@@ -105,13 +105,13 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingSession, setIsLoadingSession] = useState(!!sessionId);
   const [tokenUsage, setTokenUsage] = useState<{ used: number; max: number; cumulative: number }>(() => {
-    let savedModel = "glm-5.1";
-    try { savedModel = localStorage.getItem("axon-last-model") || "glm-5.1"; } catch { /* ignore */ }
+    let savedModel = "deepseek-v4-pro";
+    try { savedModel = localStorage.getItem("axon-last-model") || "deepseek-v4-pro"; } catch { /* ignore */ }
     const currentModel = MODELS.find((m) => m.id === savedModel);
     return { used: 0, max: currentModel?.contextWindow || 128000, cumulative: 0 };
   });
   const [model, setModelState] = useState(() => {
-    try { return localStorage.getItem("axon-last-model") || "glm-5.1"; } catch { return "glm-5.1"; }
+    try { return localStorage.getItem("axon-last-model") || "deepseek-v4-pro"; } catch { return "deepseek-v4-pro"; }
   });
   const [workspace, setWorkspace] = useState<string>("");
   const [workspaces, setWorkspaces] = useState<string[]>([]);
