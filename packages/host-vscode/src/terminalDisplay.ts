@@ -5,6 +5,7 @@
  * - 全局单例，整个扩展生命周期共享一个 "Axon" 终端
  * - 终端被用户关闭后下次命令时自动重建
  * - 命令直接在终端里执行（用户全程可见、可交互输入）
+ * - cwd 变化时用 cd 切换目录而不是新建终端，避免终端标签页泛滥
  * - 用 Shell Integration API 捕获输出和退出码；不可用时回退到"只执行不捕获"
  */
 
@@ -13,20 +14,17 @@ import * as vscode from "vscode";
 let terminal: vscode.Terminal | null = null;
 let terminalCwd: string | undefined;
 
-/** 获取或创建终端实例。cwd 变了就另建新终端（旧终端保留、历史不丢） */
-function getTerminal(cwd?: string): vscode.Terminal {
-  if (terminal && !terminal.exitStatus && terminalCwd === cwd) {
+/** 获取或创建终端实例。始终复用同一个终端，cwd 变化时用 cd 切换。 */
+function getOrCreateTerminal(): vscode.Terminal {
+  if (terminal && !terminal.exitStatus) {
     return terminal;
   }
-  // cwd 变了或终端已关 → 新建（旧终端不 dispose，历史保留在终端标签页里）
-  const label = cwd ? `Axon · ${cwd.split(/[/\\]/).pop() || cwd}` : "Axon";
   terminal = vscode.window.createTerminal({
-    name: label,
-    cwd,
+    name: "Axon",
     iconPath: new vscode.ThemeIcon("sparkle"),
     env: { GIT_PAGER: "cat", AXON_AI_TERMINAL: "1" },
   });
-  terminalCwd = cwd;
+  terminalCwd = undefined;
   return terminal;
 }
 
@@ -48,6 +46,15 @@ async function waitForShellIntegration(t: vscode.Terminal, timeoutMs = 5000): Pr
   });
 }
 
+/** 根据操作系统生成 cd 命令（PowerShell on Windows，cd 带引号 + drive switch） */
+function cdCommand(cwd: string): string {
+  const isWindows = process.platform === "win32";
+  if (isWindows) {
+    return `Set-Location -LiteralPath '${cwd.replace(/'/g, "''")}'; `;
+  }
+  return `cd '${cwd.replace(/'/g, "'\\''")}'; `;
+}
+
 export interface TerminalRunResult {
   stdout: string;
   exitCode: number | null;
@@ -61,6 +68,7 @@ export interface TerminalRunResult {
  * 在 "Axon" 终端里执行命令并尽力捕获输出。
  * - shell integration 可用：捕获完整输出 + 退出码
  * - 不可用：仅执行（sendText），返回 captured=false
+ * - cwd 不同时先 cd 切换再执行，始终复用同一终端
  * @param signal 可选中断信号（用户取消时停止等待）
  */
 export async function runInTerminalCaptured(
@@ -69,8 +77,15 @@ export async function runInTerminalCaptured(
   timeoutMs = 120_000,
   signal?: AbortSignal,
 ): Promise<TerminalRunResult> {
-  const t = getTerminal(cwd);
-  t.show(false); // 显示并聚焦，方便用户交互输入
+  const t = getOrCreateTerminal();
+  t.show(false); // 显示但不聚焦，方便用户观察
+
+  // cwd 与终端当前目录不同时，先 cd 再执行
+  const needCd = cwd && cwd !== terminalCwd;
+  if (needCd) {
+    terminalCwd = cwd;
+  }
+  const effectiveCommand = needCd ? cdCommand(cwd!) + command : command;
 
   // Mark AI command start for proactive awareness filtering (by timestamp)
   const aiCmdStartTime = Date.now();
@@ -80,14 +95,14 @@ export async function runInTerminalCaptured(
 
   // Shell Integration 不可用：退化为只执行不捕获
   if (!hasShellIntegration || !t.shellIntegration) {
-    t.sendText(command);
+    t.sendText(effectiveCommand);
     // Mark end immediately (no way to track completion without shell integration)
     vscode.commands.executeCommand('axon.internal.markAiCommandEnd', aiCmdStartTime);
     return { stdout: "", exitCode: null, captured: false };
   }
 
   const si = t.shellIntegration;
-  const execution = si.executeCommand(command);
+  const execution = si.executeCommand(effectiveCommand);
 
   // 并行：读取输出流 + 等待执行结束
   let stdout = "";
