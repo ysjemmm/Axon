@@ -153,6 +153,9 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const typewriterTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamEnding = useRef<{ elapsed: number; tokens: number } | null>(null);
   const cancelled = useRef(false);
+  /** 被取消那轮 assistant 消息的 id——turn_cancelled 事件用此精确定位，
+   *  避免竞态误将新启动的轮次标为 cancelled */
+  const cancelledTurnMsgId = useRef<string | null>(null);
   const turnStartTime = useRef<number>(0);
   // 在稳定 handler 内读取最新值，避免把 handler 依赖这些 state（保持订阅稳定）
   const modelRef = useRef(model); modelRef.current = model;
@@ -773,10 +776,13 @@ export function useChatSession(opts: UseChatSessionOptions) {
         credits: (msg as any).credits as number | undefined,
         creditDetail: (msg as any).creditDetail as CreditDetail | undefined,
       };
+      const targetMsgId = cancelledTurnMsgId.current;
+      cancelledTurnMsgId.current = null;
       setChatHistory((prev) => {
+        if (!targetMsgId) return prev;
         const updated = [...prev];
         for (let i = updated.length - 1; i >= 0; i--) {
-          if (updated[i].role === "assistant") {
+          if (updated[i].role === "assistant" && updated[i].id === targetMsgId) {
             updated[i] = { ...updated[i], streaming: false, turnStatus: "cancelled", turnStats: stats };
             break;
           }
@@ -784,7 +790,11 @@ export function useChatSession(opts: UseChatSessionOptions) {
         return updated;
       });
       setReasoning("");
-      finishLoading();
+      // 仅在取消标记仍为 true（新轮未启动）时收尾 loading；
+      // 若 sendNow 已将 cancelled 标为 false，说明队列消费已启动新轮次，不要干扰它。
+      if (cancelled.current) {
+        finishLoading();
+      }
       return;
     }
 
@@ -1226,10 +1236,12 @@ export function useChatSession(opts: UseChatSessionOptions) {
       clearInterval(typewriterTimer.current);
       typewriterTimer.current = null;
     }
+    // 记录被取消的 assistant 消息 id，供 turn_cancelled 事件精确匹配
     setChatHistory((prev) => {
       const updated = [...prev];
       const last = updated[updated.length - 1];
       if (last?.role === "assistant" && last.streaming) {
+        cancelledTurnMsgId.current = last.id;
         const elapsed = turnStartTime.current ? Date.now() - turnStartTime.current : 0;
         const tokens = (last.segments || [])
           .filter((s): s is TextSegment => s.type === "text")
