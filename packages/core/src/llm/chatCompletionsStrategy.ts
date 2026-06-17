@@ -49,6 +49,10 @@ export class ChatCompletionsStrategy implements LLMStrategy {
     // 对 deepseek 关闭并行工具调用（一次一个），从源头规避。其它网关（如 glm 中转）收到该
     // 专有参数会断流，故仅对 deepseek 下发。
     const isDeepSeek = /deepseek/i.test(model);
+    // stream_options（include_usage）是 OpenAI 专有参数。经中转网关的非 OpenAI 原生模型
+    // （deepseek / glm 等）收到后可能断流或返回格式异常的 chunk，故仅对原生 OpenAI（GPT 系）
+    // 及确认兼容的 provider 下发。
+    const isNativeOpenAI = /^(gpt|o1|o3|o4)/i.test(model);
     const stream: any = await this.client.chat.completions.create(
       {
         model,
@@ -62,8 +66,9 @@ export class ChatCompletionsStrategy implements LLMStrategy {
           : {}),
         ...(temperature !== undefined ? { temperature } : {}),
         stream: true,
-        // 让流式响应在末尾附带真实 token 用量（精确值，替代上层字符数估算）
-        stream_options: { include_usage: true },
+        // 让流式响应在末尾附带真实 token 用量（精确值，替代上层字符数估算）。
+        // 仅对 OpenAI 原生模型下发；中转网关模型（glm/deepseek）不兼容该参数，会断流。
+        ...(isNativeOpenAI ? { stream_options: { include_usage: true } } : {}),
       },
       { signal },
     );

@@ -1,71 +1,70 @@
-/**
- * 消息配对清洗器 - 保证 tool_calls 与 tool 结果严格配对，移除孤儿，避免 API 400。
- *
- * 从 agentSession.ts 抽离。被 buildRequestMessages 在每次发请求前调用，
- * 兜底已损坏的历史会话数据不再 400。
- */
-
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 
-/**
- * 清洗消息列表：
- * - 带 tool_calls 的 assistant：只保留那些"紧随其后连续出现对应 tool 结果"的 tool_call；
- *   若一个都不剩，则降级为普通 assistant 文本消息（或在无内容时丢弃）。
- * - role:tool 结果：只保留那些属于当前 assistant(tool_calls) 连续结果段的；
- *   孤儿 / 被打散 / 跨段漂移的 tool 结果全部丢弃。
- * 不修改原数组，返回新数组。
- */
-export function sanitizeToolPairing(messages: ChatCompletionMessageParam[]): ChatCompletionMessageParam[] {
+const DEFAULT_TOOL_ERROR =
+  "[系统提示：该工具调用的结果已丢失（可能是会话历史损坏或消息链断裂导致）。" +
+  "请重新尝试该操作，不要假设它已成功执行。]";
+
+export function sanitizeToolPairing(
+  messages: ChatCompletionMessageParam[]
+): ChatCompletionMessageParam[] {
   const result: ChatCompletionMessageParam[] = [];
+  let i = 0;
 
-  for (let i = 0; i < messages.length; i++) {
+  while (i < messages.length) {
     const m = messages[i] as any;
-    const role = m.role;
 
-    if (role === "assistant" && Array.isArray(m.tool_calls)) {
-      const expectedIds = new Set<string>(
-        m.tool_calls
-          .map((tc: any) => tc.id)
-          .filter((id: unknown) => typeof id === "string")
+    // ── 非 assistant+tool_calls 消息 ──────────────────────────────────
+    if (!(m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0)) {
+      if (m.role !== "tool") result.push(m); // 孤立 tool 消息直接丢弃
+      i++;
+      continue;
+    }
+
+    // ── assistant with tool_calls ─────────────────────────────────────
+
+    // 1. 过滤无效 ID（null / undefined / 非 string）
+    const validCalls: any[] = m.tool_calls.filter(
+      (tc: any) => typeof tc.id === "string" && tc.id.length > 0
+    );
+
+    // 没有任何合法 tool_call → 降级为普通 assistant 消息
+    if (validCalls.length === 0) {
+      const { tool_calls, ...rest } = m;
+      result.push(rest as ChatCompletionMessageParam);
+      i++;
+      continue;
+    }
+
+    // 2. 收集紧跟在后面的所有 tool 消息
+    let j = i + 1;
+    const toolResultMap = new Map<string, ChatCompletionMessageParam>();
+    while (j < messages.length && (messages[j] as any).role === "tool") {
+      const tm = messages[j] as any;
+      if (typeof tm.tool_call_id === "string" && !toolResultMap.has(tm.tool_call_id)) {
+        toolResultMap.set(tm.tool_call_id, tm);
+      }
+      j++;
+    }
+
+    // 3. 推入 assistant（只含合法 tool_calls）
+    result.push(
+      validCalls.length === m.tool_calls.length
+        ? m
+        : { ...m, tool_calls: validCalls }
+    );
+
+    // 4. 每个 tool_call 必须有对应 tool 消息，缺什么补什么
+    for (const tc of validCalls) {
+      result.push(
+        toolResultMap.get(tc.id) ?? {
+          role: "tool",
+          tool_call_id: tc.id,
+          content: DEFAULT_TOOL_ERROR,
+        } as ChatCompletionMessageParam
       );
-
-      const keptToolMessages: ChatCompletionMessageParam[] = [];
-      const respondedIds = new Set<string>();
-      let j = i + 1;
-
-      while (j < messages.length) {
-        const next = messages[j] as any;
-        if (next.role !== "tool") break;
-
-        const toolCallId = next.tool_call_id;
-        if (
-          typeof toolCallId === "string" &&
-          expectedIds.has(toolCallId) &&
-          !respondedIds.has(toolCallId)
-        ) {
-          keptToolMessages.push(next);
-          respondedIds.add(toolCallId);
-        }
-        j++;
-      }
-
-      const keptToolCalls = m.tool_calls.filter((tc: any) => respondedIds.has(tc.id));
-      if (keptToolCalls.length > 0) {
-        result.push({ ...m, tool_calls: keptToolCalls });
-        result.push(...keptToolMessages);
-      } else if (m.content) {
-        result.push({ role: "assistant", content: m.content } as ChatCompletionMessageParam);
-      }
-
-      i = j - 1;
-      continue;
     }
 
-    if (role === "tool") {
-      continue;
-    }
-
-    result.push(messages[i]);
+    i = j; // 跳过已消费的 tool 消息
   }
 
   return result;

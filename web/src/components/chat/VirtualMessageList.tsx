@@ -108,14 +108,14 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
     const [scrollTop, setScrollTop] = useState(0);
     const [clientHeight, setClientHeight] = useState(0);
     const heightMap = useRef(new Map<string, number>());
-    const [, forceUpdate] = useState(0);
+    const [measureVersion, setMeasureVersion] = useState(0);
 
     // ---- height tracking ----
     const recordHeight = useCallback((id: string, h: number) => {
       const prev = heightMap.current.get(id);
       if (prev !== h) {
         heightMap.current.set(id, h);
-        forceUpdate((n) => n + 1);
+        setMeasureVersion((n) => n + 1);
       }
     }, []);
 
@@ -174,7 +174,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
         topPadding: topPad,
         bottomPadding: bottomPad,
       };
-    }, [getHeights, scrollTop, clientHeight, overscan]);
+    }, [getHeights, scrollTop, clientHeight, overscan, measureVersion]);
 
     // ---- notify total height change ----
     useEffect(() => {
@@ -198,7 +198,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
         if (w !== prevWidth) {
           prevWidth = w;
           heightMap.current.clear();
-          forceUpdate((n) => n + 1);
+          setMeasureVersion((n) => n + 1);
         }
         setClientHeight(container.clientHeight);
       };
@@ -250,7 +250,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
       },
       remeasure() {
         heightMap.current.clear();
-        forceUpdate((n) => n + 1);
+        setMeasureVersion((n) => n + 1);
       },
       getMessageOffset(id: string) {
         let offset = 0;

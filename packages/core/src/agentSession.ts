@@ -1270,21 +1270,25 @@ export class AgentSession {
   private buildRequestMessages(): ChatCompletionMessageParam[] {
     const injections = this.buildInjections();
 
-    // 发送前清洗：移除孤儿 tool_calls / 孤儿 tool 结果，避免历史损坏导致 API 400
-    const cleaned = sanitizeToolPairing(this.messages);
-
-    // 移除跨轮瞬态工具结果：上一轮的搜索结果在新一轮里没有意义，反而污染上下文
-    const filtered = cleaned.filter((m) => {
+    // 先移除跨轮瞬态工具结果（search/list_dir/web_search/web_fetch），
+    // 必须在 sanitizeToolPairing 之前执行：先删掉不需要的工具结果，
+    // 再让 sanitizer 把关联的孤儿 tool_calls 一并清理，避免产生
+    // "assistant(tool_calls) 后缺少 tool 结果" 的消息序列导致 API 400。
+    const preFiltered = this.messages.filter((m) => {
       if ((m as any).role !== "tool") return true;
       const toolName = (m as any)._toolName as string | undefined;
       if (!toolName || !AgentSession.TRANSIENT_TOOLS.has(toolName)) return true;
-      // 只保留当前轮次的瞬态结果
-      const idx = cleaned.indexOf(m);
+      // 只保留当前轮次的瞬态结果（在原始数组上的下标与 turnStartMsgCount 对齐）
+      const idx = this.messages.indexOf(m);
       return idx >= this.turnStartMsgCount;
     });
 
-    if (injections.length === 0) return filtered;
-    const [systemMsg, ...rest] = filtered;
+    // 发送前清洗：移除孤儿 tool_calls / 孤儿 tool 结果（含上一步因瞬态过滤
+    // 而产生的孤儿），避免历史损坏导致 API 400
+    const cleaned = sanitizeToolPairing(preFiltered);
+
+    if (injections.length === 0) return cleaned;
+    const [systemMsg, ...rest] = cleaned;
     return [systemMsg, ...injections, ...rest];
   }
 

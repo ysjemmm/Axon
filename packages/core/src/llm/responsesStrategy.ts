@@ -17,6 +17,7 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import type { LLMStrategy, RunTurnParams, LLMTurnResult, NormalizedToolCall, ToolDef } from "./types.js";
+import { sanitizeToolPairing } from "../messageSanitizer.js";
 
 /** Responses API 的输入项（联合类型，覆盖普通消息 / 工具调用 / 工具结果） */
 type ResponsesInputItem =
@@ -192,10 +193,15 @@ export class ResponsesStrategy implements LLMStrategy {
     instructions: string;
     input: ResponsesInputItem[];
   } {
+    // 发送前清洗：保证 function_call 与 function_call_output 严格配对，避免 API 400。
+    // 虽然 buildRequestMessages 已调用过 sanitizeToolPairing，但此处做防御性二次校验，
+    // 防止其它调用路径绕过上层清洗直接传脏数据进来。
+    const cleaned = sanitizeToolPairing(messages);
+
     const systemParts: string[] = [];
     const input: ResponsesInputItem[] = [];
 
-    for (const msg of messages) {
+    for (const msg of cleaned) {
       const role = (msg as any).role;
 
       if (role === "system") {
