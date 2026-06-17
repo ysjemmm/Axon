@@ -1664,6 +1664,7 @@ export class AgentSession {
     // 完成前自检：本轮是否有过实质动作（改文件/跑命令）、是否已经做过收尾自检
     let didMutate = false;
     let didSelfCheck = false;
+    let emptyRetried = false;
     let didDiagnose = false; // 模型是否已主动做过 check_diagnostics
     // 记录本轮改动过的文件路径（用于正常收尾前自动跑 diagnostics）
     const mutatedFiles = new Set<string>();
@@ -1789,44 +1790,15 @@ export class AgentSession {
           // 进入下一轮循环（不发 stream_end），让模型重新生成
           continue;
         }
-        // 完成前自检：本轮有过实质改动、还没自检过、且模型没主动做过 check_diagnostics 时触发。
-        // 如果模型已经自行验证了（didDiagnose），说明它已确认改动无误，不需要再走自检流程。
-        // 如果回复内容是纯操作确认（撤回/恢复/已接受等），也不需要自检。
-        const isConfirmReply = /已撤回|已恢复|已接受|已拒绝|恢复.*原样|撤回.*修改/.test(contentBuffer);
-        // 手动模式一律不自检：改动本身要用户在卡片上 ✓/✗ 确认，验证职责不在 AI 这轮。
-        // 自检只对自动模式（改动直接落盘、无人兜底）有意义。
-        const isManualMode = this.host.edits.getMode() === "manual";
-        if (didMutate && !didSelfCheck && !didDiagnose && !isConfirmReply && !isManualMode) {
-          didSelfCheck = true;
-          console.log(`[agent-loop] round=${rounds} 分支=触发完成前自检（注入引导后 continue）`);
-          this.messages.push({ role: "assistant", content: contentBuffer });
-          this.messages.push({
-            role: "system",
-            content:
-              `在结束本轮、把回答交给用户之前，请做一次收尾自检（这一步不要输出给用户看的话，直接行动）：\n` +
-              `⚠️ 自检范围仅限于【本轮用户提出的原始需求】——不要对历史对话中已经完成/无关的话题做任何额外操作。` +
-              `如果你看到历史里有搜索结果或文件内容与当前问题无关，忽略它们。\n` +
-              `1. 用户的原始需求是否已经完整实现？有没有漏掉的子需求？\n` +
-              `2. 改动过的代码是否需要 check_diagnostics 验证？还没验证、且改动确有必要验证时再补上。\n` +
-              `3. 如果你新增/修改了有明确输入输出的【复杂】逻辑（解析器、转换函数、算法等），` +
-              `且能用脚本快速验证，可用 execute_command 跑一次行为验证。` +
-              `但简单到一眼能看出对错的改动（如打印一句话、改配置值、纯文案、单文件小脚本）不必验证——别为验证而验证。\n` +
-              `4. 有没有留下 TODO、占位、半成品、未处理的边界、import/引用不一致？\n` +
-              `5. 如果发现遗漏或问题：立刻用工具补完，不要把问题留给用户。\n` +
-              `6. 如果确认一切就绪：直接给出最终的、完整的中文回答，结束本轮。\n` +
-              `注意：不要因为这条自检而重复已经做好的事，也不要输出"我来自检一下"之类的过程话。` +
-              `更不要重复你上面刚说过的内容——直接从新的动作或新的信息开始。`,
-          });
-          // 自检分支：进入下一轮，模型要么补完遗漏（调工具），要么给出最终回答
-          // 进入下一轮：模型要么补完遗漏（调工具），要么给出最终回答
-          continue;
-        }
+        // 完成前自检：已关闭（速度优先，避免 DeepSeek 等模型多跑一轮验证）。
+        // 如需恢复：将下面 didSelfCheck = true 改回 false，并取消注释自检块。
+        didSelfCheck = true; // 跳过自检轮
         // 空回复兜底：模型声称结束（finish=stop、无工具调用）但内容为空，
         // 这通常是 API 侧偶发的 SSE 异常（output item 未产出）。不要给用户显示空白——
         // 注入引导让模型重新生成一次回复。最多重试 1 次，防无限循环。
-        if (!contentBuffer && !didSelfCheck) {
+        if (!contentBuffer && !emptyRetried) {
           console.log(`[agent-loop] round=${rounds} 空回复兜底：content 为空但 finish=stop，注入重说引导`);
-          didSelfCheck = true; // 复用此标志防止多次重试
+          emptyRetried = true;
           this.messages.push({
             role: "system",
             content: "你上一轮的回复内容为空（可能是网络波动）。请直接给出你的中文回答，不要调工具。",
