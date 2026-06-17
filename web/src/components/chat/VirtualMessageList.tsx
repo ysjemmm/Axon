@@ -268,7 +268,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
 
     return (
       <div ref={containerRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
-        {/* 占位高度：撑出完整滚动区域 */}
+        {/* 虚拟滚动区域：高度由消息 + 占位撑开 */}
         <div style={{ height: totalHeight, position: "relative" }}>
           {/* 顶部占位（离屏消息的虚拟高度） */}
           {topPadding > 0 && <div style={{ height: topPadding }} />}
@@ -289,10 +289,11 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
 
           {/* 底部占位 */}
           {bottomPadding > 0 && <div style={{ height: bottomPadding }} />}
-
-          {/* footer：reasoning / loading / bottomRef 放在虚拟内容区域内 */}
-          {footer}
         </div>
+
+        {/* footer 在虚拟区域之外、正常文档流中：内容变化（思考过程出现/消失等）
+            会自然影响容器的 scrollHeight，不会留下空白 */}
+        {footer}
       </div>
     );
   },
