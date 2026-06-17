@@ -1,0 +1,23 @@
+{
+  "name": "@axon/cli",
+  "version": "0.1.0",
+  "description": "Axon AI Agent CLI - LLM-powered coding assistant",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "axon": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "openai": "^4.80.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -1,0 +1,799 @@
+[
+  {
+    "variant": {
+      "id": "gpt-5.4",
+      "label": "GPT-5.4",
+      "model": "gpt-5.4"
+    },
+    "results": [
+      {
+        "scenario": "mt_edit_read_then_edit",
+        "agg": [
+          {
+            "scenarioId": "mt_edit_read_then_edit",
+            "trace": [
+              {
+                "round": 1,
+                "name": "read_file",
+                "args": {
+                  "endLine": 400,
+                  "path": "src/config.ts",
+                  "startLine": 1
+                },
+                "ok": true,
+                "resultPreview": "export const HOST = \"127.0.0.1\";\nexport const PORT = 3000;\nexport const DEBUG = false;\n"
+              },
+              {
+                "round": 2,
+                "name": "str_replace",
+                "args": {
+                  "newStr": "export const HOST = \"127.0.0.1\";\nexport const PORT = 8080;\nexport const DEBUG = false;",
+                  "oldStr": "export const HOST = \"127.0.0.1\";\nexport const PORT = 3000;\nexport const DEBUG = false;",
+                  "path": "src/config.ts"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/config.ts 中的文本"
+              },
+              {
+                "round": 3,
+                "name": "check_diagnostics",
+                "args": {
+                  "paths": [
+                    "src/config.ts"
+                  ]
+                },
+                "ok": true,
+                "resultPreview": "✓ src/config.ts: 无错误"
+              }
+            ],
+            "finalReply": "已处理。",
+            "rounds": 4,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 0.6666666666666666,
+              "judge": null
+            },
+            "overall": 0.95,
+            "passed": true,
+            "latency": 9471,
+            "tokens": 41920
+          }
+        ]
+      },
+      {
+        "scenario": "mt_edit_large_file",
+        "agg": [
+          {
+            "scenarioId": "mt_edit_large_file",
+            "trace": [
+              {
+                "round": 1,
+                "name": "read_file",
+                "args": {
+                  "endLine": 400,
+                  "path": "src/tax.ts",
+                  "startLine": 1
+                },
+                "ok": true,
+                "resultPreview": "export const pad0 = 0;\nexport const pad1 = 1;\nexport const pad2 = 2;\nexport const pad3 = 3;\nexport const pad4 = 4;\nexport const pad5 = 5;\nexport const pad6 = 6;\nexport const pad7 = 7;\nexport const pad"
+              },
+              {
+                "round": 2,
+                "name": "search",
+                "args": {
+                  "includePattern": ".ts",
+                  "intent": "定位税率计算逻辑",
+                  "mode": "content",
+                  "path": ".",
+                  "query": "computeTax|0\\.1"
+                },
+                "ok": true,
+                "resultPreview": "找到 2 处匹配:\nsrc/tax.ts:402 (共807行)\n    401: \n  > 402: export function computeTax(amount: number): number {\n    403:   const rate = 0.1;\nsrc/tax.ts:403 (共807行)\n    402: export function computeTax(amount:"
+              },
+              {
+                "round": 3,
+                "name": "read_file",
+                "args": {
+                  "endLine": 460,
+                  "path": "src/tax.ts",
+                  "startLine": 360
+                },
+                "ok": true,
+                "resultPreview": "export const pad359 = 359;\nexport const pad360 = 360;\nexport const pad361 = 361;\nexport const pad362 = 362;\nexport const pad363 = 363;\nexport const pad364 = 364;\nexport const pad365 = 365;\nexport cons"
+              },
+              {
+                "round": 4,
+                "name": "str_replace",
+                "args": {
+                  "newStr": "export function computeTax(amount: number): number {\n  const rate = 0.15;\n  return amount * rate;\n}",
+                  "oldStr": "export function computeTax(amount: number): number {\n  const rate = 0.1;\n  return amount * rate;\n}",
+                  "path": "src/tax.ts"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/tax.ts 中的文本"
+              },
+              {
+                "round": 5,
+                "name": "check_diagnostics",
+                "args": {
+                  "paths": [
+                    "src/tax.ts"
+                  ]
+                },
+                "ok": true,
+                "resultPreview": "✓ src/tax.ts: 无错误"
+              }
+            ],
+            "finalReply": "已改为 `0.15`，并确认这个文件没有类型错误。",
+            "rounds": 6,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 0.4,
+              "judge": null
+            },
+            "overall": 0.9099999999999999,
+            "passed": true,
+            "latency": 24414,
+            "tokens": 72195
+          }
+        ]
+      },
+      {
+        "scenario": "mt_edit_multi_todo",
+        "agg": [
+          {
+            "scenarioId": "mt_edit_multi_todo",
+            "trace": [
+              {
+                "round": 1,
+                "name": "read_file",
+                "args": {
+                  "endLine": 400,
+                  "path": "src/ops.ts",
+                  "startLine": 1
+                },
+                "ok": true,
+                "resultPreview": "export function add(a: number, b: number) {\n  // TODO: 实现\n}\n\nexport function sub(a: number, b: number) {\n  // TODO: 实现\n}\n\nexport function mul(a: number, b: number) {\n  // TODO: 实现\n}\n"
+              },
+              {
+                "round": 2,
+                "name": "str_replace",
+                "args": {
+                  "newStr": "export function add(a: number, b: number) {\n  return a + b\n}\n\nexport function sub(a: number, b: number) {\n  return a - b\n}\n\nexport function mul(a: number, b: number) {\n  return a * b\n}\n",
+                  "oldStr": "export function add(a: number, b: number) {\n  // TODO: 实现\n}\n\nexport function sub(a: number, b: number) {\n  // TODO: 实现\n}\n\nexport function mul(a: number, b: number) {\n  // TODO: 实现\n}\n",
+                  "path": "src/ops.ts"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/ops.ts 中的文本"
+              },
+              {
+                "round": 3,
+                "name": "check_diagnostics",
+                "args": {
+                  "paths": [
+                    "src/ops.ts"
+                  ]
+                },
+                "ok": true,
+                "resultPreview": "✓ src/ops.ts: 无错误"
+              }
+            ],
+            "finalReply": "已实现。",
+            "rounds": 4,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 0.6666666666666666,
+              "judge": null
+            },
+            "overall": 0.95,
+            "passed": true,
+            "latency": 12915,
+            "tokens": 42303
+          }
+        ]
+      },
+      {
+        "scenario": "mt_edit_special_chars",
+        "agg": [
+          {
+            "scenarioId": "mt_edit_special_chars",
+            "trace": [
+              {
+                "round": 1,
+                "name": "read_file",
+                "args": {
+                  "endLine": 400,
+                  "path": "src/msg.ts",
+                  "startLine": 1
+                },
+                "ok": true,
+                "resultPreview": "export const greeting = \"Hello \\\"world\\\"\";\nexport const count = 3;\n"
+              },
+              {
+                "round": 2,
+                "name": "str_replace",
+                "args": {
+                  "newStr": "export const greeting = \"Bye\";\nexport const count = 3;",
+                  "oldStr": "export const greeting = \"Hello \\\"world\\\"\";\nexport const count = 3;",
+                  "path": "src/msg.ts"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/msg.ts 中的文本"
+              }
+            ],
+            "finalReply": "已改。",
+            "rounds": 3,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 1,
+              "judge": null
+            },
+            "overall": 1,
+            "passed": true,
+            "latency": 8006,
+            "tokens": 31303
+          }
+        ]
+      }
+    ],
+    "meanScore": 0.9524999999999999,
+    "passRate": 1
+  },
+  {
+    "variant": {
+      "id": "gpt-5.5",
+      "label": "GPT-5.5",
+      "model": "gpt-5.5"
+    },
+    "results": [
+      {
+        "scenario": "mt_edit_read_then_edit",
+        "agg": [
+          {
+            "scenarioId": "mt_edit_read_then_edit",
+            "trace": [
+              {
+                "round": 1,
+                "name": "read_file",
+                "args": {
+                  "endLine": 400,
+                  "path": "src/config.ts",
+                  "startLine": 1
+                },
+                "ok": true,
+                "resultPreview": "export const HOST = \"127.0.0.1\";\nexport const PORT = 3000;\nexport const DEBUG = false;\n"
+              },
+              {
+                "round": 2,
+                "name": "str_replace",
+                "args": {
+                  "newStr": "export const HOST = \"127.0.0.1\";\nexport const PORT = 8080;\nexport const DEBUG = false;",
+                  "oldStr": "export const HOST = \"127.0.0.1\";\nexport const PORT = 3000;\nexport const DEBUG = false;",
+                  "path": "src/config.ts"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/config.ts 中的文本"
+              },
+              {
+                "round": 3,
+                "name": "check_diagnostics",
+                "args": {
+                  "paths": [
+                    "src/config.ts"
+                  ]
+                },
+                "ok": true,
+                "resultPreview": "✓ src/config.ts: 无错误"
+              }
+            ],
+            "finalReply": "完成，类型检查无错误。",
+            "rounds": 4,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 0.6666666666666666,
+              "judge": null
+            },
+            "overall": 0.95,
+            "passed": true,
+            "latency": 12818,
+            "tokens": 41934
+          }
+        ]
+      },
+      {
+        "scenario": "mt_edit_large_file",
+        "agg": [
+          {
+            "scenarioId": "mt_edit_large_file",
+            "trace": [
+              {
+                "round": 1,
+                "name": "read_file",
+                "args": {
+                  "endLine": 120,
+                  "path": "src/tax.ts",
+                  "startLine": 1
+                },
+                "ok": true,
+                "resultPreview": "export const pad0 = 0;\nexport const pad1 = 1;\nexport const pad2 = 2;\nexport const pad3 = 3;\nexport const pad4 = 4;\nexport const pad5 = 5;\nexport const pad6 = 6;\nexport const pad7 = 7;\nexport const pad"
+              },
+              {
+                "round": 2,
+                "name": "search",
+                "args": {
+                  "includePattern": ".ts",
+                  "intent": "定位税率计算函数",
+                  "mode": "content",
+                  "path": "src",
+                  "query": "computeTax|0\\.1"
+                },
+                "ok": true,
+                "resultPreview": "找到 2 处匹配:\nsrc/tax.ts:402 (共807行)\n    401: \n  > 402: export function computeTax(amount: number): number {\n    403:   const rate = 0.1;\nsrc/tax.ts:403 (共807行)\n    402: export function computeTax(amount:"
+              },
+              {
+                "round": 3,
+                "name": "read_file",
+                "args": {
+                  "endLine": 410,
+                  "path": "src/tax.ts",
+                  "startLine": 395
+                },
+                "ok": true,
+                "resultPreview": "export const pad394 = 394;\nexport const pad395 = 395;\nexport const pad396 = 396;\nexport const pad397 = 397;\nexport const pad398 = 398;\nexport const pad399 = 399;\n\nexport function computeTax(amount: nu"
+              },
+              {
+                "round": 4,
+                "name": "str_replace",
+                "args": {
+                  "newStr": "export function computeTax(amount: number): number {\n  const rate = 0.15;\n  return amount * rate;\n}",
+                  "oldStr": "export function computeTax(amount: number): number {\n  const rate = 0.1;\n  return amount * rate;\n}",
+                  "path": "src/tax.ts"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/tax.ts 中的文本"
+              },
+              {
+                "round": 5,
+                "name": "check_diagnostics",
+                "args": {
+                  "paths": [
+                    "src/tax.ts"
+                  ]
+                },
+                "ok": true,
+                "resultPreview": "✓ src/tax.ts: 无错误"
+              }
+            ],
+            "finalReply": "完成，类型检查无错误。",
+            "rounds": 6,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 0.4,
+              "judge": null
+            },
+            "overall": 0.9099999999999999,
+            "passed": true,
+            "latency": 19643,
+            "tokens": 68667
+          }
+        ]
+      },
+      {
+        "scenario": "mt_edit_multi_todo",
+        "agg": [
+          {
+            "scenarioId": "mt_edit_multi_todo",
+            "trace": [
+              {
+                "round": 1,
+                "name": "read_file",
+                "args": {
+                  "endLine": 400,
+                  "path": "src/ops.ts",
+                  "startLine": 1
+                },
+                "ok": true,
+                "resultPreview": "export function add(a: number, b: number) {\n  // TODO: 实现\n}\n\nexport function sub(a: number, b: number) {\n  // TODO: 实现\n}\n\nexport function mul(a: number, b: number) {\n  // TODO: 实现\n}\n"
+              },
+              {
+                "round": 2,
+                "name": "str_replace",
+                "args": {
+                  "newStr": "export function add(a: number, b: number) {\n  return a + b\n}\n\nexport function sub(a: number, b: number) {\n  return a - b\n}\n\nexport function mul(a: number, b: number) {\n  return a * b\n}\n",
+                  "oldStr": "export function add(a: number, b: number) {\n  // TODO: 实现\n}\n\nexport function sub(a: number, b: number) {\n  // TODO: 实现\n}\n\nexport function mul(a: number, b: number) {\n  // TODO: 实现\n}\n",
+                  "path": "src/ops.ts"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/ops.ts 中的文本"
+              },
+              {
+                "round": 3,
+                "name": "check_diagnostics",
+                "args": {
+                  "paths": [
+                    "src/ops.ts"
+                  ]
+                },
+                "ok": true,
+                "resultPreview": "✓ src/ops.ts: 无错误"
+              }
+            ],
+            "finalReply": "完成，类型检查无错误。",
+            "rounds": 4,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 0.6666666666666666,
+              "judge": null
+            },
+            "overall": 0.95,
+            "passed": true,
+            "latency": 14492,
+            "tokens": 42300
+          }
+        ]
+      },
+      {
+        "scenario": "mt_edit_special_chars",
+        "agg": [
+          {
+            "scenarioId": "mt_edit_special_chars",
+            "trace": [
+              {
+                "round": 1,
+                "name": "read_file",
+                "args": {
+                  "endLine": 400,
+                  "path": "src/msg.ts",
+                  "startLine": 1
+                },
+                "ok": true,
+                "resultPreview": "export const greeting = \"Hello \\\"world\\\"\";\nexport const count = 3;\n"
+              },
+              {
+                "round": 2,
+                "name": "str_replace",
+                "args": {
+                  "newStr": "export const greeting = \"Bye\";\nexport const count = 3;",
+                  "oldStr": "export const greeting = \"Hello \\\"world\\\"\";\nexport const count = 3;",
+                  "path": "src/msg.ts"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/msg.ts 中的文本"
+              },
+              {
+                "round": 3,
+                "name": "check_diagnostics",
+                "args": {
+                  "paths": [
+                    "src/msg.ts"
+                  ]
+                },
+                "ok": true,
+                "resultPreview": "✓ src/msg.ts: 无错误"
+              }
+            ],
+            "finalReply": "完成。",
+            "rounds": 4,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 0.6666666666666666,
+              "judge": null
+            },
+            "overall": 0.95,
+            "passed": true,
+            "latency": 15673,
+            "tokens": 41872
+          }
+        ]
+      }
+    ],
+    "meanScore": 0.94,
+    "passRate": 1
+  },
+  {
+    "variant": {
+      "id": "deepseek-v4-pro",
+      "label": "DeepSeek-V4-Pro",
+      "model": "deepseek-v4-pro"
+    },
+    "results": [
+      {
+        "scenario": "mt_edit_read_then_edit",
+        "agg": [
+          {
+            "scenarioId": "mt_edit_read_then_edit",
+            "trace": [
+              {
+                "round": 1,
+                "name": "read_file",
+                "args": {
+                  "path": "src/config.ts"
+                },
+                "ok": true,
+                "resultPreview": "export const HOST = \"127.0.0.1\";\nexport const PORT = 3000;\nexport const DEBUG = false;\n"
+              },
+              {
+                "round": 2,
+                "name": "str_replace",
+                "args": {
+                  "path": "src/config.ts",
+                  "oldStr": "export const PORT = 3000;",
+                  "newStr": "export const PORT = 8080;"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/config.ts 中的文本"
+              },
+              {
+                "round": 3,
+                "name": "check_diagnostics",
+                "args": {
+                  "paths": [
+                    "src/config.ts"
+                  ]
+                },
+                "ok": true,
+                "resultPreview": "✓ src/config.ts: 无错误"
+              }
+            ],
+            "finalReply": "已将 `PORT` 从 `3000` 改为 `8080`，无类型错误。",
+            "rounds": 4,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 0.6666666666666666,
+              "judge": null
+            },
+            "overall": 0.95,
+            "passed": true,
+            "latency": 7780,
+            "tokens": 41334
+          }
+        ]
+      },
+      {
+        "scenario": "mt_edit_large_file",
+        "agg": [
+          {
+            "scenarioId": "mt_edit_large_file",
+            "trace": [
+              {
+                "round": 1,
+                "name": "read_file",
+                "args": {
+                  "path": "src/tax.ts"
+                },
+                "ok": true,
+                "resultPreview": "export const pad0 = 0;\nexport const pad1 = 1;\nexport const pad2 = 2;\nexport const pad3 = 3;\nexport const pad4 = 4;\nexport const pad5 = 5;\nexport const pad6 = 6;\nexport const pad7 = 7;\nexport const pad"
+              },
+              {
+                "round": 2,
+                "name": "search",
+                "args": {
+                  "intent": "定位 computeTax 函数",
+                  "query": "computeTax",
+                  "path": "src/tax.ts"
+                },
+                "ok": true,
+                "resultPreview": "未找到匹配 \"computeTax\" 的内容 （搜索范围：C:\\Users\\17120\\AppData\\Local\\Temp\\axon-eval-vg0Y1e）。换词时请锚定你刚搜的原始词根（保留用户原话里的名词），只替换动词前缀（get/create/gen/batch）并用 | 组合重试；不要重新解读整句需求跑去搜别的语义方向（那样越搜越偏、浪费 token），也不要把提示里的示例词当成项目里"
+              },
+              {
+                "round": 3,
+                "name": "read_file",
+                "args": {
+                  "path": "src/tax.ts",
+                  "startLine": 155
+                },
+                "ok": true,
+                "resultPreview": "export const pad154 = 154;\nexport const pad155 = 155;\nexport const pad156 = 156;\nexport const pad157 = 157;\nexport const pad158 = 158;\nexport const pad159 = 159;\nexport const pad160 = 160;\nexport cons"
+              },
+              {
+                "round": 4,
+                "name": "search",
+                "args": {
+                  "intent": "查找 computeTax 函数定义",
+                  "path": "src",
+                  "query": "computeTax"
+                },
+                "ok": true,
+                "resultPreview": "找到 1 处匹配:\nsrc/tax.ts:402 (共807行)\n    401: \n  > 402: export function computeTax(amount: number): number {\n    403:   const rate = 0.1;"
+              },
+              {
+                "round": 4,
+                "name": "search",
+                "args": {
+                  "intent": "查找税率 0.1 的位置",
+                  "path": "src",
+                  "query": "0\\.1"
+                },
+                "ok": true,
+                "resultPreview": "找到 1 处匹配:\nsrc/tax.ts:403 (共807行)\n    402: export function computeTax(amount: number): number {\n  > 403:   const rate = 0.1;\n    404:   return amount * rate;"
+              },
+              {
+                "round": 5,
+                "name": "str_replace",
+                "args": {
+                  "newStr": "  const rate = 0.15;",
+                  "oldStr": "  const rate = 0.1;",
+                  "path": "src/tax.ts"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/tax.ts 中的文本"
+              },
+              {
+                "round": 6,
+                "name": "check_diagnostics",
+                "args": {
+                  "paths": [
+                    "src/tax.ts"
+                  ]
+                },
+                "ok": true,
+                "resultPreview": "✓ src/tax.ts: 无错误"
+              }
+            ],
+            "finalReply": "已将 `src/tax.ts` 中 `computeTax` 函数的税率从 `0.1` 改为 `0.15`，类型检查通过。",
+            "rounds": 7,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 0.2857142857142857,
+              "judge": null
+            },
+            "overall": 0.8928571428571428,
+            "passed": true,
+            "latency": 18557,
+            "tokens": 87507
+          }
+        ]
+      },
+      {
+        "scenario": "mt_edit_multi_todo",
+        "agg": [
+          {
+            "scenarioId": "mt_edit_multi_todo",
+            "trace": [
+              {
+                "round": 1,
+                "name": "read_file",
+                "args": {
+                  "path": "src/ops.ts"
+                },
+                "ok": true,
+                "resultPreview": "export function add(a: number, b: number) {\n  // TODO: 实现\n}\n\nexport function sub(a: number, b: number) {\n  // TODO: 实现\n}\n\nexport function mul(a: number, b: number) {\n  // TODO: 实现\n}\n"
+              },
+              {
+                "round": 2,
+                "name": "str_replace",
+                "args": {
+                  "path": "src/ops.ts",
+                  "oldStr": "export function add(a: number, b: number) {\n  // TODO: 实现\n}",
+                  "newStr": "export function add(a: number, b: number) {\n  return a + b;\n}"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/ops.ts 中的文本"
+              },
+              {
+                "round": 2,
+                "name": "str_replace",
+                "args": {
+                  "path": "src/ops.ts",
+                  "oldStr": "export function sub(a: number, b: number) {\n  // TODO: 实现\n}",
+                  "newStr": "export function sub(a: number, b: number) {\n  return a - b;\n}"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/ops.ts 中的文本"
+              },
+              {
+                "round": 2,
+                "name": "str_replace",
+                "args": {
+                  "path": "src/ops.ts",
+                  "oldStr": "export function mul(a: number, b: number) {\n  // TODO: 实现\n}",
+                  "newStr": "export function mul(a: number, b: number) {\n  return a * b;\n}"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/ops.ts 中的文本"
+              },
+              {
+                "round": 3,
+                "name": "check_diagnostics",
+                "args": {
+                  "paths": [
+                    "src/ops.ts"
+                  ]
+                },
+                "ok": true,
+                "resultPreview": "✓ src/ops.ts: 无错误"
+              },
+              {
+                "round": 4,
+                "name": "execute_command",
+                "args": {
+                  "command": "npx tsx -e \"import { add, sub, mul } from './src/ops.ts'; console.log('add(2,3)=', add(2,3)); console.log('sub(5,2)=', sub(5,2)); console.log('mul(4,3)=', mul(4,3));\""
+                },
+                "ok": true,
+                "resultPreview": "add(2,3)= 5\nsub(5,2)= 3\nmul(4,3)= 12\n"
+              }
+            ],
+            "finalReply": "三个函数全部实现完毕，行为验证通过：\n\n- `add(2, 3)` → 5 ✓\n- `sub(5, 2)` → 3 ✓\n- `mul(4, 3)` → 12 ✓",
+            "rounds": 5,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 0.3333333333333333,
+              "judge": null
+            },
+            "overall": 0.9,
+            "passed": true,
+            "latency": 19838,
+            "tokens": 53690
+          }
+        ]
+      },
+      {
+        "scenario": "mt_edit_special_chars",
+        "agg": [
+          {
+            "scenarioId": "mt_edit_special_chars",
+            "trace": [
+              {
+                "round": 1,
+                "name": "read_file",
+                "args": {
+                  "path": "src/msg.ts"
+                },
+                "ok": true,
+                "resultPreview": "export const greeting = \"Hello \\\"world\\\"\";\nexport const count = 3;\n"
+              },
+              {
+                "round": 2,
+                "name": "str_replace",
+                "args": {
+                  "path": "src/msg.ts",
+                  "oldStr": "export const greeting = \"Hello \\\"world\\\"\";",
+                  "newStr": "export const greeting = \"Bye\";"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/msg.ts 中的文本"
+              }
+            ],
+            "finalReply": "已修改。",
+            "rounds": 3,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 1,
+              "judge": null
+            },
+            "overall": 1,
+            "passed": true,
+            "latency": 7031,
+            "tokens": 30937
+          }
+        ]
+      }
+    ],
+    "meanScore": 0.9357142857142857,
+    "passRate": 1
+  }
+]

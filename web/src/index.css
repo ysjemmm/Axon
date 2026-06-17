@@ -1,0 +1,431 @@
+@import "tailwindcss";
+@import "highlight.js/styles/github.css";
+@plugin "@tailwindcss/typography";
+
+/* ── hljs 语法高亮调色板 ──────────────────────────────────────────────
+   浅色默认走 github 配色（:root）；深色环境（VS Code body.vscode-dark / 浏览器 prefers-color-scheme）
+   切换为 github-dark 配色。VS Code webview 不一定支持 prefers-color-scheme，故以 body.vscode-dark 为准，
+   两者都覆盖（belt-and-suspenders）。token 颜色用变量收口，规则只写一遍。 */
+:root {
+  --hl-text: #24292e; --hl-comment: #6a737d; --hl-kw: #d73a49; --hl-name: #22863a;
+  --hl-var: #e36209; --hl-str: #032f62; --hl-title: #6f42c1; --hl-num: #005cc5;
+}
+body.vscode-dark, body.vscode-high-contrast {
+  --hl-text: #c9d1d9; --hl-comment: #8b949e; --hl-kw: #ff7b72; --hl-name: #7ee787;
+  --hl-var: #ffa657; --hl-str: #a5d6ff; --hl-title: #d2a8ff; --hl-num: #79c0ff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --hl-text: #c9d1d9; --hl-comment: #8b949e; --hl-kw: #ff7b72; --hl-name: #7ee787;
+    --hl-var: #ffa657; --hl-str: #a5d6ff; --hl-title: #d2a8ff; --hl-num: #79c0ff;
+  }
+}
+.hljs { color: var(--hl-text); }
+.hljs-comment, .hljs-quote { color: var(--hl-comment); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-doctag, .hljs-formula { color: var(--hl-kw); }
+.hljs-name, .hljs-tag, .hljs-selector-class, .hljs-selector-pseudo { color: var(--hl-name); }
+.hljs-variable, .hljs-template-variable, .hljs-meta, .hljs-built_in, .hljs-type, .hljs-class .hljs-title { color: var(--hl-var); }
+.hljs-string, .hljs-regexp, .hljs-link, .hljs-attr { color: var(--hl-str); }
+.hljs-title, .hljs-section, .hljs-selector-id { color: var(--hl-title); font-weight: bold; }
+.hljs-symbol, .hljs-number, .hljs-attribute, .hljs-bullet { color: var(--hl-num); }
+
+/* 文本选中高亮：跟随主题的柔和强调色，替换浏览器逆天的原生亮蓝。
+   半透明保证叠加在 code/表格上时文字仍可读，过渡让选中更顺滑。 */
+::selection {
+  background-color: color-mix(in oklab, var(--vscode-editor-selectionBackground, var(--primary, #3794ff)) 38%, transparent);
+  color: inherit;
+}
+::-moz-selection {
+  background-color: color-mix(in oklab, var(--vscode-editor-selectionBackground, var(--primary, #3794ff)) 38%, transparent);
+  color: inherit;
+}
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: bold; }
+
+/* 覆盖 highlight.js 默认样式：只清掉它自带的 padding，
+   字号/行高交给 <code> 上的 Tailwind 类控制（不要用 font-size:inherit 锁死，否则改 text-* 无效） */
+pre code.hljs {
+  padding: 0 !important;
+  background: transparent !important;
+}
+
+/* highlight.js 的 github 主题会给裸 code/.hljs 加浅灰背景，
+   在深色主题/非代码块场景下很突兀。这里清掉所有非 prose 内 code 的背景，
+   inline code 与代码块的受控背景由各自组件/prose 规则单独提供。 */
+code:not(.hljs):not(.prose code) {
+  background: transparent;
+}
+
+/* 代码块滚动条：默认隐藏，hover 时显示 */
+.axon-codeblock pre {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+/* 代码块深/浅主题背景变量（确保代码块始终与聊天背景有区分度）。
+   主用 VS Code 原生代码块底色 var；webview 暗色信号以 body.vscode-dark 为准，
+   prefers-color-scheme 作浏览器兜底。 */
+:root {
+  --axon-code-bg: rgba(0, 0, 0, 0.04);
+  --axon-code-header: rgba(0, 0, 0, 0.07);
+  --axon-code-border: rgba(0, 0, 0, 0.14);
+}
+body.vscode-dark, body.vscode-high-contrast {
+  --axon-code-bg: rgba(255, 255, 255, 0.08);
+  --axon-code-header: rgba(255, 255, 255, 0.13);
+  --axon-code-border: rgba(255, 255, 255, 0.2);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --axon-code-bg: rgba(255, 255, 255, 0.08);
+    --axon-code-header: rgba(255, 255, 255, 0.13);
+    --axon-code-border: rgba(255, 255, 255, 0.2);
+  }
+}
+
+.axon-codeblock pre:hover {
+  scrollbar-color: #d1d5db transparent; /* gray-300 */
+}
+
+@media (prefers-color-scheme: dark) {
+  .axon-codeblock pre:hover {
+    scrollbar-color: #4b5563 transparent; /* gray-600 */
+  }
+}
+
+.axon-codeblock pre::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.axon-codeblock pre::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.axon-codeblock pre::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background: transparent;
+  transition: background 0.2s;
+}
+
+.axon-codeblock pre:hover::-webkit-scrollbar-thumb {
+  background: #d1d5db; /* gray-300 */
+}
+
+.dark .axon-codeblock pre:hover::-webkit-scrollbar-thumb {
+  background: #4b5563; /* gray-600 */
+}
+
+/* 行内代码：每个 `code` 作为原子块，放不下时【整块】换到下一行（不从中间断词）；
+   靠垂直 margin 拉开换行后的行距，避免上下两行 code 贴紧。 */
+.prose :not(pre) > code {
+  display: inline-block;
+  white-space: nowrap;        /* 不在 code 内部断行：整块作为一个单位 */
+  padding: 0.12em 0.45em;
+  margin: 0.2em 0.18em;       /* 上下 0.2em 行距 + 左右 0.18em 间距 */
+  line-height: 1.4;
+  vertical-align: middle;
+  max-width: 100%;
+  overflow-x: auto;           /* 超长单 token 内部滚动，不溢出容器 */
+}
+
+/* 表格：外层 .axon-table-wrap 负责横向滚动，table 自身宽度自适应内容并铺满容器。
+   提升字号/行高/留白，统一边框与圆角，表头浅底突出。 */
+.axon-table-wrap {
+  margin: 0.75rem 0;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.prose .axon-table-wrap > table {
+  width: 100%;
+  min-width: 100%;
+  table-layout: auto;          /* 列宽随内容自适应 */
+  border-collapse: collapse;
+  margin: 0;                    /* 间距交给外层 wrap */
+  font-size: 13px;
+  line-height: 1.6;
+}
+.prose .axon-table-wrap thead {
+  background: var(--muted);
+}
+.prose .axon-table-wrap th,
+.prose .axon-table-wrap td {
+  padding: 7px 12px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-word;       /* 长内容换行，不撑爆列宽 */
+}
+.prose .axon-table-wrap th:last-child,
+.prose .axon-table-wrap td:last-child {
+  border-right: none;
+}
+.prose .axon-table-wrap th {
+  font-weight: 600;
+  white-space: nowrap;          /* 表头不换行，保持紧凑 */
+  color: var(--foreground);
+}
+.prose .axon-table-wrap tbody tr:last-child td {
+  border-bottom: none;
+}
+.prose .axon-table-wrap tbody tr {
+  transition: background-color 0.15s ease;
+}
+.prose .axon-table-wrap tbody tr:hover {
+  background: color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+
+/* 可交互元素统一显示手状光标 */
+button,
+[role="button"],
+select,
+[data-slot="select-trigger"],
+[data-slot="select-item"],
+input[type="file"],
+.cursor-pointer {
+  cursor: pointer;
+}
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/jetbrains-mono";
+
+@custom-variant dark (&:is(.dark *, .vscode-dark *));
+
+@theme inline {
+    --font-heading: var(--font-sans);
+    --font-sans: 'Geist Variable', "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+    --font-mono: 'JetBrains Mono Variable', ui-monospace, 'Cascadia Code', Consolas, monospace;
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.145 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.145 0 0);
+    --primary: oklch(0.205 0 0);
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.97 0 0);
+    --secondary-foreground: oklch(0.205 0 0);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.556 0 0);
+    --accent: oklch(0.97 0 0);
+    --accent-foreground: oklch(0.205 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    --border: oklch(0.922 0 0);
+    --input: oklch(0.922 0 0);
+    --ring: oklch(0.708 0 0);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --radius: 0.625rem;
+    --sidebar: oklch(0.985 0 0);
+    --sidebar-foreground: oklch(0.145 0 0);
+    --sidebar-primary: oklch(0.205 0 0);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.97 0 0);
+    --sidebar-accent-foreground: oklch(0.205 0 0);
+    --sidebar-border: oklch(0.922 0 0);
+    --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --sidebar: oklch(0.205 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.488 0.243 264.376);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground;
+    }
+  html {
+    @apply font-sans;
+    }
+}
+
+
+/* Relay 按钮呼吸灯：有活跃 Relay 时持续脉动发光，吸引注意 */
+@keyframes relay-breath {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.45);
+    border-color: rgba(99, 102, 241, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(99, 102, 241, 0);
+    border-color: rgba(99, 102, 241, 1);
+  }
+}
+
+.relay-breathing {
+  animation: relay-breath 1.8s ease-in-out infinite;
+}
+
+/* 尊重"减少动态效果"的系统偏好：关闭动画，仅保留高亮边框 */
+@media (prefers-reduced-motion: reduce) {
+  .relay-breathing {
+    animation: none;
+    border-color: rgba(99, 102, 241, 0.8);
+  }
+}
+
+
+/* 等宽字体覆盖：对齐 VS Code / Kiro 的编辑器字体体验。
+   Cascadia Code 是微软为编程设计的等宽字体（Windows 11 自带），
+   回退到 Consolas（Windows）/ Menlo（macOS）/ DejaVu Sans Mono（Linux）。
+   Tailwind 的 font-mono 全局引用 --font-mono，这里一处改所有 font-mono 都生效：
+   markdown 代码块、diff 面板、工具卡片路径标签等。 */
+:root {
+  --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   VS Code Webview 主题桥接
+   ═══════════════════════════════════════════════════════════════════════════════
+   VS Code 在 webview 的 <body> 上注入 --vscode-* CSS 变量和主题类名
+   （vscode-dark / vscode-light / vscode-high-contrast）。
+   这段把关键变量桥接到 web 使用的语义变量，使 UI 跟随 IDE 主题。
+   注意：只在 VS Code webview 内生效（独立运行时 --vscode-* 不存在，回退到上方默认值）。
+*/
+
+/* 字体与基础尺寸：跟随 VS Code 编辑器设置 */
+body[class*="vscode"] {
+  font-family: var(--vscode-font-family, 'Geist Variable', sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+  line-height: 1.5;
+}
+
+/* 深色主题：VS Code 注入 body.vscode-dark 时应用深色变量 */
+body.vscode-dark {
+  --background: var(--vscode-editor-background, oklch(0.145 0 0));
+  --foreground: var(--vscode-editor-foreground, oklch(0.985 0 0));
+  --card: var(--vscode-editorWidget-background, oklch(0.205 0 0));
+  --card-foreground: var(--vscode-editorWidget-foreground, oklch(0.985 0 0));
+  --popover: var(--vscode-editorWidget-background, oklch(0.205 0 0));
+  --popover-foreground: var(--vscode-editorWidget-foreground, oklch(0.985 0 0));
+  --primary: var(--vscode-button-background, oklch(0.922 0 0));
+  --primary-foreground: var(--vscode-button-foreground, oklch(0.205 0 0));
+  --secondary: var(--vscode-input-background, oklch(0.269 0 0));
+  --secondary-foreground: var(--vscode-input-foreground, oklch(0.985 0 0));
+  --muted: var(--vscode-input-background, oklch(0.269 0 0));
+  --muted-foreground: var(--vscode-descriptionForeground, oklch(0.708 0 0));
+  --accent: var(--vscode-focusBorder, oklch(0.269 0 0));
+  --accent-foreground: var(--vscode-editor-foreground, oklch(0.985 0 0));
+  --border: var(--vscode-panel-border, oklch(1 0 0 / 10%));
+  --input: var(--vscode-input-background, oklch(1 0 0 / 15%));
+  --ring: var(--vscode-focusBorder, oklch(0.556 0 0));
+  --sidebar: var(--vscode-sideBar-background, oklch(0.205 0 0));
+  --sidebar-foreground: var(--vscode-sideBar-foreground, oklch(0.985 0 0));
+  --sidebar-border: var(--vscode-sideBar-border, oklch(1 0 0 / 10%));
+}
+
+/* 浅色主题 */
+body.vscode-light {
+  --background: var(--vscode-editor-background, oklch(1 0 0));
+  --foreground: var(--vscode-editor-foreground, oklch(0.145 0 0));
+  --card: var(--vscode-editorWidget-background, oklch(1 0 0));
+  --card-foreground: var(--vscode-editorWidget-foreground, oklch(0.145 0 0));
+  --popover: var(--vscode-editorWidget-background, oklch(1 0 0));
+  --popover-foreground: var(--vscode-editorWidget-foreground, oklch(0.145 0 0));
+  --primary: var(--vscode-button-background, oklch(0.205 0 0));
+  --primary-foreground: var(--vscode-button-foreground, oklch(0.985 0 0));
+  --secondary: var(--vscode-input-background, oklch(0.97 0 0));
+  --secondary-foreground: var(--vscode-input-foreground, oklch(0.205 0 0));
+  --muted: var(--vscode-input-background, oklch(0.97 0 0));
+  --muted-foreground: var(--vscode-descriptionForeground, oklch(0.556 0 0));
+  --accent: var(--vscode-focusBorder, oklch(0.97 0 0));
+  --accent-foreground: var(--vscode-editor-foreground, oklch(0.205 0 0));
+  --border: var(--vscode-panel-border, oklch(0.922 0 0));
+  --input: var(--vscode-input-background, oklch(0.922 0 0));
+  --ring: var(--vscode-focusBorder, oklch(0.708 0 0));
+  --sidebar: var(--vscode-sideBar-background, oklch(0.985 0 0));
+  --sidebar-foreground: var(--vscode-sideBar-foreground, oklch(0.145 0 0));
+  --sidebar-border: var(--vscode-sideBar-border, oklch(0.922 0 0));
+}
+
+/* 高对比度主题 */
+body.vscode-high-contrast {
+  --background: var(--vscode-editor-background, #000000);
+  --foreground: var(--vscode-editor-foreground, #ffffff);
+  --border: var(--vscode-contrastBorder, #ffffff);
+  --input: var(--vscode-input-background, #000000);
+  --ring: var(--vscode-focusBorder, #f38518);
+}

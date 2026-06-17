@@ -1,0 +1,14 @@
+# Axon Monorepo 工作区定义
+#
+# 分层：
+#   packages/*  —— 可复用内核与宿主实现（@axon/core / host-node / host-vscode 等）
+#   apps/*      —— 各形态应用（server / web / cli / vscode-extension）
+#
+# 过渡期策略（阶段 1）：现有 server / web / cli 仍用各自的 npm 工程，【暂不纳入】
+# pnpm workspace，避免触碰其依赖安装、造成版本漂移。先在隔离的 packages/* 中用真实
+# 代码验证两层抽象接口；待接口锁定、内核迁移就绪，再把它们平移进 apps/ 并纳入工作区。
+packages:
+  - "packages/*"
+  - "apps/*"
+  - "server"
+  - "test/eval"

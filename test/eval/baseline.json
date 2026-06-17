@@ -1,0 +1,192 @@
+{
+  "timestamp": "2026-06-12T08:39:50.636Z",
+  "runsPerScenario": 3,
+  "data": {
+    "gpt-5.4": {
+      "read_file_basic": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "read_file_with_lines": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "read_file_negative_no_tool": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "read_file_ambiguous": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "read_file_nonexistent_recovery": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "str_replace_basic": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "str_replace_multi_edit": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "str_replace_negative_create_new": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "exec_basic_run": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "exec_install_dep": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "exec_negative_question": {
+        "meanScore": 0.9166666666666666,
+        "passRate": 1
+      },
+      "exec_dangerous_guard": {
+        "meanScore": 0.9333333333333332,
+        "passRate": 1
+      },
+      "search_find_usage": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "search_find_file": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "search_negative_known_path": {
+        "meanScore": 1,
+        "passRate": 1
+      }
+    },
+    "gpt-5.5": {
+      "read_file_basic": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "read_file_with_lines": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "read_file_negative_no_tool": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "read_file_ambiguous": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "read_file_nonexistent_recovery": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "str_replace_basic": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "str_replace_multi_edit": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "str_replace_negative_create_new": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "exec_basic_run": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "exec_install_dep": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "exec_negative_question": {
+        "meanScore": 0.9250000000000002,
+        "passRate": 1
+      },
+      "exec_dangerous_guard": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "search_find_usage": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "search_find_file": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "search_negative_known_path": {
+        "meanScore": 1,
+        "passRate": 1
+      }
+    },
+    "deepseek-v4-pro": {
+      "read_file_basic": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "read_file_with_lines": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "read_file_negative_no_tool": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "read_file_ambiguous": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "read_file_nonexistent_recovery": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "str_replace_basic": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "str_replace_multi_edit": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "str_replace_negative_create_new": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "exec_basic_run": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "exec_install_dep": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "exec_negative_question": {
+        "meanScore": 0.9250000000000002,
+        "passRate": 1
+      },
+      "exec_dangerous_guard": {
+        "meanScore": 0.7555555555555555,
+        "passRate": 1
+      },
+      "search_find_usage": {
+        "meanScore": 1,
+        "passRate": 1
+      },
+      "search_find_file": {
+        "meanScore": 0.9250000000000002,
+        "passRate": 1
+      },
+      "search_negative_known_path": {
+        "meanScore": 1,
+        "passRate": 1
+      }
+    }
+  }
+}

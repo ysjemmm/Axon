@@ -1,0 +1,39 @@
+{
+  "name": "@axon/eval",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Axon 工具使用 A/B 评估框架",
+  "scripts": {
+    "eval": "node --import=dotenv/config --experimental-strip-types src/runner.ts",
+    "eval:tool": "node --import=dotenv/config --experimental-strip-types src/runner.ts --tool",
+    "ab": "node --import=dotenv/config --experimental-strip-types src/abrunner.ts",
+    "models": "node --import=dotenv/config --experimental-strip-types src/abrunner.ts --preset models",
+    "baseline": "node --import=dotenv/config --experimental-strip-types src/abrunner.ts --preset models --exclude web_search --runs 3 --save-baseline",
+    "gate": "node --import=dotenv/config --experimental-strip-types src/abrunner.ts --preset models --exclude web_search --runs 3 --gate",
+    "multi": "node --import=dotenv/config --experimental-strip-types src/runnerMulti.ts",
+    "test:tools": "node --experimental-strip-types src/toolTests.ts",
+    "test:patch": "node --experimental-strip-types src/applyPatchTests.ts",
+    "test:guard": "node --experimental-strip-types src/guardTests.ts",
+    "test:safety": "node --experimental-strip-types src/safetyTests.ts",
+    "test:edit": "node --experimental-strip-types src/editTests.ts",
+    "test:trust": "node --experimental-strip-types src/commandTrustTests.ts",
+    "multi:edit": "node --import=dotenv/config --experimental-strip-types src/runnerMulti.ts --suite edit",
+    "stress:edit": "node --import=dotenv/config --experimental-strip-types src/editStress.ts",
+    "stress:largefile": "node --import=dotenv/config --experimental-strip-types src/largeFileStress.ts",
+    "stress:patch": "node --import=dotenv/config --experimental-strip-types src/applyPatchStress.ts",
+    "stress:reject": "node --import=dotenv/config --experimental-strip-types src/rejectRevertStress.ts",
+    "stress:undo": "node --experimental-strip-types src/undoRevertStress.ts",
+    "test:injection": "node --import=dotenv/config --experimental-strip-types src/injectionTests.ts"
+  },
+  "dependencies": {
+    "@axon/core": "workspace:*",
+    "@axon/host-node": "workspace:*",
+    "dotenv": "^16.4.0",
+    "openai": "^4.80.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

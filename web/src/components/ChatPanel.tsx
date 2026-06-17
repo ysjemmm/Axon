@@ -1,0 +1,1079 @@
+/**
+ * ChatPanel —— 单个会话面板的 UI 壳层（多会话版）
+ *
+ * 会话与传输逻辑收敛在 useChatSession hook，本组件只负责：
+ * 输入区编排、消息列表渲染、滚动跟随、文件/图片处理、各类弹窗。
+ *
+ * 多会话：每个面板有稳定的 clientId（事件总线路由 + 命令打标），由 SessionContainer 管理生命周期。
+ */
+
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { Send, Loader2, Copy, ImagePlus, X, FileText, Paperclip, Plus, Camera, Feather, Check, ChevronDown, ListChecks, Sparkles, Globe, ShieldAlert, Undo2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { ModelSelector, autoSelectModel, useModels, findModel } from "@/components/ModelSelector";
+import { WorkspacePicker } from "@/components/WorkspacePicker";
+import { WorkspaceGroupManager, type WorkspaceGroup } from "@/components/WorkspaceGroupManager";
+import { AxonLogo } from "@/components/AxonLogo";
+import { SkillStudio } from "@/components/SkillStudio";
+
+import type { AttachedFile, ChatPanelProps, ReplyStyle, UserSegment } from "./chat/types";
+import { REPLY_STYLES } from "./chat/types";
+import { FILE_MAX_SIZE, isAllowedTextFile, looksBinary } from "./chat/fileUtils";
+import { ReasoningBlock } from "./chat/ReasoningBlock";
+import { MessageBubble } from "./chat/MessageBubble";
+import { PendingFileRow } from "./chat/PendingFileRow";
+import { disambiguatePaths } from "./ToolCallItem";
+import { MentionEditor, type MentionEditorHandle } from "./chat/MentionEditor";
+import { TokenIndicator } from "./chat/TokenIndicator";
+import { useChatSession, type SubmitPayload } from "./chat/useChatSession";
+import { useSessionEvents } from "@/hooks/useSessionEvents";
+import { useSlashCommands } from "./chat/slash/useSlashCommands";
+import { useSlashCommandHost } from "./chat/slash/useSlashCommandHost";
+import { SlashCommandMenu } from "./chat/slash/SlashCommandMenu";
+import { DEFAULT_SLASH_COMMANDS } from "./chat/slash/commands";
+import { CommandApprovalContext } from "./chat/commandApprovalContext";
+import { QuestionListPanel } from "./chat/QuestionListPanel";
+import { VirtualMessageList, type VirtualMessageListHandle } from "./chat/VirtualMessageList";
+
+export function ChatPanel({ clientId, sessionId, mode, connected, active, send, onSessionCreated, onStreamingChange }: ChatPanelProps) {
+  const session = useChatSession({ clientId, sessionId, mode, connected, send, onSessionCreated, onStreamingChange });
+
+  // ── 输入区编排（壳层本地状态） ──────────────────────────────────────────
+  const [images, setImages] = useState<string[]>([]);
+  const [fileError, setFileError] = useState<string>("");
+  const [composerEmpty, setComposerEmpty] = useState(true); // 编辑器是否为空（控制发送按钮可用态）
+  const [replyStyle, setReplyStyle] = useState<ReplyStyle>("default");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [groupManagerOpen, setGroupManagerOpen] = useState(false);
+  const [skillStudioOpen, setSkillStudioOpen] = useState(false);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  // 问题列表 Popover 受控状态
+  const [questionListOpen, setQuestionListOpen] = useState(false);
+  // 顶部 sticky：当前视图所属 AI 回答对应的用户提问
+  const [stickyQuestion, setStickyQuestion] = useState<{ id: string; text: string } | null>(null);
+  const lastStickyIdRef = useRef<string | null>(null);
+
+  const virtualListRef = useRef<VirtualMessageListHandle>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<MentionEditorHandle>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const docInputRef = useRef<HTMLInputElement>(null);
+
+  // ── 斜杠命令（/）：当前文件 / 搜索文件 / 搜索文件夹 / 诊断 ──────────────
+  // QUEST（纯问答）模式去掉“问题/诊断”（诊断主要服务于 Agent 改代码场景），保留当前文件与文件/文件夹搜索
+  const slashCommands = useMemo(
+    () => (mode === "quest" ? DEFAULT_SLASH_COMMANDS.filter((c) => c.id !== "problems") : DEFAULT_SLASH_COMMANDS),
+    [mode],
+  );
+  const slashHost = useSlashCommandHost(clientId, editorRef);
+  const slashEditorBridge = useMemo(
+    () => ({
+      deleteBeforeCaret: (len: number) => editorRef.current?.deleteBeforeCaret(len),
+      focus: () => editorRef.current?.focus(),
+    }),
+    [],
+  );
+  const slash = useSlashCommands({ host: slashHost, editor: slashEditorBridge, commands: slashCommands });
+
+  /** 编辑器内容变化：刷新空态 + 驱动斜杠检测 */
+  const handleEditorChange = useCallback((before: string) => {
+    setComposerEmpty(editorRef.current?.isEmpty() ?? true);
+    slash.handleTextChange(before);
+  }, [slash]);
+
+  /** 当前模型是否支持图片（含自定义 provider 模型，故走合并列表） */
+  const models = useModels();
+  const currentModelVision = models.find((m) => m.id === session.model)?.vision ?? false;
+
+  // 命令审批 Context：把"按 toolCallId 索引的待审批项 + 决策回调"下发给对话流里的命令卡片
+  const commandApprovalCtx = useMemo(
+    () => ({ approvals: session.commandApprovals, onApprove: session.approveCommand }),
+    [session.commandApprovals, session.approveCommand],
+  );
+
+  /** 用户提问文本（content 优先，回退到 userSegments 拼接），供 sticky 条展示 */
+  const questionTextById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const m of session.chatHistory) {
+      if (m.role !== "user") continue;
+      let text = (m.content || "").trim();
+      if (!text && m.userSegments && m.userSegments.length > 0) {
+        text = m.userSegments.map((s) => (s.type === "text" ? s.text : s.tag?.name ?? "")).join("").trim();
+      }
+      map.set(m.id, text);
+    }
+    return map;
+  }, [session.chatHistory]);
+
+  /** 点击 sticky 条：平滑滚动到对应提问处，落点刚好在 sticky 条下方一点 */
+  const scrollToQuestion = useCallback((id: string) => {
+    const idx = session.chatHistory.findIndex((m) => m.id === id);
+    if (idx >= 0) virtualListRef.current?.scrollToIndex(idx, "smooth");
+  }, [session.chatHistory]);
+
+  // ── 自动滚动 ──────────────────────────────────────────────────────────────
+  const SCROLL_BOTTOM_THRESHOLD = 80;
+  const isAtBottomRef = useRef(true);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "instant") => {
+    isAtBottomRef.current = true;
+    setShowScrollBtn(false);
+    virtualListRef.current?.scrollToBottom(behavior);
+  }, []);
+
+  const animatedScrollToBottom = useCallback(() => {
+    virtualListRef.current?.scrollToBottom("smooth");
+    isAtBottomRef.current = true;
+    setShowScrollBtn(false);
+  }, []);
+
+  // 列表滚动回调（stable ref 避免 VirtualMessageList 频繁重注册监听器）
+  const handleScrollRef = useRef<((scrollTopVal: number) => void) | null>(null);
+
+  // 内容高度变化 → 自动刷到底部（流式跟随）
+  // 用 rAF 延迟一帧：此时 React 已 flush DOM，container.scrollHeight 是包含 footer 的最新值
+  const handleTotalHeightChange = useCallback(() => {
+    if (!isAtBottomRef.current) return;
+    requestAnimationFrame(() => {
+      virtualListRef.current?.scrollToBottom("instant");
+    });
+  }, []);
+
+  // sticky user question 检测（每次滚动时重新计算视口上方最后一条 user 消息）
+  const stickyDetectRef = useRef<((scrollTopVal: number) => void) | null>(null);
+  stickyDetectRef.current = (scrollTopVal: number) => {
+    const THRESHOLD = 8;
+    let current: { id: string; text: string } | null = null;
+    for (let i = 0; i < session.chatHistory.length; i++) {
+      const m = session.chatHistory[i];
+      if (m.role !== "user") continue;
+      const offset = virtualListRef.current?.getMessageOffset(m.id);
+      if (offset !== undefined && offset < scrollTopVal + THRESHOLD) {
+        current = { id: m.id, text: questionTextById.get(m.id) || "" };
+      }
+    }
+    const nextId = current?.id ?? null;
+    if (nextId !== lastStickyIdRef.current) {
+      lastStickyIdRef.current = nextId;
+      setStickyQuestion(current && current.text ? current : null);
+    }
+  };
+
+  handleScrollRef.current = (scrollTopVal: number) => {
+    const state = virtualListRef.current?.getScrollState();
+    if (state) {
+      const distanceToBottom = state.scrollHeight - scrollTopVal - state.clientHeight;
+      isAtBottomRef.current = distanceToBottom <= SCROLL_BOTTOM_THRESHOLD;
+      setShowScrollBtn(distanceToBottom > 200);
+    }
+    stickyDetectRef.current?.(scrollTopVal);
+  };
+
+  const stableOnScroll = useCallback((scrollTopVal: number) => {
+    handleScrollRef.current?.(scrollTopVal);
+  }, []);
+
+  // 内容变化时自动跟随（仅当用户当前在底部时才滚底，避免接受/拒绝等状态更新把阅读位置跳走）
+  // 内容跟随滚动由下方 ResizeObserver 统一驱动（监听内容高度变化），
+  // 这样流式文字、命令输出、新卡片等任何高度增长都能即时跟随，不再依赖易漏的内容指纹。
+
+  // 撤销失败轻提示：3 秒后自动消失
+  useEffect(() => {
+    if (!session.undoNotice) return;
+    const t = setTimeout(() => session.setUndoNotice(null), 3000);
+    return () => clearTimeout(t);
+  }, [session.undoNotice, session.setUndoNotice]);
+
+  // 会话清空时重置顶部 sticky 提问条
+  useEffect(() => {
+    if (session.chatHistory.length === 0) {
+      lastStickyIdRef.current = null;
+      setStickyQuestion(null);
+    }
+  }, [session.chatHistory.length]);
+
+  // 流式期间持续跟随滚底：rAF 循环兜底覆盖所有高度变化场景
+  // （虚拟消息增长、footer 内容变化、工具卡片内部滚动等 handleTotalHeightChange 遗漏的路径）
+  useEffect(() => {
+    if (!session.isLoading) return;
+    let rafId: number;
+    const loop = () => {
+      if (isAtBottomRef.current) {
+        virtualListRef.current?.scrollToBottom("instant");
+      }
+      rafId = requestAnimationFrame(loop);
+    };
+    rafId = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(rafId);
+  }, [session.isLoading]);
+
+  // 切回该会话（变为可见）时自动滚到底部——等淡入/布局就绪后下一帧执行
+  useEffect(() => {
+    if (!active) return;
+    const id = requestAnimationFrame(() => scrollToBottom("instant"));
+    return () => cancelAnimationFrame(id);
+  }, [active, scrollToBottom]);
+
+  // 连接断开时把用户最后一条问题回填到输入框
+  useEffect(() => {
+    if (!connected && session.isLoading) {
+      const lastUserMsg = session.chatHistory.filter((m) => m.role === "user").pop();
+      if (lastUserMsg?.content) {
+        editorRef.current?.setText(lastUserMsg.content);
+        setComposerEmpty(editorRef.current?.isEmpty() ?? false);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected]);
+
+  // ── 发送 ──────────────────────────────────────────────────────────────────
+  const doSend = (text: string, sendImgs: string[], sendFileList: AttachedFile[], segments: UserSegment[]) => {
+    const sendImages = currentModelVision ? sendImgs : [];
+    const sendFiles = [...sendFileList];
+
+    let contentForModel = text;
+    if (sendFiles.length > 0) {
+      const fileBlocks = sendFiles
+        .map((f) => {
+          if (f.kind === "terminal") return `终端输出（${f.name}）：\n\`\`\`\n${f.content}\n\`\`\``;
+          if (f.kind === "editor") return `代码片段（${f.name}）：\n\`\`\`\n${f.content}\n\`\`\``;
+          if (f.kind === "folder") return f.content;
+          if (f.kind === "diagnostics") return `诊断信息（${f.name}）：\n\`\`\`\n${f.content}\n\`\`\``;
+          return `文件：${f.name}\n\`\`\`\n${f.content}\n\`\`\``;
+        })
+        .join("\n\n");
+      contentForModel = text
+        ? `${text}\n\n以下是我提供的上下文：\n\n${fileBlocks}`
+        : `以下是我提供的上下文：\n\n${fileBlocks}`;
+    }
+
+    let actualModel = session.model;
+    let actualProvider = findModel(session.model)?.provider;
+    if (session.model === "auto") {
+      const selected = autoSelectModel(contentForModel, sendImages.length > 0);
+      actualModel = selected.id;
+      actualProvider = selected.provider;
+    }
+
+    const payload: SubmitPayload = {
+      userBubble: {
+        content: text,
+        images: sendImages.length > 0 ? [...sendImages] : undefined,
+        attachedFiles: sendFiles.length > 0 ? sendFiles : undefined,
+        segments: segments.length > 0 ? segments : undefined,
+      },
+      send: {
+        content: contentForModel,
+        displayText: text,
+        attachedFiles: sendFiles.length > 0 ? sendFiles.map((f) => ({ name: f.name, size: f.size })) : undefined,
+        userSegments: segments.length > 0 ? segments : undefined,
+        model: actualModel,
+        provider: actualProvider,
+        images: sendImages.length > 0 ? sendImages : undefined,
+        workspace: mode === "quest" ? undefined : (session.workspace || undefined),
+        workspaces: mode === "quest" ? undefined : (session.workspaces.length > 0 ? session.workspaces : undefined),
+        replyStyle,
+        mode,
+        quest: mode === "quest" ? { think: session.questThink, webSearch: session.questWebSearch } : undefined,
+      },
+    };
+
+    const queued = session.submit(payload);
+    if (!queued) {
+      requestAnimationFrame(() => scrollToBottom("smooth"));
+      editorRef.current?.focus();
+    }
+  };
+
+  const handleSend = () => {
+    const { text, tags, segments } = editorRef.current?.read() ?? { text: "", tags: [], segments: [] };
+    if (!text && images.length === 0 && tags.length === 0) return;
+    doSend(text, images, tags, segments);
+    editorRef.current?.clear();
+    setComposerEmpty(true);
+    setImages([]);
+    setFileError("");
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
+  const handleModelChange = (newModel: string) => {
+    const targetModel = findModel(newModel);
+    if (images.length > 0 && targetModel && !targetModel.vision) return; // 有图片时禁止切到不支持 vision 的模型
+    session.setModel(newModel);
+  };
+
+  // ── 图片/文件处理 ──────────────────────────────────────────────────────────
+  const fileToBase64 = (file: File): Promise<string> => new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.readAsDataURL(file);
+  });
+
+  const addImages = async (files: FileList | File[]) => {
+    if (!currentModelVision) return;
+    const imageFiles = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    const base64List = await Promise.all(imageFiles.map(fileToBase64));
+    setImages((prev) => [...prev, ...base64List]);
+  };
+
+  const captureScreenshot = async () => {
+    if (!currentModelVision) {
+      setFileError("当前模型不支持图片，无法使用截图");
+      return;
+    }
+    if (navigator.mediaDevices?.getDisplayMedia) {
+      let stream: MediaStream | null = null;
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        const track = stream.getVideoTracks()[0];
+        const video = document.createElement("video");
+        video.srcObject = stream;
+        await video.play();
+        await new Promise((r) => requestAnimationFrame(() => r(null)));
+        const canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext("2d");
+        if (!ctx || canvas.width === 0) throw new Error("无法读取画面");
+        ctx.drawImage(video, 0, 0);
+        const dataUrl = canvas.toDataURL("image/png");
+        track.stop();
+        setImages((prev) => [...prev, dataUrl]);
+        setFileError("");
+        return;
+      } catch (err) {
+        if ((err as Error).name !== "NotAllowedError") {
+          console.warn("[screenshot] getDisplayMedia 失败,尝试剪贴板降级:", err);
+        } else {
+          return;
+        }
+      } finally {
+        stream?.getTracks().forEach((t) => t.stop());
+      }
+    }
+    if (!navigator.clipboard?.read) {
+      setFileError("当前环境不支持截图（需要 HTTPS 或浏览器剪贴板权限）");
+      return;
+    }
+    try {
+      const items = await navigator.clipboard.read();
+      let found = false;
+      for (const item of items) {
+        const imageType = item.types.find((t) => t.startsWith("image/"));
+        if (imageType) {
+          const blob = await item.getType(imageType);
+          const dataUrl = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.readAsDataURL(blob);
+          });
+          setImages((prev) => [...prev, dataUrl]);
+          found = true;
+          break;
+        }
+      }
+      if (!found) setFileError("剪贴板中没有图片。请先用 Win+Shift+S 截图，再点此按钮");
+      else setFileError("");
+    } catch (err) {
+      if ((err as Error).name === "NotAllowedError") {
+        setFileError("浏览器拒绝了剪贴板访问权限，请在权限提示中点击「允许」");
+      } else {
+        setFileError(`读取剪贴板失败：${(err as Error).message}`);
+      }
+    }
+  };
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    if (!currentModelVision) return;
+    const files = e.clipboardData.files;
+    if (files.length > 0) {
+      e.preventDefault();
+      addImages(files);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+    const imgs = files.filter((f) => f.type.startsWith("image/"));
+    const docs = files.filter((f) => !f.type.startsWith("image/"));
+    if (imgs.length > 0 && currentModelVision) addImages(imgs);
+    if (docs.length > 0) addFiles(docs);
+  };
+
+  const removeImage = (index: number) => setImages((prev) => prev.filter((_, i) => i !== index));
+
+  const readFileAsText = (file: File): Promise<string> => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string) ?? "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file);
+  });
+
+  const addFiles = async (files: FileList | File[]) => {
+    setFileError("");
+    const list = Array.from(files);
+    const errors: string[] = [];
+    let added = 0;
+    for (const file of list) {
+      if (!isAllowedTextFile(file.name)) { errors.push(`${file.name}：不支持的文件类型`); continue; }
+      if (file.size > FILE_MAX_SIZE) { errors.push(`${file.name}：超过 ${Math.round(FILE_MAX_SIZE / 1024)}KB 限制`); continue; }
+      try {
+        const content = await readFileAsText(file);
+        if (looksBinary(content)) { errors.push(`${file.name}：疑似二进制文件，已跳过`); continue; }
+        // 上传文件内容已在本地读到，直接作为 tag 插入编辑器（无需走扩展回灌）
+        editorRef.current?.insertTag({ name: file.name, content, size: file.size, kind: "file" });
+        added++;
+      } catch {
+        errors.push(`${file.name}：读取失败`);
+      }
+    }
+    if (added > 0) setComposerEmpty(editorRef.current?.isEmpty() ?? false);
+    if (errors.length > 0) setFileError(errors.join("；"));
+  };
+
+  // 接收外部注入的上下文 → 作为内联 tag 插入编辑器。
+  // 带 contextId（斜杠命令触发，已先插入占位 tag）→ 补全该 tag；否则（终端/编辑器选区）→ 在光标处插入新 tag。
+  useSessionEvents(clientId, useCallback((msg) => {
+    if (msg.type !== "add_context") return;
+    const text = (msg as { text?: string }).text;
+    if (text === undefined) return;
+    const rawSource = (msg as { source?: string }).source;
+    const kind: AttachedFile["kind"] =
+      rawSource === "editor" ? "editor"
+        : rawSource === "file" ? "file"
+          : rawSource === "folder" ? "folder"
+            : rawSource === "diagnostics" ? "diagnostics"
+              : "terminal";
+    const fallbackLabel =
+      kind === "editor" ? "代码片段"
+        : kind === "file" ? "文件"
+          : kind === "folder" ? "文件夹"
+            : kind === "diagnostics" ? "诊断"
+              : "终端选区";
+    const label = (msg as { label?: string }).label || fallbackLabel;
+    const sizeRaw = (msg as { size?: number }).size;
+    const size = typeof sizeRaw === "number" ? sizeRaw : text.length;
+    const contextId = (msg as { contextId?: string }).contextId;
+    if (contextId) {
+      editorRef.current?.updateTag(contextId, { name: label, content: text, size, kind });
+    } else {
+      editorRef.current?.insertTag({ name: label, content: text, size, kind });
+    }
+    setComposerEmpty(editorRef.current?.isEmpty() ?? false);
+  }, [clientId]));
+
+  // Skill Studio 整页接管
+  if (skillStudioOpen) {
+    return <SkillStudio workspace={session.workspace} onBack={() => setSkillStudioOpen(false)} />;
+  }
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+      {/* 消息列表 */}
+      <div className="relative flex-1 min-h-0 flex flex-col px-3">
+        {/* 顶部导航条：当前视图所属 AI 回答对应的用户提问，固定在消息列表上方（不浮动、不遮盖内容） */}
+        {stickyQuestion && (
+          <Popover open={questionListOpen} onOpenChange={setQuestionListOpen}>
+            <div className={`flex items-center gap-1 shrink-0 ${questionListOpen ? "" : "shadow-[0_2px_4px_-1px_rgba(0,0,0,0.06)]"}`}>
+              <button
+                onClick={() => scrollToQuestion(stickyQuestion.id)}
+                title="跳转到该提问"
+                className="flex-1 min-w-0 flex items-center gap-1.5 px-3 py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+              >
+                <ChevronDown className="w-3.5 h-3.5 shrink-0 text-primary/70 -rotate-90" />
+                <span className="truncate text-left">{stickyQuestion.text}</span>
+              </button>
+              <PopoverTrigger asChild>
+                <button
+                  title="查看所有用户问题"
+                  className="p-2 shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+                >
+                  <ListChecks className="w-3.5 h-3.5" />
+                </button>
+              </PopoverTrigger>
+            </div>
+            <PopoverContent
+              align="start"
+              side="bottom"
+              sideOffset={0}
+              collisionPadding={0}
+              className="!w-[var(--radix-popover-content-available-width)] p-0 max-h-[50vh] flex flex-col rounded-none border-t-0 shadow-lg origin-top data-[state=open]:animate-in data-[state=open]:slide-in-from-top-1 data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:slide-out-to-top-1 data-[state=closed]:fade-out-0 duration-150"
+            >
+              <QuestionListPanel
+                questions={session.chatHistory.filter((m) => m.role === "user").map((m) => ({
+                  id: m.id,
+                  text: questionTextById.get(m.id) || "",
+                  timestamp: m.timestamp,
+                  hasImage: !!(m.images && m.images.length > 0),
+                  files: m.attachedFiles?.map((f) => f.name),
+                }))}
+                onSelect={(id) => { setQuestionListOpen(false); scrollToQuestion(id); }}
+              />
+            </PopoverContent>
+          </Popover>
+        )}
+        <VirtualMessageList
+            ref={virtualListRef}
+            messages={session.chatHistory}
+            estimateHeight={200}
+            overscan={5}
+            onTotalHeightChange={handleTotalHeightChange}
+            onScroll={stableOnScroll}
+            header={
+              !connected && session.chatHistory.length > 0 ? (
+                <div className="flex items-center justify-center gap-2 py-2 px-4 rounded-lg bg-destructive/10 text-destructive text-xs">
+                  <X className="w-3.5 h-3.5" />
+                  连接已断开，请稍后重试
+                </div>
+              ) : undefined
+            }
+            footer={
+              <>
+                {session.reasoning && session.isLoading && <ReasoningBlock content={session.reasoning} />}
+                {session.isLoading && (
+                  <div className="flex items-center gap-2.5 text-muted-foreground text-sm px-3 py-1 pb-6">
+                    <svg width="28" height="28" viewBox="0 0 40 40" className="shrink-0">
+                      <circle cx="20" cy="20" r="17" fill="none" stroke="url(#axon-glow)" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="20 80" opacity="0.8">
+                        <animateTransform attributeName="transform" type="rotate" from="0 20 20" to="360 20 20" dur="1.5s" repeatCount="indefinite" />
+                      </circle>
+                      <circle cx="20" cy="20" r="13" fill="white" stroke="#1e1b4b" strokeWidth="1.5" />
+                      <ellipse cx="15" cy="19" rx="2" ry="2.5" fill="#6366f1">
+                        <animate attributeName="ry" values="2.5;1;2.5" dur="2.5s" repeatCount="indefinite" begin="0s" />
+                      </ellipse>
+                      <ellipse cx="25" cy="19" rx="2" ry="2.5" fill="#6366f1">
+                        <animate attributeName="ry" values="2.5;1;2.5" dur="2.5s" repeatCount="indefinite" begin="0.1s" />
+                      </ellipse>
+                      <defs>
+                        <linearGradient id="axon-glow" x1="0%" y1="0%" x2="100%" y2="100%">
+                          <stop offset="0%" stopColor="#6366f1" />
+                          <stop offset="50%" stopColor="#a78bfa" />
+                          <stop offset="100%" stopColor="#38bdf8" />
+                        </linearGradient>
+                      </defs>
+                    </svg>
+                    <span className="animate-pulse">{session.statusText}</span>
+                  </div>
+                )}
+                <div ref={bottomRef} />
+              </>
+            }
+            renderMessage={(msg, _idx) => (
+              <CommandApprovalContext.Provider value={commandApprovalCtx}>
+                <MessageBubble
+                  message={msg as any}
+                  onAcceptEdit={session.acceptEdits}
+                  onRejectEdit={session.rejectEdits}
+                  onUndoEdit={session.undoEdits}
+                  onQuoteToInput={(qMsg) => {
+                    if (qMsg.userSegments && qMsg.userSegments.length > 0) {
+                      editorRef.current?.appendSegments(qMsg.userSegments);
+                    } else if (qMsg.content) {
+                      editorRef.current?.appendText(qMsg.content);
+                    }
+                    if (qMsg.images && qMsg.images.length > 0) setImages((prev) => [...prev, ...qMsg.images!]);
+                    setComposerEmpty(editorRef.current?.isEmpty() ?? false);
+                  }}
+                  onImagePreview={setPreviewImage}
+                />
+              </CommandApprovalContext.Provider>
+            )}
+          />
+          {/* 空历史占位 */}
+          {session.chatHistory.length === 0 && session.isLoadingSession && (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="text-center text-muted-foreground py-20">
+                <Loader2 className="w-8 h-8 mx-auto mb-4 animate-spin text-primary/60" />
+                <p className="text-sm">会话历史加载中...</p>
+              </div>
+            </div>
+          )}
+          {session.chatHistory.length === 0 && !session.isLoadingSession && (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="text-center text-muted-foreground py-20">
+                <AxonLogo size={64} className="mx-auto mb-4" />
+                {mode === "quest" ? (
+                  <>
+                    <p className="text-lg">Axon · 问答</p>
+                    <p className="text-sm mt-2">概念、方案、答疑。我不会改你的代码。</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-lg">Axon</p>
+                    <p className="text-sm mt-2">读写代码、执行命令、搜索项目、联网查询。</p>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+        <button
+          onClick={animatedScrollToBottom}
+          className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-10 w-9 h-9 rounded-full bg-background border border-border shadow-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:shadow-lg transition-all duration-200 ${showScrollBtn ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-2 pointer-events-none"}`}
+          title="滚动到底部"
+          aria-label="滚动到底部"
+        >
+          <ChevronDown className="w-5 h-5" />
+        </button>
+      </div>
+
+      {/* 输入区域 */}
+      <div className="px-3 py-4">
+        {/* 待确认改动汇总条 */}
+        {session.pendingPaths.length > 0 && (
+          <div className="mb-2 rounded-lg border border-amber-300/60 bg-amber-50 dark:bg-amber-950/30 overflow-hidden">
+            <div className="flex items-center gap-2 px-3 py-2 text-sm">
+              <button
+                onClick={() => session.setPendingExpanded((v) => !v)}
+                className="flex items-center gap-1.5 flex-1 text-left text-amber-700 dark:text-amber-400"
+                title="展开/收起文件清单"
+              >
+                <ChevronDown className={`w-4 h-4 shrink-0 transition-transform ${session.pendingExpanded ? "" : "-rotate-90"}`} />
+                <FileText className="w-4 h-4 shrink-0" />
+                <span>{session.pendingPaths.length} 处改动待确认</span>
+              </button>
+              <button
+                onClick={() => session.acceptEdits()}
+                className="px-2.5 py-1 rounded-md bg-green-600 text-white text-xs hover:bg-green-700 transition-colors"
+              >
+                全部接受
+              </button>
+              <button
+                onClick={() => session.rejectEdits()}
+                className="px-2.5 py-1 rounded-md border border-border text-xs text-muted-foreground hover:bg-muted/50 transition-colors"
+              >
+                全部拒绝
+              </button>
+            </div>
+            {session.pendingExpanded && (
+              <div className="border-t border-amber-300/40 px-3 py-1.5 space-y-1">
+                {(() => {
+                  // 最小不重复路径：同名文件才补上区分路径，否则只显示文件名（复用 disambiguatePaths）
+                  const names = disambiguatePaths(session.pendingPaths);
+                  return session.pendingPaths.map((p, idx) => (
+                    <PendingFileRow key={p} path={p} displayName={names[idx]} diff={session.pendingDiffs[p]} onAccept={session.acceptEdits} onReject={session.rejectEdits} />
+                  ));
+                })()}
+              </div>
+            )}
+          </div>
+        )}
+        <div className="relative">
+          {/* 斜杠命令菜单（贴输入框上方，置于 overflow-hidden 容器之外避免被裁剪） */}
+          {slash.open && (
+            <SlashCommandMenu
+              mode={slash.mode}
+              breadcrumb={slash.activeCommand?.label ?? null}
+              commandItems={slash.commandItems}
+              fallbackResults={slash.fallbackResults}
+              results={slash.results}
+              loading={slash.loading}
+              activeIndex={slash.activeIndex}
+              onHover={slash.setActiveIndex}
+              onSelect={slash.selectAt}
+              onRequestClose={slash.close}
+            />
+          )}
+        <div
+          className="border border-border rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-ring focus-within:border-transparent transition-all relative"
+          onDrop={handleDrop}
+          onDragOver={(e) => e.preventDefault()}
+        >
+          {/* 图片预览区 */}
+          {images.length > 0 && (
+            <div className="flex gap-2 px-4 pt-3 pr-12 flex-wrap">
+              {images.map((img, i) => (
+                <div key={i} className="relative group">
+                  <img src={img} alt="" className="w-16 h-16 object-cover rounded-lg border border-border" />
+                  <button
+                    onClick={() => removeImage(i)}
+                    className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* 文件 / 上下文预览区已移到输入框内，与输入文字同处一行（见下方内联 tag） */}
+          {fileError && <div className="px-4 pt-2 text-xs text-destructive">{fileError}</div>}
+          {/* 排队消息 */}
+          {session.messageQueue.length > 0 && (
+            <div className="px-3 pr-12 pt-2 pb-1 border-b border-border/40">
+              <div className="text-[10px] text-muted-foreground/60 font-medium mb-1">排队中（当前回复结束后自动发送）</div>
+              <div className="max-h-20 overflow-y-auto space-y-1">
+                {session.messageQueue.map((q) => {
+                  const ub = q.payload.userBubble;
+                  const label = ub.content || (ub.attachedFiles && ub.attachedFiles.length > 0 ? `[${ub.attachedFiles.length} 个文件]` : "[图片]");
+                  return (
+                    <div key={q.id} className="flex items-center gap-2 px-2 py-1 rounded bg-muted/40 text-xs text-foreground/80">
+                      <span className="flex-1 truncate">{label}</span>
+                      <button
+                        onClick={() => session.removeFromQueue(q.id)}
+                        className="px-1.5 py-0.5 rounded text-[10px] text-muted-foreground hover:text-red-500 hover:bg-muted/60 shrink-0"
+                        title="移除此条"
+                      >
+                        移除
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {/* 工具确认条 */}
+          {session.toolConfirm && (
+            <div className="flex items-center gap-2 px-3 py-2 bg-primary/5 border border-primary/20 rounded-lg mb-2">
+              <ListChecks className="w-4 h-4 text-primary shrink-0" />
+              <span className="text-xs flex-1 min-w-0 truncate">
+                {session.toolConfirm.kind === "mcp"
+                  ? `AI 请求调用 MCP 工具「${session.toolConfirm.title}」`
+                  : `AI 建议创建 Relay 工作流「${session.toolConfirm.title}」`}
+              </span>
+              <button
+                onClick={() => session.confirmTool(true)}
+                className="px-2.5 py-1 rounded text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+              >
+                确认
+              </button>
+              <button
+                onClick={() => session.confirmTool(false)}
+                className="px-2.5 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+              >
+                跳过
+              </button>
+            </div>
+          )}
+          {/* 撤销失败轻提示（保守策略：文件未被改动）。3 秒后自动消失 */}
+          {session.undoNotice && (
+            <div className="flex items-start gap-2 px-3 py-2 bg-amber-50 dark:bg-amber-950/20 border border-amber-300/50 rounded-lg mb-2">
+              <Undo2 className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <p className="flex-1 min-w-0 text-[11px] text-muted-foreground">{session.undoNotice.text}</p>
+              <button
+                onClick={() => session.setUndoNotice(null)}
+                className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors shrink-0"
+                title="关闭"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+          {/* 危险命令被安全策略硬拦：可关闭的警告横幅（与给 AI 的错误分开，让用户知情） */}
+          {session.commandBlocked && (
+            <div className="flex items-start gap-2 px-3 py-2 bg-destructive/5 border border-destructive/20 rounded-lg mb-2">
+              <ShieldAlert className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium text-destructive">已拦截危险命令</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5 break-all font-mono">
+                  {session.commandBlocked.command}
+                </p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">原因：{session.commandBlocked.reason}</p>
+              </div>
+              <button
+                onClick={session.dismissCommandBlocked}
+                className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors shrink-0"
+                title="关闭"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+          {/* 命令信任授权改为内联在对应命令卡片下方（无感模式），见 ToolCallItem。此处不再用模态弹窗 */}
+          {/* 输入框：contentEditable 富文本，tag 内联在光标处（MentionEditor） */}
+          <div className="px-3 pr-10 pt-2 pb-1">
+            <MentionEditor
+              ref={editorRef}
+              disabled={!connected}
+              placeholder={connected ? (currentModelVision ? "给 Axon 发消息...（可粘贴或拖拽图片）" : "给 Axon 发消息...") : "等待连接..."}
+              onChange={handleEditorChange}
+              onKeyDown={(e) => {
+                // 斜杠菜单优先消费方向键/回车/Esc，未消费时再走默认发送逻辑
+                if (slash.handleKeyDown(e)) return;
+                handleKeyDown(e);
+              }}
+              onPaste={handlePaste}
+            />
+          </div>
+          {/* 底部工具栏 */}
+          <div className="flex items-center justify-between px-2 pb-1.5">
+            <div className="flex items-center gap-1">
+              <ModelSelector value={session.model} onChange={handleModelChange} disabledModels={images.length > 0 ? models.filter((m) => !m.vision).map((m) => m.id) : []} />
+
+              <Popover open={menuOpen} onOpenChange={setMenuOpen}>
+                <PopoverTrigger asChild>
+                  <button
+                    className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                    title="更多"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="start" side="top" className="w-52 p-1 gap-0">
+                  <button
+                    onClick={() => { docInputRef.current?.click(); setMenuOpen(false); }}
+                    className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs hover:bg-muted/60 transition-colors text-left"
+                  >
+                    <Paperclip className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                    <span className="flex-1">上传文件</span>
+                    <span className="text-[10px] text-muted-foreground/60">≤256KB</span>
+                  </button>
+                  <button
+                    onClick={() => { fileInputRef.current?.click(); setMenuOpen(false); }}
+                    disabled={!currentModelVision}
+                    className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs hover:bg-muted/60 transition-colors text-left disabled:opacity-40 disabled:cursor-not-allowed"
+                    title={currentModelVision ? "" : "当前模型不支持图片"}
+                  >
+                    <ImagePlus className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                    <span className="flex-1">上传图片</span>
+                  </button>
+                  <button
+                    onClick={() => { captureScreenshot(); setMenuOpen(false); }}
+                    disabled={!currentModelVision}
+                    className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs hover:bg-muted/60 transition-colors text-left disabled:opacity-40 disabled:cursor-not-allowed"
+                    title={currentModelVision ? "" : "当前模型不支持图片"}
+                  >
+                    <Camera className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                    <span className="flex-1">截图</span>
+                  </button>
+
+                  <div className="my-0.5 border-t border-border" />
+
+                  <div className="px-2 pt-1 pb-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                    <Feather className="w-3 h-3" />
+                    回复风格
+                  </div>
+                  {REPLY_STYLES.map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => { setReplyStyle(s.id); setMenuOpen(false); }}
+                      className="flex items-center gap-2 w-full px-2 py-1 rounded-md text-xs hover:bg-muted/60 transition-colors text-left"
+                    >
+                      <span className="w-3.5 shrink-0 flex justify-center">
+                        {replyStyle === s.id && <Check className="w-3 h-3 text-primary" />}
+                      </span>
+                      <span className="flex-1">{s.label}</span>
+                      <span className="text-[10px] text-muted-foreground/60">{s.hint}</span>
+                    </button>
+                  ))}
+                </PopoverContent>
+              </Popover>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(e) => { if (e.target.files) addImages(e.target.files); e.target.value = ""; }}
+              />
+              <input
+                ref={docInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }}
+              />
+
+              {replyStyle !== "default" && (
+                <span className="ml-1 px-2 py-0.5 rounded-full bg-muted text-xs text-muted-foreground">
+                  {REPLY_STYLES.find((s) => s.id === replyStyle)?.label}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              {mode === "quest" ? (
+                <>
+                  {/* Quest：思考开关 */}
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={() => session.setQuestThink(!session.questThink)}
+                          className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${session.questThink ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          思考
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" align="end" className="max-w-[220px]">
+                        <p className="text-xs text-muted-foreground">开启后展示模型的思考过程（reasoning）。</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                  {/* Quest：联网搜索开关 */}
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={() => session.setQuestWebSearch(!session.questWebSearch)}
+                          className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${session.questWebSearch ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
+                        >
+                          <Globe className="w-3.5 h-3.5" />
+                          联网
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" align="end" className="max-w-[220px]">
+                        <p className="text-xs text-muted-foreground">开启后允许联网搜索与抓取网页；关闭时仅基于模型知识作答。</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </>
+              ) : (
+                /* Agent：编辑模式开关 */
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={session.toggleEditMode}
+                        className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${session.editMode === "manual" ? "bg-amber-500" : "bg-green-500"}`} />
+                        {session.editMode === "manual" ? "手动确认" : "自动应用"}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" align="end" className="max-w-[240px] border-zinc-700 bg-zinc-900 text-white shadow-xl">
+                      <p className="font-medium mb-0.5 text-white">代码改动应用方式</p>
+                      <p className="text-xs text-zinc-200">
+                        {session.editMode === "manual"
+                          ? "当前：手动确认。AI 修改/创建文件后不会立即写入磁盘，需你点「接受」才生效。点击切换为自动应用。"
+                          : "当前：自动应用。AI 修改/创建文件后立即写入磁盘。点击切换为手动确认。"}
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
+              <TokenIndicator used={session.tokenUsage.used} max={session.tokenUsage.max} cumulative={session.tokenUsage.cumulative} />
+              {/* 压缩上下文按钮 */}
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => session.compactSession()}
+                      disabled={session.isCompacting || session.isLoading || session.chatHistory.length < 6}
+                      className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                      title="手动压缩上下文"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                        <path d="M4 5l-2 2 2 2M7 3l2-2 2 2M9 8l2 2-2 2M12 13l2-2-2-2M3 13l-2-2 2-2" />
+                      </svg>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" align="end">
+                    <p className="text-xs">压缩上下文</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              {session.isLoading ? (
+                <Button
+                  size="sm"
+                  onClick={() => session.cancelTurn(session.model)}
+                  disabled={session.isCompacting}
+                  className="h-7 w-7 rounded-full bg-destructive hover:bg-destructive/90 shrink-0 disabled:opacity-40"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  onClick={handleSend}
+                  disabled={!connected || (composerEmpty && images.length === 0)}
+                  className="h-7 w-7 rounded-full shrink-0"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+        </div>
+      </div>
+
+      {/* 工作区选择弹窗 */}
+      <WorkspacePicker
+        open={pickerOpen}
+        onOpenChange={setPickerOpen}
+        initialPath={session.workspace || undefined}
+        onSelect={session.selectWorkspace}
+      />
+
+      {/* 工作区组管理弹窗 */}
+      <WorkspaceGroupManager
+        open={groupManagerOpen}
+        onOpenChange={setGroupManagerOpen}
+        onSelect={(group: WorkspaceGroup) => session.selectGroup(group)}
+        onGroupUpdated={(group: WorkspaceGroup) => session.groupUpdated(group)}
+      />
+
+      {/* 图片预览 Modal */}
+      <Dialog open={!!previewImage} onOpenChange={(open) => !open && setPreviewImage(null)}>
+        <DialogContent className="max-w-[90vw] max-h-[90vh] p-2 bg-background/95 border-border shadow-xl flex flex-col items-center gap-2" showCloseButton={false}>
+          {previewImage && (
+            <>
+              <img src={previewImage} alt="" className="max-w-full max-h-[80vh] object-contain rounded-lg" />
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={async (e) => {
+                    const btn = e.currentTarget;
+                    const setStatus = (text: string, ok: boolean) => {
+                      btn.dataset.status = ok ? "ok" : "err";
+                      const label = btn.querySelector("span");
+                      if (label) label.textContent = text;
+                      setTimeout(() => {
+                        delete btn.dataset.status;
+                        if (label) label.textContent = "复制图片";
+                      }, 1800);
+                    };
+                    try {
+                      const res = await fetch(previewImage);
+                      const blob = await res.blob();
+                      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+                      setStatus("已复制", true);
+                    } catch {
+                      try {
+                        const parts = previewImage.split(",");
+                        const mime = parts[0].match(/:(.*?);/)?.[1] || "image/png";
+                        const binary = atob(parts[1]);
+                        const bytes = new Uint8Array(binary.length);
+                        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                        const blob = new Blob([bytes], { type: mime });
+                        await navigator.clipboard.write([new ClipboardItem({ [mime]: blob })]);
+                        setStatus("已复制", true);
+                      } catch (err) {
+                        setStatus("复制失败", false);
+                        console.warn("[axon] 复制图片失败:", err);
+                      }
+                    }
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-muted hover:bg-muted/80 text-foreground transition-colors data-[status=ok]:bg-green-500/15 data-[status=ok]:text-green-600 dark:data-[status=ok]:text-green-400 data-[status=err]:bg-red-500/15 data-[status=err]:text-red-600 dark:data-[status=err]:text-red-400"
+                  title="复制图片到剪贴板"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>复制图片</span>
+                </button>
+                <button
+                  onClick={() => setPreviewImage(null)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-muted hover:bg-muted/80 text-muted-foreground transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  关闭
+                </button>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

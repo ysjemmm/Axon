@@ -1,0 +1,692 @@
+[
+  {
+    "variant": {
+      "id": "gpt-5.4",
+      "label": "GPT-5.4",
+      "model": "gpt-5.4"
+    },
+    "results": [
+      {
+        "scenario": "mt_create_file_closure",
+        "agg": [
+          {
+            "scenarioId": "mt_create_file_closure",
+            "trace": [
+              {
+                "round": 1,
+                "name": "list_dir",
+                "args": {
+                  "depth": 1,
+                  "intent": "查看 src 目录",
+                  "path": "src"
+                },
+                "ok": true,
+                "resultPreview": "src/\nsrc/index.ts"
+              },
+              {
+                "round": 2,
+                "name": "create_file",
+                "args": {
+                  "content": "export function greet(name: string): string {\n  return `Hello, ${name}!`;\n}\n",
+                  "overwrite": false,
+                  "path": "src/greet.ts"
+                },
+                "ok": true,
+                "resultPreview": "已创建文件 src/greet.ts"
+              }
+            ],
+            "finalReply": "已完成。",
+            "rounds": 3,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 1,
+              "judge": null
+            },
+            "overall": 1,
+            "passed": true,
+            "latency": 7999,
+            "tokens": 31264
+          }
+        ]
+      },
+      {
+        "scenario": "mt_locate_and_fix",
+        "agg": [
+          {
+            "scenarioId": "mt_locate_and_fix",
+            "trace": [
+              {
+                "round": 1,
+                "name": "search",
+                "args": {
+                  "includePattern": "",
+                  "intent": "查找最大重试次数配置",
+                  "mode": "content",
+                  "path": "",
+                  "query": "最大重试|重试次数|maxRetries|retryCount|retry.*max|MAX_RETRY|RETRY_MAX"
+                },
+                "ok": true,
+                "resultPreview": "未找到匹配 \"最大重试|重试次数|maxRetries|retryCount|retry.*max|MAX_RETRY|RETRY_MAX\" 的内容 （搜索范围：C:\\Users\\17120\\AppData\\Local\\Temp\\axon-eval-stiUEK）。换词时请锚定你刚搜的原始词根（保留用户原话里的名词），只替换动词前缀（get/create/gen/batch）并用 | 组合重试；不"
+              },
+              {
+                "round": 2,
+                "name": "list_dir",
+                "args": {
+                  "depth": 2,
+                  "intent": "了解项目结构",
+                  "path": ""
+                },
+                "ok": true,
+                "resultPreview": "./\nsrc/\nsrc/client.ts\nsrc/config.ts"
+              },
+              {
+                "round": 3,
+                "name": "read_file",
+                "args": {
+                  "endLine": 400,
+                  "path": "src/config.ts",
+                  "startLine": 1
+                },
+                "ok": true,
+                "resultPreview": "export const MAX_RETRIES = 1;\nexport const TIMEOUT_MS = 3000;\nexport const API_BASE = \"https://api.example.com\";\n"
+              },
+              {
+                "round": 3,
+                "name": "read_file",
+                "args": {
+                  "endLine": 400,
+                  "path": "src/client.ts",
+                  "startLine": 1
+                },
+                "ok": true,
+                "resultPreview": "import { MAX_RETRIES } from \"./config\";\n\nexport function withRetry() {\n  return MAX_RETRIES;\n}\n"
+              },
+              {
+                "round": 4,
+                "name": "str_replace",
+                "args": {
+                  "newStr": "export const MAX_RETRIES = 5;",
+                  "oldStr": "export const MAX_RETRIES = 1;",
+                  "path": "src/config.ts"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/config.ts 中的文本"
+              },
+              {
+                "round": 5,
+                "name": "check_diagnostics",
+                "args": {
+                  "paths": [
+                    "src/config.ts"
+                  ]
+                },
+                "ok": true,
+                "resultPreview": "✓ src/config.ts: 无错误"
+              }
+            ],
+            "finalReply": "已改为 `5`，位置在 `src/config.ts`。",
+            "rounds": 6,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 0.3333333333333333,
+              "judge": null
+            },
+            "overall": 0.9,
+            "passed": true,
+            "latency": 19137,
+            "tokens": 64387
+          }
+        ]
+      },
+      {
+        "scenario": "mt_rename_across_files",
+        "agg": [
+          {
+            "scenarioId": "mt_rename_across_files",
+            "trace": [
+              {
+                "round": 1,
+                "name": "read_file",
+                "args": {
+                  "endLine": 400,
+                  "path": "src/math.ts",
+                  "startLine": 1
+                },
+                "ok": true,
+                "resultPreview": "export function add(a: number, b: number): number {\n  return a + b;\n}\n"
+              },
+              {
+                "round": 1,
+                "name": "search",
+                "args": {
+                  "includePattern": ".ts",
+                  "intent": "查找 add 的调用位置",
+                  "mode": "content",
+                  "path": "",
+                  "query": "\\badd\\s*\\("
+                },
+                "ok": true,
+                "resultPreview": "找到 2 处匹配:\nsrc/app.ts:3 (共4行)\n    2: \n  > 3: console.log(add(1, 2));\n    4: \nsrc/math.ts:1 (共4行)\n  > 1: export function add(a: number, b: number): number {\n    2:   return a + b;"
+              },
+              {
+                "round": 2,
+                "name": "read_file",
+                "args": {
+                  "endLine": 400,
+                  "path": "src/app.ts",
+                  "startLine": 1
+                },
+                "ok": true,
+                "resultPreview": "import { add } from \"./math\";\n\nconsole.log(add(1, 2));\n"
+              },
+              {
+                "round": 2,
+                "name": "str_replace",
+                "args": {
+                  "newStr": "export function sum(a: number, b: number): number {\n  return a + b;\n}\n",
+                  "oldStr": "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
+                  "path": "src/math.ts"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/math.ts 中的文本"
+              },
+              {
+                "round": 3,
+                "name": "str_replace",
+                "args": {
+                  "newStr": "import { sum } from \"./math\";\n\nconsole.log(sum(1, 2));\n",
+                  "oldStr": "import { add } from \"./math\";\n\nconsole.log(add(1, 2));\n",
+                  "path": "src/app.ts"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/app.ts 中的文本"
+              },
+              {
+                "round": 4,
+                "name": "check_diagnostics",
+                "args": {
+                  "paths": [
+                    "src/math.ts",
+                    "src/app.ts"
+                  ]
+                },
+                "ok": true,
+                "resultPreview": "✓ src/math.ts: 无错误\n\n✓ src/app.ts: 无错误"
+              }
+            ],
+            "finalReply": "已完成，`add` 已重命名为 `sum`，所有调用处也已同步更新，并且类型检查通过。",
+            "rounds": 5,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 0.3333333333333333,
+              "judge": null
+            },
+            "overall": 0.9,
+            "passed": true,
+            "latency": 14139,
+            "tokens": 53575
+          }
+        ]
+      }
+    ],
+    "meanScore": 0.9333333333333332,
+    "passRate": 1
+  },
+  {
+    "variant": {
+      "id": "gpt-5.5",
+      "label": "GPT-5.5",
+      "model": "gpt-5.5"
+    },
+    "results": [
+      {
+        "scenario": "mt_create_file_closure",
+        "agg": [
+          {
+            "scenarioId": "mt_create_file_closure",
+            "trace": [
+              {
+                "round": 1,
+                "name": "list_dir",
+                "args": {
+                  "depth": 2,
+                  "intent": "查看 src 目录",
+                  "path": "src"
+                },
+                "ok": true,
+                "resultPreview": "src/\nsrc/index.ts"
+              },
+              {
+                "round": 2,
+                "name": "create_file",
+                "args": {
+                  "content": "export function greet(name: string): string {\n  return `Hello, ${name}!`;\n}\n",
+                  "overwrite": false,
+                  "path": "src/greet.ts"
+                },
+                "ok": true,
+                "resultPreview": "已创建文件 src/greet.ts"
+              },
+              {
+                "round": 3,
+                "name": "check_diagnostics",
+                "args": {
+                  "paths": [
+                    "src/greet.ts"
+                  ]
+                },
+                "ok": true,
+                "resultPreview": "✓ src/greet.ts: 无错误"
+              }
+            ],
+            "finalReply": "完成。",
+            "rounds": 4,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 0.6666666666666666,
+              "judge": null
+            },
+            "overall": 0.95,
+            "passed": true,
+            "latency": 10455,
+            "tokens": 41794
+          }
+        ]
+      },
+      {
+        "scenario": "mt_locate_and_fix",
+        "agg": [
+          {
+            "scenarioId": "mt_locate_and_fix",
+            "trace": [
+              {
+                "round": 1,
+                "name": "search",
+                "args": {
+                  "includePattern": "",
+                  "intent": "查找最大重试次数配置",
+                  "mode": "content",
+                  "path": "",
+                  "query": "最大重试|重试次数|maxRetry|maxRetries|retryCount|retries|retry"
+                },
+                "ok": true,
+                "resultPreview": "找到 4 处匹配:\nsrc/client.ts:1 (共6行)\n  > 1: import { MAX_RETRIES } from \"./config\";\n    2: \nsrc/client.ts:3 (共6行)\n    2: \n  > 3: export function withRetry() {\n    4:   return MAX_RETRIES;\nsrc/client.ts:4 ("
+              },
+              {
+                "round": 2,
+                "name": "read_file",
+                "args": {
+                  "endLine": 4,
+                  "path": "src/config.ts",
+                  "startLine": 1
+                },
+                "ok": true,
+                "resultPreview": "export const MAX_RETRIES = 1;\nexport const TIMEOUT_MS = 3000;\nexport const API_BASE = \"https://api.example.com\";\n"
+              },
+              {
+                "round": 3,
+                "name": "str_replace",
+                "args": {
+                  "newStr": "export const MAX_RETRIES = 5;\nexport const TIMEOUT_MS = 3000;\nexport const API_BASE = \"https://api.example.com\";",
+                  "oldStr": "export const MAX_RETRIES = 1;\nexport const TIMEOUT_MS = 3000;\nexport const API_BASE = \"https://api.example.com\";",
+                  "path": "src/config.ts"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/config.ts 中的文本"
+              },
+              {
+                "round": 4,
+                "name": "check_diagnostics",
+                "args": {
+                  "paths": [
+                    "src/config.ts"
+                  ]
+                },
+                "ok": true,
+                "resultPreview": "✓ src/config.ts: 无错误"
+              }
+            ],
+            "finalReply": "已完成，类型检查无错误。",
+            "rounds": 5,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 0.5,
+              "judge": null
+            },
+            "overall": 0.9249999999999999,
+            "passed": true,
+            "latency": 14886,
+            "tokens": 53251
+          }
+        ]
+      },
+      {
+        "scenario": "mt_rename_across_files",
+        "agg": [
+          {
+            "scenarioId": "mt_rename_across_files",
+            "trace": [
+              {
+                "round": 1,
+                "name": "read_file",
+                "args": {
+                  "endLine": 400,
+                  "path": "src/math.ts",
+                  "startLine": 1
+                },
+                "ok": true,
+                "resultPreview": "export function add(a: number, b: number): number {\n  return a + b;\n}\n"
+              },
+              {
+                "round": 1,
+                "name": "search",
+                "args": {
+                  "includePattern": ".ts",
+                  "intent": "查找函数调用位置",
+                  "mode": "content",
+                  "path": "",
+                  "query": "\\badd\\b"
+                },
+                "ok": true,
+                "resultPreview": "找到 3 处匹配:\nsrc/app.ts:1 (共4行)\n  > 1: import { add } from \"./math\";\n    2: \nsrc/app.ts:3 (共4行)\n    2: \n  > 3: console.log(add(1, 2));\n    4: \nsrc/math.ts:1 (共4行)\n  > 1: export function add(a: number, b:"
+              },
+              {
+                "round": 2,
+                "name": "read_file",
+                "args": {
+                  "endLine": 400,
+                  "path": "src/app.ts",
+                  "startLine": 1
+                },
+                "ok": true,
+                "resultPreview": "import { add } from \"./math\";\n\nconsole.log(add(1, 2));\n"
+              },
+              {
+                "round": 2,
+                "name": "str_replace",
+                "args": {
+                  "newStr": "export function sum(a: number, b: number): number {\n  return a + b;\n}\n",
+                  "oldStr": "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
+                  "path": "src/math.ts"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/math.ts 中的文本"
+              },
+              {
+                "round": 3,
+                "name": "str_replace",
+                "args": {
+                  "newStr": "import { sum } from \"./math\";\n\nconsole.log(sum(1, 2));\n",
+                  "oldStr": "import { add } from \"./math\";\n\nconsole.log(add(1, 2));\n",
+                  "path": "src/app.ts"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/app.ts 中的文本"
+              },
+              {
+                "round": 4,
+                "name": "check_diagnostics",
+                "args": {
+                  "paths": [
+                    "src/math.ts",
+                    "src/app.ts"
+                  ]
+                },
+                "ok": true,
+                "resultPreview": "✓ src/math.ts: 无错误\n\n✓ src/app.ts: 无错误"
+              }
+            ],
+            "finalReply": "完成，类型检查无错误。",
+            "rounds": 5,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 0.3333333333333333,
+              "judge": null
+            },
+            "overall": 0.9,
+            "passed": true,
+            "latency": 14181,
+            "tokens": 53656
+          }
+        ]
+      }
+    ],
+    "meanScore": 0.9249999999999999,
+    "passRate": 1
+  },
+  {
+    "variant": {
+      "id": "deepseek-v4-pro",
+      "label": "DeepSeek-V4-Pro",
+      "model": "deepseek-v4-pro"
+    },
+    "results": [
+      {
+        "scenario": "mt_create_file_closure",
+        "agg": [
+          {
+            "scenarioId": "mt_create_file_closure",
+            "trace": [
+              {
+                "round": 1,
+                "name": "list_dir",
+                "args": {
+                  "intent": "查看 src 目录结构，确认是否有 greet.ts",
+                  "path": "src"
+                },
+                "ok": true,
+                "resultPreview": "src/\nsrc/index.ts"
+              },
+              {
+                "round": 2,
+                "name": "create_file",
+                "args": {
+                  "path": "src/greet.ts",
+                  "content": "export function greet(name: string): string {\n  return `Hello, ${name}!`;\n}\n"
+                },
+                "ok": true,
+                "resultPreview": "已创建文件 src/greet.ts"
+              }
+            ],
+            "finalReply": "已创建 `src/greet.ts`，导出 `greet(name)` 函数，返回模板字符串 `` `Hello, ${name}!` ``。",
+            "rounds": 3,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 1,
+              "judge": null
+            },
+            "overall": 1,
+            "passed": true,
+            "latency": 6215,
+            "tokens": 30896
+          }
+        ]
+      },
+      {
+        "scenario": "mt_locate_and_fix",
+        "agg": [
+          {
+            "scenarioId": "mt_locate_and_fix",
+            "trace": [
+              {
+                "round": 1,
+                "name": "search",
+                "args": {
+                  "intent": "搜索最大重试次数配置",
+                  "query": "max.*retry|retry.*count|maxRetry|max_retry|重试次数"
+                },
+                "ok": true,
+                "resultPreview": "未找到匹配 \"max.*retry|retry.*count|maxRetry|max_retry|重试次数\" 的内容 （搜索范围：C:\\Users\\17120\\AppData\\Local\\Temp\\axon-eval-Laj9m3）。换词时请锚定你刚搜的原始词根（保留用户原话里的名词），只替换动词前缀（get/create/gen/batch）并用 | 组合重试；不要重新解读整句需求跑去搜别的语"
+              },
+              {
+                "round": 2,
+                "name": "search",
+                "args": {
+                  "intent": "搜索重试相关配置",
+                  "query": "retry|Retry|RETRY"
+                },
+                "ok": true,
+                "resultPreview": "找到 1 处匹配:\nsrc/client.ts:3 (共6行)\n    2: \n  > 3: export function withRetry() {\n    4:   return MAX_RETRIES;"
+              },
+              {
+                "round": 2,
+                "name": "search",
+                "args": {
+                  "intent": "搜索重试中文关键词",
+                  "query": "重试"
+                },
+                "ok": true,
+                "resultPreview": "未找到匹配 \"重试\" 的内容 （搜索范围：C:\\Users\\17120\\AppData\\Local\\Temp\\axon-eval-Laj9m3）。换词时请锚定你刚搜的原始词根（保留用户原话里的名词），只替换动词前缀（get/create/gen/batch）并用 | 组合重试；不要重新解读整句需求跑去搜别的语义方向（那样越搜越偏、浪费 token），也不要把提示里的示例词当成项目里真实存在的符号。"
+              },
+              {
+                "round": 3,
+                "name": "read_file",
+                "args": {
+                  "path": "src/client.ts"
+                },
+                "ok": true,
+                "resultPreview": "import { MAX_RETRIES } from \"./config\";\n\nexport function withRetry() {\n  return MAX_RETRIES;\n}\n"
+              },
+              {
+                "round": 3,
+                "name": "search",
+                "args": {
+                  "intent": "搜索 MAX_RETRIES 定义位置",
+                  "query": "MAX_RETRIES"
+                },
+                "ok": true,
+                "resultPreview": "找到 3 处匹配:\nsrc/client.ts:1 (共6行)\n  > 1: import { MAX_RETRIES } from \"./config\";\n    2: \nsrc/client.ts:4 (共6行)\n    3: export function withRetry() {\n  > 4:   return MAX_RETRIES;\n    5: }\nsrc/config.ts:1 "
+              },
+              {
+                "round": 4,
+                "name": "str_replace",
+                "args": {
+                  "newStr": "export const MAX_RETRIES = 5;",
+                  "oldStr": "export const MAX_RETRIES = 1;",
+                  "path": "src/config.ts"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/config.ts 中的文本"
+              }
+            ],
+            "finalReply": "已将 `src/config.ts` 中的 `MAX_RETRIES` 从 `1` 改为 `5`。",
+            "rounds": 5,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 0.3333333333333333,
+              "judge": null
+            },
+            "overall": 0.9,
+            "passed": true,
+            "latency": 12627,
+            "tokens": 53977
+          }
+        ]
+      },
+      {
+        "scenario": "mt_rename_across_files",
+        "agg": [
+          {
+            "scenarioId": "mt_rename_across_files",
+            "trace": [
+              {
+                "round": 1,
+                "name": "read_file",
+                "args": {
+                  "path": "src/math.ts"
+                },
+                "ok": true,
+                "resultPreview": "export function add(a: number, b: number): number {\n  return a + b;\n}\n"
+              },
+              {
+                "round": 1,
+                "name": "search",
+                "args": {
+                  "intent": "找到所有调用 add 函数的地方",
+                  "query": "add\\(",
+                  "includePattern": ".ts"
+                },
+                "ok": true,
+                "resultPreview": "找到 2 处匹配:\nsrc/app.ts:3 (共4行)\n    2: \n  > 3: console.log(add(1, 2));\n    4: \nsrc/math.ts:1 (共4行)\n  > 1: export function add(a: number, b: number): number {\n    2:   return a + b;"
+              },
+              {
+                "round": 2,
+                "name": "read_file",
+                "args": {
+                  "path": "src/app.ts"
+                },
+                "ok": true,
+                "resultPreview": "import { add } from \"./math\";\n\nconsole.log(add(1, 2));\n"
+              },
+              {
+                "round": 3,
+                "name": "str_replace",
+                "args": {
+                  "newStr": "export function sum(a: number, b: number): number {\n  return a + b;\n}",
+                  "oldStr": "export function add(a: number, b: number): number {\n  return a + b;\n}",
+                  "path": "src/math.ts"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/math.ts 中的文本"
+              },
+              {
+                "round": 3,
+                "name": "str_replace",
+                "args": {
+                  "newStr": "import { sum } from \"./math\";\n\nconsole.log(sum(1, 2));",
+                  "oldStr": "import { add } from \"./math\";\n\nconsole.log(add(1, 2));",
+                  "path": "src/app.ts"
+                },
+                "ok": true,
+                "resultPreview": "已替换 src/app.ts 中的文本"
+              },
+              {
+                "round": 4,
+                "name": "check_diagnostics",
+                "args": {
+                  "paths": [
+                    "src/math.ts",
+                    "src/app.ts"
+                  ]
+                },
+                "ok": true,
+                "resultPreview": "✓ src/math.ts: 无错误\n\n✓ src/app.ts: 无错误"
+              }
+            ],
+            "finalReply": "类型检查通过，没有错误。改动涉及 2 个文件：\n\n- `src/math.ts` — 函数定义 `add` → `sum`\n- `src/app.ts` — import 和调用 `add` → `sum`",
+            "rounds": 5,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 0.3333333333333333,
+              "judge": null
+            },
+            "overall": 0.9,
+            "passed": true,
+            "latency": 14084,
+            "tokens": 53347
+          }
+        ]
+      }
+    ],
+    "meanScore": 0.9333333333333332,
+    "passRate": 1
+  }
+]

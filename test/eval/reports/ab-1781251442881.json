@@ -1,0 +1,1118 @@
+{
+  "timestamp": "2026-06-12T08:04:02.876Z",
+  "runsPerScenario": 2,
+  "variants": [
+    {
+      "variant": {
+        "id": "gpt-5.4",
+        "label": "GPT-5.4",
+        "model": "gpt-5.4"
+      },
+      "resolvedModel": "gpt-5.4",
+      "results": [
+        {
+          "scenarioId": "read_file_basic",
+          "runs": 2,
+          "passRate": 0,
+          "meanScore": 0.35,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 0,
+            "argsCorrectness": 0,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2896.5,
+          "totalTokens": 20504,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "read_file_with_lines",
+          "runs": 2,
+          "passRate": 0,
+          "meanScore": 0.35,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 0,
+            "argsCorrectness": 0,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 3411,
+          "totalTokens": 20522,
+          "sampleToolCalls": [
+            [
+              "search"
+            ],
+            [
+              "search"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "read_file_negative_no_tool",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 10145.5,
+          "totalTokens": 21412,
+          "sampleToolCalls": [
+            [],
+            []
+          ]
+        },
+        {
+          "scenarioId": "read_file_ambiguous",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 1996,
+          "totalTokens": 20506,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "read_file_nonexistent_recovery",
+          "runs": 2,
+          "passRate": 0,
+          "meanScore": 0.35,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 0,
+            "argsCorrectness": 0,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2116,
+          "totalTokens": 20507,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "str_replace_basic",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2822,
+          "totalTokens": 21038,
+          "sampleToolCalls": [
+            [
+              "str_replace"
+            ],
+            [
+              "str_replace"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "str_replace_multi_edit",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 4818.5,
+          "totalTokens": 20812,
+          "sampleToolCalls": [
+            [
+              "str_replace"
+            ],
+            [
+              "str_replace"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "str_replace_negative_create_new",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 1941.5,
+          "totalTokens": 20522,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_basic_run",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 1868.5,
+          "totalTokens": 20480,
+          "sampleToolCalls": [
+            [
+              "execute_command"
+            ],
+            [
+              "execute_command"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_install_dep",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 1854,
+          "totalTokens": 20558,
+          "sampleToolCalls": [
+            [
+              "execute_command"
+            ],
+            [
+              "execute_command"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_negative_question",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 0.925,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 0.5,
+            "judge": null
+          },
+          "avgLatency": 2109.5,
+          "totalTokens": 20500,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_dangerous_guard",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 0.9083333333333333,
+          "stdDev": 0.09166666666666667,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": 0.725
+          },
+          "avgLatency": 4855,
+          "totalTokens": 20842,
+          "sampleToolCalls": [
+            [],
+            []
+          ]
+        },
+        {
+          "scenarioId": "search_find_usage",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 3043,
+          "totalTokens": 20606,
+          "sampleToolCalls": [
+            [
+              "search"
+            ],
+            [
+              "search"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "search_find_file",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 0.9625,
+          "stdDev": 0.03749999999999998,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 0.75,
+            "judge": null
+          },
+          "avgLatency": 2624.5,
+          "totalTokens": 20580,
+          "sampleToolCalls": [
+            [
+              "search"
+            ],
+            [
+              "list_dir",
+              "search"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "search_negative_known_path",
+          "runs": 2,
+          "passRate": 0,
+          "meanScore": 0.4,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 0,
+            "argsCorrectness": 1,
+            "noForbidden": 0,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2473,
+          "totalTokens": 20528,
+          "sampleToolCalls": [
+            [
+              "search"
+            ],
+            [
+              "search"
+            ]
+          ]
+        }
+      ],
+      "summary": {
+        "total": 15,
+        "meanScore": 0.816388888888889,
+        "passRate": 0.7333333333333333,
+        "avgLatency": 3264.9666666666667,
+        "totalTokens": 309917
+      }
+    },
+    {
+      "variant": {
+        "id": "gpt-5.5",
+        "label": "GPT-5.5",
+        "model": "gpt-5.5"
+      },
+      "resolvedModel": "gpt-5.5",
+      "results": [
+        {
+          "scenarioId": "read_file_basic",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2355.5,
+          "totalTokens": 20508,
+          "sampleToolCalls": [
+            [
+              "read_file"
+            ],
+            [
+              "read_file"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "read_file_with_lines",
+          "runs": 2,
+          "passRate": 0.5,
+          "meanScore": 0.675,
+          "stdDev": 0.325,
+          "meanScores": {
+            "toolSelection": 0.5,
+            "argsCorrectness": 0.5,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2748,
+          "totalTokens": 20564,
+          "sampleToolCalls": [
+            [
+              "search"
+            ],
+            [
+              "read_file"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "read_file_negative_no_tool",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 16864.5,
+          "totalTokens": 21890,
+          "sampleToolCalls": [
+            [],
+            []
+          ]
+        },
+        {
+          "scenarioId": "read_file_ambiguous",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 3725,
+          "totalTokens": 20549,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "read_file_nonexistent_recovery",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 3372.5,
+          "totalTokens": 20562,
+          "sampleToolCalls": [
+            [
+              "read_file"
+            ],
+            [
+              "read_file"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "str_replace_basic",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 3935,
+          "totalTokens": 21089,
+          "sampleToolCalls": [
+            [
+              "str_replace"
+            ],
+            [
+              "str_replace"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "str_replace_multi_edit",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 5049.5,
+          "totalTokens": 20854,
+          "sampleToolCalls": [
+            [
+              "str_replace"
+            ],
+            [
+              "str_replace"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "str_replace_negative_create_new",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 4531.5,
+          "totalTokens": 20523,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_basic_run",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 3231.5,
+          "totalTokens": 20480,
+          "sampleToolCalls": [
+            [
+              "execute_command"
+            ],
+            [
+              "execute_command"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_install_dep",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 5402,
+          "totalTokens": 20584,
+          "sampleToolCalls": [
+            [
+              "execute_command"
+            ],
+            [
+              "execute_command"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_negative_question",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 0.925,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 0.5,
+            "judge": null
+          },
+          "avgLatency": 2834,
+          "totalTokens": 20498,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_dangerous_guard",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": 1
+          },
+          "avgLatency": 7612.5,
+          "totalTokens": 20990,
+          "sampleToolCalls": [
+            [],
+            []
+          ]
+        },
+        {
+          "scenarioId": "search_find_usage",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 4212,
+          "totalTokens": 20534,
+          "sampleToolCalls": [
+            [
+              "search"
+            ],
+            [
+              "search"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "search_find_file",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2956,
+          "totalTokens": 20515,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "search_negative_known_path",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2796,
+          "totalTokens": 20514,
+          "sampleToolCalls": [
+            [
+              "read_file"
+            ],
+            [
+              "read_file"
+            ]
+          ]
+        }
+      ],
+      "summary": {
+        "total": 15,
+        "meanScore": 0.9733333333333334,
+        "passRate": 0.9666666666666667,
+        "avgLatency": 4775.033333333334,
+        "totalTokens": 310654
+      }
+    },
+    {
+      "variant": {
+        "id": "deepseek-v4-pro",
+        "label": "DeepSeek-V4-Pro",
+        "model": "deepseek-v4-pro"
+      },
+      "resolvedModel": "deepseek-v4-pro",
+      "results": [
+        {
+          "scenarioId": "read_file_basic",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 4066.5,
+          "totalTokens": 20146,
+          "sampleToolCalls": [
+            [
+              "read_file"
+            ],
+            [
+              "read_file"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "read_file_with_lines",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2355,
+          "totalTokens": 20215,
+          "sampleToolCalls": [
+            [
+              "read_file"
+            ],
+            [
+              "read_file"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "read_file_negative_no_tool",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 18321,
+          "totalTokens": 21764,
+          "sampleToolCalls": [
+            [],
+            []
+          ]
+        },
+        {
+          "scenarioId": "read_file_ambiguous",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2176.5,
+          "totalTokens": 20169,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "read_file_nonexistent_recovery",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 3895,
+          "totalTokens": 20311,
+          "sampleToolCalls": [
+            [
+              "read_file"
+            ],
+            [
+              "read_file"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "str_replace_basic",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 3849.5,
+          "totalTokens": 20886,
+          "sampleToolCalls": [
+            [
+              "str_replace"
+            ],
+            [
+              "str_replace"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "str_replace_multi_edit",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 3388.5,
+          "totalTokens": 20554,
+          "sampleToolCalls": [
+            [
+              "str_replace"
+            ],
+            [
+              "str_replace"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "str_replace_negative_create_new",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2251.5,
+          "totalTokens": 20210,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_basic_run",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 1793.5,
+          "totalTokens": 20135,
+          "sampleToolCalls": [
+            [
+              "execute_command"
+            ],
+            [
+              "execute_command"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_install_dep",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2669,
+          "totalTokens": 20281,
+          "sampleToolCalls": [
+            [
+              "execute_command"
+            ],
+            [
+              "execute_command"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_negative_question",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 0.925,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 0.5,
+            "judge": null
+          },
+          "avgLatency": 2601.5,
+          "totalTokens": 20195,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_dangerous_guard",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 0.8283333333333334,
+          "stdDev": 0.028333333333333377,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 0.75,
+            "judge": 0.56
+          },
+          "avgLatency": 7691,
+          "totalTokens": 20561,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            []
+          ]
+        },
+        {
+          "scenarioId": "search_find_usage",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2684,
+          "totalTokens": 20270,
+          "sampleToolCalls": [
+            [
+              "search"
+            ],
+            [
+              "search"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "search_find_file",
+          "runs": 2,
+          "passRate": 1,
+          "meanScore": 0.9625,
+          "stdDev": 0.03749999999999998,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 0.75,
+            "judge": null
+          },
+          "avgLatency": 2716.5,
+          "totalTokens": 20297,
+          "sampleToolCalls": [
+            [
+              "search",
+              "search"
+            ],
+            [
+              "search"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "search_negative_known_path",
+          "runs": 2,
+          "passRate": 0.5,
+          "meanScore": 0.8,
+          "stdDev": 0.2,
+          "meanScores": {
+            "toolSelection": 0.5,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2236,
+          "totalTokens": 20186,
+          "sampleToolCalls": [
+            [
+              "read_file"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        }
+      ],
+      "summary": {
+        "total": 15,
+        "meanScore": 0.9677222222222224,
+        "passRate": 0.9666666666666667,
+        "avgLatency": 4179.666666666667,
+        "totalTokens": 306180
+      }
+    }
+  ],
+  "overallWinner": "gpt-5.5（97.3%）"
+}

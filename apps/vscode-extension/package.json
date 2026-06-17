@@ -1,0 +1,473 @@
+{
+  "name": "axon-ide",
+  "displayName": "Axon",
+  "description": "Axon AI 编程助手 —— 内置 Agent 内核，深度集成编辑器",
+  "version": "0.1.0",
+  "private": true,
+  "publisher": "ysj",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://example.com/axon/axon-ide.git"
+  },
+  "type": "commonjs",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": ["AI", "Programming Languages", "Other"],
+  "activationEvents": ["*"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Axon",
+      "properties": {
+        "axon.trustedCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "markdownDescription": "命令信任白名单：Agent 执行 `execute_command` 时，命中这里的命令将免人工授权直接放行（灾难性命令如 `rm -rf` 始终被拦截，不受此影响）。\n\n约定：\n- 精确整条：如 `npm run build`（只信任这一条）\n- 前缀（以 ` *` 结尾）：如 `git status *`（信任 `git status` 开头的所有命令）\n- 全部：`*`（信任所有命令，强烈不推荐）\n\n在审批弹窗里选择「加入白名单」会自动写入此项。内置只读命令（`git status`、`pwd` 等）已默认信任，无需在此列出。"
+        },
+        "axon.proactiveAwareness.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "AI 主动感知总开关：开启后，终端报错和诊断变化（仅用户操作）会在侧栏显示 badge 通知。"
+        },
+        "axon.proactiveAwareness.terminalErrors": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "检测用户终端中命令执行失败（非零退出码），并在侧栏展示通知。AI 使用的终端不受影响。"
+        },
+        "axon.proactiveAwareness.diagnostics": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "检测诊断（errors/warnings）数量增加时，在侧栏展示通知。仅在问题数增多时触发。"
+        },
+        "axon.inlineCompletion.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "启用 AI 内联代码补全（替代 Copilot）。开启后，输入代码时 Axon 会自动建议补全。"
+        },
+        "axon.inlineCompletion.provider": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "内联补全使用的 LLM Provider。留空则自动探测第一个已配置的 provider。"
+        },
+        "axon.inlineCompletion.model": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "内联补全使用的模型。留空使用 gpt-4o-mini。可选更快/更便宜的模型（如 deepseek-chat、glm-4-flash 等）。"
+        },
+        "axon.inlineCompletion.maxPrefixLines": {
+          "type": "number",
+          "default": 80,
+          "scope": "resource",
+          "markdownDescription": "补全时发送给 LLM 的光标前最大行数。减小可降低延迟。"
+        },
+        "axon.inlineCompletion.maxSuffixLines": {
+          "type": "number",
+          "default": 30,
+          "scope": "resource",
+          "markdownDescription": "补全时发送给 LLM 的光标后最大行数。"
+        },
+        "axon.inlineCompletion.maxTokens": {
+          "type": "number",
+          "default": 128,
+          "scope": "resource",
+          "markdownDescription": "LLM 每次补全返回的最大 token 数。"
+        },
+        "axon.inlineCompletion.temperature": {
+          "type": "number",
+          "default": 0.1,
+          "scope": "resource",
+          "markdownDescription": "补全模型的采样温度（0-2）。越低结果越确定，越高结果越多样。"
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "axon-manage",
+          "title": "Axon",
+          "icon": "media/axon.svg"
+        },
+        {
+          "id": "axon-powers",
+          "title": "Axon Powers",
+          "icon": "media/powers.svg"
+        }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "axon-chat",
+          "title": "Axon",
+          "icon": "media/axon.svg"
+        }
+      ]
+    },
+    "views": {
+      "axon-manage": [
+        {
+          "id": "axon.relay",
+          "name": "Relay"
+        },
+        {
+          "id": "axon.skills",
+          "name": "Skills"
+        },
+        {
+          "id": "axon.mcp",
+          "name": "MCP"
+        },
+        {
+          "id": "axon.provider",
+          "name": "Provider"
+        }
+      ],
+      "axon-powers": [
+        {
+          "id": "axon.powers",
+          "name": "Powers"
+        }
+      ],
+      "axon-chat": [
+        {
+          "id": "axon.chat",
+          "name": "Axon",
+          "type": "webview"
+        }
+      ],
+      "explorer": [
+        {
+          "id": "axon.customSkills",
+          "name": "Skills",
+          "icon": "$(mortar-board)",
+          "visibility": "collapsed"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "axon.newSession",
+        "title": "Axon: 新建对话"
+      },
+      {
+        "command": "axon.focusChat",
+        "title": "Axon: 聚焦对话面板"
+      },
+      {
+        "command": "axon.openRelay",
+        "title": "Axon: 打开 Relay"
+      },
+      {
+        "command": "axon.deleteRelay",
+        "title": "删除"
+      },
+      {
+        "command": "axon.openSkill",
+        "title": "Axon: 打开 Skill"
+      },
+      {
+        "command": "axon.skill.create",
+        "title": "新建 Skill",
+        "icon": "$(add)"
+      },
+      {
+        "command": "axon.skill.delete",
+        "title": "删除 Skill"
+      },
+      {
+        "command": "axon.skill.rename",
+        "title": "重命名"
+      },
+      {
+        "command": "axon.skill.import",
+        "title": "导入 Skill",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "axon.skill.deleteBatch",
+        "title": "批量删除 Skill",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "axon.skill.toggle",
+        "title": "启用/禁用 Skill"
+      },
+      {
+        "command": "axon.openPower",
+        "title": "Axon: 打开 Power"
+      },
+      {
+        "command": "axon.openMcp",
+        "title": "Axon: 打开 MCP 管理",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "axon.mcp.refresh",
+        "title": "刷新 MCP",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "axon.mcp.delete",
+        "title": "删除 MCP 服务器"
+      },
+      {
+        "command": "axon.mcp.toggle",
+        "title": "启用/禁用 MCP 服务器"
+      },
+      {
+        "command": "axon.mcp.deleteAll",
+        "title": "批量删除 MCP 服务器",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "axon.power.create",
+        "title": "新建 Power",
+        "icon": "$(add)"
+      },
+      {
+        "command": "axon.power.delete",
+        "title": "删除 Power"
+      },
+      {
+        "command": "axon.power.toggle",
+        "title": "启用/禁用 Power"
+      },
+      {
+        "command": "axon.power.import",
+        "title": "导入 Power",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "axon.power.importSkills",
+        "title": "导入 Skills 到此 Power",
+        "icon": "$(file-symlink-directory)"
+      },
+      {
+        "command": "axon.power.importSteering",
+        "title": "导入 Steering 到此 Power",
+        "icon": "$(file-text)"
+      },
+      {
+        "command": "axon.openProvider",
+        "title": "Axon: 打开 Provider 配置",
+        "icon": "$(add)"
+      },
+      {
+        "command": "axon.provider.refresh",
+        "title": "刷新 Provider",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "axon.provider.setKey",
+        "title": "设置 API Key",
+        "icon": "$(key)"
+      },
+      {
+        "command": "axon.provider.delete",
+        "title": "删除 Provider"
+      },
+      {
+        "command": "axon.git.toggleBlameAnnotation",
+        "title": "使用 Git 追溯注解",
+        "category": "Axon"
+      }
+    ],
+    "menus": {
+      "editor/lineNumber/context": [
+        {
+          "command": "axon.git.toggleBlameAnnotation",
+          "group": "navigation@-100"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "axon.deleteRelay",
+          "when": "viewItem == relayItem",
+          "group": "inline"
+        },
+        {
+          "command": "axon.skill.create",
+          "when": "viewItem == skillGroup",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.skill.import",
+          "when": "viewItem == skillGroup",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.skill.delete",
+          "when": "viewItem == skillItem",
+          "group": "7_modification"
+        },
+        {
+          "command": "axon.skill.rename",
+          "when": "viewItem == skillItem",
+          "group": "7_modification"
+        },
+        {
+          "command": "axon.skill.toggle",
+          "when": "viewItem == skillToggleable",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.skill.delete",
+          "when": "viewItem == skillToggleable",
+          "group": "7_modification"
+        },
+        {
+          "command": "axon.power.toggle",
+          "when": "viewItem == powerItem",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.power.delete",
+          "when": "viewItem == powerItem",
+          "group": "7_modification"
+        },
+        {
+          "command": "axon.power.importSkills",
+          "when": "viewItem == powerItem",
+          "group": "3_import"
+        },
+        {
+          "command": "axon.power.importSteering",
+          "when": "viewItem == powerItem",
+          "group": "3_import"
+        },
+        {
+          "command": "axon.mcp.delete",
+          "when": "viewItem == mcpItem",
+          "group": "7_modification"
+        },
+        {
+          "command": "axon.mcp.toggle",
+          "when": "viewItem == mcpItem",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.provider.setKey",
+          "when": "viewItem == providerLocked",
+          "group": "inline"
+        },
+        {
+          "command": "axon.provider.setKey",
+          "when": "viewItem == providerBuiltin",
+          "group": "inline"
+        },
+        {
+          "command": "axon.provider.setKey",
+          "when": "viewItem == providerCustom",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.provider.delete",
+          "when": "viewItem == providerCustom",
+          "group": "7_modification"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "axon.skill.create",
+          "when": "view == axon.customSkills",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.skill.import",
+          "when": "view == axon.customSkills",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.skill.deleteBatch",
+          "when": "view == axon.customSkills",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.skill.create",
+          "when": "view == axon.skills",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.skill.import",
+          "when": "view == axon.skills",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.skill.deleteBatch",
+          "when": "view == axon.skills",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.power.create",
+          "when": "view == axon.powers",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.power.import",
+          "when": "view == axon.powers",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.openMcp",
+          "when": "view == axon.powers",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.mcp.refresh",
+          "when": "view == axon.mcp",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.openMcp",
+          "when": "view == axon.mcp",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.mcp.deleteAll",
+          "when": "view == axon.mcp",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.openProvider",
+          "when": "view == axon.provider",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.provider.refresh",
+          "when": "view == axon.provider",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "build:web": "node scripts/copy-web.mjs",
+    "dev": "node esbuild.mjs --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "package": "node esbuild.mjs && node scripts/copy-web.mjs && vsce package --no-dependencies -o axon-ide.vsix",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "dependencies": {
+    "@axon/core": "workspace:*",
+    "@axon/host-node": "workspace:*",
+    "@axon/host-vscode": "workspace:*",
+    "playwright-core": "1.49.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.95.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  }
+}

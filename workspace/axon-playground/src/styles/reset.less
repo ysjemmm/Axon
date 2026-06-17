@@ -1,0 +1,68 @@
+/**
+ * 样式重置
+ * 清除浏览器默认样式，统一各浏览器表现
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  min-height: 100vh;
+}
+
+// 链接样式
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+// 列表样式
+ul,
+ol {
+  list-style: none;
+}
+
+// 图片自适应
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+// 表格边框合并
+table {
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+
+// 输入框样式
+input,
+button,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+// 按钮样式重置
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+// 滚动条平滑
+html {
+  scroll-behavior: smooth;
+}

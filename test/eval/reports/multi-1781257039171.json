@@ -1,0 +1,69 @@
+[
+  {
+    "variant": {
+      "id": "gpt-5.5",
+      "label": "GPT-5.5",
+      "model": "gpt-5.5"
+    },
+    "results": [
+      {
+        "scenario": "mt_create_file_closure",
+        "agg": [
+          {
+            "scenarioId": "mt_create_file_closure",
+            "trace": [
+              {
+                "round": 1,
+                "name": "list_dir",
+                "args": {
+                  "depth": 2,
+                  "intent": "查看源码目录",
+                  "path": "src"
+                },
+                "ok": true,
+                "resultPreview": "src/\nsrc/index.ts"
+              },
+              {
+                "round": 2,
+                "name": "create_file",
+                "args": {
+                  "content": "export function greet(name: string): string {\n  return `Hello, ${name}!`;\n}\n",
+                  "overwrite": false,
+                  "path": "src/greet.ts"
+                },
+                "ok": true,
+                "resultPreview": "已创建文件 src/greet.ts"
+              },
+              {
+                "round": 3,
+                "name": "check_diagnostics",
+                "args": {
+                  "paths": [
+                    "src/greet.ts"
+                  ]
+                },
+                "ok": true,
+                "resultPreview": "✓ src/greet.ts: 无错误"
+              }
+            ],
+            "finalReply": "完成，类型检查无错误。",
+            "rounds": 4,
+            "scores": {
+              "taskCompletion": 1,
+              "toolTrajectory": 1,
+              "noForbidden": 1,
+              "efficiency": 0.6666666666666666,
+              "judge": null
+            },
+            "overall": 0.95,
+            "passed": true,
+            "latency": 9865,
+            "tokens": 41788
+          }
+        ]
+      }
+    ],
+    "meanScore": 0.95,
+    "passRate": 1
+  }
+]

@@ -1,0 +1,31 @@
+{
+  "name": "axon-playground",
+  "private": true,
+  "version": "1.0.0",
+  "description": "产研管理系统 - AI 编程工具文件操作演示项目",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc && vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --ext .vue,.ts,.tsx --fix"
+  },
+  "dependencies": {
+    "vue": "^3.4.21",
+    "@arco-design/web-vue": "^2.56.0",
+    "pinia": "^2.1.7",
+    "vue-router": "^4.4.0",
+    "axios": "^1.7.2",
+    "dayjs": "^1.11.11",
+    "lodash-es": "^4.17.21",
+    "@vueuse/core": "^10.11.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.4",
+    "typescript": "~5.4.5",
+    "vite": "^5.3.1",
+    "vue-tsc": "^2.0.21",
+    "less": "^4.2.0",
+    "@types/lodash-es": "^4.17.12"
+  }
+}

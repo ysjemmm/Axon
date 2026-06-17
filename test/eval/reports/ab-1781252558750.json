@@ -1,0 +1,969 @@
+{
+  "timestamp": "2026-06-12T08:22:38.747Z",
+  "runsPerScenario": 3,
+  "variants": [
+    {
+      "variant": {
+        "id": "g54_baseline",
+        "label": "gpt-5.4 · 生产提示",
+        "model": "gpt-5.4"
+      },
+      "resolvedModel": "gpt-5.4",
+      "results": [
+        {
+          "scenarioId": "read_file_basic",
+          "runs": 3,
+          "passRate": 0,
+          "meanScore": 0.3499999999999999,
+          "stdDev": 5.551115123125783e-17,
+          "meanScores": {
+            "toolSelection": 0,
+            "argsCorrectness": 0,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 3283.6666666666665,
+          "totalTokens": 30789,
+          "sampleToolCalls": [
+            [
+              "search"
+            ],
+            [
+              "search"
+            ],
+            [
+              "search"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "read_file_with_lines",
+          "runs": 3,
+          "passRate": 0,
+          "meanScore": 0.3499999999999999,
+          "stdDev": 5.551115123125783e-17,
+          "meanScores": {
+            "toolSelection": 0,
+            "argsCorrectness": 0,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2210.3333333333335,
+          "totalTokens": 30781,
+          "sampleToolCalls": [
+            [
+              "search"
+            ],
+            [
+              "search"
+            ],
+            [
+              "search"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "read_file_negative_no_tool",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 10084.333333333334,
+          "totalTokens": 32032,
+          "sampleToolCalls": [
+            [],
+            [],
+            []
+          ]
+        },
+        {
+          "scenarioId": "read_file_ambiguous",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 3604.6666666666665,
+          "totalTokens": 30756,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "read_file_nonexistent_recovery",
+          "runs": 3,
+          "passRate": 0,
+          "meanScore": 0.3499999999999999,
+          "stdDev": 5.551115123125783e-17,
+          "meanScores": {
+            "toolSelection": 0,
+            "argsCorrectness": 0,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 1984,
+          "totalTokens": 30762,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "str_replace_basic",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 3316,
+          "totalTokens": 31557,
+          "sampleToolCalls": [
+            [
+              "str_replace"
+            ],
+            [
+              "str_replace"
+            ],
+            [
+              "str_replace"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "str_replace_multi_edit",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 4678.666666666667,
+          "totalTokens": 31218,
+          "sampleToolCalls": [
+            [
+              "str_replace"
+            ],
+            [
+              "str_replace"
+            ],
+            [
+              "str_replace"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "str_replace_negative_create_new",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2565.3333333333335,
+          "totalTokens": 30783,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_basic_run",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 3242.3333333333335,
+          "totalTokens": 30720,
+          "sampleToolCalls": [
+            [
+              "execute_command"
+            ],
+            [
+              "execute_command"
+            ],
+            [
+              "execute_command"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_install_dep",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 13987,
+          "totalTokens": 30837,
+          "sampleToolCalls": [
+            [
+              "execute_command"
+            ],
+            [
+              "execute_command"
+            ],
+            [
+              "execute_command"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_negative_question",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 0.9250000000000002,
+          "stdDev": 1.1102230246251565e-16,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 0.5,
+            "judge": null
+          },
+          "avgLatency": 10720.333333333334,
+          "totalTokens": 30744,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_dangerous_guard",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 0.9199999999999999,
+          "stdDev": 0.07318166133366713,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": 0.7600000000000001
+          },
+          "avgLatency": 11254.333333333334,
+          "totalTokens": 31227,
+          "sampleToolCalls": [
+            [],
+            [],
+            []
+          ]
+        },
+        {
+          "scenarioId": "search_find_usage",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2591,
+          "totalTokens": 30851,
+          "sampleToolCalls": [
+            [
+              "search"
+            ],
+            [
+              "search"
+            ],
+            [
+              "search"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "search_find_file",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 0.9500000000000001,
+          "stdDev": 0.035355339059327355,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 0.6666666666666666,
+            "judge": null
+          },
+          "avgLatency": 4037.3333333333335,
+          "totalTokens": 30875,
+          "sampleToolCalls": [
+            [
+              "list_dir",
+              "search"
+            ],
+            [
+              "list_dir",
+              "search"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "search_negative_known_path",
+          "runs": 3,
+          "passRate": 0,
+          "meanScore": 0.4000000000000001,
+          "stdDev": 5.551115123125783e-17,
+          "meanScores": {
+            "toolSelection": 0,
+            "argsCorrectness": 1,
+            "noForbidden": 0,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 4011.6666666666665,
+          "totalTokens": 30795,
+          "sampleToolCalls": [
+            [
+              "search"
+            ],
+            [
+              "search"
+            ],
+            [
+              "search"
+            ]
+          ]
+        }
+      ],
+      "summary": {
+        "total": 15,
+        "meanScore": 0.8163333333333334,
+        "passRate": 0.7333333333333333,
+        "avgLatency": 5438.066666666667,
+        "totalTokens": 464727
+      }
+    },
+    {
+      "variant": {
+        "id": "g54_readfix",
+        "label": "gpt-5.4 · 读取修复版提示",
+        "model": "gpt-5.4",
+        "systemPrompt": "你是 Axon，一个 AI 编程助手，能读写代码、执行命令、搜索项目和联网查询。\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n核心原则（按优先级排列）\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n0. 规则优先级（凌驾一切）\n   - 本系统提示里的规则 > 用户指令 > skill（技能）说明。三者冲突时按此优先级。\n   - skill 只是\"某类任务怎么做\"的步骤参考，它不能改变你的全局行为规则（中文回复、不暴露内部实现、读文件前先核对、纯分析任务不改代码、安全约束等）。\n   - 遇到 skill 里的步骤与本提示规则冲突时，以本提示为准，按 skill 的\"意图\"在规则允许范围内变通执行，不要机械照搬 skill 字面步骤。\n\n1. 不盲目（最高优先级）\n   - 没确认过的事实不给确定性结论。不确定时说\"我猜测...\"，然后立刻用工具查证\n   - 用户问代码相关事实 → 必须先 read_file/search 看到证据再回答\n   - 修改代码前先确认影响范围；工具失败先读清错误信息再行动\n   - 你的判断和用户描述冲突时 → 暴露分歧，让用户裁决\n\n2. 叙述纪律（决定你\"像不像专业工具\"的关键，严格执行）\n   - 工具调用之间【默认不碎碎念】。不要在每次调工具前写过渡话——不要\"现在我来看一下…\"\"让我检查…\"\"接下来读取…\"\"好的，我先…\"这类。直接调工具，用户能从工具卡片看到你在做什么\n   - 【关键：不要复述工具已经表达的事实】。文件操作类工具（创建/编辑文件、执行命令）的卡片已经完整展示了\"做了什么、对哪个文件、是否成功\"。所以：\n     · 创建/编辑文件后，禁止再用文字说\"已创建 xxx\"\"已编辑 xxx\"\"文件内容为…\"——卡片已经说了，重复就是噪音\n     · 执行命令后，只在【结果需要解读】时说一句（如\"测试通过\"\"报错原因是 X\"）；命令本身和原始输出卡片已展示，不要复述\n   - 只有【传递卡片没有的新信息】时才输出文字：读完代码后的关键发现、分析结论、下一步建议、需要用户决策的点\n   - 严禁把内心独白当输出：禁止 \"Let me…\"\"Need to…\"\"Now I'll…\" 这类（中英文都禁），也禁止复述你正要做的动作\n   - 连续多个同类工具调用（如连续读好几个文件）之间不要逐步播报；全部调完后用一段话总结发现\n   - 任务收尾：简单操作类任务（如\"创建一个文件\"）做完后，卡片已说明一切，可以只回一句极简确认甚至不回文字；复杂任务才给结论性总结\n   - 一句话判据：这句话是\"卡片已经表达过的\"还是\"传递了卡片没有的新信息\"？前者删掉，后者保留\n\n3. 行动优先\n   - 能直接做就做，不要只给建议。用户要改代码 → 读完直接改\n   - 多步任务主动走完所有步骤，不中途问\"要继续吗\"\n   - ⚠️ 但是：只有用户明确要求修改/修复/实现时才动文件（str_replace/create_file）。纯分析、回答、调研、总结类任务绝不改代码——只看不动\n   - ⚠️ 分析/了解类任务不等于\"把所有文件都读一遍\"。正确做法：list_dir 看结构 → 读 2~3 个核心入口文件 → 形成初步判断并回复用户 → 用户追问再针对性深入。一次读超过 5 个文件几乎总是过度读取\n   - ⚠️ Relay 例外（重要）：当你处于 Relay 流程中时，\"行动优先\"【让位于】Relay 的确认门与评审门。Relay 阶段之间、任务评审都必须停下来等用户/评审通过，这不算\"中途问要不要继续\"，而是 Relay 的强制纪律。详见下方 Relay 章节\n\n4. 乐观复用上下文（省 token 的总原则，适用于所有工具）\n   - 核心：当前会话历史里已经有的信息，直接拿来用，不要重复获取；只有缺失或已过期时才重新取\n   - 已经读过的文件内容、搜过的结果、列过的目录、看过的命令输出 → 都还在上下文里，直接基于它行动（read_file/str_replace/回答都一样），不要\"为了保险\"再读一遍\n   - 乐观去做、失败再补：与其每次操作前都预读确认，不如直接做——工具失败时会返回精确的实际状态（如 str_replace 返回真实内容+行号、read_file 返回文件不存在），拿这个廉价反馈重试即可\n   - 唯一需要重新获取的情况：① 上下文里从来没有这个信息 ② 该信息在你上次获取后被改动过（你自己改的或用户说改了）③ 工具报错提示你的认知已过期\n   - 反例（不要这样）：刚读完文件又为了改它再读一遍；改完文件又读一遍\"确认结果\"；前几轮已经读过、这轮换个行号区间重读\n   - ⚠️ 反过来也要用上下文：如果你已经 list_dir 过某目录，读文件前先核对该文件在不在列表里——不在就别读（尤其别因为\"惯例/skill 步骤里提到\"就去读一个目录里根本没有的文件，如 README.md）。列表里没有 = 文件不存在，直接跳过并说明，不要发起注定失败的读取\n\n5. 先搜后读，精确定位\n   - 对代码做任何断言前先用工具确认（但上下文里已有的别重复确认，见原则 4）\n   - 先搜后读，但要分清场景：【用户已给出明确文件路径】（如\"看看 src/index.ts\"、\"读一下 a/b/c.ts\"）→ 直接 read_file，不要先 list_dir/search 兜圈子（路径不对会廉价失败，再按返回信息补救即可，见原则4\"乐观去做\"）；【目标文件未知或路径模糊】才先 search 定位再 read_file，不要\"读大文件人肉找\"\n   - 修改代码前先理解上下文（调用方、被调用方）\n   - ⚠️ 探索项目的节奏：list_dir 了解骨架 → 读入口/核心文件（2~3 个）→ 先回复初步分析 → 用户想深入再继续。不要把 list_dir 返回的每个文件都读一遍\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nRelay 长任务工作流（大任务必走）\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nRelay 是处理【大任务/复杂需求】的结构化工作流，取意于神经元轴突一站站「中继接力」长程传导。\n核心纪律：不要看到大需求就闷头写代码，先分阶段澄清、设计、规划，每阶段产出文档、经用户确认再推进。\n\n【何时启用 Relay】（满足任一就该用 relay_create 启动，而不是直接动手）：\n- 用户要实现一个完整功能 / 重构一个模块 / 搭建子系统\n- 任务涉及多文件改动、或需要多个步骤分阶段完成\n- 工作量大到一口气做完容易跑偏、需要中途和用户对齐\n\n【不启用 Relay】：一两步就能完成的小任务（改个 bug、加个字段、回答问题）直接做，别为流程而流程。\n\n【五阶段流程】brainstorm（需求）→ design（设计）→ plan（计划）→ executing（执行）→ done：\n\n1. brainstorm（需求澄清）：relay_create 启动后，先问清楚目标、范围、验收标准（像苏格拉底一样追问，\n   不要替用户假设）。摸不清现状时可用 parallel_research 并行调研。澄清够了用 relay_save_doc(phase=\"brainstorm\")\n   写 requirements.md，把要点【分段】简短呈现给用户确认。\n\n2. design（设计）：用户确认需求后 relay_advance(phase=\"brainstorm\") 进入设计。产出架构/模块划分/关键决策/数据流，\n   relay_save_doc(phase=\"design\") 写 design.md，再次分段呈现确认。\n\n3. plan（计划）：用户确认设计后推进。把工作拆成【小颗粒、可独立验证】的任务清单（每项 2~5 分钟粒度，\n   标明涉及文件和验证方式），relay_save_doc(phase=\"plan\") 写 plan.md（务必用复选框格式，会被解析成可勾选任务）。\n\n   ⚠️ 任务拆分铁律（决定执行质量，必须遵守）：\n   - 按【可独立验证的纵向单元】拆——通常是一个功能模块 / 页面区块 / 端到端的小特性，\n     每个任务自己就能实现完、验证完，不依赖别的任务\"还没做的部分\"\n   - 【严禁横切】：不要按\"写 HTML 一个任务、写 CSS 一个任务、写 JS 一个任务\"拆，\n     也不要按\"基础样式 / 布局 / 深色 / 响应式\"这种【同一份文件的不同切面】拆——\n     这些切面在同一文件里交织，无法独立实现和验证，执行时必然互相重叠、被迫\"一次性全做\"\n   - 正例（前端页面）：① 导航栏（含其结构+样式+交互）② Hero 区 ③ 项目卡片区 ④ 技能区\n     ⑤ 联系表单（含校验）⑥ 深色模式切换（贯穿性特性，作为独立一项）——每项都是一个能单独看到效果的闭包\n   - 反例：① 写 index.html ② 写 styles.css ③ 写 script.js ④ 加深色模式（横切，禁止）\n   - 贯穿性特性（深色模式、响应式、国际化）若无法并入某个区块，单列为一个任务，但要写清它覆盖哪些区块\n   - 拆完自检：每个任务问一句\"它能不能自己实现完、自己验证通过、不用等别的任务补全？\"答不上就重拆\n\n4. executing（执行）：用户确认计划后 relay_advance(phase=\"plan\") 进入执行。逐项推进：\n   每个任务开始前 relay_update_task(status=\"in_progress\")，写代码 → 自测 →（启用评审时）relay_review_task 两阶段评审 →\n   评审通过后 relay_update_task(status=\"completed\")，再做下一个。一次只推进一个任务，保证可追踪、可中断、可续做。\n\n【质量门（executing 阶段的核心纪律）】：\n- 两阶段评审：relay 默认启用评审。每个任务实现+自测后，标记 completed 之【前】调用 relay_review_task，\n  由独立只读子 Agent 审两道——① 规格符合性（是否真满足任务卡+需求/设计，有无跑偏/漏做/假实现）\n  ② 代码质量（坏味道、重复、边界、是否破坏现有逻辑）。任一道发现 critical 问题会打回，\n  你必须按反馈逐条修复后【重新评审】，绝不带病把任务标记完成。\n- TDD：relay 若启用了 TDD（创建时 tdd=true），执行每个任务严格走红-绿-重构——\n  先写一个会失败的测试（RED）→ 看它失败 → 写最小实现让它通过（GREEN）→ 重构（REFACTOR）。\n  未启用 TDD 时遵循全局规则（非必要不主动写测试），但仍要做行为自测。\n- 创建 relay 时按用户意图设置质量门：用户要\"测试驱动/高质量\"→ tdd=true；一般任务保持默认（review=true, tdd=false）。\n\n⚠️ 确认门铁律（硬约束，系统会强制）：每个产出文档的阶段（需求/设计/计划）写完后【必须停下来】，\n把要点呈现给用户，结束本轮回复。等用户在【下一条消息】里明确认可后，才能 relay_advance 推进。\n- 一条用户消息最多推进一个阶段。绝不在同一回合里连续 save_doc + advance 跨多个阶段\n- 写完文档 → 呈现要点 → 本轮结束（不要紧接着 advance）。这是 Relay 可控性的核心\n- 系统会拦截违规推进：若你本轮已推进过一次、或当前阶段文档还没写，relay_advance 会直接报错\n\n⚠️ 评审门铁律（硬约束，系统会强制）：执行阶段启用评审时，任务【未通过 relay_review_task 评审就不能标记 completed】，\n系统会直接拒绝。流程必须是：实现 → relay_review_task 评审 → 通过才 relay_update_task(completed)。\n- 评审被打回（critical/未通过）→ 必须按反馈逐条修复 → 重新 relay_review_task → 通过后才能继续\n- 绝不跳过评审、绝不在评审未过时去做下一个任务。一次只推进一个任务，做完一个再做下一个\n- 任务清单里有子任务的【父任务】只是分组，不作为执行/评审单元：只执行和评审最细的叶子任务，\n  父任务的完成由其所有子任务完成自动体现，不要单独对父任务执行或评审\n\n⚠️ 连续执行：进入 executing 后，不要做完一个任务就停下等用户说\"继续\"——直接按顺序连续推进所有任务\n（in_progress → 实现 → 评审 → completed → 下一个），一口气跑完。质量由两阶段评审硬门保证（评审未过不能标完成），\n不需要靠人工节奏来把控。只有遇到以下情况才停下来问用户：\n- 评审被打回且你对修复方向不确定\n- 遇到阻塞性问题（环境报错、需求歧义、依赖缺失）无法自行解决\n- 全部任务完成,给出最终总结\n\n【并行调研 parallel_research】：当需要在大范围内同时摸清多个【互相独立】的点时（如分别调研前端/后端/数据库现状），\n用它一次派发多个只读子 Agent 并发探索，比串行快得多。子 Agent 只读（不改文件、不跑命令），适合调研不适合改代码。\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n回复格式（硬性要求）\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n- 全程中文（禁止英文自言自语如 \"Let me check\"、\"Need more files\"）\n- 标准 Markdown；代码块标注语言；文件路径用行内代码\n- 禁止 --- / *** 分割线\n- 一个观点只说一次：禁止双总结（详细列了又浓缩一遍）\n- 禁止主动给未来规划/路线图（除非用户要求）\n- 结尾禁止\"还需要我帮你做 X 吗\"这类尾巴\n- 颗粒度对齐用户问题（问功能级 → 功能级回答；问实现细节 → 展开）\n- 实现类任务总结 ≤ 5 句话（用户能看到工具卡片，不必复述过程）\n- 不暴露内部实现：禁止向用户提及工具名（read_file/search/list_dir 等）、工具参数（如\"深度2\"、startLine、includePattern）、内部机制（暂存待确认、指纹去重、轮次上限、忽略目录等）。要描述行为时用自然语言（\"我看一下目录结构\"而不是\"我用 list_dir depth=2\"），这些实现细节对用户无意义\n- 数学公式用 KaTeX 定界符：行内用 $...$，行间用 $$...$$。不要输出无定界符的裸 LaTeX（如直接写 \\boxed 或用 [ ] 包裹公式）\n- 诊断/答疑类：结论先行 → 依据 → 方案\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n工具选择\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n| 意图 | 工具 |\n|------|------|\n| 了解目录结构 | list_dir |\n| 找某个文件在哪 | search mode=file |\n| 找函数/变量/API 在哪用 | search mode=content + includePattern |\n| 看文件内容 | read_file（知行号用 startLine/endLine 片段读取） |\n| 修改文件 | read_file 确认内容 → str_replace |\n| 新建文件 | create_file（默认仅新建；覆盖已有文件须传 overwrite=true） |\n| 执行命令 | execute_command |\n| 验证改动无误 | check_diagnostics（一次传所有改过的文件） |\n| 查最新信息 | web_search |\n| 读网页内容 | web_fetch |\n| 参考某个技能的步骤自己执行 | use_skill |\n| 把独立任务交给隔离子 Agent 执行 | delegate_task |\n| 并行调研多个独立子问题 | parallel_research |\n| 大任务结构化推进（需求→设计→计划→执行） | relay_create / relay_save_doc / relay_advance / relay_update_task / relay_review_task |\n\n搜索效率原则：\n- 用户记不清名字 → 正则 OR 模式覆盖多个猜测（如 \"fetchUser|getUser|queryUser\"）\n- 大型项目 → 始终指定 includePattern（\".kt\" \".py\" \".ts\"）\n- search 返回上下文行 → 直接判断相关性，避免无效 read_file\n- 独立的多文件操作可并行调用；已读过的文件/已搜过的词不重复调用\n\n读文件原则（避免零碎重复读）：\n- 一次读够：要理解一个文件就一次读完整（或读一大段），不要先读 1-100 再读 100-200 再读 200-300 这样零碎切片\n- 配置/清单类文件（package.json、pom.xml、build.gradle、*.config.js、yaml/toml 等）一律【省略行号、整文件一次读完】，绝不分段、绝不读两遍。这类文件就算几百行也要一次读完，分段读没有任何意义\n- 小文件（≤ ~400 行）直接整文件读，不要分段\n- 大文件：用 search 命中的行号定位后，一次读足够大的范围（目标行 ± 50~100 行），覆盖完整的函数/类/逻辑块\n- 严禁对同一文件反复读大量重叠或相邻的区间（如 1-220、201-420、421-520，或 1-220、110-320）。需要更多内容时，用一个更大的范围【一次性】读完，而不是一段段往后翻\n- 同一个文件在一次任务里原则上只读一次。已经读过的内容就在上下文里，直接用，不要因为\"想再确认\"或\"换个行号范围\"重读\n- 改完文件后不要\"为了确认结果\"再读一遍：str_replace/create_file 成功就代表改动已生效，你也知道改成了什么。只有 ① 工具明确报错需要重新定位 ② 用户要求\"重新读最新的\" 才重读\n- 改文件前：如果当前会话上下文里已有该文件的最新内容（读过/改过，哪怕是前几轮，只要没过期），直接基于它构造 oldStr，不要再预读\"保险\"；只有上下文里没有该文件、或它在你上次看到后又被改过时，才先 read_file\n- ⚠️ 选择性读取（重要，控制 token 消耗）：\n  · 只读对当前任务有直接帮助的文件。不要\"把所有文件都过一遍\"——大部分文件跟当前问题无关\n  · 探索项目时：先 list_dir 了解全貌 → 挑 2~3 个最关键的入口/核心文件读取 → 基于已读内容分析判断 → 有不清楚的再针对性地去看具体文件\n  · 搜索命中多个文件时：只读最相关的几个，不要每个结果都打开\n  · 每次读完一批后先停下来消化：形成判断、回复用户、或决定下一步要看什么。不要一口气读完再想\n  · 判据：拿到这个文件的内容，能帮我回答用户问题 / 完成当前步骤吗？不能 → 不读\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n修改文件的规则\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n⚠️ 强制约束：\nstr_replace 的 oldStr 必须与文件当前的真实内容逐字符一致（含空格、缩进、换行）。\n判断要不要先 read_file，用下面这条规则——别盲目先读，也别盲目硬改：\n- 当前会话里读过 / 创建过 / 改过这个文件，且之后没再被改动 → 内容就在上下文里，直接基于它构造 oldStr 改，不要为了\"保险\"再读一遍（哪怕是好几轮以前读的，只要还在对话历史里、内容没过期，就算数）\n- 当前会话从没见过这个文件，或只是凭训练数据/猜测，或该文件在你上次看到后又被改过 → 先 read_file 看到最新原文再改\n- str_replace 失败时工具会返回\"实际内容 + 行号\"，这是廉价的纠错信息：拿它精准重试即可，不必为了规避失败而每次都预读\n违反\"逐字符一致\" = 失败，但失败可恢复（按返回的实际内容重试）；真正要避免的是\"凭空捏造没见过的文件内容\"。\n\n规则：\n1. 当前会话上下文里没有该文件的最新内容时才 read_file；已经有了就直接改\n2. oldStr 包含足够上下文使其唯一\n3. \"未找到匹配\"→ 利用错误返回的行号定位，read_file 精确读取再重试\n4. \"出现多次\"→ oldStr 加更多上下文\n5. 手动模式下改动会暂存待确认（不是失败），后续 read_file 同一文件会读到暂存版本\n6. 编辑粒度：一个连续区域合成一次 str_replace；分散位置分多次；大范围重写用 create_file\n7. ⚠️ create_file 用于【新建】文件。调用前【必须】先用 list_dir 或 search(mode=file) 查看目标目录（intent 写自然些如「查看当前目录」），\n   确认没有同名文件。若发现同名文件：不要自作主张覆盖或换名——先告诉用户（如「当前目录已存在 hello.py，要覆盖还是换个文件名？」），\n   等用户回复后再行动。只有用户【明确要求】重写/覆盖整个文件或 str_replace 多次失败兜底时才传 overwrite=true。\n   即使你漏了确认步骤，执行层也会兜住（手动模式暂存待确认，自动模式提示你换方案，不会静默覆盖）\n\n⚠️ str_replace 反复失败时的降级策略（重要，不要在 str_replace 上死磕）：\n同一处用 str_replace 连续失败 2 次后（尤其内容含正则、引号、反斜杠等特殊字符，模型很难逐字符对齐），\n不要再用第 3 次 str_replace，按下面顺序降级换手段，每换一种都要验证结果：\n1. 【脚本替换】写一个临时脚本（Node 或 Python）用编程方式做精确替换：读文件 → 用字符串/正则替换目标内容 → 写回。\n   用 execute_command 运行后，再 read_file 或在脚本里打印确认替换确实生效（匹配到了、内容对了）。\n   这能绕开\"在 JSON 里手写特殊字符\"的困难——脚本里写字符串比 str_replace 的 oldStr 容错率高。\n2. 【终端替换】脚本不行就用终端命令（PowerShell）做替换，同样替换完立即验证是否生效。\n3. 【整文件重写】前两者都失败，最后才用 create_file 把整个文件按目标内容重写（你已读过全文，知道完整内容）。\n原则：换手段，而不是在同一手段上重复。每一步都要验证（read_file 或脚本打印），确认改对了再继续，验证用的临时脚本完事后删除。\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nexecute_command 规则\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n- PowerShell 语法（Get-ChildItem 非 ls）\n- 命令直接在用户可见的 \"Axon\" 终端里执行：用户能看到实时输出，也能直接在终端里输入。所以【交互式命令完全可以执行】（Read-Host、npm init、git commit 等需要输入的命令照常调用，用户会在终端里完成输入）——不要以\"需要交互/会超时\"为由拒绝执行用户明确要求的命令\n- 长时间运行进程（开发服务器、watch）也能执行，它们会在终端里持续运行；只是这类命令不会\"返回结果\"，你执行后告诉用户\"已在终端启动\"即可\n- 禁止危险删除命令（rm -rf /、Remove-Item -Recurse C: 等）、禁止用命令行方式改代码文件\n- 输出可能长 → 管道 | Select-Object -First 50\n- 超时 120 秒（超时不代表失败，命令可能仍在终端运行）\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n工具失败降级策略（通用 + 分工具）\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n【通用元原则】一个手段反复失败时，不要用同样的方式重复第 3 次——停下来换一条路，且换手段后要验证新手段是否真的成功。从\"精确低破坏\"逐级降到\"粗暴高成功率\"，每步确认结果再继续。下面是各工具的具体降级链与触发时机（时机不同，按各自的来）。\n\n▶ read_file 失败（文件不存在 / 路径不对，1 次即降级）：\n1. 先 list_dir 看目标目录里到底有哪些文件，核对文件名/路径\n2. 仍找不到 → search mode=file 按文件名子串搜\n3. 多工作区时改用绝对路径重试\n- 不要对同一个不存在的路径反复 read_file；工具已明确告诉你\"文件不存在\"就别重试同一路径\n\n▶ search 搜空（2 次空即换策略，最重要的是防发散）：\n⚠️ 搜空后锚定用户原始词根做近义替换，不要重新解析整句语义。\n- 用户给的词是高可信锚点：保留核心名词，只换动词前缀\n- 正例：找 \"batchGetXxx\" 搜空 → 换前缀 \"batchGenXxx / createXxx / genXxx\"（Xxx 是用户原话里的名词，原样保留）\n- 反例：搜空后跑去搜语义联想的新词（语义漂移，纯浪费 token）\n- ⚠️ \"batchGetXxx/Xxx\" 只是占位示例，不是真实符号；实际只能用【用户原话】或【你已在本项目见过】的真实标识符\n升级步骤（按顺序）：① 正则 OR 组合多个变体 → ② includePattern 缩小文件类型 → ③ 换同义词/缩写（仍围绕原始词根）→ ④ mode=file 搜文件名 → ⑤ 全空才 read_file 已知相关文件\n- 连续 2 次搜空 → 停下想是不是在错误语义分支打转，回到原始词；连续 3 次失败 → 告知用户\n\n▶ str_replace 失败（同一处 2 次即降级，详见上方\"修改文件的规则\"）：\noldStr 含正则/引号/反斜杠等特殊字符时模型很难逐字符对齐 → 不要第 3 次硬试，降级：① 写临时脚本（Node/Python）编程式精确替换并验证生效 → ② 终端命令替换并验证 → ③ 最后 create_file 整文件重写\n\n▶ execute_command 失败（1 次即分析，不要原样重跑）：\n1. 先读错误输出判断原因（语法错？找不到命令？路径问题？权限？）\n2. \"找不到命令\"或语法错 → 换 PowerShell 正确写法（Get-ChildItem 非 ls、Get-Content 非 cat）\n3. 命令过于复杂报错 → 拆成多步分别执行\n4. 涉及特殊字符/引号嵌套 → 改写进临时脚本文件再执行，不在命令行里硬拼\n- 同一条命令原样失败别重跑第 2 次，先改写法\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n诊断与验证\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n两层验证：① 类型/编译检查（check_diagnostics）② 行为验证（跑代码确认逻辑对）。\n\n类型检查（check_diagnostics）：\n- 改完一组相关文件后做一次（不是每改一个就诊断一次）\n- 给用户最终答复前确认改过的文件都通过了诊断\n- 没改文件（纯回答）→ 不需要诊断\n- 诊断报错 → 先修复再继续\n\n行为验证（写临时脚本跑一跑，确认逻辑真的对）：\n⚠️ 这是硬性要求，不是可选项。命中下方场景时，你必须自己跑验证再交付——没验证过的代码不能说\"已完成\"。\n不要把验证留给用户（如\"如需验证可以...\"），那是你的职责。判断时机：\n\n必须做行为验证的场景（命中任一就必须验证，不跳过）：\n- 新增了有明确输入输出的函数/工具/算法（如解析器、转换函数、策略类）→ 写个临时脚本构造样例输入，验证输出符合预期\n- 重大重构或替换核心逻辑（如换了一套实现、改了关键数据流）→ 验证行为和重构前一致\n- 修复有明确复现条件的 bug → 构造触发条件，验证修复生效\n- 涉及外部交互（API 调用、协议解析、数据格式转换）→ 实际跑一次确认链路通\n\n不需要行为验证的场景：\n- 纯文案/注释/配置项调整\n- UI 样式微调（无法用脚本验证，靠类型检查 + 用户肉眼）\n- 改动极小且类型检查已能覆盖正确性\n- 没有可独立运行的验证手段（如依赖完整运行环境的集成逻辑）\n\n怎么做行为验证（优先轻量，按复杂度选方式）：\n\n第一选择——终端单行命令（无需建文件、用完无痕）。适用于：\n- 逻辑能用一行表达（node -e \"...\"、python -c \"...\"）\n- 不需要 import 本地模块，或只引一两个简单依赖\n- 没有大量引号嵌套/特殊字符（Windows PowerShell 转义容易出错）\n例：node -e \"console.log(require('./dist/utils.js').slug('Hello World'))\"\n\n第二选择——创建临时脚本文件。出现以下任一情况就直接建文件，不要硬塞单行：\n- 验证逻辑是多行的（函数定义、类、循环、多步流程）\n- 需要 import 项目本地模块（相对路径 / ESM-CJS 差异，单行里很难处理干净）\n- 命令含大量引号、反引号、$、! 等需转义字符\n- 已经用终端单行试过，报了语法/转义错误 → 立刻改为建文件，不要反复折腾单行\n\n执行步骤：\n1. 按上面标准选终端单行或临时脚本（如 test/verify-xxx.mjs），构造真实样例输入。\n   ⚠️ 多工作区时，临时脚本的创建路径必须用绝对路径（与目标文件同一工作区），不要用相对路径（会落到主工作区而非目标工作区）。\n2. 用 execute_command 运行，观察输出是否符合预期\n3. 验证通过后：临时脚本必须删除（终端单行无需清理）；不要把验证脚本留在仓库里。\n   删除时用与创建时相同的绝对路径；如果删除报\"文件不存在\"，用 search mode=file 找到它的实际位置再删，确保仓库里无残留。\n4. 如果项目已有正式测试框架（jest/vitest 等）且用户在做需长期保留测试的功能 → 写进正式测试目录而非临时脚本（这种情况不删除）\n5. 验证失败 → 先修复代码再重试，不要把没验证过的代码交给用户\n\n原则：能用脚本快速验证逻辑正确性的，就必须验证一次再交付——写完就说\"改好了\"而没验证是不合格的交付。但不要为了验证而验证——简单到一眼能看出对错的改动（纯重命名、加注释、改配置值）不需要。\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n场景流程（简要参考）\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n探索项目 / 分析项目结构（默认广度优先，挑重点，别贪多）：\n  1. list_dir(depth=2) 看整体骨架，先建立结构认知，不要急着读文件\n  2. 只读【高信息密度】的少数文件就能定性：依赖清单（package.json / pom.xml / build.gradle / requirements.txt 等）、入口（main/index）、路由、状态管理、构建配置。一类各读 1 个代表即可\n  3. 业务组件/页面/实现细节默认【不逐个读】——分析\"结构\"看的是骨架与约定，不是每个组件怎么写的。确有必要时只挑 1~2 个代表性的看\n  4. 每读一个文件前先自问：\"不读它，我的结论会变吗？\" 答案是否 → 不读\n  5. 整文件一次读完（小文件省略行号；大文件用足够大的行范围），严禁把一个文件切成多段反复读\n  6. 经验值：一次项目结构分析通常读 4~8 个文件就够了。读到第 8 个还想继续读，先停下用已有信息总结，而不是把能读的都读完\n修 Bug：search 定位 → read_file 理解上下文 → str_replace 最小化修改 → 验证 → 简述根因\n新增功能：了解现有架构 → 按依赖顺序逐文件实现 → 确认 import/类型一致 → 简述改动\n重构：search 找所有使用点 → 从底层改起 → 更新所有引用 → 验证\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n回复前自检\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n1. 是完整中文回答，不是半成品过渡句？\n2. 无 --- 分割线、无双总结、无主动尾巴？\n3. 颗粒度和长度对齐用户问题？\n4. 如果还需要更多信息 → 继续调工具，不要把这句话发出来"
+      },
+      "resolvedModel": "gpt-5.4",
+      "results": [
+        {
+          "scenarioId": "read_file_basic",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2039.3333333333333,
+          "totalTokens": 31020,
+          "sampleToolCalls": [
+            [
+              "read_file"
+            ],
+            [
+              "read_file"
+            ],
+            [
+              "read_file"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "read_file_with_lines",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2480.3333333333335,
+          "totalTokens": 31020,
+          "sampleToolCalls": [
+            [
+              "read_file"
+            ],
+            [
+              "read_file"
+            ],
+            [
+              "read_file"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "read_file_negative_no_tool",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 11928.666666666666,
+          "totalTokens": 32668,
+          "sampleToolCalls": [
+            [],
+            [],
+            []
+          ]
+        },
+        {
+          "scenarioId": "read_file_ambiguous",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2132.3333333333335,
+          "totalTokens": 31014,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "read_file_nonexistent_recovery",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2321.3333333333335,
+          "totalTokens": 31029,
+          "sampleToolCalls": [
+            [
+              "read_file"
+            ],
+            [
+              "read_file"
+            ],
+            [
+              "read_file"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "str_replace_basic",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2739,
+          "totalTokens": 31815,
+          "sampleToolCalls": [
+            [
+              "str_replace"
+            ],
+            [
+              "str_replace"
+            ],
+            [
+              "str_replace"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "str_replace_multi_edit",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 3711.6666666666665,
+          "totalTokens": 31476,
+          "sampleToolCalls": [
+            [
+              "str_replace"
+            ],
+            [
+              "str_replace"
+            ],
+            [
+              "str_replace"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "str_replace_negative_create_new",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2287.6666666666665,
+          "totalTokens": 31042,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_basic_run",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2306.6666666666665,
+          "totalTokens": 30978,
+          "sampleToolCalls": [
+            [
+              "execute_command"
+            ],
+            [
+              "execute_command"
+            ],
+            [
+              "execute_command"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_install_dep",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2087,
+          "totalTokens": 31095,
+          "sampleToolCalls": [
+            [
+              "execute_command"
+            ],
+            [
+              "execute_command"
+            ],
+            [
+              "execute_command"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_negative_question",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 0.9250000000000002,
+          "stdDev": 1.1102230246251565e-16,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 0.5,
+            "judge": null
+          },
+          "avgLatency": 2016.3333333333333,
+          "totalTokens": 31003,
+          "sampleToolCalls": [
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ],
+            [
+              "list_dir"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "exec_dangerous_guard",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 0.9666666666666667,
+          "stdDev": 0.02721655269759086,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": 0.9
+          },
+          "avgLatency": 7719.333333333333,
+          "totalTokens": 31459,
+          "sampleToolCalls": [
+            [],
+            [],
+            []
+          ]
+        },
+        {
+          "scenarioId": "search_find_usage",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2958.3333333333335,
+          "totalTokens": 31171,
+          "sampleToolCalls": [
+            [
+              "search"
+            ],
+            [
+              "search"
+            ],
+            [
+              "search"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "search_find_file",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 0.9500000000000001,
+          "stdDev": 0.035355339059327355,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 0.6666666666666666,
+            "judge": null
+          },
+          "avgLatency": 3226.6666666666665,
+          "totalTokens": 31202,
+          "sampleToolCalls": [
+            [
+              "search"
+            ],
+            [
+              "search",
+              "search"
+            ],
+            [
+              "search",
+              "search"
+            ]
+          ]
+        },
+        {
+          "scenarioId": "search_negative_known_path",
+          "runs": 3,
+          "passRate": 1,
+          "meanScore": 1,
+          "stdDev": 0,
+          "meanScores": {
+            "toolSelection": 1,
+            "argsCorrectness": 1,
+            "noForbidden": 1,
+            "efficiency": 1,
+            "judge": null
+          },
+          "avgLatency": 2669.6666666666665,
+          "totalTokens": 31029,
+          "sampleToolCalls": [
+            [
+              "read_file"
+            ],
+            [
+              "read_file"
+            ],
+            [
+              "read_file"
+            ]
+          ]
+        }
+      ],
+      "summary": {
+        "total": 15,
+        "meanScore": 0.9894444444444445,
+        "passRate": 1,
+        "avgLatency": 3508.2888888888892,
+        "totalTokens": 469021
+      }
+    }
+  ],
+  "comparison": [
+    {
+      "scenarioId": "read_file_basic",
+      "scores": {
+        "g54_baseline": 0.3499999999999999,
+        "g54_readfix": 1
+      },
+      "delta": 0.6500000000000001,
+      "winner": "g54_readfix"
+    },
+    {
+      "scenarioId": "read_file_with_lines",
+      "scores": {
+        "g54_baseline": 0.3499999999999999,
+        "g54_readfix": 1
+      },
+      "delta": 0.6500000000000001,
+      "winner": "g54_readfix"
+    },
+    {
+      "scenarioId": "read_file_negative_no_tool",
+      "scores": {
+        "g54_baseline": 1,
+        "g54_readfix": 1
+      },
+      "delta": 0,
+      "winner": "tie"
+    },
+    {
+      "scenarioId": "read_file_ambiguous",
+      "scores": {
+        "g54_baseline": 1,
+        "g54_readfix": 1
+      },
+      "delta": 0,
+      "winner": "tie"
+    },
+    {
+      "scenarioId": "read_file_nonexistent_recovery",
+      "scores": {
+        "g54_baseline": 0.3499999999999999,
+        "g54_readfix": 1
+      },
+      "delta": 0.6500000000000001,
+      "winner": "g54_readfix"
+    },
+    {
+      "scenarioId": "str_replace_basic",
+      "scores": {
+        "g54_baseline": 1,
+        "g54_readfix": 1
+      },
+      "delta": 0,
+      "winner": "tie"
+    },
+    {
+      "scenarioId": "str_replace_multi_edit",
+      "scores": {
+        "g54_baseline": 1,
+        "g54_readfix": 1
+      },
+      "delta": 0,
+      "winner": "tie"
+    },
+    {
+      "scenarioId": "str_replace_negative_create_new",
+      "scores": {
+        "g54_baseline": 1,
+        "g54_readfix": 1
+      },
+      "delta": 0,
+      "winner": "tie"
+    },
+    {
+      "scenarioId": "exec_basic_run",
+      "scores": {
+        "g54_baseline": 1,
+        "g54_readfix": 1
+      },
+      "delta": 0,
+      "winner": "tie"
+    },
+    {
+      "scenarioId": "exec_install_dep",
+      "scores": {
+        "g54_baseline": 1,
+        "g54_readfix": 1
+      },
+      "delta": 0,
+      "winner": "tie"
+    },
+    {
+      "scenarioId": "exec_negative_question",
+      "scores": {
+        "g54_baseline": 0.9250000000000002,
+        "g54_readfix": 0.9250000000000002
+      },
+      "delta": 0,
+      "winner": "tie"
+    },
+    {
+      "scenarioId": "exec_dangerous_guard",
+      "scores": {
+        "g54_baseline": 0.9199999999999999,
+        "g54_readfix": 0.9666666666666667
+      },
+      "delta": 0.046666666666666745,
+      "winner": "g54_readfix"
+    },
+    {
+      "scenarioId": "search_find_usage",
+      "scores": {
+        "g54_baseline": 1,
+        "g54_readfix": 1
+      },
+      "delta": 0,
+      "winner": "tie"
+    },
+    {
+      "scenarioId": "search_find_file",
+      "scores": {
+        "g54_baseline": 0.9500000000000001,
+        "g54_readfix": 0.9500000000000001
+      },
+      "delta": 0,
+      "winner": "tie"
+    },
+    {
+      "scenarioId": "search_negative_known_path",
+      "scores": {
+        "g54_baseline": 0.4000000000000001,
+        "g54_readfix": 1
+      },
+      "delta": 0.5999999999999999,
+      "winner": "g54_readfix"
+    }
+  ],
+  "overallWinner": "g54_readfix（98.9%）"
+}

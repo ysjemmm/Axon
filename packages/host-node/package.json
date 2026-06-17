@@ -1,0 +1,29 @@
+{
+  "name": "@axon/host-node",
+  "version": "0.1.0",
+  "description": "NodeAgentHost：基于 node:fs / child_process / tsc 的 AgentHost 实现（web / cli / server 形态）",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "dependencies": {
+    "@axon/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "playwright-core": "1.49.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}
