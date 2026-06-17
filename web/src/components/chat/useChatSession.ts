@@ -783,6 +783,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
         }
         return updated;
       });
+      setReasoning("");
+      finishLoading();
       return;
     }
 
