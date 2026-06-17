@@ -7,7 +7,7 @@ import { Activity } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatTokenCount } from "./format";
 
-export function TokenIndicator({ used, max, cumulative }: { used: number; max: number; cumulative?: number }) {
+export function TokenIndicator({ used, max }: { used: number; max: number; cumulative?: number }) {
   const hasMax = max > 0;
   const percent = hasMax ? Math.min((used / max) * 100, 100) : 0;
 

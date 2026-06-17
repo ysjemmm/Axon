@@ -10,7 +10,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { Send, Loader2, Copy, ImagePlus, X, FileText, Paperclip, Plus, Camera, Feather, Check, ChevronDown, ListChecks, Sparkles, Globe, ShieldAlert, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent } from "@/components/ui/dialog";

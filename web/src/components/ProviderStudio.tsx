@@ -24,6 +24,7 @@ import {
   type ProviderLevel,
   type ResolvedProviderInfo,
   type ProviderModelInfo,
+  type ProbedModelInfo,
 } from "@/lib/apiClient";
 
 function isInVSCode(): boolean {

@@ -61,14 +61,6 @@ interface UseChatSessionOptions {
   onStreamingChange?: (streaming: boolean) => void;
 }
 
-/** 取一个工具段涉及的编辑文件路径（单文件 diff + apply_patch 多文件 diffs），用于 pending/undoable 匹配 */
-function segEditPaths(seg: { diff?: { path: string }; diffs?: { path: string }[] }): string[] {
-  const paths: string[] = [];
-  if (seg.diff?.path) paths.push(seg.diff.path);
-  if (seg.diffs) for (const d of seg.diffs) if (d.path) paths.push(d.path);
-  return paths;
-}
-
 /** 取一个工具段的编辑单元列表 {path, editId}（editId 由后端随 diff 下发，前端不推导，避免 seg.id≠toolCallId 的偏差） */
 function segEditUnits(seg: { diff?: { path: string; editId?: string }; diffs?: { path: string; editId?: string }[] }): { path: string; editId?: string }[] {
   const units: { path: string; editId?: string }[] = [];
@@ -634,7 +626,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
         // 避免重复追加：最后一条已是一条同内容的压缩提示
         const last = prev[prev.length - 1];
         const label = `[${endMsg}]`;
-        if (last?.role === "system" && last.content === label) return prev;
+        if ((last as any)?.role === "system" && last.content === label) return prev;
         return [...prev, { id: `compact-${Date.now()}`, role: "system" as any, content: label, timestamp: Date.now() }];
       });
       setStatusText(ok ? "思考中..." : "压缩失败，请重试");
@@ -693,7 +685,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
               }
               if (textIdx >= 0) {
                 const textSeg = segs[textIdx];
-                segs[textIdx] = { ...textSeg, content: (textSeg as { content: string }).content + batch };
+                segs[textIdx] = { type: "text" as const, content: (textSeg as any).content + batch } as TextSegment;
               }
               updated[updated.length - 1] = { ...last, segments: segs };
             }
@@ -724,7 +716,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
                 }
                 if (textIdx >= 0) {
                   const textSeg = segs[textIdx];
-                  segs[textIdx] = { ...textSeg, content: (textSeg as { content: string }).content + finalFlush };
+                  segs[textIdx] = { type: "text" as const, content: (textSeg as any).content + finalFlush } as TextSegment;
                 }
                 updated[updated.length - 1] = { ...last, segments: segs, streaming: false, turnStats: stats, turnStatus: "success" };
               } else {
@@ -822,7 +814,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
             }
             if (textIdx >= 0) {
               const textSeg = segs[textIdx];
-              segs[textIdx] = { ...textSeg, content: (textSeg as { content: string }).content + remaining };
+              segs[textIdx] = { type: "text" as const, content: (textSeg as any).content + remaining } as TextSegment;
             }
           }
           updated[updated.length - 1] = { ...last, segments: segs, streaming: false, turnStats: stats, turnStatus: "success" };
