@@ -460,24 +460,14 @@
     }
   },
   "scripts": {
-    "build": "node esbuild.mjs",
-    "build:web": "node scripts/copy-web.mjs",
-    "dev": "node esbuild.mjs --watch",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "package": "node esbuild.mjs && node scripts/copy-web.mjs && vsce package --no-dependencies -o axon-ide.vsix",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "dependencies": {
-    "@axon/core": "workspace:*",
-    "@axon/host-node": "workspace:*",
-    "@axon/host-vscode": "workspace:*",
     "playwright-core": "1.49.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.95.0",
-    "@vscode/vsce": "^3.6.2",
-    "esbuild": "^0.24.0",
     "typescript": "^5.7.0"
   }
 }
