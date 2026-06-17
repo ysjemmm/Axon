@@ -29,6 +29,7 @@ export class ChatCompletionsStrategy implements LLMStrategy {
     // 多模态降级：如果消息中含 image_url 但模型可能不支持（非 GPT/Claude/Qwen），
     // 把 image_url 部分剥离，只保留文字 + 提示"图片无法显示"
     const safeMessages = messages.map((m) => {
+      if (!m) return m; // 防御：消息为 undefined/null 时保持原样（应由上层 sanitize 保证不出现，此处兜底）
       if (m.role === "user" && Array.isArray(m.content)) {
         const parts = m.content as any[];
         const hasImage = parts.some((p) => p.type === "image_url");

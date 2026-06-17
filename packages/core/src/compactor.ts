@@ -138,6 +138,7 @@ export async function compactMessages(
 function serializeHistory(messages: ChatCompletionMessageParam[]): string {
   return messages
     .map((msg) => {
+      if (!msg) return ""; // 防御：消息为 undefined/null 时跳过
       const role = msg.role === "user" ? "用户" : msg.role === "assistant" ? "助手" : msg.role === "system" ? "系统" : "工具";
       const content = typeof msg.content === "string" ? msg.content : "(工具调用)";
       const truncated = content.length > 500 ? content.slice(0, 500) + "..." : content;

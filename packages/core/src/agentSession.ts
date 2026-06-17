@@ -1132,6 +1132,7 @@ export class AgentSession {
       // 尚未拿到 API 真实 usage：用字符数粗估（约 0.4 token/字符）兜底
       let chars = 0;
       for (const m of this.messages) {
+        if (!m) continue;
         if (typeof m.content === "string") chars += m.content.length;
         else if (Array.isArray(m.content)) {
           for (const part of m.content as any[]) if (part.type === "text") chars += (part.text || "").length;
@@ -1288,6 +1289,7 @@ export class AgentSession {
     const cleaned = sanitizeToolPairing(preFiltered);
 
     if (injections.length === 0) return cleaned;
+    if (cleaned.length === 0) return injections; // 防御：cleaned 为空时至少返回 injections，避免 systemMsg 为 undefined
     const [systemMsg, ...rest] = cleaned;
     return [systemMsg, ...injections, ...rest];
   }
@@ -1364,6 +1366,7 @@ export class AgentSession {
 
   /** 取一条消息的纯文本内容（兼容 string 与多模态 parts） */
   private messageText(m: ChatCompletionMessageParam): string {
+    if (!m) return "";
     const c = (m as { content?: unknown }).content;
     if (typeof c === "string") return c;
     if (Array.isArray(c)) return (c as Array<{ type?: string; text?: string }>).map((p) => (p.type === "text" ? p.text || "" : "")).join("");
