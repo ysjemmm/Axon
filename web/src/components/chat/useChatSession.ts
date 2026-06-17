@@ -157,6 +157,9 @@ export function useChatSession(opts: UseChatSessionOptions) {
    *  避免竞态误将新启动的轮次标为 cancelled */
   const cancelledTurnMsgId = useRef<string | null>(null);
   const turnStartTime = useRef<number>(0);
+  /** turn 代数计数器——每次 $sendNow$ 启动新轮时递增。所有 assistant 消息打上 turnGen，
+   * 工具结果等异步事件只作用于同代 assistant，防止取消 A 后陈旧结果穿到 B。 */
+  const turnGeneration = useRef(0);
   // 在稳定 handler 内读取最新值，避免把 handler 依赖这些 state（保持订阅稳定）
   const modelRef = useRef(model); modelRef.current = model;
   const statusPhaseRef = useRef(statusPhase); statusPhaseRef.current = statusPhase;
@@ -660,10 +663,10 @@ export function useChatSession(opts: UseChatSessionOptions) {
           if (!lastSeg || lastSeg.type !== "text") {
             segs.push({ type: "text", content: "" });
           }
-          updated[updated.length - 1] = { ...last, segments: segs, streaming: true, turnStatus: "running" };
+          updated[updated.length - 1] = { ...last, segments: segs, streaming: true, turnStatus: "running", turnGen: turnGeneration.current };
           return updated;
         }
-        return [...prev, { id: `assistant-${Date.now()}`, role: "assistant", segments: [{ type: "text", content: "" }], streaming: true, turnStatus: "running" }];
+        return [...prev, { id: `assistant-${Date.now()}`, role: "assistant", segments: [{ type: "text", content: "" }], streaming: true, turnStatus: "running", turnGen: turnGeneration.current }];
       });
       if (typewriterTimer.current) clearInterval(typewriterTimer.current);
       streamEnding.current = null;
@@ -846,6 +849,9 @@ export function useChatSession(opts: UseChatSessionOptions) {
       setChatHistory((prev) => {
         const updated = [...prev];
         const last = updated[updated.length - 1];
+        const curGen = turnGeneration.current;
+        // 陈旧 tool_call（来自被取消的上一轮）不作用于新轮 assistant
+        if (last && last.role === "assistant" && last.turnGen !== curGen) return prev;
         const status = (msg as any).status || "pending";
         const args = (msg.args as Record<string, unknown>) || {};
         const eventId = (msg as any).id as string || "";
@@ -905,7 +911,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
         };
 
         if (!last || last.role !== "assistant") {
-          updated.push({ id: `assistant-${Date.now()}`, role: "assistant", segments: [toolSeg], streaming: true });
+          updated.push({ id: `assistant-${Date.now()}`, role: "assistant", segments: [toolSeg], streaming: true, turnGen: turnGeneration.current });
         } else {
           updated[updated.length - 1] = { ...last, segments: [...(last.segments || []), toolSeg] };
         }
@@ -922,6 +928,9 @@ export function useChatSession(opts: UseChatSessionOptions) {
         const updated = [...prev];
         const last = updated[updated.length - 1];
         if (last?.role === "assistant" && last.segments) {
+          const curGen = turnGeneration.current;
+          // 陈旧结果（上一轮取消后的延迟到达）不作用于新轮 assistant
+          if (last.turnGen !== curGen) return prev;
           const segs = [...last.segments];
           const eventId = (msg as any).id as string || "";
           let matchIdx = -1;
@@ -1025,7 +1034,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
           type: "subagent", id: delegateId, intent, skill, prompt, status: "running", inner: [],
         };
         if (!last || last.role !== "assistant") {
-          updated.push({ id: `assistant-${Date.now()}`, role: "assistant", segments: [subSeg], streaming: true });
+          updated.push({ id: `assistant-${Date.now()}`, role: "assistant", segments: [subSeg], streaming: true, turnGen: turnGeneration.current });
         } else {
           updated[updated.length - 1] = { ...last, segments: [...(last.segments || []), subSeg] };
         }
@@ -1038,14 +1047,21 @@ export function useChatSession(opts: UseChatSessionOptions) {
       if (cancelled.current) return;
       const delegateId = (msg as any).delegateId as string;
       const event = (msg as any).event as WsMessage;
-      setChatHistory((prev) => updateSubAgentInner(prev, delegateId, event));
+      setChatHistory((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.role === "assistant" && last.turnGen !== turnGeneration.current) return prev;
+        return updateSubAgentInner(prev, delegateId, event);
+      });
       return;
     }
 
     if (msg.type === "sub_agent_end") {
       const delegateId = (msg as any).delegateId as string;
       const result = (msg as any).result as string || "";
-      setChatHistory((prev) => prev.map((m) => {
+      setChatHistory((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.role === "assistant" && last.turnGen !== turnGeneration.current) return prev;
+        return prev.map((m) => {
         if (m.role !== "assistant" || !m.segments) return m;
         const segs = m.segments.map((s) => {
           if (s.type !== "subagent" || s.id !== delegateId) return s;
@@ -1056,7 +1072,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
           return { ...s, status: "done" as const, innerStreaming: false, conclusion: result, inner };
         });
         return { ...m, segments: segs };
-      }));
+      });
+      });
       return;
     }
 
@@ -1172,6 +1189,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
 
   /** 真正执行发送：追加用户气泡 + 发 user_message + 进入加载态 */
   const sendNow = useCallback((payload: SubmitPayload) => {
+    // 递增代数，新一轮事件只作用于本代的 assistant 消息
+    const gen = ++turnGeneration.current;
     // 清除取消标记——新一轮开始后，之前取消设的 flag 不应阻止新事件处理
     cancelled.current = false;
     setChatHistory((prev) => [
@@ -1184,6 +1203,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
         images: payload.userBubble.images && payload.userBubble.images.length > 0 ? [...payload.userBubble.images] : undefined,
         attachedFiles: payload.userBubble.attachedFiles && payload.userBubble.attachedFiles.length > 0 ? payload.userBubble.attachedFiles : undefined,
         userSegments: payload.userBubble.segments && payload.userBubble.segments.length > 0 ? payload.userBubble.segments : undefined,
+        turnGen: gen,
       },
     ]);
     send({ type: "user_message", ...payload.send });
