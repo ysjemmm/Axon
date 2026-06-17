@@ -526,7 +526,37 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             </PopoverContent>
           </Popover>
         )}
-        <VirtualMessageList
+        {session.chatHistory.length === 0 ? (
+          <>
+            {/* 空历史占位 —— 独占整个 flex-1 区域，自然居中 */}
+            {session.isLoadingSession ? (
+              <div className="flex-1 flex items-center justify-center">
+                <div className="text-center text-muted-foreground">
+                  <Loader2 className="w-8 h-8 mx-auto mb-4 animate-spin text-primary/60" />
+                  <p className="text-sm">会话历史加载中...</p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 flex items-center justify-center">
+                <div className="text-center text-muted-foreground">
+                  <AxonLogo size={64} className="mx-auto mb-4" />
+                  {mode === "quest" ? (
+                    <>
+                      <p className="text-lg">Axon · 问答</p>
+                      <p className="text-sm mt-2">概念、方案、答疑。我不会改你的代码。</p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-lg">Axon</p>
+                      <p className="text-sm mt-2">读写代码、执行命令、搜索项目、联网查询。</p>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          <VirtualMessageList
             ref={virtualListRef}
             messages={session.chatHistory}
             estimateHeight={200}
@@ -592,32 +622,6 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               </CommandApprovalContext.Provider>
             )}
           />
-          {/* 空历史占位 */}
-          {session.chatHistory.length === 0 && session.isLoadingSession && (
-            <div className="flex-1 flex items-center justify-center">
-              <div className="text-center text-muted-foreground py-20">
-                <Loader2 className="w-8 h-8 mx-auto mb-4 animate-spin text-primary/60" />
-                <p className="text-sm">会话历史加载中...</p>
-              </div>
-            </div>
-          )}
-          {session.chatHistory.length === 0 && !session.isLoadingSession && (
-            <div className="flex-1 flex items-center justify-center">
-              <div className="text-center text-muted-foreground py-20">
-                <AxonLogo size={64} className="mx-auto mb-4" />
-                {mode === "quest" ? (
-                  <>
-                    <p className="text-lg">Axon · 问答</p>
-                    <p className="text-sm mt-2">概念、方案、答疑。我不会改你的代码。</p>
-                  </>
-                ) : (
-                  <>
-                    <p className="text-lg">Axon</p>
-                    <p className="text-sm mt-2">读写代码、执行命令、搜索项目、联网查询。</p>
-                  </>
-                )}
-              </div>
-            </div>
           )}
         <button
           onClick={animatedScrollToBottom}
