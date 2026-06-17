@@ -279,7 +279,7 @@ export const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>
       if (!el) return;
       const prefix = (el.textContent ?? "").trim() ? "\n" : "";
       el.appendChild(document.createTextNode(prefix + text));
-      // 光标移到末尾
+      // 光标移到末尾，并滚到可见位置
       const range = document.createRange();
       range.selectNodeContents(el);
       range.collapse(false);
@@ -287,6 +287,7 @@ export const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>
       sel?.removeAllRanges();
       sel?.addRange(range);
       el.focus();
+      el.scrollTop = el.scrollHeight;
       refreshEmpty();
     },
     appendSegments: (segments: UserSegment[]) => {
@@ -312,6 +313,7 @@ export const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>
       sel?.removeAllRanges();
       sel?.addRange(range);
       el.focus();
+      el.scrollTop = el.scrollHeight;
       refreshEmpty();
     },
   }));
@@ -339,6 +341,9 @@ export const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>
     after.collapse(true);
     sel.removeAllRanges();
     sel.addRange(after);
+
+    // 粘贴长文本后光标在末尾，需滚到可见位置
+    requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
 
     refreshEmpty();
     onChange?.("");
