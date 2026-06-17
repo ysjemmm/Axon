@@ -361,9 +361,14 @@ export class AgentSession {
     }
   }
 
-  /** 手动触发上下文压缩（供前端"压缩上下文"按钮调用） */
+  /** 手动触发上下文压缩（供前端"压缩上下文"按钮调用）。需超过当前模型窗口 50% 才允许。 */
   async compactSession(): Promise<void> {
     if (this.isCompacting) return;
+    const ctxWindow = this.getContextWindow();
+    if (!needsCompaction(this.lastTotalTokens, ctxWindow)) {
+      this.send("compacting_end", { success: false, message: "当前上下文未超过模型窗口的 50%，无需压缩" });
+      return;
+    }
     this.isCompacting = true;
     this.send("compacting_start", {});
     try {
