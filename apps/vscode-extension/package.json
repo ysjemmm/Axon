@@ -6,7 +6,7 @@
   "private": true,
   "publisher": "ysj",
   "license": "MIT",
-  "icon": "media/icon.svg",
+  "icon": "media/icon.png",
   "galleryBanner": {
     "color": "#1e1b4b",
     "theme": "dark"
