@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="128" y2="128">
+      <stop offset="0%" stop-color="#1e1b4b"/>
+      <stop offset="100%" stop-color="#312e81"/>
+    </linearGradient>
+    <radialGradient id="core" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="60%" stop-color="#4f46e5"/>
+      <stop offset="100%" stop-color="#3730a3"/>
+    </radialGradient>
+    <linearGradient id="branch-r" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+    <linearGradient id="branch-l" x1="100%" y1="0%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="24" fill="url(#bg)"/>
+  <!-- Core -->
+  <circle cx="64" cy="64" r="16" fill="url(#core)"/>
+  <!-- Branches -->
+  <path d="M76 56L92 40L100 32" stroke="url(#branch-r)" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="100" cy="32" r="5" fill="#38bdf8"/>
+  <path d="M80 64L96 62L104 58" stroke="url(#branch-r)" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="104" cy="58" r="4" fill="#38bdf8" opacity="0.85"/>
+  <path d="M76 72L90 86L96 96" stroke="url(#branch-r)" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="96" cy="96" r="5" fill="#38bdf8"/>
+  <path d="M52 56L36 40L28 32" stroke="url(#branch-l)" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="28" cy="32" r="5" fill="#a78bfa"/>
+  <path d="M48 64L32 66L24 70" stroke="url(#branch-l)" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="24" cy="70" r="4" fill="#a78bfa" opacity="0.85"/>
+  <path d="M52 72L38 86L32 96" stroke="url(#branch-l)" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="32" cy="96" r="5" fill="#a78bfa"/>
+</svg>

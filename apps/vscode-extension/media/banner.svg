@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="840" viewBox="0 0 1400 840" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1400" y2="840">
+      <stop offset="0%" stop-color="#0f0d2e"/>
+      <stop offset="50%" stop-color="#1e1b4b"/>
+      <stop offset="100%" stop-color="#312e81"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#6366f1" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#1e1b4b" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="core" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#818cf8"/>
+      <stop offset="50%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#4f46e5"/>
+    </radialGradient>
+    <linearGradient id="branch-r" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+    <linearGradient id="branch-l" x1="100%" y1="0%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+    <linearGradient id="text-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#a78bfa"/>
+      <stop offset="40%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1400" height="840" fill="url(#bg)"/>
+
+  <!-- Background glow -->
+  <ellipse cx="350" cy="420" rx="500" ry="400" fill="url(#glow)"/>
+
+  <!-- Logo area -->
+  <!-- Core -->
+  <circle cx="200" cy="400" r="48" fill="url(#core)"/>
+
+  <!-- Branches - right -->
+  <path d="M236 360L310 290L370 250" stroke="url(#branch-r)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="370" cy="250" r="16" fill="#38bdf8"/>
+  <path d="M240 400L340 395L400 370" stroke="url(#branch-r)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="400" cy="370" r="14" fill="#38bdf8" opacity="0.85"/>
+  <path d="M236 440L310 500L360 540" stroke="url(#branch-r)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="360" cy="540" r="16" fill="#38bdf8"/>
+
+  <!-- Branches - left -->
+  <path d="M164 360L90 290L40 260" stroke="url(#branch-l)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="40" cy="260" r="15" fill="#a78bfa"/>
+  <path d="M160 400L60 405L0 430" stroke="url(#branch-l)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="0" cy="430" r="14" fill="#a78bfa" opacity="0.85"/>
+  <path d="M164 440L90 500L40 530" stroke="url(#branch-l)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="40" cy="530" r="15" fill="#a78bfa"/>
+
+  <!-- Branches - top -->
+  <path d="M200 352L210 260L220 200" stroke="url(#branch-r)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="220" cy="200" r="13" fill="#38bdf8" opacity="0.8"/>
+  <path d="M200 448L190 540L180 600" stroke="url(#branch-l)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="180" cy="600" r="13" fill="#a78bfa" opacity="0.8"/>
+
+  <!-- Brand name and tagline -->
+  <text x="480" y="370" font-family="system-ui, -apple-system, sans-serif" font-size="120" font-weight="800" fill="url(#text-grad)" letter-spacing="-2">Axon</text>
+  <text x="480" y="450" font-family="system-ui, -apple-system, sans-serif" font-size="36" fill="#94a3b8" letter-spacing="2">AI-POWERED CODING ASSISTANT</text>
+
+  <!-- Feature tags -->
+  <g transform="translate(480, 520)" font-family="system-ui, -apple-system, sans-serif" font-size="22" fill="#64748b">
+    <text x="0" y="0">Built-in Agent Core</text>
+    <text x="260" y="0">·</text>
+    <text x="280" y="0" fill="#6366f1">Deep Editor Integration</text>
+    <text x="520" y="0">·</text>
+    <text x="540" y="0">Read, Write, Execute</text>
+  </g>
+
+  <!-- VS Code badge -->
+  <rect x="480" y="580" width="220" height="40" rx="20" fill="#ffffff" fill-opacity="0.08"/>
+  <text x="590" y="606" font-family="system-ui, -apple-system, sans-serif" font-size="18" fill="#94a3b8" text-anchor="middle">For VS Code</text>
+</svg>

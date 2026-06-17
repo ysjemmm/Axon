@@ -6,9 +6,18 @@
   "private": true,
   "publisher": "ysj",
   "license": "MIT",
+  "icon": "media/icon.svg",
+  "galleryBanner": {
+    "color": "#1e1b4b",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
-    "url": "https://example.com/axon/axon-ide.git"
+    "url": "https://github.com/ysjemmm/Axon"
+  },
+  "homepage": "https://github.com/ysjemmm/Axon#readme",
+  "bugs": {
+    "url": "https://github.com/ysjemmm/Axon/issues"
   },
   "type": "commonjs",
   "engines": {
