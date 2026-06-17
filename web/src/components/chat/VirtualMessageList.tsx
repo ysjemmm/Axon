@@ -194,10 +194,11 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
       };
       const handleResize = () => {
         const w = container.clientWidth;
-        // 宽度变化 → 内容重排导致已缓存高度失效，清掉强制重测，避免与 footer 重叠
+        // 宽度变化时仅触发重算（clientHeight 可能变了），不清理高度缓存。
+        // 内容重排带来的高度变化由每条消息自己的 ResizeObserver 精确捕获，
+        // 清空全部缓存只会让离屏消息回退到预估值，造成空白/跳动。
         if (w !== prevWidth) {
           prevWidth = w;
-          heightMap.current.clear();
           setMeasureVersion((n) => n + 1);
         }
         setClientHeight(container.clientHeight);
