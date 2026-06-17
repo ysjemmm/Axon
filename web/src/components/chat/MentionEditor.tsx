@@ -342,6 +342,9 @@ export const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>
     sel.removeAllRanges();
     sel.addRange(after);
 
+    // 恢复焦点（insertNode 可能让 contentEditable 失焦）
+    el.focus();
+
     // 粘贴长文本后光标在末尾，需滚到可见位置
     requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
 

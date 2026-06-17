@@ -462,9 +462,7 @@
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
   },
-  "dependencies": {
-    "playwright-core": "1.49.1"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.95.0",
