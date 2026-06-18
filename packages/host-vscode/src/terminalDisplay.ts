@@ -145,9 +145,9 @@ export async function runInTerminalCaptured(
     const timer = setTimeout(() => finish(null), timeoutMs); // 超时：返回 null（命令可能仍在终端运行）
 
     // 辅助完成检测：PowerShell 下 Shell Integration 偶尔丢 end 事件（长命令/管道/foreach）。
-    // 当读流已关闭（readPromise 完成）且持续 3 秒无新输出时，视为命令已结束。
-    // 这是对 onDidEndTerminalShellExecution 不可靠时的降级补偿，不替代它。
-    // 交互式命令等输入时输出也会静默——弹出通用通知引导用户看终端，不自动结束。
+    // 读流关闭后静默 3s → 判断是否为交互式等待输入：
+    //   是 → 通知前端呼吸灯，不 finish（等用户在终端操作或超时兜底）
+    //   否 → finish(0)，视为命令已完成（end 事件丢失的补偿）
     let lastStdoutLen = 0;
     let idleCount = 0;
     let prompted = false;
@@ -157,19 +157,21 @@ export async function runInTerminalCaptured(
       if (curLen === lastStdoutLen && curLen > 0) {
         idleCount++;
         if (idleCount >= IDLE_THRESHOLD) {
-          // 静默 3s 且命令未结束：可能等输入或已执行完但 end 事件丢失。
-          // 弹一次通用通知——不猜文案，让用户自己去终端看。
-          if (!prompted) {
+          if (!prompted && isWaitingForStdin(stdout)) {
+            // 命令在等用户输入：通知 + 呼吸灯，不 finish
             prompted = true;
             notifyWaiting();
             vscode.window.showInformationMessage(
-              "Axon 终端已无新输出 3 秒——命令可能正在等待你的输入，或已执行完毕。请切换到终端面板确认。",
+              "Axon 终端正在等待你的输入。请切换到终端面板操作。",
               "打开终端",
             ).then((choice) => {
               if (choice === "打开终端") t.show(true);
             });
+          } else {
+            // 正常命令已完成：finish(0) 补偿丢失的 end 事件
+            console.log("[terminal] idle poll: no new output for 3s, treating as complete");
+            finish(0);
           }
-          // 不自动 finish：如果真结束了，超时（120s）会兜底；如果等输入，用户去终端操作即可继续
         }
       } else {
         idleCount = 0;
@@ -195,6 +197,28 @@ export async function runInTerminalCaptured(
   vscode.commands.executeCommand('axon.internal.markAiCommandEnd', aiCmdStartTime);
 
   return { stdout: cleaned, exitCode, captured: true, closed };
+}
+
+/**
+ * 判断命令输出末尾是否看起来像在等待 stdin 输入。
+ *
+ * 启发式：取输出末尾最后一行，如果它很短（<200字符）且：
+ * - 以 ? / : / ：结尾（提问或冒号提示），或
+ * - 包含 [Y/N] / [y/N] / (Y/n) 等常见选择语法
+ * 则很可能在等待用户输入。
+ *
+ * 这不是硬编码文案——是基于"交互提示的形状特征"来判断。
+ */
+function isWaitingForStdin(output: string): boolean {
+  const tail = output.slice(-600);
+  const lines = tail.split(/\r?\n/).filter(l => l.trim());
+  const last = (lines[lines.length - 1] || "").trim();
+  if (!last) return false;
+  // 短行 + 结尾是 ? / : / ：→ 提问/冒号提示
+  const promptEnd = /[?：:]\s*$/.test(last) && last.length < 200;
+  // 常见的 Y/N 选择括号语法
+  const choiceSyntax = /[\[\(]\s*[Yy](?:\s*\/\s*[Nn])?\s*[\]\)]/.test(last);
+  return promptEnd || choiceSyntax;
 }
 
 /** 去除 ANSI 转义序列与终端控制字符 */
