@@ -2,30 +2,34 @@
  * TerminalDisplay —— 管理一个 "Axon" 可见终端，在终端里真正执行 Agent 的命令
  *
  * 设计：
- * - 全局单例，整个扩展生命周期共享一个 "Axon" 终端
+ * - 按 terminalKey 隔离终端，不同 session 的命令不混在同一个终端里
+ * - 同一 terminalKey 内复用终端，cwd 变化时用 cd 切换目录
  * - 终端被用户关闭后下次命令时自动重建
  * - 命令直接在终端里执行（用户全程可见、可交互输入）
- * - cwd 变化时用 cd 切换目录而不是新建终端，避免终端标签页泛滥
  * - 用 Shell Integration API 捕获输出和退出码；不可用时回退到"只执行不捕获"
  */
 
 import * as vscode from "vscode";
 
-let terminal: vscode.Terminal | null = null;
-let terminalCwd: string | undefined;
+/** terminalKey → 该 key 专属的终端实例 */
+const terminals = new Map<string, vscode.Terminal>();
+/** terminalKey → 该 key 对应终端的当前 cwd */
+const terminalCwds = new Map<string, string>();
 
-/** 获取或创建终端实例。始终复用同一个终端，cwd 变化时用 cd 切换。 */
-function getOrCreateTerminal(): vscode.Terminal {
-  if (terminal && !terminal.exitStatus) {
-    return terminal;
+/** 获取或创建指定 key 的终端实例 */
+function getOrCreateTerminal(terminalKey: string): vscode.Terminal {
+  const existing = terminals.get(terminalKey);
+  if (existing && !existing.exitStatus) {
+    return existing;
   }
-  terminal = vscode.window.createTerminal({
+  const t = vscode.window.createTerminal({
     name: "Axon",
     iconPath: new vscode.ThemeIcon("sparkle"),
     env: { GIT_PAGER: "cat", AXON_AI_TERMINAL: "1" },
   });
-  terminalCwd = undefined;
-  return terminal;
+  terminals.set(terminalKey, t);
+  terminalCwds.delete(terminalKey);
+  return t;
 }
 
 /** 等待终端的 shell integration 就绪（首次创建终端时 shell 启动需要一点时间） */
@@ -69,6 +73,7 @@ export interface TerminalRunResult {
  * - shell integration 可用：捕获完整输出 + 退出码
  * - 不可用：仅执行（sendText），返回 captured=false
  * - cwd 不同时先 cd 切换再执行，始终复用同一终端
+ * @param terminalKey 终端隔离键（不同 key 用不同终端，同一 key 复用）
  * @param signal 可选中断信号（用户取消时停止等待）
  */
 export async function runInTerminalCaptured(
@@ -76,14 +81,15 @@ export async function runInTerminalCaptured(
   cwd?: string,
   timeoutMs = 120_000,
   signal?: AbortSignal,
+  terminalKey = "default",
 ): Promise<TerminalRunResult> {
-  const t = getOrCreateTerminal();
+  const t = getOrCreateTerminal(terminalKey);
   t.show(false); // 显示但不聚焦，方便用户观察
 
-  // cwd 与终端当前目录不同时，先 cd 再执行
-  const needCd = cwd && cwd !== terminalCwd;
+  const prevCwd = terminalCwds.get(terminalKey);
+  const needCd = cwd && cwd !== prevCwd;
   if (needCd) {
-    terminalCwd = cwd;
+    terminalCwds.set(terminalKey, cwd!);
   }
   const effectiveCommand = needCd ? cdCommand(cwd!) + command : command;
 
@@ -138,16 +144,31 @@ export async function runInTerminalCaptured(
     // 辅助完成检测：PowerShell 下 Shell Integration 偶尔丢 end 事件（长命令/管道/foreach）。
     // 当读流已关闭（readPromise 完成）且持续 3 秒无新输出时，视为命令已结束。
     // 这是对 onDidEndTerminalShellExecution 不可靠时的降级补偿，不替代它。
+    // 但要排除交互式命令等输入的场景——输出以交互提示结尾时不是"完成"，不能自动结束。
     let lastStdoutLen = 0;
     let idleCount = 0;
-    const IDLE_THRESHOLD = 3; // 连续 3 次（每次 1s）无新输出视为完成
+    let prompted = false;
+    const IDLE_THRESHOLD = 3; // 连续 3 次（每次 1s）无新输出
     const idlePoller = setInterval(() => {
       const curLen = stdout.length;
       if (curLen === lastStdoutLen && curLen > 0) {
         idleCount++;
         if (idleCount >= IDLE_THRESHOLD) {
+          // 检查输出末尾是否为交互式等待输入提示（如 Y/N、密码等）
+          if (looksLikeInteractivePrompt(stdout) && !prompted) {
+            prompted = true;
+            console.log("[terminal] 检测到交互式等待输入，已通知用户");
+            vscode.window.showInformationMessage(
+              "Axon 终端正在等待你的输入。请切换到「Axon」终端面板操作。",
+              "打开终端",
+            ).then((choice) => {
+              if (choice === "打开终端") t.show(true);
+            });
+            // 不 finish：命令仍在等待输入，让超时机制兜底
+            return;
+          }
           console.log("[terminal] idle poll triggered: no new output for 3s after stream activity, treating as complete");
-          finish(0); // 无法拿到真实 exitCode，降级为 0
+          finish(0);
         }
       } else {
         idleCount = 0;
@@ -174,6 +195,34 @@ export async function runInTerminalCaptured(
   return { stdout: cleaned, exitCode, captured: true, closed };
 }
 
+/** 检测输出末尾是否为交互式等待输入提示 */
+function looksLikeInteractivePrompt(output: string): boolean {
+  // 取末尾 300 字符检查，取行尾最后几个非空行
+  const tail = output.slice(-500);
+  const lines = tail.split(/\r?\n/).filter((l) => l.trim());
+  const last = (lines[lines.length - 1] || "").trim();
+  if (!last) return false;
+  // 常见交互式提示模式（中/英）
+  const patterns = [
+    /终止批处理操作吗/i,
+    /是否.*[?？]/,
+    /继续.*[?？]/,
+    /Do you want to continue/i,
+    /Proceed.*\[.*Y.*N/i,
+    /Are you sure/i,
+    /confirm/i,
+    /password[:：]/i,
+    /请输入/i,
+    /按.*键.*继续/i,
+    /Press.*key.*continue/i,
+    /\(Y\/N\)/i,
+    /\(y\/n\)/,
+    /\[Y\/N\]/i,
+    /\(yes\/no\)/i,
+  ];
+  return patterns.some((p) => p.test(last));
+}
+
 /** 去除 ANSI 转义序列与终端控制字符 */
 function stripAnsi(text: string): string {
   // eslint-disable-next-line no-control-regex
@@ -182,7 +231,11 @@ function stripAnsi(text: string): string {
 
 /** 聚焦 "Axon" 终端（从前端"打开终端"按钮触发） */
 export function focusTerminal(): void {
-  if (terminal && !terminal.exitStatus) {
-    terminal.show(false);
+  // 找到第一个存活终端并聚焦
+  for (const t of terminals.values()) {
+    if (t && !t.exitStatus) {
+      t.show(false);
+      return;
+    }
   }
 }

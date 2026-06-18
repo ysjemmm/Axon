@@ -10,9 +10,14 @@
 import type { HostCommandRunner, ExecOptions, ExecResult } from "@axon/core";
 import { runInTerminalCaptured } from "./terminalDisplay.js";
 
+let cmdSeq = 0;
+
 export class VSCodeCommandRunner implements HostCommandRunner {
+  // 每个 runner 实例独立 terminalKey，保证不同 session 不共享终端
+  private terminalKey = `axon-${++cmdSeq}-${Date.now().toString(36)}`;
+
   async exec(command: string, opts: ExecOptions): Promise<ExecResult> {
-    const result = await runInTerminalCaptured(command, opts.cwd, opts.timeoutMs, opts.signal);
+    const result = await runInTerminalCaptured(command, opts.cwd, opts.timeoutMs, opts.signal, this.terminalKey);
 
     // Shell Integration 不可用：命令已在终端执行，但拿不到输出
     if (!result.captured) {

@@ -782,15 +782,27 @@ export function useChatSession(opts: UseChatSessionOptions) {
       const targetMsgId = cancelledTurnMsgId.current;
       cancelledTurnMsgId.current = null;
       setChatHistory((prev) => {
-        if (!targetMsgId) return prev;
+        let found = false;
         const updated = [...prev];
+        // 优先按 targetMsgId 精确定位，找不到时回退到最后一条 assistant 消息
+        // （取消可能发生在工具执行中而非流式输出中，此时 targetMsgId 为 null）
         for (let i = updated.length - 1; i >= 0; i--) {
-          if (updated[i].role === "assistant" && updated[i].id === targetMsgId) {
-            updated[i] = { ...updated[i], streaming: false, turnStatus: "cancelled", turnStats: stats };
+          if (updated[i].role === "assistant") {
+            if (targetMsgId && updated[i].id !== targetMsgId) continue;
+            const wasStreaming = updated[i].streaming;
+            updated[i] = {
+              ...updated[i],
+              streaming: false,
+              turnStatus: updated[i].turnStatus === "cancelled" ? "cancelled" : "cancelled",
+              turnStats: updated[i].turnStats || stats,
+            };
+            found = true;
             break;
           }
         }
-        return updated;
+        // 没有 assistant 消息可挂载时，至少清掉乐观假数据的影响：
+        // 不返回原 prev（否则假数据永远挂在 UI 上）
+        return found ? updated : prev;
       });
       setReasoning("");
       // 仅在取消标记仍为 true（新轮未启动）时收尾 loading；
@@ -1271,6 +1283,10 @@ export function useChatSession(opts: UseChatSessionOptions) {
         const cancelCredits = estInputTokens > 0 || estOutputTokens > 0
           ? Math.max(0.5, Math.round(((estInputTokens / 1000) * 0.14 + (estOutputTokens / 1000) * 0.44) * 100) / 100)
           : 0;
+        // 乐观拆分：system/本次提问/记忆都有非零估算，不把全会话 token 全塞进"记忆"。
+        // 真实值会在后端 turn_cancelled 事件到达时覆盖。
+        const estSystemTokens = Math.min(estInputTokens, 10000); // 系统提示 + 工具定义最少也有几千 token
+        const estQuestionTokens = Math.min(estInputTokens - estSystemTokens, last.content ? Math.round(last.content.length * 0.35) : 0);
         const cancelCreditDetail: CreditDetail = {
           inputTokens: estInputTokens,
           outputTokens: estOutputTokens,
@@ -1278,11 +1294,9 @@ export function useChatSession(opts: UseChatSessionOptions) {
           inputRate: 0.14,
           outputRate: 0.44,
           tier: "估算",
-          // 取消时拿不到后端精确拆分：把估算输入主要计入"记忆"（常驻会话里记忆是大头），
-          // 避免 tooltip 记忆段显示为 0。system/本次提问无从估算，置 0。
-          memoryTokens: estInputTokens,
-          systemTokens: 0,
-          questionTokens: 0,
+          memoryTokens: Math.max(0, estInputTokens - estSystemTokens - estQuestionTokens),
+          systemTokens: estSystemTokens,
+          questionTokens: estQuestionTokens,
         };
         const segments = (last.segments || []).map((seg) => {
           if (seg.type === "subagent" && seg.status === "running") {
