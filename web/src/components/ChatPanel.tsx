@@ -120,15 +120,21 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   const isAtBottomRef = useRef(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
 
+  // 用户手动滚离底部的时间戳。2 秒内禁止自动滚底，避免吸住用户。
+  const userScrolledAwayAt = useRef(0);
+  const AUTO_SCROLL_COOLDOWN = 2000;
+
+  const recentlyScrolledAway = () => Date.now() - userScrolledAwayAt.current < AUTO_SCROLL_COOLDOWN;
+
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "instant") => {
-    userScrolledUpRef.current = false;
+    userScrolledAwayAt.current = 0;
     isAtBottomRef.current = true;
     setShowScrollBtn(false);
     virtualListRef.current?.scrollToBottom(behavior);
   }, []);
 
   const animatedScrollToBottom = useCallback(() => {
-    userScrolledUpRef.current = false;
+    userScrolledAwayAt.current = 0;
     virtualListRef.current?.scrollToBottom("smooth");
     isAtBottomRef.current = true;
     setShowScrollBtn(false);
@@ -138,9 +144,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   const handleScrollRef = useRef<((scrollTopVal: number) => void) | null>(null);
 
   // 内容高度变化 → 自动刷到底部（流式跟随）
-  // 用 rAF 延迟一帧：此时 React 已 flush DOM，container.scrollHeight 是包含 footer 的最新值
   const handleTotalHeightChange = useCallback(() => {
-    if (!isAtBottomRef.current) return;
+    if (!isAtBottomRef.current || recentlyScrolledAway()) return;
     requestAnimationFrame(() => {
       virtualListRef.current?.scrollToBottom("instant");
     });
@@ -170,11 +175,10 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     const state = virtualListRef.current?.getScrollState();
     if (state) {
       const distanceToBottom = state.scrollHeight - scrollTopVal - state.clientHeight;
-      // 用户手动滚回底部（距离 < 8px）时清除 "向上滚动" 标志，恢复自动跟随
-      if (distanceToBottom <= 8) {
-        userScrolledUpRef.current = false;
+      isAtBottomRef.current = distanceToBottom <= SCROLL_BOTTOM_THRESHOLD;
+      if (!isAtBottomRef.current) {
+        userScrolledAwayAt.current = Date.now();
       }
-      isAtBottomRef.current = distanceToBottom <= SCROLL_BOTTOM_THRESHOLD && !userScrolledUpRef.current;
       setShowScrollBtn(distanceToBottom > 200);
     }
     stickyDetectRef.current?.(scrollTopVal);
@@ -203,33 +207,13 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     }
   }, [session.chatHistory.length]);
 
-  // 用户手动向上滚动时立即停止自动跟随。
-  // 用 persisted 标志，防止 ResizeObserver → scrollToBottom → scroll 事件链路误判回 true。
-  const userScrolledUpRef = useRef(false);
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const container = virtualListRef.current?.getScrollContainer();
-      if (!container) return;
-      const onWheel = (e: WheelEvent) => {
-        if (e.deltaY < 0) {
-          userScrolledUpRef.current = true;
-          isAtBottomRef.current = false;
-        }
-      };
-      container.addEventListener("wheel", onWheel, { passive: true });
-      cleanupRef.current = () => container.removeEventListener("wheel", onWheel);
-    }, 100);
-    return () => { clearTimeout(timer); cleanupRef.current?.(); cleanupRef.current = null; };
-  }, []);
-  const cleanupRef = useRef<(() => void) | null>(null);
-
   // 流式期间持续跟随滚底：rAF 循环兜底覆盖所有高度变化场景
-  // （虚拟消息增长、footer 内容变化、工具卡片内部滚动等 handleTotalHeightChange 遗漏的路径）
+  // 用户滚离底部后 2 秒冷却期内不自动跟随
   useEffect(() => {
     if (!session.isLoading) return;
     let rafId: number;
     const loop = () => {
-      if (isAtBottomRef.current) {
+      if (isAtBottomRef.current && !recentlyScrolledAway()) {
         virtualListRef.current?.scrollToBottom("instant");
       }
       rafId = requestAnimationFrame(loop);

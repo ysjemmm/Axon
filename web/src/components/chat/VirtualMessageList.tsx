@@ -26,8 +26,6 @@ export interface VirtualMessageListHandle {
   remeasure: () => void;
   /** 获取指定消息 id 的累积偏移（从列表顶部算起） */
   getMessageOffset: (id: string) => number | undefined;
-  /** 获取滚动容器 DOM 元素 */
-  getScrollContainer: () => HTMLDivElement | null;
 }
 
 interface VirtualMessageListProps {
@@ -262,9 +260,6 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
           offset += heightMap.current.get(messages[i].id) ?? estimateHeight;
         }
         return undefined;
-      },
-      getScrollContainer() {
-        return containerRef.current;
       },
     }), [messages, estimateHeight]);
 
