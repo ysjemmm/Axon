@@ -358,8 +358,21 @@ export function useChatSession(opts: UseChatSessionOptions) {
       return;
     }
 
-    // 任何新的 tool 结果或流式内容都清除等待输入状态（命令已不再阻塞）
-    if (msg.type === "tool_result" || msg.type === "stream_delta" || msg.type === "stream_start" || msg.type === "stream_end" || msg.type === "turn_cancelled") {
+    // tool 结果到达时清除该卡片的等待输入状态
+    if (msg.type === "tool_result") {
+      const toolCallId = (msg as any).id as string | undefined;
+      if (toolCallId) {
+        setWaitingInputIds((prev) => {
+          const next = new Set(prev);
+          next.delete(toolCallId);
+          return next;
+        });
+      }
+      // fall through: tool_result 继续由下方通用段更新 (segments/chatHistory)
+    }
+
+    // 流式内容或取消时清除所有等待输入状态
+    if (msg.type === "stream_delta" || msg.type === "stream_start" || msg.type === "stream_end" || msg.type === "turn_cancelled") {
       setWaitingInputIds(new Set());
     }
 
@@ -804,7 +817,6 @@ export function useChatSession(opts: UseChatSessionOptions) {
         for (let i = updated.length - 1; i >= 0; i--) {
           if (updated[i].role === "assistant") {
             if (targetMsgId && updated[i].id !== targetMsgId) continue;
-            const wasStreaming = updated[i].streaming;
             updated[i] = {
               ...updated[i],
               streaming: false,
@@ -1279,6 +1291,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     cancelled.current = true;
     typewriterBuffer.current = "";
     streamEnding.current = null;
+    setWaitingInputIds(new Set()); // 取消时清除所有呼吸灯
     if (typewriterTimer.current) {
       clearInterval(typewriterTimer.current);
       typewriterTimer.current = null;

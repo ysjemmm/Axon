@@ -160,6 +160,7 @@ export async function runInTerminalCaptured(
           if (!prompted && isWaitingForStdin(stdout)) {
             // 命令在等用户输入：通知 + 呼吸灯，不 finish
             prompted = true;
+            console.log("[terminal] 检测到交互提示 → 通知前端呼吸灯, stdout 末尾:", JSON.stringify(stdout.slice(-200)));
             notifyWaiting();
             vscode.window.showInformationMessage(
               "Axon 终端正在等待你的输入。请切换到终端面板操作。",
@@ -169,7 +170,7 @@ export async function runInTerminalCaptured(
             });
           } else {
             // 正常命令已完成：finish(0) 补偿丢失的 end 事件
-            console.log("[terminal] idle poll: no new output for 3s, treating as complete");
+            console.log("[terminal] idle poll: no new output for 3s, treating as complete, stdout 末尾:", JSON.stringify(stdout.slice(-100)));
             finish(0);
           }
         }

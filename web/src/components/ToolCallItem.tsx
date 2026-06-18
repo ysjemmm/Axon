@@ -364,15 +364,15 @@ function CommandCardItem({ tool, approval }: { tool: ToolCallData; approval: Ret
   const isEditing = !!approval && editing;
 
   return (
-    <div className={`my-2 rounded-lg border bg-popover overflow-hidden ${approval ? "border-amber-400/70" : isWaitingInput ? "border-primary/50 animate-pulse" : "border-border"}`}>
+    <div className={`my-2 rounded-lg border bg-popover overflow-hidden ${approval ? "border-amber-400/70" : (isWaitingInput && tool.status === "pending") ? "border-primary/50 animate-pulse" : "border-border"}`}>
       {/* 标题栏 */}
       <div className="flex items-center gap-2 py-1.5 px-2.5 text-xs border-b border-border/60 bg-foreground/[0.04]">
-        {tool.status === "pending" && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-muted-foreground" />}
-        {tool.status === "success" && !isWaitingInput && <Terminal className="w-3.5 h-3.5 text-green-600 shrink-0" />}
+        {tool.status === "pending" && isWaitingInput && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-primary" />}
+        {tool.status === "pending" && !isWaitingInput && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-muted-foreground" />}
+        {tool.status === "success" && <Terminal className="w-3.5 h-3.5 text-green-600 shrink-0" />}
         {tool.status === "error" && <Terminal className="w-3.5 h-3.5 text-red-500 shrink-0" />}
-        {isWaitingInput && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-primary" />}
         <span className="text-muted-foreground flex-1">Command</span>
-        {isWaitingInput && (
+        {isWaitingInput && tool.status === "pending" && (
           <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary/10 text-primary border border-primary/30 animate-pulse">
             等待用户输入
           </span>

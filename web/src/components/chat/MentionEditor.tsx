@@ -335,12 +335,14 @@ export const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>
 
     const range = sel.getRangeAt(0);
     range.deleteContents();
-    range.insertNode(document.createTextNode(plainText));
-    const after = document.createRange();
-    after.setStartAfter(range.endContainer);
-    after.collapse(true);
+    const textNode = document.createTextNode(plainText);
+    range.insertNode(textNode);
+    // 光标移到插入文本末尾：range.insertNode 后 range 仍指向原父节点，
+    // 必须基于插入的文本节点本身设光标，否则 setStartAfter(range.endContainer) 会跳到编辑器外部
+    range.setStartAfter(textNode);
+    range.collapse(true);
     sel.removeAllRanges();
-    sel.addRange(after);
+    sel.addRange(range);
 
     // 恢复焦点（insertNode 可能让 contentEditable 失焦）
     el.focus();
