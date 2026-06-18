@@ -869,8 +869,79 @@ export async function executeToolCall(
       return sections.join("\n");
     }
     default:
-      throw new Error(`未知工具: ${name}`);
+      throw new Error(`未知工具: ${name}。${suggestTool(name)}`);
   }
+}
+
+/**
+ * 所有 execute.ts 支持的工具名集合（供 suggestTool 模糊匹配用）
+ */
+const ALL_TOOL_NAMES = [
+  "read_file", "create_file", "str_replace", "apply_patch",
+  "execute_command", "start_process", "get_process_output", "stop_process", "list_processes",
+  "open_browser", "get_browser_logs", "screenshot_page", "close_browser",
+  "browser_click", "browser_type", "browser_press", "browser_select",
+  "browser_scroll", "browser_reload", "browser_back", "browser_forward",
+  "get_browser_network", "get_browser_storage", "browser_eval",
+  "browser_hover", "browser_wait", "browser_get_html", "browser_set_viewport",
+  "search", "list_dir", "check_diagnostics", "web_search", "web_fetch",
+  "use_skill", "activate_power",
+];
+
+/** 计算两个字符串的编辑距离（Levenshtein），下限 0 */
+function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  const dp: number[] = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const temp = dp[j];
+      dp[j] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(dp[j], dp[j - 1], prev);
+      prev = temp;
+    }
+  }
+  return dp[n];
+}
+
+/** 模糊匹配：在所有已知工具中找编辑距离最小的，若 ≤3 则给出友好提示 */
+function suggestTool(name: string): string {
+  const lower = name.toLowerCase();
+
+  // 关键词快速匹配：处理常见 AI 变体
+  const keywords: [string[], string][] = [
+    [["replace", "str_replace", "replace_in", "replacein"], "str_replace"],
+    [["read", "readfile", "read_file", "cat", "open"], "read_file"],
+    [["create", "write", "new", "make", "createfile", "create_file", "new_file"], "create_file"],
+    [["patch", "apply_patch", "applypatch", "diff"], "apply_patch"],
+    [["exec", "execute", "run", "cmd", "command", "shell", "terminal"], "execute_command"],
+    [["start", "spawn", "launch", "background", "daemon"], "start_process"],
+    [["browser", "web"], "open_browser"],
+    [["click"], "browser_click"],
+    [["type", "input", "fill"], "browser_type"],
+    [["screenshot", "capture", "snap"], "screenshot_page"],
+    [["search", "find", "grep", "lookup"], "search"],
+    [["list", "ls", "dir", "lsdir", "listdir"], "list_dir"],
+    [["diagnostic", "check", "lint", "tsc", "typecheck"], "check_diagnostics"],
+    [["websearch", "web_search", "google", "internet"], "web_search"],
+    [["fetch", "download", "curl", "wget"], "web_fetch"],
+  ];
+
+  for (const [aliases, tool] of keywords) {
+    if (aliases.some((a) => lower === a || lower.includes(a) || a.includes(lower))) {
+      return `你应该使用的是 "${tool}" 吗？请使用精确的工具名称，不要自己编造。`;
+    }
+  }
+
+  // 编辑距离兜底
+  let best = "";
+  let bestDist = Infinity;
+  for (const tool of ALL_TOOL_NAMES) {
+    const dist = levenshtein(lower, tool);
+    if (dist < bestDist) { bestDist = dist; best = tool; }
+  }
+  if (bestDist <= 3 && best) return `你是否想用 "${best}"？请使用精确的工具名称，不要自己编造。`;
+  return `可用工具：${ALL_TOOL_NAMES.join("、")}。请只使用以上名称，不要自己编造。`;
 }
 
 /**

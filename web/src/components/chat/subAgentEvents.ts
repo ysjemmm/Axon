@@ -68,7 +68,7 @@ export function applyEventToSubAgent(sub: SubAgentSegment, event: WsMessage): Su
             args,
             command: event.name === "execute_command" ? (args.command as string) : seg.command,
             cwd: event.name === "execute_command" ? (event as any).cwd : seg.cwd,
-            query: (event.name === "search" || event.name === "list_dir") ? ((args.intent as string) || seg.query || fallbackIntent(event.name)) : seg.query,
+            query: (event.name === "search" || event.name === "list_dir") ? ((args.intent as string) || (args.query as string) || seg.query || fallbackIntent(event.name)) : seg.query,
           };
           return { ...sub, inner };
         }
@@ -86,7 +86,7 @@ export function applyEventToSubAgent(sub: SubAgentSegment, event: WsMessage): Su
       args,
       command: event.name === "execute_command" ? (args.command as string) : undefined,
       cwd: event.name === "execute_command" ? (event as any).cwd : undefined,
-      query: (event.name === "search" || event.name === "list_dir") ? ((args.intent as string) || fallbackIntent(event.name)) : undefined,
+      query: (event.name === "search" || event.name === "list_dir") ? ((args.intent as string) || (args.query as string) || fallbackIntent(event.name)) : undefined,
     };
     inner.push(toolSeg);
     return { ...sub, inner };
@@ -127,7 +127,7 @@ export function applyEventToSubAgent(sub: SubAgentSegment, event: WsMessage): Su
       let finalDesc = seg.description;
       if (event.name === "execute_command") finalDesc = "命令已执行";
       else if (event.name === "check_diagnostics") finalDesc = (event.result || "").includes("无错误") ? "无错误" : "error";
-      else if (isExplore) finalDesc = seg.query || fallbackIntent(seg.name);
+      else if (isExplore) finalDesc = seg.query || ((event as any).args?.query as string) || fallbackIntent(seg.name);
       else if (fileName) {
         const evResult = event.result || "";
         const evVerb = evResult.includes("已存在") ? "已存在" : evResult.startsWith("已覆盖") ? "已覆盖" : "已创建";

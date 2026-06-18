@@ -1059,7 +1059,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
               } else if (msg.name === "check_diagnostics") {
                 finalDesc = (msg.result || "").includes("无错误") ? "无错误" : "error";
               } else if (isExplore) {
-                finalDesc = seg.query || fallbackIntent(seg.name);
+                finalDesc = seg.query || (msg.args as Record<string, unknown>)?.query as string || fallbackIntent(seg.name);
               } else if (isRelayTool(msg.name || "")) {
                 finalDesc = msg.result ? firstLine(msg.result) : relayToolLabel(msg.name || "");
               } else if (fileName) {
