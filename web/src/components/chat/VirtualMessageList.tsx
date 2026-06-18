@@ -28,6 +28,8 @@ export interface VirtualMessageListHandle {
   getMessageOffset: (id: string) => number | undefined;
   /** 当前是否在底部 */
   isAtBottom: () => boolean;
+  /** 获取滚动容器 DOM 元素 */
+  getScrollContainer: () => HTMLDivElement | null;
 }
 
 interface VirtualMessageListProps {
@@ -273,6 +275,9 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
       },
       isAtBottom() {
         return isAtBottomRef.current;
+      },
+      getScrollContainer() {
+        return containerRef.current;
       },
     }), [messages, estimateHeight]);
 

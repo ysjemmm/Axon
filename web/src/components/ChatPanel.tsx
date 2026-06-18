@@ -189,19 +189,26 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     }
   }, [session.chatHistory.length]);
 
-  // 流式期间持续跟随滚底：rAF 循环，仅 autoScroll 为 true 时追底
+  // 流式输出时自动跟随底部：50ms 轮询检测 scrollHeight 变化，只在内容真的长高时才滚底。
+  // 不再用 rAF 每帧强制滚底（那是吸住用户的根因）。
+  const autoScrollRef = useRef(autoScroll);
+  autoScrollRef.current = autoScroll;
   useEffect(() => {
     if (!session.isLoading) return;
-    let rafId: number;
-    const loop = () => {
-      if (autoScroll) {
-        virtualListRef.current?.scrollToBottom("instant");
+    let prevHeight = 0;
+    const timer = setInterval(() => {
+      const container = virtualListRef.current?.getScrollContainer();
+      if (!container) return;
+      const ch = container.scrollHeight;
+      if (ch !== prevHeight) {
+        prevHeight = ch;
+        if (autoScrollRef.current) {
+          virtualListRef.current?.scrollToBottom("instant");
+        }
       }
-      rafId = requestAnimationFrame(loop);
-    };
-    rafId = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(rafId);
-  }, [session.isLoading, autoScroll]);
+    }, 50);
+    return () => clearInterval(timer);
+  }, [session.isLoading]);
 
   // 切回该会话（变为可见）时自动滚到底部
   useEffect(() => {
