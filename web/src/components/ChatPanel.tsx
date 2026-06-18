@@ -91,8 +91,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
   // 命令审批 Context：把"按 toolCallId 索引的待审批项 + 决策回调"下发给对话流里的命令卡片
   const commandApprovalCtx = useMemo(
-    () => ({ approvals: session.commandApprovals, onApprove: session.approveCommand }),
-    [session.commandApprovals, session.approveCommand],
+    () => ({ approvals: session.commandApprovals, onApprove: session.approveCommand, waitingInputIds: session.waitingInputIds }),
+    [session.commandApprovals, session.approveCommand, session.waitingInputIds],
   );
 
   /** 用户提问文本（content 优先，回退到 userSegments 拼接），供 sticky 条展示 */

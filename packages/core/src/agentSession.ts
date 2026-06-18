@@ -1962,6 +1962,10 @@ export class AgentSession {
         let result: string;
         let status: "success" | "error" = "success";
         const meta: ToolMeta = { editId: toolCall.id };
+        // execute_command：挂上"等待输入"回调——终端检测到静默时通知前端给卡片加呼吸灯
+        if (toolName === "execute_command") {
+          meta.onWaitingInput = () => this.send("tool_waiting_input", { toolCallId: toolCall.id });
+        }
         let commandWasEdited: string | undefined; // execute_command 专用：用户编辑后的命令（仅注入 AI 上下文，不渲染给前端）
 
         if (!verdict.allowed) {

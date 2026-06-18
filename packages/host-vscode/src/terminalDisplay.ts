@@ -74,6 +74,7 @@ export interface TerminalRunResult {
  * - 不可用：仅执行（sendText），返回 captured=false
  * - cwd 不同时先 cd 切换再执行，始终复用同一终端
  * @param terminalKey 终端隔离键（不同 key 用不同终端，同一 key 复用）
+ * @param onWaitingInput 检测到命令可能在等待 stdin 输入的回调
  * @param signal 可选中断信号（用户取消时停止等待）
  */
 export async function runInTerminalCaptured(
@@ -82,7 +83,9 @@ export async function runInTerminalCaptured(
   timeoutMs = 120_000,
   signal?: AbortSignal,
   terminalKey = "default",
+  onWaitingInput?: () => void,
 ): Promise<TerminalRunResult> {
+  const notifyWaiting = () => onWaitingInput?.();
   const t = getOrCreateTerminal(terminalKey);
   t.show(true); // 聚焦终端，让用户看到交互提示（如 Y/N、密码等）
 
@@ -158,6 +161,7 @@ export async function runInTerminalCaptured(
           // 弹一次通用通知——不猜文案，让用户自己去终端看。
           if (!prompted) {
             prompted = true;
+            notifyWaiting();
             vscode.window.showInformationMessage(
               "Axon 终端已无新输出 3 秒——命令可能正在等待你的输入，或已执行完毕。请切换到终端面板确认。",
               "打开终端",

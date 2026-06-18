@@ -382,7 +382,11 @@ export async function executeToolCall(
         ? await resolveInWorkspaces(args.cwd, cwd, host, workspaces)
         : cwd;
       // 超时放宽到 120 秒——终端里跑较长命令是正常的；超时不代表失败，命令可能仍在运行。
-      const result = await host.commands.exec(args.command as string, { cwd: execCwd, timeoutMs: 120_000 });
+      const result = await host.commands.exec(args.command as string, {
+        cwd: execCwd,
+        timeoutMs: 120_000,
+        onWaitingInput: meta?.onWaitingInput,
+      });
       // 超时：命令在终端里可能仍在运行（如开发服务器、需要持续交互）
       if (result.timedOut) {
         throw new Error(

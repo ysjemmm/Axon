@@ -141,6 +141,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
   /** 撤销失败的轻提示（自动消失） */
   const [undoNotice, setUndoNotice] = useState<{ id: number; text: string } | null>(null);
   const [toolConfirm, setToolConfirm] = useState<{ toolName: string; title: string; kind?: string } | null>(null);
+  // execute_command 卡片的"等待用户输入"呼吸灯：按 toolCallId 索引
+  const [waitingInputIds, setWaitingInputIds] = useState<Set<string>>(new Set());
   // 命令信任授权门：未信任命令的审批改为内联在对应命令卡片上（无感模式），按 toolCallId 索引。
   // 并发安全——parallel_research / 多个子 Agent 可能同时请求，各自挂在自己的命令卡片上。
   const [commandApprovals, setCommandApprovals] = useState<Record<string, CommandApproval>>({});
@@ -346,6 +348,19 @@ export function useChatSession(opts: UseChatSessionOptions) {
       const title = label || (typeof args?.title === "string" ? args.title : "Relay 工作流");
       setToolConfirm({ toolName, title, kind });
       return;
+    }
+
+    if (msg.type === "tool_waiting_input") {
+      const toolCallId = (msg as any).toolCallId as string | undefined;
+      if (toolCallId) {
+        setWaitingInputIds((prev) => new Set(prev).add(toolCallId));
+      }
+      return;
+    }
+
+    // 任何新的 tool 结果或流式内容都清除等待输入状态（命令已不再阻塞）
+    if (msg.type === "tool_result" || msg.type === "stream_delta" || msg.type === "stream_start" || msg.type === "stream_end" || msg.type === "turn_cancelled") {
+      setWaitingInputIds(new Set());
     }
 
     if (msg.type === "confirm_command_request") {
@@ -1411,6 +1426,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     isCompacting, compactSession,
     pendingPaths, pendingDiffs, pendingExpanded, setPendingExpanded,
     messageQueue, toolConfirm,
+    waitingInputIds,
     commandApprovals, commandBlocked,
     editMode, workspace, workspaces, currentGroupId, hasRelay, model,
     // 撤销轻提示

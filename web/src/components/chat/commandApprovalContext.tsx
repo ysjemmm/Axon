@@ -30,11 +30,14 @@ interface CommandApprovalCtxValue {
   approvals: Record<string, CommandApprovalEntry>;
   /** 对某个工具调用作出审批决策 */
   onApprove: (toolCallId: string, decision: CommandDecision) => void;
+  /** 正在等待用户输入的命令 toolCallId 集合（呼吸灯） */
+  waitingInputIds: Set<string>;
 }
 
 export const CommandApprovalContext = createContext<CommandApprovalCtxValue>({
   approvals: {},
   onApprove: () => { /* 默认空实现 */ },
+  waitingInputIds: new Set(),
 });
 
 /**

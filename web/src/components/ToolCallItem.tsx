@@ -9,11 +9,11 @@
  * execute_command 特殊样式：显示命令内容
  */
 
-import { useState } from "react";
+import { useState, useContext } from "react";
 import { CheckCircle2, Loader2, Terminal, Eye, EyeOff, FileX, Search, GitCompare, Bug, ChevronRight, Check, X, Globe, ShieldCheck, Pencil, Plug, Undo2, Server, ScrollText, Power, ExternalLink, FolderTree } from "lucide-react";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { useCommandApproval, type CommandTrustOption, type CommandDecision } from "@/components/chat/commandApprovalContext";
+import { useCommandApproval, CommandApprovalContext, type CommandTrustOption, type CommandDecision } from "@/components/chat/commandApprovalContext";
 
 /**
  * 单行文本：超长截断为省略号，hover 显示完整内容（shadcn tooltip）。
@@ -348,6 +348,10 @@ function CommandCardItem({ tool, approval }: { tool: ToolCallData; approval: Ret
   const [editing, setEditing] = useState(false);
   const [editedCmd, setEditedCmd] = useState(tool.command || "");
 
+  // 检查是否正在等待用户输入
+  const { waitingInputIds } = useContext(CommandApprovalContext);
+  const isWaitingInput = waitingInputIds.has(tool.id);
+
   const startEditing = () => { setEditedCmd(tool.command || ""); setEditing(true); };
 
   // 包装 approval.approve：如果用户编辑了命令，附带 editedCommand
@@ -360,13 +364,19 @@ function CommandCardItem({ tool, approval }: { tool: ToolCallData; approval: Ret
   const isEditing = !!approval && editing;
 
   return (
-    <div className={`my-2 rounded-lg border bg-popover overflow-hidden ${approval ? "border-amber-400/70" : "border-border"}`}>
+    <div className={`my-2 rounded-lg border bg-popover overflow-hidden ${approval ? "border-amber-400/70" : isWaitingInput ? "border-primary/50 animate-pulse" : "border-border"}`}>
       {/* 标题栏 */}
       <div className="flex items-center gap-2 py-1.5 px-2.5 text-xs border-b border-border/60 bg-foreground/[0.04]">
         {tool.status === "pending" && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-muted-foreground" />}
-        {tool.status === "success" && <Terminal className="w-3.5 h-3.5 text-green-600 shrink-0" />}
+        {tool.status === "success" && !isWaitingInput && <Terminal className="w-3.5 h-3.5 text-green-600 shrink-0" />}
         {tool.status === "error" && <Terminal className="w-3.5 h-3.5 text-red-500 shrink-0" />}
+        {isWaitingInput && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-primary" />}
         <span className="text-muted-foreground flex-1">Command</span>
+        {isWaitingInput && (
+          <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary/10 text-primary border border-primary/30 animate-pulse">
+            等待用户输入
+          </span>
+        )}
         {tool.cwd && <span className="text-xs text-muted-foreground/70 font-mono">{tool.cwd}</span>}
         {/* 聚焦终端按钮 */}
         <button

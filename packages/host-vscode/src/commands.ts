@@ -17,7 +17,7 @@ export class VSCodeCommandRunner implements HostCommandRunner {
   private terminalKey = `axon-${++cmdSeq}-${Date.now().toString(36)}`;
 
   async exec(command: string, opts: ExecOptions): Promise<ExecResult> {
-    const result = await runInTerminalCaptured(command, opts.cwd, opts.timeoutMs, opts.signal, this.terminalKey);
+    const result = await runInTerminalCaptured(command, opts.cwd, opts.timeoutMs, opts.signal, this.terminalKey, opts.onWaitingInput);
 
     // Shell Integration 不可用：命令已在终端执行，但拿不到输出
     if (!result.captured) {

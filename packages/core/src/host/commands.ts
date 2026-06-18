@@ -18,6 +18,8 @@ export interface ExecOptions {
   timeoutMs: number;
   /** 可选中断信号（用户取消时停止等待） */
   signal?: AbortSignal;
+  /** 检测到命令可能在等待 stdin 输入的回调（终端静默但命令未结束） */
+  onWaitingInput?: () => void;
 }
 
 /** 命令执行结果（标准化，不抛超时异常，由 timedOut 标记） */

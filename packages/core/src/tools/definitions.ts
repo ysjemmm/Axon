@@ -638,6 +638,8 @@ export class ToolError extends Error {
 export interface ToolMeta {
   /** 输入：本次工具调用的 id（= tool_call id），用作编辑单元 editId 的前缀，支持逐次改动接受/拒绝/撤销 */
   editId?: string;
+  /** execute_command 专用：命令在终端等待用户输入时回调 */
+  onWaitingInput?: () => void;
   fileDiff?: { path: string; absPath?: string; oldContent: string; newContent: string; editId?: string };
   /** apply_patch 等单次调用改多个文件的工具：按文件累计的 diff 列表（fileDiff 仅保留最后一个，向后兼容单文件工具）。 */
   fileDiffs?: { path: string; absPath?: string; oldContent: string; newContent: string; editId?: string }[];
