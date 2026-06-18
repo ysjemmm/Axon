@@ -56,6 +56,8 @@ export class AgentSession {
   private lastCachedTokens = 0;
   private cumulativeTokens = 0;
   private lastTurnTokens = 0;
+  /** 本轮开始前的累计 token 快照（取消时用差值复原本轮消耗） */
+  private turnStartCumulative = 0;
   /** 本轮（最近一次用户输入）调用的子 Agent 累计 token，turn 开始时清零 */
   private lastSubAgentTokens = 0;
   /** 本轮（最近一次用户输入）所有回合的输出 token 累加，turn 开始时清零。
@@ -404,7 +406,8 @@ export class AgentSession {
       }
     }
     const elapsed = Date.now() - turnStartTime;
-    const turnTokens = this.lastTurnTokens || 0;
+    // 取消时 lastTurnTokens 可能为 0（LLM 调用尚未结束），用 cumulative 差值兜底
+    const turnTokens = this.lastTurnTokens || (this.turnStartCumulative > 0 ? this.cumulativeTokens - this.turnStartCumulative : 0);
     const breakdown = { ...this.buildTokenBreakdown(), outputTokens: this.lastTurnOutputTokens || this.lastCompletionTokens || 0 };
     const credits = calculateCredits(this.model, breakdown);
     const creditDetail = buildCreditDetail(this.model, breakdown);
@@ -1591,6 +1594,7 @@ export class AgentSession {
     this.cancelled = false; // 新一轮用户输入，重置取消标志
     this.lastSubAgentTokens = 0; // 新一轮用户输入，重置本轮 subagent 用量统计
     this.lastTurnOutputTokens = 0; // 新一轮用户输入，重置本轮输出 token 累计
+    this.turnStartCumulative = this.cumulativeTokens; // 取消时用差值复原本轮消耗
     // 记录本轮开始前的消息条数（此刻 messages 仅含 system + 之前会话，尚未 push 本轮用户消息）。
     // 用它在收尾时切出"本轮新增的消息"（用户消息 + 工具结果），据此估算"本次输入"。
     this.turnStartMsgCount = this.messages.length;
