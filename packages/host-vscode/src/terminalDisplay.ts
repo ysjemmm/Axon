@@ -84,7 +84,7 @@ export async function runInTerminalCaptured(
   terminalKey = "default",
 ): Promise<TerminalRunResult> {
   const t = getOrCreateTerminal(terminalKey);
-  t.show(false); // 显示但不聚焦，方便用户观察
+  t.show(true); // 聚焦终端，让用户看到交互提示（如 Y/N、密码等）
 
   const prevCwd = terminalCwds.get(terminalKey);
   const needCd = cwd && cwd !== prevCwd;
@@ -144,34 +144,32 @@ export async function runInTerminalCaptured(
     // 辅助完成检测：PowerShell 下 Shell Integration 偶尔丢 end 事件（长命令/管道/foreach）。
     // 当读流已关闭（readPromise 完成）且持续 3 秒无新输出时，视为命令已结束。
     // 这是对 onDidEndTerminalShellExecution 不可靠时的降级补偿，不替代它。
-    // 但要排除交互式命令等输入的场景——输出以交互提示结尾时不是"完成"，不能自动结束。
+    // 交互式命令等输入时输出也会静默——弹出通用通知引导用户看终端，不自动结束。
     let lastStdoutLen = 0;
     let idleCount = 0;
     let prompted = false;
-    const IDLE_THRESHOLD = 3; // 连续 3 次（每次 1s）无新输出
+    const IDLE_THRESHOLD = 3;
     const idlePoller = setInterval(() => {
       const curLen = stdout.length;
       if (curLen === lastStdoutLen && curLen > 0) {
         idleCount++;
         if (idleCount >= IDLE_THRESHOLD) {
-          // 检查输出末尾是否为交互式等待输入提示（如 Y/N、密码等）
-          if (looksLikeInteractivePrompt(stdout) && !prompted) {
+          // 静默 3s 且命令未结束：可能等输入或已执行完但 end 事件丢失。
+          // 弹一次通用通知——不猜文案，让用户自己去终端看。
+          if (!prompted) {
             prompted = true;
-            console.log("[terminal] 检测到交互式等待输入，已通知用户");
             vscode.window.showInformationMessage(
-              "Axon 终端正在等待你的输入。请切换到「Axon」终端面板操作。",
+              "Axon 终端已无新输出 3 秒——命令可能正在等待你的输入，或已执行完毕。请切换到终端面板确认。",
               "打开终端",
             ).then((choice) => {
               if (choice === "打开终端") t.show(true);
             });
-            // 不 finish：命令仍在等待输入，让超时机制兜底
-            return;
           }
-          console.log("[terminal] idle poll triggered: no new output for 3s after stream activity, treating as complete");
-          finish(0);
+          // 不自动 finish：如果真结束了，超时（120s）会兜底；如果等输入，用户去终端操作即可继续
         }
       } else {
         idleCount = 0;
+        prompted = false;
         lastStdoutLen = curLen;
       }
     }, 1000);
@@ -193,34 +191,6 @@ export async function runInTerminalCaptured(
   vscode.commands.executeCommand('axon.internal.markAiCommandEnd', aiCmdStartTime);
 
   return { stdout: cleaned, exitCode, captured: true, closed };
-}
-
-/** 检测输出末尾是否为交互式等待输入提示 */
-function looksLikeInteractivePrompt(output: string): boolean {
-  // 取末尾 300 字符检查，取行尾最后几个非空行
-  const tail = output.slice(-500);
-  const lines = tail.split(/\r?\n/).filter((l) => l.trim());
-  const last = (lines[lines.length - 1] || "").trim();
-  if (!last) return false;
-  // 常见交互式提示模式（中/英）
-  const patterns = [
-    /终止批处理操作吗/i,
-    /是否.*[?？]/,
-    /继续.*[?？]/,
-    /Do you want to continue/i,
-    /Proceed.*\[.*Y.*N/i,
-    /Are you sure/i,
-    /confirm/i,
-    /password[:：]/i,
-    /请输入/i,
-    /按.*键.*继续/i,
-    /Press.*key.*continue/i,
-    /\(Y\/N\)/i,
-    /\(y\/n\)/,
-    /\[Y\/N\]/i,
-    /\(yes\/no\)/i,
-  ];
-  return patterns.some((p) => p.test(last));
 }
 
 /** 去除 ANSI 转义序列与终端控制字符 */
