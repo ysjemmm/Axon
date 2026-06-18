@@ -393,12 +393,12 @@ export class AgentSession {
     });
   }
 
-  /** 手动触发上下文压缩（供前端"压缩上下文"按钮调用）。需超过当前模型窗口 50% 才允许。 */
+  /** 手动触发上下文压缩（供前端"压缩上下文"按钮调用）。需超过当前模型窗口 35% 才允许。 */
   async compactSession(): Promise<void> {
     if (this.isCompacting) return;
     const ctxWindow = this.getContextWindow();
     if (!needsCompaction(this.lastTotalTokens, ctxWindow)) {
-      this.send("compacting_end", { success: false, message: "当前上下文未超过模型窗口的 50%，无需压缩" });
+      this.send("compacting_end", { success: false, message: "当前上下文未超过模型窗口的 35%，无需压缩" });
       return;
     }
     this.isCompacting = true;
@@ -1405,8 +1405,9 @@ export class AgentSession {
     }
   }
 
-  /** 当前轮次不需要保留到下一轮的"瞬态"工具：其结果只在当轮有意义，跨轮重复只会污染上下文。 */
-  private static readonly TRANSIENT_TOOLS = new Set(["search", "list_dir", "web_search", "web_fetch"]);
+  /** 当前轮次不需要保留到下一轮的"瞬态"工具：其结果只在当轮有意义，跨轮重复只会污染上下文。
+   *  read_file 也纳入瞬态：文件内容已被 AI 消化，下轮若仍需可重读（成本远低于每轮重复发送）。 */
+  private static readonly TRANSIENT_TOOLS = new Set(["search", "list_dir", "web_search", "web_fetch", "read_file"]);
 
   private buildRequestMessages(): ChatCompletionMessageParam[] {
     const injections = this.buildInjections();
@@ -1451,16 +1452,6 @@ export class AgentSession {
     if (instruction) {
       injections.push({ role: "system", content: instruction });
     }
-
-    // 行为验证提醒（每轮注入，强化模型对验证义务的注意力——系统提示里写了但模型容易忽略，
-    // 放在动态注入里每轮可见，遵守度更高）
-    injections.push({
-      role: "system",
-      content:
-        "行为验证义务提醒：如果本轮你新增或修改了有明确输入输出的函数/逻辑，" +
-        "交付前必须自己用 execute_command 跑验证（临时脚本或 node -e），确认行为正确。" +
-        "只做 check_diagnostics 不够。没跑验证就给最终回答 = 不合格交付。",
-    });
 
     // 多工作区信息（让 AI 感知所有可操作的根路径）
     if (this.workspaces.length > 1) {

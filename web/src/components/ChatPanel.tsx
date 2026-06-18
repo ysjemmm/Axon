@@ -794,7 +794,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-medium text-foreground">上下文已使用 {session.compactionNeeded.percent}%</p>
                   <p className="text-[11px] text-muted-foreground mt-0.5">
-                    当前会话上下文已超过模型窗口的 75%，为保证回复质量建议压缩。请选择：
+                    当前会话上下文已超过模型窗口的 35%，为保证回复速度建议压缩。请选择：
                   </p>
                 </div>
               </div>
@@ -1045,9 +1045,9 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                   <TooltipTrigger asChild>
                     <button
                       onClick={() => session.compactSession()}
-                      disabled={session.isCompacting || session.isLoading || session.chatHistory.length < 6 || session.tokenUsage.used < session.tokenUsage.max * 0.5}
+                      disabled={session.isCompacting || session.isLoading || session.chatHistory.length < 6 || session.tokenUsage.used < session.tokenUsage.max * 0.35}
                       className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                      title={session.tokenUsage.used < session.tokenUsage.max * 0.5 ? "上下文未超过 50%，禁止手动压缩" : "手动压缩上下文"}
+                      title={session.tokenUsage.used < session.tokenUsage.max * 0.35 ? "上下文未超过 35%，禁止手动压缩" : "手动压缩上下文"}
                     >
                       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
                         <path d="M4 5l-2 2 2 2M7 3l2-2 2 2M9 8l2 2-2 2M12 13l2-2-2-2M3 13l-2-2 2-2" />

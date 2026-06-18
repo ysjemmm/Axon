@@ -26,8 +26,8 @@ interface CompactConfig {
 }
 
 const DEFAULT_CONFIG: CompactConfig = {
-  triggerPercent: 0.5,
-  keepRecentCount: 10,
+  triggerPercent: 0.35,
+  keepRecentCount: 8,
   maxTokens: DEFAULT_CONTEXT_WINDOW,
 };
 
