@@ -809,6 +809,9 @@ export function useChatSession(opts: UseChatSessionOptions) {
       };
       const targetMsgId = cancelledTurnMsgId.current;
       cancelledTurnMsgId.current = null;
+      // 如果取消时没有 assistant 消息可挂载（如仅发出工具卡片还未产生文本回复），
+      // 提前生成一个 id 供 fallback 使用——不能在 setChatHistory 回调里用 Date.now()
+      const fallbackId = `assistant-cancelled-${Date.now()}`;
       setChatHistory((prev) => {
         let found = false;
         const updated = [...prev];
@@ -820,7 +823,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
             updated[i] = {
               ...updated[i],
               streaming: false,
-              turnStatus: updated[i].turnStatus === "cancelled" ? "cancelled" : "cancelled",
+              turnStatus: "cancelled",
               turnStats: updated[i].turnStats || stats,
             };
             found = true;
@@ -831,13 +834,14 @@ export function useChatSession(opts: UseChatSessionOptions) {
         // 如果没有可挂载的 assistant，补一个最小 assistant turn，保证 credit/耗时仍然展示。
         if (!found) {
           updated.push({
-            id: `assistant-cancelled-${Date.now()}`,
+            id: fallbackId,
             role: "assistant",
             timestamp: Date.now(),
             segments: [],
             streaming: false,
             turnStatus: "cancelled",
             turnStats: stats,
+            turnGen: turnGeneration.current,
           });
         }
         return updated;
