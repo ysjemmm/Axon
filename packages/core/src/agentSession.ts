@@ -2138,9 +2138,9 @@ export class AgentSession {
         const softFail = status === "error" && isSoftToolFailure(toolName, result);
         guard.recordToolResult(status !== "error", softFail, { toolName, args: toolArgs });
 
-        // 软失败隐藏卡片：前 2 次 str_replace / apply_patch 匹配失败不让用户看到，
+        // 软失败隐藏卡片：前 2 次 str_replace / apply_patch / read_file 失败不让用户看到，
         // 后端把错误回给 AI 重试即可。第 3 次还是失败才展示卡片。
-        if (softFail && (toolName === "str_replace" || toolName === "apply_patch")) {
+        if (softFail && (toolName === "str_replace" || toolName === "apply_patch" || toolName === "read_file")) {
           const path = typeof (toolArgs as { path?: unknown }).path === "string"
             ? (toolArgs as { path: string }).path
             : (toolCall.arguments ?? "");
@@ -2153,7 +2153,7 @@ export class AgentSession {
           }
         }
         // 成功时清除该文件/工具的软失败计数
-        if (status === "success" && (toolName === "str_replace" || toolName === "apply_patch")) {
+        if (status === "success" && (toolName === "str_replace" || toolName === "apply_patch" || toolName === "read_file")) {
           const path = typeof (toolArgs as { path?: unknown }).path === "string"
             ? (toolArgs as { path: string }).path
             : (toolCall.arguments ?? "");

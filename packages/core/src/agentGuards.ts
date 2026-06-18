@@ -167,11 +167,18 @@ export function policyForModel(model: string): AgentPolicy {
 /**
  * 判断一次工具失败是否为"软失败"——错误返回里带了足够的纠错信息，模型据此重试属于正常纠错流程，
  * 不应计入"连续失败"强制收尾。典型：str_replace 未匹配/不唯一（返回了实际内容+行号）、
- * 工具参数 JSON 非法（返回了原始参数提示）。这类错误给模型更多重试空间，避免被过早掐断。
+ * apply_patch 上下文未匹配、read_file 缺参数、工具参数 JSON 非法。
+ * 这类错误给模型更多重试空间，避免被过早掐断。
  */
 export function isSoftToolFailure(toolName: string, result: string): boolean {
   if (toolName === "str_replace") {
     return /未找到 oldStr|出现多次|不唯一/.test(result);
+  }
+  if (toolName === "apply_patch") {
+    return /上下文未匹配/.test(result);
+  }
+  if (toolName === "read_file") {
+    return /缺少必填参数 path/.test(result);
   }
   // 参数 JSON 非法（任何工具都可能）
   if (/工具参数不是合法 JSON/.test(result)) return true;
