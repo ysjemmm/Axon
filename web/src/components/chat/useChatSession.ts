@@ -154,7 +154,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
   // 并发安全——parallel_research / 多个子 Agent 可能同时请求，各自挂在自己的命令卡片上。
   const [commandApprovals, setCommandApprovals] = useState<Record<string, CommandApproval>>({});
   // 危险命令被硬拦时给用户的可见提示（与给 AI 的错误分开）
-  const [commandBlocked, setCommandBlocked] = useState<{ command: string; reason: string } | null>(null);
+  const [commandBlocked, setCommandBlocked] = useState<{ requestId?: string; command: string; reason: string; dangerous?: boolean } | null>(null);
   const [messageQueue, setMessageQueue] = useState<Array<{ id: string; payload: SubmitPayload }>>([]);
 
   // ── refs ────────────────────────────────────────────────────────────────
@@ -401,8 +401,10 @@ export function useChatSession(opts: UseChatSessionOptions) {
 
     if (msg.type === "command_blocked") {
       setCommandBlocked({
+        requestId: (msg as any).requestId as string | undefined,
         command: (msg as any).command as string,
         reason: (msg as any).reason as string,
+        dangerous: (msg as any).dangerous as boolean | undefined,
       });
       return;
     }
@@ -1458,7 +1460,13 @@ export function useChatSession(opts: UseChatSessionOptions) {
     }
   }, [send]);
 
-  /** 关闭"危险命令被拦截"提示 */
+  /** 关闭"危险命令被拦截"提示（拒绝），或仍要执行 */
+  const respondToDangerousCommand = useCallback((requestId: string, executeAnyway: boolean) => {
+    setCommandBlocked(null);
+    send({ type: "confirm_command", requestId, choice: executeAnyway ? "once" : "reject" });
+  }, [send]);
+
+  /** 单纯关闭危险提示（无 requestId 的旧版硬拦） */
   const dismissCommandBlocked = useCallback(() => setCommandBlocked(null), []);
 
   /** 选择模型：持久化 + 更新 token 上下文窗口 */
@@ -1509,7 +1517,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     // 动作
     submit, removeFromQueue, cancelTurn,
     toggleEditMode, acceptEdits, rejectEdits, undoEdits, confirmTool,
-    approveCommand, dismissCommandBlocked,
+    approveCommand, dismissCommandBlocked, respondToDangerousCommand,
     setModel, selectWorkspace, selectGroup, groupUpdated,
   };
 }

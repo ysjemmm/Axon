@@ -8,8 +8,7 @@
  *   - child_process.exec          → host.commands（含 PowerShell UTF-8 包装，由实现负责）
  *   - checkDiagnostics（tsc）      → host.diagnostics
  *
- * 危险命令检测（detectDangerousCommand）是与形态无关的安全策略，留在 core，
- * 在调用 host.commands.exec 之前执行。
+ * 危险命令检测由 CommandGate 在调用前统一处理（含用户确认），此处不再重复。
  *
  * web 能力（webSearch/webFetch）依赖 node:https/http，尚未迁入 core，
  * 通过可选的 web 注入参数提供；未注入时 web_search/web_fetch 直接报错。
@@ -18,7 +17,7 @@
  */
 
 import { resolve, relative, sep } from "node:path";
-import { detectDangerousCommand, isWithinWorkspaces } from "./safety.js";
+import { isWithinWorkspaces } from "./safety.js";
 import {
   resolveInWorkspaces,
   owningWorkspace,
@@ -368,16 +367,6 @@ export async function executeToolCall(
       return `已应用补丁，修改 ${changed.length} 个文件：${changed.join("、")}`;
     }
     case "execute_command": {
-      // 危险命令防护：拦截明显具备大范围破坏性的命令（递归强删、磁盘格式化、关机等）。
-      // Fail-Fast 直接拒绝，由模型改用更安全的方式，而不是放任执行。
-      const dangerCheck = detectDangerousCommand(args.command as string);
-      if (dangerCheck) {
-        throw new Error(
-          `命令被安全策略拒绝：${dangerCheck}。` +
-          `如确需此操作，请改用更精确、可控的命令（指明具体文件而非通配/递归），` +
-          `或由用户在终端中手动执行。`,
-        );
-      }
       // 命令在用户可见的 "Axon" 终端里执行（可交互输入），用 Shell Integration 捕获输出。
       // 解析 cwd 参数：支持相对路径或绝对路径，不传时用会话默认 cwd
       const execCwd = typeof args.cwd === "string" && args.cwd.trim()
@@ -438,13 +427,6 @@ export async function executeToolCall(
       }
       if (!host.processes) {
         throw new Error("start_process 失败：当前形态不支持后台进程。请改用 execute_command（注意它会等命令结束，不适合常驻进程）。");
-      }
-      // 危险命令防护：与 execute_command 同一套硬拦策略
-      const dangerCheck = detectDangerousCommand(args.command as string);
-      if (dangerCheck) {
-        throw new Error(
-          `命令被安全策略拒绝：${dangerCheck}。如确需此操作，请改用更精确、可控的命令，或由用户在终端中手动执行。`,
-        );
       }
       const procCwd = typeof args.cwd === "string" && args.cwd.trim()
         ? await resolveInWorkspaces(args.cwd, cwd, host, workspaces)

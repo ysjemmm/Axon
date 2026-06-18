@@ -139,6 +139,10 @@ export type AgentEventPayload =
   | { type: "workspace_set"; workspace: string; workspaces: string[]; groupId?: string; groupName?: string }
   | { type: "workspace_error"; message: string }
 
+  // ── 命令信任与安全 ──
+  | { type: "confirm_command_request"; requestId: string; command: string; options: { choice: string; pattern: string; label: string }[]; id?: string }
+  | { type: "command_blocked"; requestId?: string; command: string; reason: string; dangerous?: boolean }
+
   // ── 子 Agent / 并行调研 ──
   | { type: "sub_agent_start"; delegateId: string; toolCallId: string; intent: string; skill: string | null; prompt: string }
   | { type: "sub_agent_event"; delegateId: string; event: Json }

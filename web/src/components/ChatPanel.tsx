@@ -835,7 +835,9 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               </button>
             </div>
           )}
-          {/* 危险命令被安全策略硬拦：可关闭的警告横幅（与给 AI 的错误分开，让用户知情） */}
+          {/* 危险命令被安全策略拦截：可关闭的警告横幅。
+                dangerous 模式下提供"拒绝"和"仍要执行"两个选择；
+                旧版（无 requestId）仅展示关闭按钮。 */}
           {session.commandBlocked && (
             <div className="flex items-start gap-2 px-3 py-2 bg-destructive/5 border border-destructive/20 rounded-lg mb-2">
               <ShieldAlert className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
@@ -846,13 +848,30 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                 </p>
                 <p className="text-[11px] text-muted-foreground mt-0.5">原因：{session.commandBlocked.reason}</p>
               </div>
-              <button
-                onClick={session.dismissCommandBlocked}
-                className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors shrink-0"
-                title="关闭"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
+              {session.commandBlocked.dangerous && session.commandBlocked.requestId ? (
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    onClick={() => session.respondToDangerousCommand(session.commandBlocked!.requestId!, false)}
+                    className="px-2.5 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+                  >
+                    拒绝
+                  </button>
+                  <button
+                    onClick={() => session.respondToDangerousCommand(session.commandBlocked!.requestId!, true)}
+                    className="px-2.5 py-1 rounded-md text-xs font-medium bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
+                  >
+                    仍要执行
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={session.dismissCommandBlocked}
+                  className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors shrink-0"
+                  title="关闭"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
           )}
           {/* 命令信任授权改为内联在对应命令卡片下方（无感模式），见 ToolCallItem。此处不再用模态弹窗 */}

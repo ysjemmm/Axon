@@ -56,7 +56,10 @@ export interface ApprovalDecision {
 export interface GateDeps {
   /** 弹出审批请求并等待用户决策 */
   requestApproval: (command: string, options: ReturnType<typeof buildTrustOptions>) => Promise<ApprovalDecision>;
-  /** 灾难命令被拦时，给用户一个可见提示（与给 AI 的错误分开） */
+  /** 危险命令确认弹窗：返回 true=仍要执行（仅本次，不信任），false=拒绝 */
+  requestDangerousApproval?: (command: string, reason: string) => Promise<boolean>;
+  /** 灾难命令被拦时，给用户一个可见提示（与给 AI 的错误分开）。
+   *  仅在 requestDangerousApproval 未提供或超时时作为兜底。 */
   emitBlocked: (command: string, reason: string) => void;
   /** 持久化一条新批准的规则（exact/prefix；all 不持久化）。无则不落盘 */
   persist?: (rule: TrustRule, target?: "user" | "workspace") => void;
@@ -103,6 +106,11 @@ export class CommandGate {
   async gate(command: string, deps: GateDeps): Promise<GateOutcome> {
     const danger = detectDangerousCommand(command);
     if (danger) {
+      // 优先走确认弹窗（用户可选"仍要执行"）；未提供时退化为硬拦
+      if (deps.requestDangerousApproval) {
+        const accepted = await deps.requestDangerousApproval(command, danger);
+        if (accepted) return { allow: true }; // 仅本次执行，不写入信任
+      }
       deps.emitBlocked(command, danger);
       return {
         allow: false,

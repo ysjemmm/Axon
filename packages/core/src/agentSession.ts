@@ -625,6 +625,20 @@ export class AgentSession {
   }
 
   /**
+   * 危险命令确认弹窗：发送 command_blocked（带 requestId），等待用户点"拒绝"或"仍要执行"。
+   * 返回 true=仍要执行，false=拒绝。
+   */
+  private requestDangerousCommandApproval(command: string, reason: string): Promise<boolean> {
+    const requestId = `danger_${Date.now()}_${this.approvalSeq++}`;
+    this.send("command_blocked", { requestId, command, reason, dangerous: true });
+    return new Promise<boolean>((resolve) => {
+      this.commandApprovalResolvers.set(requestId, (decision) => {
+        resolve(decision.choice === "once"); // "once" = 仍要执行，"reject" = 拒绝
+      });
+    });
+  }
+
+  /**
    * 命令信任门（共享）：主循环与子 Agent 的 execute_command 都走这一个 gate，
    * 保证白名单、灾难硬拦、人工授权三层语义一致，且批准结果在父子间共享。
    * @param toolCallId 触发该命令的工具调用 id，透传给前端做内联审批定位
@@ -632,6 +646,7 @@ export class AgentSession {
   private gateCommand(command: string, toolCallId?: string): Promise<GateOutcome> {
     return this.commandGate.gate(command, {
       requestApproval: (cmd, options) => this.requestCommandApproval(cmd, options, toolCallId),
+      requestDangerousApproval: (cmd, reason) => this.requestDangerousCommandApproval(cmd, reason),
       emitBlocked: (cmd, reason) => this.send("command_blocked", { command: cmd, reason }),
       persist: (rule, target) => this.onCommandTrustApproved?.(rule, target),
     });
