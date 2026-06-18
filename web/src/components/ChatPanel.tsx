@@ -116,19 +116,16 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   }, [session.chatHistory]);
 
   // ── 自动滚动 ──────────────────────────────────────────────────────────────
-  // VirtualMessageList 自己感知 isAtBottom，通过 onAutoScrollChange 通知。
-  // ChatPanel 只维护一个 autoScroll 布尔，流式输出时据此决定是否追底。
-  const [autoScroll, setAutoScroll] = useState(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "instant") => {
-    setAutoScroll(true);
+    autoScrollUserOverride.current = false;
     setShowScrollBtn(false);
     virtualListRef.current?.scrollToBottom(behavior);
   }, []);
 
   const animatedScrollToBottom = useCallback(() => {
-    setAutoScroll(true);
+    autoScrollUserOverride.current = false;
     setShowScrollBtn(false);
     virtualListRef.current?.scrollToBottom("smooth");
   }, []);
@@ -169,11 +166,6 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     handleScrollRef.current?.(scrollTopVal);
   }, []);
 
-  // VirtualMessageList 告诉我用户是否在底部
-  const stableOnAutoScrollChange = useCallback((atBottom: boolean) => {
-    setAutoScroll(atBottom);
-  }, []);
-
   // 撤销失败轻提示：3 秒后自动消失
   useEffect(() => {
     if (!session.undoNotice) return;
@@ -189,25 +181,49 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     }
   }, [session.chatHistory.length]);
 
-  // 流式输出时自动跟随底部：50ms 轮询检测 scrollHeight 变化，只在内容真的长高时才滚底。
-  // 不再用 rAF 每帧强制滚底（那是吸住用户的根因）。
-  const autoScrollRef = useRef(autoScroll);
-  autoScrollRef.current = autoScroll;
+  // 流式输出时自动跟随底部：用 wheel 事件精确判断用户意图。
+  // 向上滚一次 → 停止追底；滚回底部 → 恢复追底。简单、可靠、无竞态。
+  const autoScrollRef = useRef(true);
+  const autoScrollUserOverride = useRef(false);
   useEffect(() => {
-    if (!session.isLoading) return;
-    let prevHeight = 0;
-    const timer = setInterval(() => {
-      const container = virtualListRef.current?.getScrollContainer();
-      if (!container) return;
+    if (!session.isLoading) {
+      autoScrollUserOverride.current = false;
+      return;
+    }
+    // 启动时滚到底部
+    virtualListRef.current?.scrollToBottom("instant");
+
+    const container = virtualListRef.current?.getScrollContainer();
+    if (!container) return;
+
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) {
+        // 向上滚 → 用户想离开底部
+        autoScrollUserOverride.current = true;
+      } else {
+        // 向下滚 → 检测是否已到底部
+        const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 40;
+        if (atBottom) autoScrollUserOverride.current = false;
+      }
+    };
+    container.addEventListener("wheel", onWheel, { passive: true });
+
+    // 内容高度变化时，只在用户未手动离开底部时才追底
+    let prevHeight = container.scrollHeight;
+    const poller = setInterval(() => {
       const ch = container.scrollHeight;
       if (ch !== prevHeight) {
         prevHeight = ch;
-        if (autoScrollRef.current) {
-          virtualListRef.current?.scrollToBottom("instant");
+        if (!autoScrollUserOverride.current) {
+          container.scrollTo({ top: 99999999, behavior: "instant" });
         }
       }
     }, 50);
-    return () => clearInterval(timer);
+
+    return () => {
+      container.removeEventListener("wheel", onWheel);
+      clearInterval(poller);
+    };
   }, [session.isLoading]);
 
   // 切回该会话（变为可见）时自动滚到底部
@@ -558,7 +574,6 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             messages={session.chatHistory}
             estimateHeight={200}
             overscan={5}
-            onAutoScrollChange={stableOnAutoScrollChange}
             onScroll={stableOnScroll}
             header={
               !connected && session.chatHistory.length > 0 ? (

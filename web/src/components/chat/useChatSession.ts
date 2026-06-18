@@ -500,7 +500,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
               }
               const pathArg = tcArgs.path as string || "";
               const shortName = pathArg ? (pathArg.split("/").pop()?.split("\\").pop() || pathArg) : "";
-              const intentArg = (tcArgs.intent as string) || "";
+              const intentArg = (tcArgs.intent as string) || (tcArgs.query as string) || "";
               const isExplore = toolName === "search" || toolName === "list_dir";
               const lineSuffix = toolName === "read_file" ? formatLineSuffix(tcArgs.startLine, tcArgs.endLine) : "";
               const readNameWithLines = shortName + (lineSuffix ? ` ${lineSuffix}` : "");
@@ -939,7 +939,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
               command: (msg.name === "execute_command" || msg.name === "start_process") ? (args.command as string) : seg.command,
               cwd: (msg.name === "execute_command" || msg.name === "start_process") ? (msg as any).cwd : seg.cwd,
               query: (msg.name === "search" || msg.name === "list_dir")
-                ? ((args.intent as string) || seg.query || fallbackIntent(msg.name))
+                ? ((args.intent as string) || (args.query as string) || seg.query || fallbackIntent(msg.name))
                 : seg.query,
             };
             updated[updated.length - 1] = { ...last, segments: segs };
@@ -958,7 +958,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
           command: (msg.name === "execute_command" || msg.name === "start_process") ? (args.command as string) : undefined,
           cwd: (msg.name === "execute_command" || msg.name === "start_process") ? (msg as any).cwd : undefined,
           query: (msg.name === "search" || msg.name === "list_dir")
-            ? ((args.intent as string) || fallbackIntent(msg.name))
+            ? ((args.intent as string) || (args.query as string) || fallbackIntent(msg.name))
             : undefined,
           mcpServer: (msg as any).mcpServer,
           mcpTool: (msg as any).mcpTool,

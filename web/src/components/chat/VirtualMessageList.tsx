@@ -15,7 +15,7 @@ interface MeasuredItem {
   height: number;
 }
 
-export interface VirtualMessageListHandle {
+interface VirtualMessageListHandle {
   /** 滚动到列表底部 */
   scrollToBottom: (behavior?: ScrollBehavior) => void;
   /** 滚动到指定 index 的消息 */
@@ -26,8 +26,6 @@ export interface VirtualMessageListHandle {
   remeasure: () => void;
   /** 获取指定消息 id 的累积偏移（从列表顶部算起） */
   getMessageOffset: (id: string) => number | undefined;
-  /** 当前是否在底部 */
-  isAtBottom: () => boolean;
   /** 获取滚动容器 DOM 元素 */
   getScrollContainer: () => HTMLDivElement | null;
 }
@@ -43,8 +41,6 @@ interface VirtualMessageListProps {
   footer?: ReactNode;
   /** 列表顶部插槽（断开连接提示等） */
   header?: ReactNode;
-  /** 自动跟随状态变化：true=用户在底部，false=已滚离 */
-  onAutoScrollChange?: (isAtBottom: boolean) => void;
   /** 滚动事件回调 */
   onScroll?: (scrollTop: number) => void;
 }
@@ -102,7 +98,6 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
       overscan = DEFAULT_OVERSCAN,
       footer,
       header,
-      onAutoScrollChange,
       onScroll,
     },
     ref,
@@ -112,11 +107,8 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
     const [scrollTop, setScrollTop] = useState(0);
     const [clientHeight, setClientHeight] = useState(0);
     const heightMap = useRef(new Map<string, number>());
-    const isAtBottomRef = useRef(true);
     const visibleRangeRef = useRef({ start: 0, end: 0 });
     const [measureVersion, setMeasureVersion] = useState(0);
-
-    const BOTTOM_THRESHOLD = 40;
 
     // ---- height tracking ----
     const recordHeight = useCallback((id: string, h: number) => {
@@ -201,15 +193,8 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
       let prevWidth = container.clientWidth;
 
       const handleScroll = () => {
-        const c = containerRef.current;
-        if (!c) return;
-        const atBottom = c.scrollHeight - c.scrollTop - c.clientHeight < BOTTOM_THRESHOLD;
-        if (atBottom !== isAtBottomRef.current) {
-          isAtBottomRef.current = atBottom;
-          onAutoScrollChange?.(atBottom);
-        }
-        setScrollTop(c.scrollTop);
-        onScroll?.(c.scrollTop);
+        setScrollTop(container.scrollTop);
+        onScroll?.(container.scrollTop);
       };
       const handleResize = () => {
         const w = container.clientWidth;
@@ -244,8 +229,9 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
       scrollToBottom(behavior: ScrollBehavior = "instant") {
         const container = containerRef.current;
         if (!container) return;
-        isAtBottomRef.current = true;
-        container.scrollTo({ top: container.scrollHeight, behavior });
+        // 虚拟列表中未测量消息使用预估值，scrollHeight 可能远小于真实高度。
+        // 直接用极大值兜底——浏览器会自动 clamp 到实际最大可滚动位置。
+        container.scrollTo({ top: 99999999, behavior });
       },
       scrollToIndex(index: number, behavior: ScrollBehavior = "smooth") {
         const container = containerRef.current;
@@ -272,9 +258,6 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
           offset += heightMap.current.get(messages[i].id) ?? estimateHeight;
         }
         return undefined;
-      },
-      isAtBottom() {
-        return isAtBottomRef.current;
       },
       getScrollContainer() {
         return containerRef.current;
