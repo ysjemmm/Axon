@@ -180,6 +180,8 @@ export function isSoftToolFailure(toolName: string, result: string): boolean {
   if (toolName === "read_file") {
     return /缺少必填参数 path/.test(result);
   }
+  // AI hallucinated a non-existent tool (e.g. "replace_in_file" instead of "str_replace")
+  if (/错误: 未知工具/.test(result)) return true;
   // 参数 JSON 非法（任何工具都可能）
   if (/工具参数不是合法 JSON/.test(result)) return true;
   return false;

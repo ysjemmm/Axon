@@ -1982,7 +1982,13 @@ export class AgentSession {
           const argCwd = typeof (toolArgs as { cwd?: unknown }).cwd === "string" && (toolArgs as { cwd: string }).cwd.trim();
           return argCwd ? resolve(this.cwd, argCwd) : this.terminalCwd;
         })();
-        this.send("tool_call", { id: toolCall.id, name: toolName, args: toolArgs, cwd: displayCwd, status: "executing", ...this.mcpMetaFor(toolName) });
+        // 前 2 次软失败不发 tool_call（不闪卡片），直接发带 hidden 的 tool_result。
+        // 第 3 次还是失败才展示，此时发 tool_call + tool_result。
+        // 这些工具容易软失败：str_replace/apply_patch/read_file。
+        const SOFT_FAIL_TOOLS = new Set(["str_replace", "apply_patch", "read_file"]);
+        if (!SOFT_FAIL_TOOLS.has(toolName)) {
+          this.send("tool_call", { id: toolCall.id, name: toolName, args: toolArgs, cwd: displayCwd, status: "executing", ...this.mcpMetaFor(toolName) });
+        }
 
         // 推送细化状态（给前端展示具体动作）
         const statusMap: Record<string, { content: string; phase: string }> = {
@@ -2140,23 +2146,24 @@ export class AgentSession {
 
         // 软失败隐藏卡片：前 2 次 str_replace / apply_patch / read_file 失败不让用户看到，
         // 后端把错误回给 AI 重试即可。第 3 次还是失败才展示卡片。
-        if (softFail && (toolName === "str_replace" || toolName === "apply_patch" || toolName === "read_file")) {
+        // 未知工具（AI hallucinated non-existent tool name）同样静默。
+        if (softFail) {
           const path = typeof (toolArgs as { path?: unknown }).path === "string"
             ? (toolArgs as { path: string }).path
-            : (toolCall.arguments ?? "");
+            : toolName;
           const key = `softfail:${toolName}:${path}`;
           const prev = ((this as any).__softFailCounts ??= new Map<string, number>());
           prev.set(key, (prev.get(key) || 0) + 1);
           if (prev.get(key)! < 3) {
             meta.hidden = true;
-            if (meta.userMessage) delete meta.userMessage; // 不展示给用户
+            if (meta.userMessage) delete meta.userMessage;
           }
         }
         // 成功时清除该文件/工具的软失败计数
-        if (status === "success" && (toolName === "str_replace" || toolName === "apply_patch" || toolName === "read_file")) {
+        if (status === "success" && softFail === false) {
           const path = typeof (toolArgs as { path?: unknown }).path === "string"
             ? (toolArgs as { path: string }).path
-            : (toolCall.arguments ?? "");
+            : toolName;
           const key = `softfail:${toolName}:${path}`;
           ((this as any).__softFailCounts ??= new Map<string, number>()).delete(key);
         }
@@ -2183,6 +2190,10 @@ export class AgentSession {
         }
         if (status === "success" && toolName === "check_diagnostics") {
           didDiagnose = true;
+        }
+        // 软失败工具延迟展示：成功前不发 tool_call，现在确认可见才补发
+        if (SOFT_FAIL_TOOLS.has(toolName) && !meta.hidden) {
+          this.send("tool_call", { id: toolCall.id, name: toolName, args: toolArgs, cwd: displayCwd, status: "success", ...this.mcpMetaFor(toolName) });
         }
         this.send("tool_result", { id: toolCall.id, name: toolName, args: toolArgs, result: result.slice(0, 500), status, fileDiff: meta.fileDiff, fileDiffs: meta.fileDiffs, readRange: meta.readRange, diagnostics: meta.diagnostics, searchResults: (meta as any).searchResults, fetchResult: (meta as any).fetchResult, powerActivated: (meta as any).powerActivated, pending: isPending, userMessage: meta.userMessage, hidden: meta.hidden, resolvedPath: (meta as any).resolvedPath, ...this.mcpMetaFor(toolName) });
         // 存入历史时按工具类型截断：read_file/web_fetch 给大预算（避免模型分页重读），
