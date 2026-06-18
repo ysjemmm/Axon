@@ -30,6 +30,8 @@ export interface ExecResult {
   timedOut: boolean;
   /** 进程退出码；超时或异常终止时可能为 null */
   exitCode: number | null;
+  /** 命令执行后终端的实际工作目录（用于同步 agentSession.terminalCwd） */
+  cwd?: string;
 }
 
 /** Agent 可用的命令执行能力 */

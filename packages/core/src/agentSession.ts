@@ -222,8 +222,13 @@ export class AgentSession {
   }
 
   /** 跟踪终端实际工作目录（execute_command / start_process 执行后同步） */
-  private trackTerminalCwd(toolName: string, args: Record<string, unknown>): void {
+  private trackTerminalCwd(toolName: string, args: Record<string, unknown>, meta?: ToolMeta): void {
     if (toolName !== "execute_command" && toolName !== "start_process") return;
+    // 优先用 shell integration 返回的真实 cwd
+    if (meta?.terminalCwd) {
+      this.terminalCwd = meta.terminalCwd;
+      return;
+    }
     const argCwd = typeof args.cwd === "string" && args.cwd.trim() ? args.cwd : undefined;
     this.terminalCwd = argCwd ? resolve(this.cwd, argCwd) : this.cwd;
   }
@@ -1616,6 +1621,7 @@ export class AgentSession {
     this.lastSubAgentTokens = 0; // 新一轮用户输入，重置本轮 subagent 用量统计
     this.lastTurnOutputTokens = 0; // 新一轮用户输入，重置本轮输出 token 累计
     this.turnStartCumulative = this.cumulativeTokens; // 取消时用差值复原本轮消耗
+    (this as any).__softFailCounts = new Map<string, number>(); // 每轮重置软失败计数
     // 记录本轮开始前的消息条数（此刻 messages 仅含 system + 之前会话，尚未 push 本轮用户消息）。
     // 用它在收尾时切出"本轮新增的消息"（用户消息 + 工具结果），据此估算"本次输入"。
     this.turnStartMsgCount = this.messages.length;
@@ -2070,7 +2076,7 @@ export class AgentSession {
             try {
               result = await executeToolCall(toolName, execArgs, this.cwd, this.host, meta, this.workspaces, this.loadSkillForTool, this.web, this.loadPowerForTool);
               // 同步终端工作目录（后续命令不传 cwd 时默认在此执行）
-              this.trackTerminalCwd(toolName, execArgs);
+              this.trackTerminalCwd(toolName, execArgs, meta);
             } catch (err) {
               const error = err as Error;
               result = `错误: ${error.message}`;
@@ -2089,7 +2095,7 @@ export class AgentSession {
         } else {
           try {
             result = await executeToolCall(toolName, toolArgs, this.cwd, this.host, meta, this.workspaces, this.loadSkillForTool, this.web, this.loadPowerForTool);
-            this.trackTerminalCwd(toolName, toolArgs);
+            this.trackTerminalCwd(toolName, toolArgs, meta);
             // 反复零碎读同一文件检测：超过阈值时追加提示，引导模型用已读内容而非继续切片重读
             if (toolName === "read_file" && typeof toolArgs.path === "string") {
               result += guard.noteFileRead(toolArgs.path);
@@ -2109,6 +2115,29 @@ export class AgentSession {
         // （错误返回里带了实际内容/行号，模型据此重试是正常纠错，不应被过早掐断）
         const softFail = status === "error" && isSoftToolFailure(toolName, result);
         guard.recordToolResult(status !== "error", softFail, { toolName, args: toolArgs });
+
+        // 软失败隐藏卡片：前 2 次 str_replace / apply_patch 匹配失败不让用户看到，
+        // 后端把错误回给 AI 重试即可。第 3 次还是失败才展示卡片。
+        if (softFail && (toolName === "str_replace" || toolName === "apply_patch")) {
+          const path = typeof (toolArgs as { path?: unknown }).path === "string"
+            ? (toolArgs as { path: string }).path
+            : (toolCall.arguments ?? "");
+          const key = `softfail:${toolName}:${path}`;
+          const prev = ((this as any).__softFailCounts ??= new Map<string, number>());
+          prev.set(key, (prev.get(key) || 0) + 1);
+          if (prev.get(key)! < 3) {
+            meta.hidden = true;
+            if (meta.userMessage) delete meta.userMessage; // 不展示给用户
+          }
+        }
+        // 成功时清除该文件/工具的软失败计数
+        if (status === "success" && (toolName === "str_replace" || toolName === "apply_patch")) {
+          const path = typeof (toolArgs as { path?: unknown }).path === "string"
+            ? (toolArgs as { path: string }).path
+            : (toolCall.arguments ?? "");
+          const key = `softfail:${toolName}:${path}`;
+          ((this as any).__softFailCounts ??= new Map<string, number>()).delete(key);
+        }
 
         // 手动模式下文件改动是否进入了暂存（待确认）
         const isPending = this.host.edits.getMode() === "manual" && (toolName === "str_replace" || toolName === "create_file" || toolName === "apply_patch") && status === "success";

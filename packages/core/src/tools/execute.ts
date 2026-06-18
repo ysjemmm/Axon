@@ -389,6 +389,8 @@ export async function executeToolCall(
         timeoutMs: 120_000,
         onWaitingInput: meta?.onWaitingInput,
       });
+      // 同步终端实际工作目录（shell integration 返回的真实 cwd）
+      if (meta && result.cwd) meta.terminalCwd = result.cwd;
       // 超时：命令在终端里可能仍在运行（如开发服务器、需要持续交互）
       if (result.timedOut) {
         throw new Error(

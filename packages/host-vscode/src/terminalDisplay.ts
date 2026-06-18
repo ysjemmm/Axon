@@ -66,6 +66,8 @@ export interface TerminalRunResult {
   captured: boolean;
   /** 终端被用户手动关闭（命令被强制终止） */
   closed?: boolean;
+  /** 命令执行后终端的实际工作目录（从 shell integration 获取） */
+  cwd?: string;
 }
 
 /**
@@ -197,7 +199,11 @@ export async function runInTerminalCaptured(
   // Mark AI command end for proactive awareness filtering
   vscode.commands.executeCommand('axon.internal.markAiCommandEnd', aiCmdStartTime);
 
-  return { stdout: cleaned, exitCode, captured: true, closed };
+  // 尝试从 shell integration 获取终端当前真实工作目录
+  let actualCwd: string | undefined;
+  try { actualCwd = t.shellIntegration?.cwd?.fsPath; } catch { /* 忽略 */ }
+
+  return { stdout: cleaned, exitCode, captured: true, closed, cwd: actualCwd };
 }
 
 /**

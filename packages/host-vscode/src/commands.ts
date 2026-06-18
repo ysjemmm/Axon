@@ -28,6 +28,7 @@ export class VSCodeCommandRunner implements HostCommandRunner {
         stderr: "",
         timedOut: false,
         exitCode: 0,
+        cwd: result.cwd,
       };
     }
 
@@ -38,6 +39,7 @@ export class VSCodeCommandRunner implements HostCommandRunner {
         stderr: "终端已被关闭，命令被终止。",
         timedOut: false,
         exitCode: 1,
+        cwd: result.cwd,
       };
     }
 
@@ -48,6 +50,7 @@ export class VSCodeCommandRunner implements HostCommandRunner {
       stderr: "",
       timedOut,
       exitCode: timedOut ? null : result.exitCode,
+      cwd: result.cwd,
     };
   }
 }

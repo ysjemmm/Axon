@@ -660,6 +660,8 @@ export interface ToolMeta {
   /** screenshot_page 专用：截图的 data URL（data:image/png;base64,...）。
    *  agent loop 会在工具结果后追加一条带该图片的 user 消息，喂给多模态模型"看"页面。 */
   screenshotDataUrl?: string;
+  /** execute_command / start_process 专用：命令执行后终端的实际工作目录 */
+  terminalCwd?: string;
 }
 
 /** 按工具类型返回“存入对话历史的内容上限（字符）” */
