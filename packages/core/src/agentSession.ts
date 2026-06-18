@@ -366,6 +366,25 @@ export class AgentSession {
       this.abortController.abort();
       this.abortController = null;
     }
+    // 直接发送 turn_cancelled 兜底：agent loop 可能在 prefetch 阶段就被 abort 了，
+    // 根本没走到 stampCancelledTurnStats。这里保证前端至少能拿到字符估算值。
+    this.sendTurnCancelledFallback();
+  }
+
+  /** 在 cancel() 被调用但 agent loop 尚未产出任何统计时的兜底 */
+  private sendTurnCancelledFallback(): void {
+    const breakdown = { ...this.buildTokenBreakdown(), outputTokens: 0 };
+    const turnTokens = breakdown.memoryTokens + breakdown.systemTokens + breakdown.questionTokens + breakdown.outputTokens;
+    if (turnTokens <= 0) return; // 没有任何数据可发
+    const credits = calculateCredits(this.model, breakdown);
+    const creditDetail = buildCreditDetail(this.model, breakdown);
+    this.send("turn_cancelled", {
+      elapsed: 0,
+      tokens: turnTokens,
+      model: this.model,
+      credits,
+      creditDetail,
+    });
   }
 
   /** 手动触发上下文压缩（供前端"压缩上下文"按钮调用）。需超过当前模型窗口 50% 才允许。 */
@@ -411,9 +430,12 @@ export class AgentSession {
       }
     }
     const elapsed = Date.now() - turnStartTime;
-    // 取消时 lastTurnTokens 可能为 0（LLM 调用尚未结束），用 cumulative 差值兜底
-    const turnTokens = this.lastTurnTokens || (this.turnStartCumulative > 0 ? this.cumulativeTokens - this.turnStartCumulative : 0);
     const breakdown = { ...this.buildTokenBreakdown(), outputTokens: this.lastTurnOutputTokens || this.lastCompletionTokens || 0 };
+    // 取消时可能没有任何 LLM 返回数据（lastTurnTokens=0, cumulative 也没涨）。
+    // 用 buildTokenBreakdown 的字符估算兜底，至少不显示 0。
+    const turnTokens = this.lastTurnTokens
+      || (this.turnStartCumulative > 0 ? this.cumulativeTokens - this.turnStartCumulative : 0)
+      || (breakdown.memoryTokens + breakdown.systemTokens + breakdown.questionTokens + breakdown.outputTokens);
     const credits = calculateCredits(this.model, breakdown);
     const creditDetail = buildCreditDetail(this.model, breakdown);
     // 找到 messages 里最后一条 assistant 消息并追加 turnStats
