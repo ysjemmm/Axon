@@ -1909,10 +1909,12 @@ export class AgentSession {
           continue;
         }
 
-        // 命令类工具：显式 cwd → 用显式值，否则用终端实际工作目录
-        const displayCwd = (toolName === "execute_command" || toolName === "start_process") && typeof (toolArgs as { cwd?: unknown }).cwd === "string" && (toolArgs as { cwd?: string }).cwd
-          ? (toolArgs as { cwd: string }).cwd
-          : this.terminalCwd;
+        // 命令类工具：显式 cwd → 解析为绝对路径（AI 可能传相对路径如 "."），否则用终端实际工作目录
+        const displayCwd = (() => {
+          if (toolName !== "execute_command" && toolName !== "start_process") return "";
+          const argCwd = typeof (toolArgs as { cwd?: unknown }).cwd === "string" && (toolArgs as { cwd: string }).cwd.trim();
+          return argCwd ? resolve(this.cwd, argCwd) : this.terminalCwd;
+        })();
         this.send("tool_call", { id: toolCall.id, name: toolName, args: toolArgs, cwd: displayCwd, status: "executing", ...this.mcpMetaFor(toolName) });
 
         // 推送细化状态（给前端展示具体动作）
