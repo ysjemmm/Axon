@@ -26,6 +26,8 @@ export interface VirtualMessageListHandle {
   remeasure: () => void;
   /** 获取指定消息 id 的累积偏移（从列表顶部算起） */
   getMessageOffset: (id: string) => number | undefined;
+  /** 当前是否在底部 */
+  isAtBottom: () => boolean;
 }
 
 interface VirtualMessageListProps {
@@ -39,8 +41,8 @@ interface VirtualMessageListProps {
   footer?: ReactNode;
   /** 列表顶部插槽（断开连接提示等） */
   header?: ReactNode;
-  /** 内容高度变化回调（供自动跟随底部用） */
-  onTotalHeightChange?: (totalHeight: number) => void;
+  /** 自动跟随状态变化：true=用户在底部，false=已滚离 */
+  onAutoScrollChange?: (isAtBottom: boolean) => void;
   /** 滚动事件回调 */
   onScroll?: (scrollTop: number) => void;
 }
@@ -98,7 +100,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
       overscan = DEFAULT_OVERSCAN,
       footer,
       header,
-      onTotalHeightChange,
+      onAutoScrollChange,
       onScroll,
     },
     ref,
@@ -108,16 +110,27 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
     const [scrollTop, setScrollTop] = useState(0);
     const [clientHeight, setClientHeight] = useState(0);
     const heightMap = useRef(new Map<string, number>());
+    const isAtBottomRef = useRef(true);
+    const visibleRangeRef = useRef({ start: 0, end: 0 });
     const [measureVersion, setMeasureVersion] = useState(0);
+
+    const BOTTOM_THRESHOLD = 40;
 
     // ---- height tracking ----
     const recordHeight = useCallback((id: string, h: number) => {
       const prev = heightMap.current.get(id);
-      if (prev !== h) {
-        heightMap.current.set(id, h);
-        setMeasureVersion((n) => n + 1);
+      if (prev === h) return;
+      // 消息在视口上方 → 高度变化时补偿 scrollTop，消除视觉抖动
+      const msgIndex = messages.findIndex((m) => m.id === id);
+      const isAbove = msgIndex >= 0 && msgIndex < visibleRangeRef.current.start;
+      heightMap.current.set(id, h);
+      if (isAbove) {
+        const delta = h - (prev ?? estimateHeight);
+        const c = containerRef.current;
+        if (c && delta !== 0) c.scrollTop += delta;
       }
-    }, []);
+      setMeasureVersion((n) => n + 1);
+    }, [messages, estimateHeight]);
 
     /** 预先计算的每条消息偏移量数组（含兜底预估值） */
     const getHeights = useCallback((): MeasuredItem[] => {
@@ -168,6 +181,8 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
       let bottomPad = 0;
       for (let i = endIdx; i < heights.length; i++) bottomPad += heights[i].height;
 
+      visibleRangeRef.current = { start: startIdx, end: endIdx };
+
       return {
         totalHeight: total,
         visibleRange: { start: startIdx, end: endIdx },
@@ -178,19 +193,21 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
 
     // ---- notify total height change ----
     useEffect(() => {
-      onTotalHeightChange?.(totalHeight);
-    }, [totalHeight, onTotalHeightChange]);
-
-    // ---- scroll & resize listeners ----
-    useEffect(() => {
       const container = containerRef.current;
       if (!container) return;
 
       let prevWidth = container.clientWidth;
 
       const handleScroll = () => {
-        setScrollTop(container.scrollTop);
-        onScroll?.(container.scrollTop);
+        const c = containerRef.current;
+        if (!c) return;
+        const atBottom = c.scrollHeight - c.scrollTop - c.clientHeight < BOTTOM_THRESHOLD;
+        if (atBottom !== isAtBottomRef.current) {
+          isAtBottomRef.current = atBottom;
+          onAutoScrollChange?.(atBottom);
+        }
+        setScrollTop(c.scrollTop);
+        onScroll?.(c.scrollTop);
       };
       const handleResize = () => {
         const w = container.clientWidth;
@@ -225,15 +242,8 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
       scrollToBottom(behavior: ScrollBehavior = "instant") {
         const container = containerRef.current;
         if (!container) return;
-        // 用 DOM scrollHeight（含 footer），避免计算高度遗漏 footer 导致滚不到底
+        isAtBottomRef.current = true;
         container.scrollTo({ top: container.scrollHeight, behavior });
-        // 双保险：smooth 动画可能被后续高度变化"甩开"，下一帧再补一次到绝对底部
-        if (behavior === "smooth") {
-          requestAnimationFrame(() => {
-            const c = containerRef.current;
-            if (c) c.scrollTo({ top: c.scrollHeight, behavior: "instant" });
-          });
-        }
       },
       scrollToIndex(index: number, behavior: ScrollBehavior = "smooth") {
         const container = containerRef.current;
@@ -260,6 +270,9 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
           offset += heightMap.current.get(messages[i].id) ?? estimateHeight;
         }
         return undefined;
+      },
+      isAtBottom() {
+        return isAtBottomRef.current;
       },
     }), [messages, estimateHeight]);
 

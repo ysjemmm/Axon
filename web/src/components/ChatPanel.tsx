@@ -116,42 +116,27 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   }, [session.chatHistory]);
 
   // ── 自动滚动 ──────────────────────────────────────────────────────────────
-  const SCROLL_BOTTOM_THRESHOLD = 80;
-  const isAtBottomRef = useRef(true);
+  // VirtualMessageList 自己感知 isAtBottom，通过 onAutoScrollChange 通知。
+  // ChatPanel 只维护一个 autoScroll 布尔，流式输出时据此决定是否追底。
+  const [autoScroll, setAutoScroll] = useState(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
 
-  // 用户手动滚离底部的时间戳。2 秒内禁止自动滚底，避免吸住用户。
-  const userScrolledAwayAt = useRef(0);
-  const AUTO_SCROLL_COOLDOWN = 2000;
-
-  const recentlyScrolledAway = () => Date.now() - userScrolledAwayAt.current < AUTO_SCROLL_COOLDOWN;
-
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "instant") => {
-    userScrolledAwayAt.current = 0;
-    isAtBottomRef.current = true;
+    setAutoScroll(true);
     setShowScrollBtn(false);
     virtualListRef.current?.scrollToBottom(behavior);
   }, []);
 
   const animatedScrollToBottom = useCallback(() => {
-    userScrolledAwayAt.current = 0;
-    virtualListRef.current?.scrollToBottom("smooth");
-    isAtBottomRef.current = true;
+    setAutoScroll(true);
     setShowScrollBtn(false);
+    virtualListRef.current?.scrollToBottom("smooth");
   }, []);
 
-  // 列表滚动回调（stable ref 避免 VirtualMessageList 频繁重注册监听器）
+  // 列表滚动回调：只做 sticky 检测 + showScrollBtn
   const handleScrollRef = useRef<((scrollTopVal: number) => void) | null>(null);
 
-  // 内容高度变化 → 自动刷到底部（流式跟随）
-  const handleTotalHeightChange = useCallback(() => {
-    if (!isAtBottomRef.current || recentlyScrolledAway()) return;
-    requestAnimationFrame(() => {
-      virtualListRef.current?.scrollToBottom("instant");
-    });
-  }, []);
-
-  // sticky user question 检测（每次滚动时重新计算视口上方最后一条 user 消息）
+  // sticky user question 检测
   const stickyDetectRef = useRef<((scrollTopVal: number) => void) | null>(null);
   stickyDetectRef.current = (scrollTopVal: number) => {
     const THRESHOLD = 8;
@@ -175,10 +160,6 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     const state = virtualListRef.current?.getScrollState();
     if (state) {
       const distanceToBottom = state.scrollHeight - scrollTopVal - state.clientHeight;
-      isAtBottomRef.current = distanceToBottom <= SCROLL_BOTTOM_THRESHOLD;
-      if (!isAtBottomRef.current) {
-        userScrolledAwayAt.current = Date.now();
-      }
       setShowScrollBtn(distanceToBottom > 200);
     }
     stickyDetectRef.current?.(scrollTopVal);
@@ -188,9 +169,10 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     handleScrollRef.current?.(scrollTopVal);
   }, []);
 
-  // 内容变化时自动跟随（仅当用户当前在底部时才滚底，避免接受/拒绝等状态更新把阅读位置跳走）
-  // 内容跟随滚动由下方 ResizeObserver 统一驱动（监听内容高度变化），
-  // 这样流式文字、命令输出、新卡片等任何高度增长都能即时跟随，不再依赖易漏的内容指纹。
+  // VirtualMessageList 告诉我用户是否在底部
+  const stableOnAutoScrollChange = useCallback((atBottom: boolean) => {
+    setAutoScroll(atBottom);
+  }, []);
 
   // 撤销失败轻提示：3 秒后自动消失
   useEffect(() => {
@@ -207,22 +189,21 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     }
   }, [session.chatHistory.length]);
 
-  // 流式期间持续跟随滚底：rAF 循环兜底覆盖所有高度变化场景
-  // 用户滚离底部后 2 秒冷却期内不自动跟随
+  // 流式期间持续跟随滚底：rAF 循环，仅 autoScroll 为 true 时追底
   useEffect(() => {
     if (!session.isLoading) return;
     let rafId: number;
     const loop = () => {
-      if (isAtBottomRef.current && !recentlyScrolledAway()) {
+      if (autoScroll) {
         virtualListRef.current?.scrollToBottom("instant");
       }
       rafId = requestAnimationFrame(loop);
     };
     rafId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafId);
-  }, [session.isLoading]);
+  }, [session.isLoading, autoScroll]);
 
-  // 切回该会话（变为可见）时自动滚到底部——等淡入/布局就绪后下一帧执行
+  // 切回该会话（变为可见）时自动滚到底部
   useEffect(() => {
     if (!active) return;
     const id = requestAnimationFrame(() => scrollToBottom("instant"));
@@ -570,7 +551,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             messages={session.chatHistory}
             estimateHeight={200}
             overscan={5}
-            onTotalHeightChange={handleTotalHeightChange}
+            onAutoScrollChange={stableOnAutoScrollChange}
             onScroll={stableOnScroll}
             header={
               !connected && session.chatHistory.length > 0 ? (
