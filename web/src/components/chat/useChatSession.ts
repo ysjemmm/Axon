@@ -827,9 +827,20 @@ export function useChatSession(opts: UseChatSessionOptions) {
             break;
           }
         }
-        // 没有 assistant 消息可挂载时，至少清掉乐观假数据的影响：
-        // 不返回原 prev（否则假数据永远挂在 UI 上）
-        return found ? updated : prev;
+        // 取消可能发生在工具执行中：此时本轮可能只有工具卡片、还没有 assistant 文本消息。
+        // 如果没有可挂载的 assistant，补一个最小 assistant turn，保证 credit/耗时仍然展示。
+        if (!found) {
+          updated.push({
+            id: `assistant-cancelled-${Date.now()}`,
+            role: "assistant",
+            timestamp: Date.now(),
+            segments: [],
+            streaming: false,
+            turnStatus: "cancelled",
+            turnStats: stats,
+          });
+        }
+        return updated;
       });
       setReasoning("");
       // 仅在取消标记仍为 true（新轮未启动）时收尾 loading；
