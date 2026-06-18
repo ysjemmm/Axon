@@ -38,8 +38,8 @@ import { CommandApprovalContext } from "./chat/commandApprovalContext";
 import { QuestionListPanel } from "./chat/QuestionListPanel";
 import { VirtualMessageList, type VirtualMessageListHandle } from "./chat/VirtualMessageList";
 
-export function ChatPanel({ clientId, sessionId, mode, connected, active, send, onSessionCreated, onStreamingChange }: ChatPanelProps) {
-  const session = useChatSession({ clientId, sessionId, mode, connected, send, onSessionCreated, onStreamingChange });
+export function ChatPanel({ clientId, sessionId, mode, connected, active, send, onSessionCreated, onCompactionMigrated, onStreamingChange }: ChatPanelProps) {
+  const session = useChatSession({ clientId, sessionId, mode, connected, send, onSessionCreated, onCompactionMigrated, onStreamingChange });
 
   // ── 输入区编排（壳层本地状态） ──────────────────────────────────────────
   const [images, setImages] = useState<string[]>([]);
@@ -786,6 +786,55 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               </button>
             </div>
           )}
+          {/* 压缩选择弹窗：自动压缩触发时（>=75%），给用户选择继续或新会话 */}
+          {session.compactionNeeded && (
+            <div className="flex flex-col gap-2 px-3 py-3 bg-primary/5 border border-primary/30 rounded-lg mb-2">
+              <div className="flex items-start gap-2">
+                <span className="text-sm">⚠️</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-foreground">上下文已使用 {session.compactionNeeded.percent}%</p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    当前会话上下文已超过模型窗口的 75%，为保证回复质量建议压缩。请选择：
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 justify-end">
+                <button
+                  onClick={() => session.chooseCompaction("new_session")}
+                  className="px-3 py-1.5 rounded-md text-xs border border-border hover:bg-muted/60 transition-colors"
+                >
+                  在新会话中继续
+                </button>
+                <button
+                  onClick={() => session.chooseCompaction("continue")}
+                  className="px-3 py-1.5 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                >
+                  压缩并继续
+                </button>
+              </div>
+            </div>
+          )}
+          {/* 会话已迁移提示：输入框不可用，引导跳转到新会话 */}
+          {session.compactionMigrated && (
+            <div className="flex flex-col gap-2 px-3 py-3 bg-muted/30 border border-border rounded-lg mb-2">
+              <div className="flex items-start gap-2">
+                <span className="text-sm">📋</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-foreground">当前会话已压缩并迁移</p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    记忆已压缩并应用到新会话中，AI 将在新会话中继续回复你的问题。
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => session.navigateToMigratedSession(session.compactionMigrated!.newSessionId)}
+                className="self-end px-3 py-1.5 rounded-md text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors inline-flex items-center gap-1.5"
+              >
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 4l5 4-5 4M14 8H3" /></svg>
+                跳转到新会话
+              </button>
+            </div>
+          )}
           {/* 危险命令被安全策略硬拦：可关闭的警告横幅（与给 AI 的错误分开，让用户知情） */}
           {session.commandBlocked && (
             <div className="flex items-start gap-2 px-3 py-2 bg-destructive/5 border border-destructive/20 rounded-lg mb-2">
@@ -977,9 +1026,9 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                   <TooltipTrigger asChild>
                     <button
                       onClick={() => session.compactSession()}
-                      disabled={session.isCompacting || session.isLoading || session.chatHistory.length < 6}
+                      disabled={session.isCompacting || session.isLoading || session.chatHistory.length < 6 || session.tokenUsage.used < session.tokenUsage.max * 0.5}
                       className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                      title="手动压缩上下文"
+                      title={session.tokenUsage.used < session.tokenUsage.max * 0.5 ? "上下文未超过 50%，禁止手动压缩" : "手动压缩上下文"}
                     >
                       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
                         <path d="M4 5l-2 2 2 2M7 3l2-2 2 2M9 8l2 2-2 2M12 13l2-2-2-2M3 13l-2-2 2-2" />
@@ -1004,7 +1053,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                 <Button
                   size="sm"
                   onClick={handleSend}
-                  disabled={!connected || (composerEmpty && images.length === 0)}
+                  disabled={!connected || (composerEmpty && images.length === 0) || !!session.compactionMigrated}
                   className="h-7 w-7 rounded-full shrink-0"
                 >
                   <Send className="w-3.5 h-3.5" />

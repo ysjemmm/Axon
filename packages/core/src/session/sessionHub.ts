@@ -301,6 +301,20 @@ export class SessionHub {
       case "compact_session":
         this.getActiveSession(this.resolveSessionId(cmd))?.compactSession();
         return;
+      case "compaction_choice": {
+        const sid = this.resolveSessionId(cmd);
+        const session = this.getActiveSession(sid);
+        if (!session) return;
+        await session.handleCompactionChoice(cmd.choice);
+        // "new_session" 选择：创建新会话并继承压缩记忆
+        if (cmd.choice === "new_session") {
+          const migrateData = session.getCompactionMigrationData();
+          if (migrateData) {
+            await this.handleCompactionMigration(sid, migrateData, cmd.clientId);
+          }
+        }
+        return;
+      }
       case "focus_browser": {
         // 聚焦浏览器：无 clientId 也能用——对所有活跃会话尝试聚焦（通常只有一个浏览器）
         const sid = this.resolveSessionId(cmd);
@@ -482,6 +496,83 @@ export class SessionHub {
       workspace: ws_dir,
       workspaces: allWorkspaces,
     } as AgentEvent);
+  }
+
+  /**
+   * 压缩迁移：创建新会话继承压缩后的记忆，并在新会话中重放用户输入。
+   * 完成后通知前端切换到新会话。
+   */
+  private async handleCompactionMigration(
+    parentSessionId: string,
+    migrateData: { messages: ChatCompletionMessageParam[]; userInput: { content: string; model?: string; images?: string[]; provider?: string; userMeta?: Record<string, unknown> } },
+    clientId: string | undefined,
+  ): Promise<void> {
+    const { all: allWorkspaces, primary: primaryWorkspace } = this.resolveWorkspaces();
+    // 从父会话获取工作区和模式
+    const parentSaved = await this.storage.getSession(parentSessionId);
+    const ws_dir = parentSaved?.workspace || primaryWorkspace;
+    const ws_dirs = parentSaved?.workspaces && parentSaved.workspaces.length > 0
+      ? parentSaved.workspaces
+      : allWorkspaces;
+    const mode = parentSaved?.mode ?? "agent";
+    const titleSource = migrateData.userInput.content;
+    const title = titleSource.slice(0, 30) + (titleSource.length > 30 ? "..." : "");
+
+    // 创建新会话并预加载压缩后的消息
+    const created = await this.storage.createSession({
+      id: "",
+      title,
+      model: migrateData.userInput.model || "auto",
+      provider: migrateData.userInput.provider || ESIGN_PROVIDER,
+      workspace: ws_dir,
+      workspaces: ws_dirs.length > 1 ? ws_dirs : undefined,
+      mode,
+      messages: migrateData.messages,
+      totalTokens: 0,
+    });
+
+    // 建立 clientId → 新会话映射
+    if (clientId) this.clientSessions.set(clientId, created.id);
+
+    const session = this.createSession(created.id, ws_dir, migrateData.messages, ws_dirs, clientId, mode);
+    session.setSessionId(created.id);
+    this.registerPersistence(session, created.id);
+    this.activeSessions.set(created.id, session);
+
+    // 通知前端：当前会话已迁移，新会话已创建
+    this.sendTo(parentSessionId, clientId, {
+      type: "compaction_migrated",
+      newSessionId: created.id,
+      parentSessionId,
+    } as AgentEvent);
+    this.sendTo(created.id, clientId, {
+      type: "session_created",
+      sessionId: created.id,
+      workspace: ws_dir,
+      workspaces: ws_dirs,
+    } as AgentEvent);
+
+    // 在新会话中发送用户消息，触发 AI 回复
+    this.runningSessions.add(created.id);
+    try {
+      await session.handleUserInput(
+        migrateData.userInput.content,
+        migrateData.userInput.model,
+        migrateData.userInput.images,
+        migrateData.userInput.provider,
+        migrateData.userInput.userMeta as { displayText?: string; attachedFiles?: { name: string; size: number }[]; replyStyle?: string } | undefined,
+      );
+    } finally {
+      this.runningSessions.delete(created.id);
+    }
+
+    // 持久化新会话
+    const messages = session.getMessages();
+    await this.storage.updateSession(created.id, {
+      messages,
+      title,
+      totalTokens: session.getLastTotalTokens(),
+    });
   }
 
   /** 删除 relay */

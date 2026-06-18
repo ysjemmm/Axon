@@ -58,6 +58,7 @@ interface UseChatSessionOptions {
   connected: boolean;
   send: (cmd: Record<string, unknown>) => void;
   onSessionCreated: (id: string) => void;
+  onCompactionMigrated?: (newSessionId: string) => void;
   onStreamingChange?: (streaming: boolean) => void;
 }
 
@@ -135,6 +136,12 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const [statusText, setStatusText] = useState("思考中...");
   const [statusPhase, setStatusPhase] = useState<string>("thinking");
   const [isCompacting, setIsCompacting] = useState(false);
+  /** 自动压缩触发时后端暂停等待用户选择（>=75% 阈值） */
+  const [compactionNeeded, setCompactionNeeded] = useState<{ currentTokens: number; maxTokens: number; percent: number } | null>(null);
+  /** 当前会话已被迁移到新会话（输入框禁用，展示跳转链接） */
+  const [compactionMigrated, setCompactionMigrated] = useState<{ newSessionId: string; parentSessionId?: string } | null>(null);
+  const compactionMigratedRef = useRef<{ newSessionId: string; parentSessionId?: string } | null>(null);
+  compactionMigratedRef.current = compactionMigrated;
   const [pendingPaths, setPendingPaths] = useState<string[]>([]);
   const [pendingDiffs, setPendingDiffs] = useState<Record<string, { oldContent: string; newContent: string }>>({});
   const [pendingExpanded, setPendingExpanded] = useState(false);
@@ -169,6 +176,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
   // 命令授权门请求用 ref 持有，供取消/回传时读取最新映射，避免回调依赖 state
   const commandApprovalsRef = useRef<Record<string, CommandApproval>>({}); commandApprovalsRef.current = commandApprovals;
   const onSessionCreatedRef = useRef(onSessionCreated); onSessionCreatedRef.current = onSessionCreated;
+  const onCompactionMigratedRef = useRef(onCompactionMigrated); onCompactionMigratedRef.current = onCompactionMigrated;
   /**
    * 本面板已"拥有"（已加载或自己创建）的会话 id。
    * 用于区分 sessionId prop 变化的两种来源：
@@ -213,6 +221,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
     }
 
     if (msg.type === "session_created") {
+      // 当前会话已迁移 → 这是新会话的创建事件，不要覆盖本面板 id
+      if (compactionMigratedRef.current) return;
       // 标记本会话为本面板自己创建，避免随后 tab.id 变化触发的挂载 effect 重新 load_session
       ownedSessionId.current = (msg as any).sessionId;
       onSessionCreatedRef.current((msg as any).sessionId);
@@ -648,6 +658,29 @@ export function useChatSession(opts: UseChatSessionOptions) {
     if (msg.type === "compacting_start") {
       setIsCompacting(true);
       setStatusText("正在压缩上下文...");
+      return;
+    }
+
+    if (msg.type === "compaction_needed") {
+      setCompactionNeeded({
+        currentTokens: (msg as any).currentTokens as number,
+        maxTokens: (msg as any).maxTokens as number,
+        percent: (msg as any).percent as number,
+      });
+      setStatusText("需要压缩上下文...");
+      return;
+    }
+
+    if (msg.type === "compaction_migrated") {
+      setIsCompacting(false);
+      setCompactionNeeded(null);
+      const newSessionId = (msg as any).newSessionId as string;
+      setCompactionMigrated({
+        newSessionId,
+        parentSessionId: (msg as any).parentSessionId as string | undefined,
+      });
+      // 通知父组件打开新会话 tab
+      onCompactionMigratedRef.current?.(newSessionId);
       return;
     }
 
@@ -1282,6 +1315,18 @@ export function useChatSession(opts: UseChatSessionOptions) {
     send({ type: "compact_session" });
   }, [send]);
 
+  /** 用户对压缩方式做出选择 */
+  const chooseCompaction = useCallback((choice: "continue" | "new_session") => {
+    send({ type: "compaction_choice", choice });
+    setCompactionNeeded(null);
+  }, [send]);
+
+  /** 导航到迁移目标新会话（父组件负责切 tab） */
+  const navigateToMigratedSession = useCallback((newSessionId: string) => {
+    const vscode = (window as any).__axonVSCode;
+    if (vscode) vscode.postMessage({ type: "open_session", sessionId: newSessionId });
+  }, []);
+
   /** 从队列移除指定消息 */
   const removeFromQueue = useCallback((id: string) => {
     setMessageQueue((prev) => prev.filter((m) => m.id !== id));
@@ -1451,7 +1496,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     // 状态
     chatHistory, isLoading, isLoadingSession,
     tokenUsage, reasoning, statusText,
-    isCompacting, compactSession,
+    isCompacting, compactSession, compactionNeeded, compactionMigrated, chooseCompaction, navigateToMigratedSession,
     pendingPaths, pendingDiffs, pendingExpanded, setPendingExpanded,
     messageQueue, toolConfirm,
     waitingInputIds,

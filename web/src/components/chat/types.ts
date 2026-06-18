@@ -156,5 +156,7 @@ export interface ChatPanelProps {
   active: boolean;
   send: (cmd: Record<string, unknown>) => void;
   onSessionCreated: (id: string) => void;
+  /** 压缩迁移：旧会话已冻结，新会话已创建，父组件应打开新会话 tab */
+  onCompactionMigrated?: (newSessionId: string) => void;
   onStreamingChange?: (streaming: boolean) => void;
 }

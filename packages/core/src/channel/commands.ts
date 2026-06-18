@@ -57,6 +57,7 @@ export type ControlCommandPayload =
   | { type: "cancel" }
   // 上下文压缩
   | { type: "compact_session" }
+  | { type: "compaction_choice"; choice: "continue" | "new_session" }
   // 浏览器：把 open_browser 打开的页面带到前台（前端点击卡片输出触发）
   | { type: "focus_browser" }
   // 编辑模式 / 待确认改动

@@ -32,12 +32,14 @@ interface SessionContainerProps {
   send: (cmd: Record<string, unknown>) => void;
   /** 会话被创建后回传（按 tab key 定位），供 App 更新对应 tab 的 id */
   onSessionCreated: (key: string, id: string) => void;
+  /** 压缩迁移：当前 tab 会话已迁移到新会话，App 应打开新 tab */
+  onCompactionMigrated?: (newSessionId: string) => void;
 }
 
 /** IDLE 面板卸载延迟（ms） */
 const IDLE_UNMOUNT_DELAY = 30_000;
 
-export function SessionContainer({ tabs, activeKey, connected, send, onSessionCreated }: SessionContainerProps) {
+export function SessionContainer({ tabs, activeKey, connected, send, onSessionCreated, onCompactionMigrated }: SessionContainerProps) {
   // 当前应挂载的面板 key 集合
   const [aliveKeys, setAliveKeys] = useState<Set<string>>(() => new Set(activeKey ? [activeKey] : []));
   const runningRef = useRef<Set<string>>(new Set());
@@ -138,6 +140,7 @@ export function SessionContainer({ tabs, activeKey, connected, send, onSessionCr
               active={isActive}
               send={send}
               onSessionCreated={(id) => onSessionCreated(t.key, id)}
+              onCompactionMigrated={onCompactionMigrated}
               onStreamingChange={(streaming) => handleStreamingChange(t.key, streaming)}
             />
           </div>

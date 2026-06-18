@@ -301,6 +301,18 @@ function App() {
     );
   }, []);
 
+  /** 压缩迁移：旧会话已冻结，打开新会话 tab */
+  const handleCompactionMigrated = useCallback((newSessionId: string) => {
+    const existing = tabs.find((t) => t.id === newSessionId && t.mode === mode);
+    if (existing) {
+      setActive(existing.key);
+    } else {
+      const newTab: SessionTab = { id: newSessionId, title: "新对话（继承记忆）", key: genTabKey(), mode };
+      setTabs((prev) => [...prev, newTab]);
+      setActive(newTab.key);
+    }
+  }, [tabs, mode, setActive]);
+
   /** 重命名 tab */
   const handleRenameTab = useCallback((key: string, val: string) => {
     const trimmed = val.trim();
@@ -472,6 +484,7 @@ function App() {
           connected={connected}
           send={send}
           onSessionCreated={handleSessionCreated}
+          onCompactionMigrated={handleCompactionMigrated}
         />
       </div>
     </div>
