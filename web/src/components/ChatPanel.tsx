@@ -121,12 +121,14 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   const [showScrollBtn, setShowScrollBtn] = useState(false);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "instant") => {
+    userScrolledUpRef.current = false;
     isAtBottomRef.current = true;
     setShowScrollBtn(false);
     virtualListRef.current?.scrollToBottom(behavior);
   }, []);
 
   const animatedScrollToBottom = useCallback(() => {
+    userScrolledUpRef.current = false;
     virtualListRef.current?.scrollToBottom("smooth");
     isAtBottomRef.current = true;
     setShowScrollBtn(false);
@@ -168,7 +170,11 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     const state = virtualListRef.current?.getScrollState();
     if (state) {
       const distanceToBottom = state.scrollHeight - scrollTopVal - state.clientHeight;
-      isAtBottomRef.current = distanceToBottom <= SCROLL_BOTTOM_THRESHOLD;
+      // 用户手动滚回底部（距离 < 8px）时清除 "向上滚动" 标志，恢复自动跟随
+      if (distanceToBottom <= 8) {
+        userScrolledUpRef.current = false;
+      }
+      isAtBottomRef.current = distanceToBottom <= SCROLL_BOTTOM_THRESHOLD && !userScrolledUpRef.current;
       setShowScrollBtn(distanceToBottom > 200);
     }
     stickyDetectRef.current?.(scrollTopVal);
@@ -196,6 +202,26 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
       setStickyQuestion(null);
     }
   }, [session.chatHistory.length]);
+
+  // 用户手动向上滚动时立即停止自动跟随。
+  // 用 persisted 标志，防止 ResizeObserver → scrollToBottom → scroll 事件链路误判回 true。
+  const userScrolledUpRef = useRef(false);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const container = virtualListRef.current?.getScrollContainer();
+      if (!container) return;
+      const onWheel = (e: WheelEvent) => {
+        if (e.deltaY < 0) {
+          userScrolledUpRef.current = true;
+          isAtBottomRef.current = false;
+        }
+      };
+      container.addEventListener("wheel", onWheel, { passive: true });
+      cleanupRef.current = () => container.removeEventListener("wheel", onWheel);
+    }, 100);
+    return () => { clearTimeout(timer); cleanupRef.current?.(); cleanupRef.current = null; };
+  }, []);
+  const cleanupRef = useRef<(() => void) | null>(null);
 
   // 流式期间持续跟随滚底：rAF 循环兜底覆盖所有高度变化场景
   // （虚拟消息增长、footer 内容变化、工具卡片内部滚动等 handleTotalHeightChange 遗漏的路径）

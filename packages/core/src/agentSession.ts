@@ -1512,6 +1512,27 @@ export class AgentSession {
     }
   }
 
+  /** 工具是否必须有参数（空参数对象视为调用失败，避免把 {} 当有效参数执行） */
+  private toolRequiresArguments(toolName: string): boolean {
+    // Tools that MUST have at least one argument to be meaningful
+    const REQUIRED_ARGS = new Set([
+      "read_file", "create_file", "str_replace", "apply_patch",
+      "execute_command", "start_process", "get_process_output", "stop_process",
+      "search", "open_browser", "get_browser_logs", "get_browser_network",
+      "get_browser_storage", "browser_click", "browser_type", "browser_press",
+      "browser_select", "browser_scroll", "browser_eval", "browser_wait",
+      "browser_hover", "browser_get_html", "browser_set_viewport",
+      "web_search", "web_fetch", "check_diagnostics",
+      "use_skill", "delegate_task", "activate_power",
+      "relay_create", "relay_save_doc", "relay_advance", "relay_update_task", "relay_review_task",
+      "parallel_research",
+    ]);
+    if (REQUIRED_ARGS.has(toolName)) return true;
+    // MCP tools always require args
+    if (toolName.startsWith(MCP_TOOL_PREFIX)) return true;
+    return false;
+  }
+
   /** 若是 MCP 工具，返回其真实 server 名与工具名（供前端卡片展示）。
    * 不在 mcpToolMap（已禁用/移除）时，从编码名尽力还原，至少让卡片能标出 server/tool 名。 */
   private mcpMetaFor(toolName: string): { mcpServer?: string; mcpTool?: string } {
@@ -1908,6 +1929,20 @@ export class AgentSession {
           }
           this.send("tool_call", { id: toolCall.id, name: toolName, args: {}, cwd: this.cwd, status: "executing" });
           this.send("tool_result", { id: toolCall.id, name: toolName, args: {}, result: errMsg, status: "error" });
+          this.messages.push({ role: "tool", tool_call_id: toolCall.id, _toolName: toolName, content: errMsg, status: "error" } as any);
+          guard.recordToolResult(false, true);
+          continue;
+        }
+
+        // 防御：模型有时生成空参数对象（流式截断/幻觉），直接执行会因缺参数而失败。
+        // 提前拦截，反馈给模型重写，比让 executeToolCall 报"缺少必填参数 path"更友好。
+        if (this.toolRequiresArguments(toolName) && Object.keys(toolArgs).length === 0) {
+          const hint = typeof toolCall.arguments === "string" && toolCall.arguments.trim()
+            ? `收到参数原文 "${toolCall.arguments.slice(0, 200)}"`
+            : "未收到任何参数（流式输出可能被截断）";
+          const errMsg = `${toolName}: 参数为空。${hint}，请重新生成这次调用。`;
+          this.send("tool_call", { id: toolCall.id, name: toolName, args: {}, cwd: this.cwd, status: "executing" });
+          this.send("tool_result", { id: toolCall.id, name: toolName, args: {}, result: errMsg, status: "error", userMessage: "参数缺失" });
           this.messages.push({ role: "tool", tool_call_id: toolCall.id, _toolName: toolName, content: errMsg, status: "error" } as any);
           guard.recordToolResult(false, true);
           continue;

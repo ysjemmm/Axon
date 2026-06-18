@@ -154,6 +154,7 @@ export async function executeToolCall(
   switch (name) {
     case "read_file": {
       if (typeof args.path !== "string" || !args.path.trim()) {
+        if (meta) meta.userMessage = "未指定文件路径";
         throw new Error("read_file 失败：缺少必填参数 path。请提供要读取的文件路径（字符串）。");
       }
       const filePath = await resolveInWorkspaces(args.path, cwd, host, workspaces);
@@ -183,6 +184,7 @@ export async function executeToolCall(
         }
         return sliced;
       } catch (err) {
+        if (meta) meta.userMessage = `读取失败`;
         throw new Error(`read_file 失败：${args.path}，原因：${(err as Error).message}`);
       }
     }

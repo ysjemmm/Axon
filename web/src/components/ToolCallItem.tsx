@@ -792,8 +792,8 @@ export function ToolCallItem({ tool, onAcceptEdit, onRejectEdit, onUndoEdit }: T
             : "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
         }`}>{tool.mcpServer}</span>
       )}
-      {tool.name === "read_file" && tool.args?.path 
-        ? <ClickableFileName fileName={String(tool.args.path)} absPath={String(tool.args.path)} startLine={toLineNumber(tool.args?.startLine)} endLine={toLineNumber(tool.args?.endLine)} className="text-foreground font-mono truncate min-w-0" />
+      {tool.name === "read_file" && typeof tool.args?.path === "string" && tool.args.path.trim()
+        ? <ClickableFileName fileName={String(tool.args.path)} absPath={String(tool.args.path)} startLine={toLineNumber(tool.args?.startLine)} endLine={toLineNumber(tool.args?.endLine)} className={`font-mono truncate min-w-0 ${tool.status === "error" ? "text-red-600" : "text-foreground"}`} />
         : (tool.mcpTool && tool.status === "success")
           ? <span className="text-muted-foreground truncate min-w-0">调用 <span className="font-medium text-foreground">{tool.mcpTool}</span></span>
           : <TruncatedText text={action} className="text-muted-foreground" />}
