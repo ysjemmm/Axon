@@ -383,12 +383,34 @@ export async function executeToolCall(
       const execCwd = typeof args.cwd === "string" && args.cwd.trim()
         ? await resolveInWorkspaces(args.cwd, cwd, host, workspaces)
         : cwd;
+      // 等待输入超时：进程卡在等待 stdin（最常见场景：引号不匹配导致 shell 等待闭合）时，
+      // 10 秒后自动报错，避免 AI 永久阻塞。进程本身会继续留在终端中，用户可手动处理。
+      let rejectWaiting: ((err: Error) => void) | null = null;
+      let waitingTimer: ReturnType<typeof setTimeout> | undefined;
+      const waitingInputTimeout = new Promise<never>((_, reject) => { rejectWaiting = reject; });
+      const wrappedOnWaitingInput = () => {
+        meta?.onWaitingInput?.();
+        if (!waitingTimer) {
+          waitingTimer = setTimeout(() => {
+            rejectWaiting?.(new Error(
+              `命令等待用户输入超时（10 秒）：${args.command}\n` +
+              `进程可能因语法错误（如引号不匹配）而卡住等待 stdin。` +
+              `命令仍在 "Axon" 终端中运行——如需手动补全请切换到终端面板操作。不要重试此命令。`
+            ));
+          }, 10_000);
+        }
+      };
       // 超时放宽到 120 秒——终端里跑较长命令是正常的；超时不代表失败，命令可能仍在运行。
-      const result = await host.commands.exec(args.command as string, {
-        cwd: execCwd,
-        timeoutMs: 120_000,
-        onWaitingInput: meta?.onWaitingInput,
-      });
+      const result = await Promise.race([
+        host.commands.exec(args.command as string, {
+          cwd: execCwd,
+          timeoutMs: 120_000,
+          onWaitingInput: wrappedOnWaitingInput,
+        }),
+        waitingInputTimeout,
+      ]).finally(() => {
+        if (waitingTimer) clearTimeout(waitingTimer);
+      }) as Awaited<ReturnType<typeof host.commands.exec>>;
       // 同步终端实际工作目录（shell integration 返回的真实 cwd）
       if (meta && result.cwd) meta.terminalCwd = result.cwd;
       // 超时：命令在终端里可能仍在运行（如开发服务器、需要持续交互）

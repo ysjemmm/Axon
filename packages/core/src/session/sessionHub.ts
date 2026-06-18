@@ -304,7 +304,7 @@ export class SessionHub {
       case "compaction_choice": {
         const sid = this.resolveSessionId(cmd);
         const session = this.getActiveSession(sid);
-        if (!session) return;
+        if (!session || !sid) return;
         await session.handleCompactionChoice(cmd.choice);
         // "new_session" 选择：创建新会话并继承压缩记忆
         if (cmd.choice === "new_session") {

@@ -24,8 +24,10 @@ export interface TrustRule {
   source?: "approved" | "manual" | "builtin";
 }
 
-/** shell 拼接/扩展元字符：命中则命令不可走 wildcard 匹配 */
-const METACHAR_RE = /[&|;`]|\$\(|>>|>|<|\n/;
+/** shell 拼接/扩展元字符：命中则命令不可走 wildcard 匹配。
+ *  注意：|（管道）不在此列——管道是 PowerShell/Bash 的常用组合方式，
+ *  信任第一个命令的前缀就应放行整个管道（危险命令由 detectDangerousCommand 拦截）。 */
+const METACHAR_RE = /[&;`]|\$\(|>>|>|<|\n/;
 
 /** 倾向于"动词在第二个 token"的工具，前缀默认取前两段（如 `npm run`、`git commit`） */
 const TWO_TOKEN_TOOLS = new Set([
@@ -132,8 +134,22 @@ export class CommandTrustTrie {
   /** 判断命令是否被信任 */
   isTrusted(command: string): boolean {
     const norm = normalizeCommand(command);
-    if (this.root.wildcard) return true;        // "*" 覆盖一切（含元字符命令）
+    if (this.root.wildcard) return true;
     if (norm.length === 0) return false;
+
+    // 管道命令：按 | 拆分，每个子命令必须各自通过信任检查。
+    // 例如 "Select-String ... | Select-Object ..." → 两边都需被信任。
+    if (norm.includes("|")) {
+      const parts = norm.split("|").map((s) => s.trim()).filter(Boolean);
+      if (parts.length === 0) return false;
+      return parts.every((part) => this.isTrustedSingle(part));
+    }
+
+    return this.isTrustedSingle(norm);
+  }
+
+  /** 判断单个命令（不含管道）是否被信任 */
+  private isTrustedSingle(norm: string): boolean {
     if (hasShellMetacharacters(norm)) {
       return this.exactWithMeta.has(norm);       // 元字符命令只认精确整条
     }

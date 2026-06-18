@@ -17,8 +17,29 @@ import {
 
 /** 内置默认只读命令（保守：精确或只读子命令前缀，绝不放宽到危险动词） */
 export const BUILTIN_TRUSTED_PATTERNS: string[] = [
-  "git status *", "git diff *", "git log *", "git branch",
-  "Get-ChildItem", "Get-Content *", "pwd", "node -v", "npm -v", "pnpm -v", "npm ls *",
+  // ── Git 只读 ──
+  "git status *", "git diff *", "git log *", "git branch *",
+  "git remote *", "git stash list", "git tag *",
+  // ── PowerShell 只读/常用 ──
+  "Get-ChildItem *", "Get-Content *", "Select-String *", "Select-Object *",
+  "Where-Object *", "Get-Location", "Get-Date", "Get-Process *",
+  "Get-Service *", "Test-Path *", "Resolve-Path *", "Split-Path *",
+  "Join-Path *", "ConvertFrom-Json *", "Measure-Object *",
+  "Group-Object *", "Sort-Object *", "Format-List *", "Format-Table *",
+  "Out-String *", "ForEach-Object *", "Write-Host *", "Write-Output *",
+  // ── Unix 只读 ──
+  "ls *", "cat *", "grep *", "head *", "tail *", "wc *",
+  "pwd", "which *", "date", "sort *", "uniq *", "du *", "df *",
+  "file *", "stat *", "readlink *", "realpath *", "basename *", "dirname *",
+  "uname *", "hostname", "whoami", "id *", "env *", "printenv *",
+  // ── cmd 只读 ──
+  "dir *", "type *", "findstr *", "where *",
+  // ── Node/Python 版本查询 ──
+  "node -v", "npm -v", "pnpm -v", "npm ls *",
+  "python --version", "python3 --version", "pip list *",
+  "git --version", "docker --version", "docker ps *",
+  // ── 通用文件查看 ──
+  "npx tsc --noEmit *", "npx eslint *",
 ];
 
 /** 用户对一次审批的决策 */

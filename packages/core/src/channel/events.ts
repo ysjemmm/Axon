@@ -39,6 +39,8 @@ export type AgentEventPayload =
   | { type: "compacted"; message: string }
   | { type: "compacting_start" }
   | { type: "compacting_end"; success: boolean; message: string }
+  | { type: "compaction_needed"; currentTokens: number; maxTokens: number; percent: number }
+  | { type: "compaction_migrated"; newSessionId?: string; parentSessionId?: string; migratedToNewSession?: boolean }
   | { type: "error"; content: string }
 
   // ── 工具调用 ──
