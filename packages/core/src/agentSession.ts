@@ -457,12 +457,19 @@ export class AgentSession {
 
   /**
    * 等待用户确认工具执行。发送 confirm_tool_request 事件给前端，
-   * 阻塞直到用户确认或拒绝。
+   * 阻塞直到用户确认或拒绝。若 120 秒内无响应（webview 未就绪等），自动拒绝以免永久死锁。
    */
   private waitForToolConfirmation(toolName: string, args: Record<string, unknown>, kind: "relay" | "mcp" = "relay", label?: string): Promise<boolean> {
     this.send("confirm_tool_request", { toolName, args, kind, label });
     return new Promise<boolean>((resolve) => {
       this.toolConfirmResolve = resolve;
+      // 兜底超时：若前端 120 秒内未应答（如 webview 被 VS Code 回收导致事件丢失），自动拒绝，避免 agent loop 永久阻塞
+      setTimeout(() => {
+        if (this.toolConfirmResolve === resolve) {
+          this.toolConfirmResolve = null;
+          resolve(false);
+        }
+      }, 120_000);
     });
   }
 

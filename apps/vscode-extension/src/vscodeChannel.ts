@@ -26,8 +26,15 @@ export class VSCodeChannel implements AgentChannel {
   }
 
   emit(event: AgentEvent): void {
-    // webview 不可用时静默丢弃，不打断 agent loop（对齐 WsChannel 语义）
-    void this.webview?.postMessage(event);
+    const wv = this.webview;
+    if (!wv) {
+      // webview 未就绪时静默丢弃（常见于 VS Code 侧栏折叠/展开重建期间），
+      // 但对需要用户交互的事件（confirm_tool_request / confirm_command_request），
+      // 上游 waitForToolConfirmation 有 120s 超时兜底，不会永久阻塞。
+      console.warn("[VSCodeChannel] webview 为 null，丢弃事件:", event.type);
+      return;
+    }
+    void wv.postMessage(event);
     // 旁路通知
     for (const l of this.listeners) {
       try { l(event); } catch { /* 不阻塞主流程 */ }
