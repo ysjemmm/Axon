@@ -35,9 +35,10 @@ const DEFAULT_CONFIG: CompactConfig = {
  * 检查是否需要压缩。
  * @param totalTokens 当前累计 token（优先传 API 返回的真实值）
  * @param maxTokens 当前模型的真实上下文窗口
+ * @param thresholdPercent 触发阈值百分比，默认 0.35（手动压缩用）。auto 压缩用 0.75
  */
-export function needsCompaction(totalTokens: number, maxTokens = DEFAULT_CONTEXT_WINDOW): boolean {
-  return totalTokens > maxTokens * DEFAULT_CONFIG.triggerPercent;
+export function needsCompaction(totalTokens: number, maxTokens = DEFAULT_CONTEXT_WINDOW, thresholdPercent = DEFAULT_CONFIG.triggerPercent): boolean {
+  return totalTokens > maxTokens * thresholdPercent;
 }
 
 /**

@@ -815,7 +815,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-medium text-foreground">上下文已使用 {session.compactionNeeded.percent}%</p>
                   <p className="text-[11px] text-muted-foreground mt-0.5">
-                    当前会话上下文已超过模型窗口的 35%，为保证回复速度建议压缩。请选择：
+                    当前会话上下文已超过模型窗口的 75%，为保证回复质量建议压缩。请选择：
                   </p>
                 </div>
               </div>

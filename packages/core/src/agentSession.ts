@@ -1781,7 +1781,7 @@ export class AgentSession {
         this.isCompacting = false;
         this.send("compacting_end", { success: false, message: `压缩失败：${(err as Error).message}` });
       }
-    } else if (this.lastTotalTokens > 0 && needsCompaction(this.lastTotalTokens, ctxWindow)) {
+    } else if (this.lastTotalTokens > 0 && needsCompaction(this.lastTotalTokens, ctxWindow, 0.75)) {
       // >=75% 自动压缩阈值：暂停，让用户选择
       const choice = await this.waitForCompactionChoice(this.lastTotalTokens, ctxWindow);
       if (choice === "continue") {
