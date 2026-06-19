@@ -11,6 +11,7 @@ export const RELAY_TOOL_NAMES = new Set([
   "relay_update_task",
   "relay_review_task",
   "parallel_research",
+  "parallel_execute",
 ]);
 
 /** 是否为 Relay 工作流工具 */
@@ -27,6 +28,7 @@ export function relayToolLabel(name: string): string {
     case "relay_update_task": return "已更新任务状态";
     case "relay_review_task": return "已完成两阶段评审";
     case "parallel_research": return "已完成并行调研";
+    case "parallel_execute": return "已完成并行执行";
     default: return "Relay 操作";
   }
 }

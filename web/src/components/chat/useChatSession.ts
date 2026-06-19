@@ -532,6 +532,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
                 case "relay_update_task":
                 case "relay_review_task":
                 case "parallel_research":
+                case "parallel_execute":
                   desc = relayToolLabel(toolName);
                   break;
                 default: desc = `已完成 ${toolName}`;
@@ -1177,6 +1178,39 @@ export function useChatSession(opts: UseChatSessionOptions) {
         }
         return updated;
       });
+      return;
+    }
+
+    // 并行执行/调研开始：一次性插入多个 SubAgentSegment 卡片（每个子任务一个）
+    if (msg.type === "parallel_execute_start" || msg.type === "parallel_research_start") {
+      if (cancelled.current) return;
+      const tasks = (msg as any).tasks as { delegateId: string; intent: string; prompt?: string; fileScope?: string[] }[] || [];
+      if (tasks.length === 0) return;
+      setChatHistory((prev) => {
+        const updated = [...prev];
+        const last = updated[updated.length - 1];
+        const subSegs: SubAgentSegment[] = tasks.map((t) => ({
+          type: "subagent" as const,
+          id: t.delegateId,
+          intent: t.intent || "并行子任务",
+          skill: null,
+          prompt: t.prompt || "",
+          status: "running" as const,
+          inner: [],
+        }));
+        if (!last || last.role !== "assistant") {
+          updated.push({ id: `assistant-${Date.now()}`, role: "assistant", segments: subSegs, streaming: true, turnGen: turnGeneration.current });
+        } else {
+          updated[updated.length - 1] = { ...last, segments: [...(last.segments || []), ...subSegs] };
+        }
+        return updated;
+      });
+      return;
+    }
+
+    // 并行执行/调研结束（整批完成通知，各路 sub_agent_end 已先到达）
+    if (msg.type === "parallel_execute_end" || msg.type === "parallel_research_end") {
+      // 各路卡片已被 sub_agent_end 标记为 done，此处无需额外处理
       return;
     }
 

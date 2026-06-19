@@ -171,6 +171,8 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
           query: `view=relay&id=${encodeURIComponent(relayId)}&workspace=${encodeURIComponent(workspace)}`,
           extensionUri: this.context.extensionUri,
           router: this.router,
+          postToSidebar: (msg: unknown) => this.postToWebview(msg),
+          icon: "media/relay.svg",
         });
         return;
       }

@@ -22,8 +22,8 @@ export interface UserMessageCommand {
   /** 用户消息的内联片段（文本 + tag），用于富文本气泡的持久化与恢复 */
   userSegments?: unknown[];
   replyStyle?: string;
-  /** 会话模式：agent（默认）或 quest（纯问答） */
-  mode?: "agent" | "quest";
+  /** 会话模式：agent（默认）、quest（纯问答）或 parallel（多 Agent 并行） */
+  mode?: "agent" | "quest" | "parallel";
   /** Quest 模式选项 */
   quest?: { think?: boolean; webSearch?: boolean };
 }
@@ -48,7 +48,7 @@ export type ControlCommandPayload =
   | UserMessageCommand
   // 会话切换/管理
   | { type: "load_session"; sessionId: string }
-  | { type: "new_session"; workspace?: string; model?: string; provider?: string; mode?: "agent" | "quest" }
+  | { type: "new_session"; workspace?: string; model?: string; provider?: string; mode?: "agent" | "quest" | "parallel" }
   | { type: "reset_session" }
   // 工作区
   | { type: "set_workspace"; workspace: string; workspaces?: string[] }
@@ -65,6 +65,7 @@ export type ControlCommandPayload =
   | { type: "accept_edits"; path?: string }
   | { type: "reject_edits"; path?: string }
   | { type: "undo_edits"; path: string }
+  | { type: "undo_parallel_file"; path: string }
   // Relay
   | { type: "delete_relay"; relayId: string; workspace?: string }
   // 工具确认（用户确认/拒绝创建 Relay 等需要确认的操作）

@@ -20,7 +20,7 @@ export interface SessionTab {
   /** 稳定的面板标识（同时作为 clientId），由 App 创建 tab 时生成 */
   key: string;
   /** 会话模式：agent=智能体，quest=纯问答 */
-  mode: "agent" | "quest";
+  mode: "agent" | "quest" | "parallel";
 }
 
 interface SessionContainerProps {
@@ -115,7 +115,7 @@ export function SessionContainer({ tabs, activeKey, connected, send, onSessionCr
 
   return (
     <>
-      {tabs.filter((t) => keysToRender.has(t.key)).map((t) => {
+      {tabs.filter((t) => keysToRender.has(t.key) && t.mode !== "parallel").map((t) => {
         const isActive = t.key === activeKey;
         return (
           <div
@@ -135,7 +135,7 @@ export function SessionContainer({ tabs, activeKey, connected, send, onSessionCr
             <ChatPanel
               clientId={t.key}
               sessionId={t.id}
-              mode={t.mode}
+              mode={t.mode as "agent" | "quest"}
               connected={connected}
               active={isActive}
               send={send}

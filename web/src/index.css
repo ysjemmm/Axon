@@ -338,6 +338,12 @@ input[type="file"],
   animation: relay-breath 1.8s ease-in-out infinite;
 }
 
+/* 并行进度条运行段 shimmer 流光动画 */
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
 /* 尊重"减少动态效果"的系统偏好：关闭动画，仅保留高亮边框 */
 @media (prefers-reduced-motion: reduce) {
   .relay-breathing {

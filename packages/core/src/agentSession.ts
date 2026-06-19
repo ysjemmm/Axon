@@ -29,6 +29,8 @@ import { RelayStore } from "./relay/relayStore.js";
 import type { RelayPhase, RelayQualityConfig } from "./relay/types.js";
 import { nextPhase, PHASE_DOC_FILE } from "./relay/types.js";
 import { runParallelResearch, aggregateResearchResults, type ResearchTask } from "./relay/parallelResearch.js";
+import { runParallelExecution, aggregateExecutionResults, type ExecutionTask } from "./relay/parallelExecution.js";
+import type { EditSnapshot } from "./host/scopedHost.js";
 import { runTwoStageReview, buildReviewFeedback, type ReviewContext } from "./relay/reviewAgent.js";
 import type { SubAgentEmit } from "./skills/subAgentRunner.js";
 
@@ -96,6 +98,10 @@ export class AgentSession {
   private relayStore: RelayStore;
   // 并行调研委托计数器：为每次 parallel_research 生成唯一 batchId
   private researchSeq = 0;
+  // 并行执行委托计数器：为每次 parallel_execute 生成唯一 batchId
+  private executionSeq = 0;
+  // 并行执行的文件回滚快照（key = AI 路径 path）。auto 落盘无原生 undo，靠此实现一键回滚。
+  private parallelSnapshots = new Map<string, EditSnapshot>();
   // 工具确认门：relay_create 等需要用户确认的操作，await 此 Promise 阻塞直到用户响应
   private toolConfirmResolve: ((confirmed: boolean) => void) | null = null;
   // 压缩选择门：自动压缩触发时（>=75%），await 此 Promise 阻塞直到用户在"继续/新会话"中选择
@@ -345,6 +351,33 @@ export class AgentSession {
     }
     // 无论成功失败都通知前端撤销结果：成功→更新卡片为已撤销；失败→轻提示
     this.send("edit_undo_result", { path, ok: result.ok, reason: result.reason });
+  }
+
+  /**
+   * 回滚一个并行执行（parallel_execute）写入的文件。
+   * 并行子 Agent auto 落盘，无原生 undo 记录，靠 parallelSnapshots 里捕获的"改动前快照"恢复：
+   * - 新建文件 → 删除
+   * - 已存在文件 → 写回原始内容
+   * @param path AI 使用的路径（前端从文件变更清单回传）
+   */
+  async undoParallelFile(path: string): Promise<void> {
+    const snap = this.parallelSnapshots.get(path);
+    if (!snap) {
+      this.send("parallel_file_reverted", { path, ok: false, reason: "未找到该文件的回滚快照" });
+      return;
+    }
+    try {
+      if (snap.isNew) {
+        await this.host.fs.remove(snap.absPath);
+      } else {
+        await this.host.fs.write(snap.absPath, snap.original ?? "");
+      }
+      // 回滚成功后移除快照（不可重复回滚）
+      this.parallelSnapshots.delete(path);
+      this.send("parallel_file_reverted", { path, ok: true });
+    } catch (err) {
+      this.send("parallel_file_reverted", { path, ok: false, reason: (err as Error).message });
+    }
   }
 
   /** 获取最近一次的累计 token 数 */
@@ -871,6 +904,43 @@ export class AgentSession {
           },
         },
       },
+      {
+        type: "function",
+        function: {
+          name: "parallel_execute",
+          description:
+            "把一个大实现任务拆成若干【互不依赖、文件不重叠】的子任务，同时派发多个子 Agent 并行执行，各自改代码。\n\n" +
+            "【何时用】需求可以明确拆成多个互不依赖的修改（如\"前端加登录页 + 后端加 auth API + 写集成测试\"），" +
+            "且各子任务操作的文件不重叠时。适合 Relay 的 executing 阶段加速并行任务。\n\n" +
+            "【关键约束】每个子任务必须声明 fileScope（允许修改的文件/目录 glob），不同子任务的 fileScope 不能重叠。" +
+            "越界写入会被系统拦截。\n\n" +
+            "【不要用】子任务之间有代码依赖（如 B 要 import A 的产出）、或文件修改范围有交叉的，用串行 delegate_task。",
+          parameters: {
+            type: "object",
+            properties: {
+              intent: { type: "string", description: "一句话说明本次并行执行的总目标，展示给用户" },
+              tasks: {
+                type: "array",
+                description: "并行执行的子任务列表（2~5 个为宜，每个文件作用域互不重叠）",
+                items: {
+                  type: "object",
+                  properties: {
+                    intent: { type: "string", description: "该子任务的一句话目的" },
+                    prompt: { type: "string", description: "交给子 Agent 的完整实现指令，必须自包含（含背景、目标、验收标准）" },
+                    fileScope: {
+                      type: "array",
+                      description: "允许该子 Agent 修改的文件/目录 glob 列表（如 [\"src/pages/login/**\", \"src/components/LoginForm.tsx\"]）",
+                      items: { type: "string" },
+                    },
+                  },
+                  required: ["intent", "prompt", "fileScope"],
+                },
+              },
+            },
+            required: ["intent", "tasks"],
+          },
+        },
+      },
     ];
   }
 
@@ -1070,9 +1140,20 @@ export class AgentSession {
     if (!relay) throw new Error(`未找到 relay：${id}`);
     this.send("relay_updated", { relay });
     if (to === "executing") {
+      // 找出无依赖（或 deps 全部已完成）的 pending 任务
+      const completedIds = new Set(relay.tasks.filter((t) => t.status === "completed").map((t) => t.id));
+      const readyTasks = relay.tasks.filter((t) =>
+        t.status === "pending" && (!t.deps || t.deps.length === 0 || t.deps.every((d) => completedIds.has(d)))
+      );
+      const parallelHint = readyTasks.length >= 2
+        ? `\n\n【并行加速】当前有 ${readyTasks.length} 个无依赖的就绪任务（${readyTasks.map((t) => t.id).join(", ")}），` +
+          `它们互不依赖，优先使用 parallel_execute 并行派发执行以提升效率。` +
+          `每个子任务的 prompt 需自包含（背景+目标+验收标准+涉及文件），fileScope 从任务详情中提取。`
+        : "";
       return (
         `阶段已推进到执行（executing）。计划共 ${relay.tasks.length} 个任务。\n` +
-        `请开始逐项执行：每个任务开始前用 relay_update_task 设为 in_progress，完成并验证后设为 completed，再做下一个。`
+        `请开始执行：每个任务开始前用 relay_update_task 设为 in_progress，完成并验证后设为 completed。` +
+        parallelHint
       );
     }
     if (to === "done") {
@@ -1255,6 +1336,83 @@ export class AgentSession {
     this.send("parallel_research_end", { batchId, results: results.map((r) => ({ delegateId: r.id, ok: r.ok })) });
 
     return aggregateResearchResults(results);
+  }
+
+  /**
+   * 执行 parallel_execute：派发多个子 Agent 并行执行写任务，各自有文件作用域隔离。
+   * 每路子 Agent 的事件用 sub_agent_event 包装（带独立 delegateId），前端各自渲染卡片。
+   */
+  private async runParallelExecution(args: Record<string, unknown>, toolCallId: string): Promise<string> {
+    const intent = typeof args.intent === "string" ? args.intent : "";
+    const rawTasks = Array.isArray(args.tasks) ? args.tasks : [];
+    if (rawTasks.length === 0) throw new Error("parallel_execute 需要至少一个执行子任务");
+
+    const batchId = `exec-${Date.now()}-${++this.executionSeq}`;
+    const tasks: ExecutionTask[] = rawTasks.map((t, i) => {
+      const obj = (t || {}) as Record<string, unknown>;
+      return {
+        id: `${batchId}-${i + 1}`,
+        intent: typeof obj.intent === "string" ? obj.intent : `任务 ${i + 1}`,
+        prompt: typeof obj.prompt === "string" ? obj.prompt : "",
+        fileScope: Array.isArray(obj.fileScope) ? obj.fileScope.filter((s): s is string => typeof s === "string") : [],
+      };
+    }).filter((t) => t.prompt.trim());
+    if (tasks.length === 0) throw new Error("parallel_execute 的子任务都缺少 prompt");
+
+    // 通知前端：并行执行开始（携带各子任务的 delegateId、intent、fileScope）
+    // 如果在 Relay 上下文中调用，附带 relayId 供前端关联跳转
+    const relayId = this.activeRelayTask?.relayId || undefined;
+    this.send("parallel_execute_start", {
+      batchId,
+      toolCallId,
+      intent,
+      relayId,
+      tasks: tasks.map((t) => ({ delegateId: t.id, intent: t.intent, fileScope: t.fileScope, prompt: t.prompt })),
+    });
+
+    // 为每个子任务生成绑定其 delegateId 的事件发射器
+    const emitFor = (taskId: string): SubAgentEmit => {
+      return (type, data) => this.send("sub_agent_event", { delegateId: taskId, event: { type, ...data } });
+    };
+
+    const startTime = Date.now();
+    const batchSnapshots = new Map<string, EditSnapshot>();
+    const results = await runParallelExecution(tasks, {
+      strategy: getStrategy(this.provider, this.model),
+      model: this.model,
+      cwd: this.cwd,
+      workspaces: this.workspaces,
+      host: this.host,
+      signal: this.abortController?.signal,
+      skillLoader: this.loadSkillForTool,
+      web: this.web,
+      emitFor,
+      client: getClient(this.provider),
+      maxConcurrency: 3,
+      snapshotStore: batchSnapshots,
+    });
+    const elapsed = Date.now() - startTime;
+
+    // 收集本批次的回滚快照（按 AI 路径索引，供前端"一键回滚"）
+    for (const snap of batchSnapshots.values()) {
+      this.parallelSnapshots.set(snap.path, snap);
+    }
+
+    // 通知前端：各路执行结束
+    for (const r of results) {
+      this.send("sub_agent_end", { delegateId: r.id, result: r.text });
+    }
+    // 累加所有子 Agent 的 token 到会话总量
+    const totalTokens = results.reduce((sum, r) => sum + (r.tokens || 0), 0);
+    this.addSubAgentTokens(totalTokens);
+    this.send("parallel_execute_end", {
+      batchId,
+      results: results.map((r) => ({ delegateId: r.id, ok: r.ok })),
+      elapsed,
+      totalTokens,
+    });
+
+    return aggregateExecutionResults(results);
   }
 
   /** 发消息给前端 */
@@ -1687,7 +1845,7 @@ export class AgentSession {
       "web_search", "web_fetch", "check_diagnostics",
       "use_skill", "delegate_task", "activate_power",
       "relay_create", "relay_save_doc", "relay_advance", "relay_update_task", "relay_review_task",
-      "parallel_research",
+      "parallel_research", "parallel_execute",
     ]);
     if (REQUIRED_ARGS.has(toolName)) return true;
     // MCP tools always require args
@@ -1933,8 +2091,8 @@ export class AgentSession {
           // 立即推送 pending 卡片：大文件 str_replace/create_file 的参数（整份新内容）要流式很久，
           // 若等到执行阶段才显示，用户几十秒看不到任何反馈、卡片一出来就是 ✓。
           // 前端按 id 关联，执行阶段的 executing / tool_result 会更新同一张卡，不会重复。
-          // delegate_task 有专门的 sub_agent 卡片，跳过。
-          if (name === "delegate_task") return;
+          // delegate_task / parallel_execute / parallel_research 有专门的 sub_agent 卡片，跳过。
+          if (name === "delegate_task" || name === "parallel_execute" || name === "parallel_research") return;
           this.send("tool_call", { id: id || "", name, args: {}, cwd: this.cwd, status: "pending", ...this.mcpMetaFor(name) });
         },
       };
@@ -2191,6 +2349,7 @@ export class AgentSession {
           web_search: { content: "正在搜索网络...", phase: "searching" },
           web_fetch: { content: "正在获取网页...", phase: "searching" },
           delegate_task: { content: "正在委托子 Agent...", phase: "delegating" },
+          parallel_execute: { content: "正在并行执行...", phase: "delegating" },
           use_skill: { content: "正在加载 Skill...", phase: "thinking" },
           relay_create: { content: "正在创建工作流...", phase: "planning" },
         };
@@ -2227,6 +2386,14 @@ export class AgentSession {
             result = await this.runParallelResearch(toolArgs, toolCall.id);
           } catch (err) {
             result = `并行调研失败: ${(err as Error).message}`;
+            status = "error";
+          }
+        } else if (toolName === "parallel_execute") {
+          // 并行执行：派发多个子 agent 并发执行写任务（文件分区隔离）
+          try {
+            result = await this.runParallelExecution(toolArgs, toolCall.id);
+          } catch (err) {
+            result = `并行执行失败: ${(err as Error).message}`;
             status = "error";
           }
         } else if (toolName === "relay_create" || toolName === "relay_save_doc" || toolName === "relay_advance" || toolName === "relay_update_task" || toolName === "relay_review_task") {

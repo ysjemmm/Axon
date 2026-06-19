@@ -386,6 +386,7 @@ export function activate(context: vscode.ExtensionContext): void {
         query: `view=relay&id=${encodeURIComponent(relayId)}&workspace=${encodeURIComponent(workspace)}`,
         extensionUri: context.extensionUri,
         router,
+        icon: "media/relay.svg",
       });
     }),
     vscode.commands.registerCommand("axon.deleteRelay", async (item: vscode.TreeItem) => {

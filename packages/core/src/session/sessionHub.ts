@@ -354,6 +354,12 @@ export class SessionHub {
         if (sid && s) await this.storage.updateSession(sid, { messages: s.getMessages() });
         return;
       }
+      case "undo_parallel_file": {
+        const sid = this.resolveSessionId(cmd);
+        const s = this.getActiveSession(sid);
+        if (typeof cmd.path === "string" && cmd.path) await s?.undoParallelFile(cmd.path);
+        return;
+      }
       case "user_message":
         if (cmd.content || cmd.images) await this.handleUserMessage(cmd, clientId);
         return;
@@ -619,6 +625,8 @@ export class SessionHub {
     let sid = this.resolveSessionId(cmd);
     let session = this.getActiveSession(sid);
     const mode = cmd.mode === "quest" ? "quest" : "agent";
+    // 并行模式标记：仍走 agent 会话，但 content 前注入编排指令引导 AI 自动拆分并使用 parallel_execute
+    const isParallel = cmd.mode === "parallel";
 
     // 会话不存在：惰性创建（采用前端传入的 sessionId，若无则由存储生成）
     if (!session) {
@@ -658,8 +666,21 @@ export class SessionHub {
     const execSession = session!;
     this.runningSessions.add(execSessionId);
 
+    // 并行模式：在用户原始需求前注入编排指令，引导 AI 将需求拆分为 parallel_execute 调用
+    const finalContent = isParallel
+      ? `【并行执行模式】请按以下步骤处理用户需求：\n\n` +
+        `1. **先确认目标文件存在**：用 search 或 list_dir 快速确认用户提到的路径/文件是否真实存在于工作区。不要凭猜测假设路径。\n` +
+        `2. **只对确实存在的文件拆分任务**：确认后，将需求拆分为多个互不依赖、文件作用域不重叠的子任务。\n` +
+        `3. **使用 parallel_execute 派发**：每个子任务需要明确 fileScope（必须是真实存在的路径）。\n` +
+        `4. **每个子任务的 prompt 必须自包含**：包含完整的背景、目标、操作步骤，子 Agent 看不到主对话历史。\n\n` +
+        `【重要约束】\n` +
+        `- 如果需求不适合并行（有依赖/文件重叠/目标文件不存在），直接说明原因并自己处理，不要强行拆分。\n` +
+        `- 不要猜测路径。找不到的文件/目录就跳过，不要为不存在的路径创建子任务。\n\n` +
+        `用户需求：${cmd.content || ""}`
+      : (cmd.content || "");
+
     try {
-      await execSession.handleUserInput(cmd.content || "", cmd.model, cmd.images as string[] | undefined, cmd.provider, {
+      await execSession.handleUserInput(finalContent, cmd.model, cmd.images as string[] | undefined, cmd.provider, {
         displayText: cmd.displayText,
         attachedFiles: cmd.attachedFiles as { name: string; size: number }[] | undefined,
         replyStyle: cmd.replyStyle,

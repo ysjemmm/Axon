@@ -294,7 +294,12 @@ export function ModelSelector({ value, onChange, disabledModels = [], disabled =
         {groups.length > 0 && <div className="border-t border-border/50 my-1" />}
 
         {/* provider 一级 + hover 内联展开二级模型 */}
-        {groups.map((g) => {
+        {/* side="top" 向上弹出时，底部离按钮最近。将当前选中的 provider 排到最后（最靠近按钮）以减少误触 */}
+        {[...groups].sort((a, b) => {
+          const aCurrent = a.models.some((m) => m.id === value) ? 1 : 0;
+          const bCurrent = b.models.some((m) => m.id === value) ? 1 : 0;
+          return aCurrent - bCurrent;
+        }).map((g) => {
           const isExpanded = expanded === g.name;
           return (
             <div key={g.name} onMouseEnter={() => setExpanded(g.name)}>

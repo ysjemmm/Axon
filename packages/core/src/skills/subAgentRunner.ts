@@ -100,6 +100,11 @@ export interface SubAgentDeps {
    */
   readOnly?: boolean;
   /**
+   * 可选：覆盖子 Agent 的轮次上限（默认使用 policyForSubAgent 的 maxRounds=200）。
+   * 并行执行的子 Agent 应设一个更紧的上限（如 30），避免陷入长时间循环。
+   */
+  maxRounds?: number;
+  /**
    * 命令信任门（父会话注入）：子 Agent 的 execute_command 在执行前经此门控——
    * 灾难命令硬拦、白名单放行、未信任则把审批冒泡到父会话再到用户。不注入则不门控。
    * @param toolCallId 该命令对应的工具调用 id，透传给前端做内联审批定位
@@ -192,7 +197,7 @@ export class SubAgentRunner {
     let messages = await this.buildInitialMessages(prompt, skill);
     const policy = policyForSubAgent(this.deps.model);
     // 子 agent 轮次上限对齐 policy（与主 agent 同源），不再写死
-    const MAX_ROUNDS = policy.maxRounds;
+    const MAX_ROUNDS = this.deps.maxRounds ?? policy.maxRounds;
     // 防失控守卫：重复调用指纹、文件重复读、连续失败计数统一收敛到 LoopGuard
     const guard = new LoopGuard(policy);
     let finalText = "";

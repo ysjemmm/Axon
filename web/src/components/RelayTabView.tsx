@@ -165,7 +165,23 @@ export function RelayTabView({ workspace, relayId }: RelayTabViewProps) {
       {/* Tab 内容 */}
       <div className="flex-1 min-h-0 overflow-y-auto p-5">
         {tab === "tasks" ? (
-          <TaskList tasks={relay.tasks} onToggle={toggleTask} />
+          <div className="space-y-3">
+            {/* 并行执行跳转按钮（当有任务正在执行或已完成时才显示，说明可能触发了并行） */}
+            {relay.phase === "executing" && relay.tasks.some((t) => t.status === "in_progress" || t.status === "completed") && (
+              <button
+                onClick={() => {
+                  const vscode = (window as any).__axonVSCode || (typeof (window as any).acquireVsCodeApi === "function" ? (window as any).acquireVsCodeApi() : null);
+                  if (vscode) vscode.postMessage({ type: "navigate_parallel", relayId: relay.id });
+                }}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-primary/5 ring-1 ring-primary/20 text-xs text-primary hover:bg-primary/10 transition-colors w-full"
+              >
+                <span>⚡</span>
+                <span className="font-medium">查看并行执行进度</span>
+                <span className="ml-auto text-primary/60">→</span>
+              </button>
+            )}
+            <TaskList tasks={relay.tasks} onToggle={toggleTask} />
+          </div>
         ) : (
           <DocView content={tab === "requirements" ? relay.requirements : tab === "design" ? relay.design : relay.plan} />
         )}

@@ -44,8 +44,26 @@ export class NodeEditPresenter implements EditPresenter {
 
   async present(edit: FileEdit): Promise<string> {
     if (this.mode === "auto") {
+      const thisFull = !edit.hunks || edit.hunks.length === 0;
+      if (!this.fileOriginals.has(edit.absPath)) {
+        this.fileOriginals.set(edit.absPath, { content: edit.originalContent, existed: !edit.isNew });
+      }
       await mkdir(dirname(edit.absPath), { recursive: true });
       await writeFile(edit.absPath, edit.newContent, "utf-8");
+      this.lastWritten.set(edit.absPath, edit.newContent);
+      // auto = 自动确认的 manual：落盘后直接记为「已接受、可撤销」，使 auto 改动同样支持撤销。
+      const key = this.keyOf(edit);
+      const existing = this.accepted.get(key);
+      this.accepted.set(key, {
+        path: edit.path,
+        absPath: edit.absPath,
+        editId: edit.editId || key,
+        isCreate: (existing?.isCreate ?? false) || thisFull,
+        isNew: existing ? existing.isNew : edit.isNew,
+        originalContent: existing ? existing.originalContent : edit.originalContent,
+        hunks: [...(existing?.hunks ?? []), ...((thisFull ? [] : edit.hunks) ?? [])],
+        acceptedAt: Date.now(),
+      });
       return "";
     }
     // manual：先落盘（让 execute_command 等系统级操作能访问），标记为待确认。

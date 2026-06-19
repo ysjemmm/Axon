@@ -77,7 +77,27 @@ export class VSCodeEditPresenter implements EditPresenter {
 
   async present(edit: FileEdit): Promise<string> {
     if (this.mode === "auto") {
+      const thisFull = !edit.hunks || edit.hunks.length === 0;
+      // 记录文件级原始快照（首次改动该文件时），用于整文件安全回退
+      if (!this.fileOriginals.has(edit.absPath)) {
+        this.fileOriginals.set(edit.absPath, { content: edit.originalContent, existed: !edit.isNew });
+      }
       await this.writeDisk(edit.absPath, edit.newContent);
+      this.lastWritten.set(edit.absPath, edit.newContent);
+      // auto = 自动确认的 manual：落盘后直接记为「已接受、可撤销」，使 auto 改动同样支持撤销。
+      // 同一文件多次工具调用按 editId 聚合 hunks（与 manual accept 语义一致）。
+      const key = this.keyOf(edit);
+      const existing = this.accepted.get(key);
+      this.accepted.set(key, {
+        path: edit.path,
+        absPath: edit.absPath,
+        editId: edit.editId || key,
+        isCreate: (existing?.isCreate ?? false) || thisFull,
+        isNew: existing ? existing.isNew : edit.isNew,
+        originalContent: existing ? existing.originalContent : edit.originalContent,
+        hunks: [...(existing?.hunks ?? []), ...((thisFull ? [] : edit.hunks) ?? [])],
+        acceptedAt: Date.now(),
+      });
       return "";
     }
     const key = this.keyOf(edit);

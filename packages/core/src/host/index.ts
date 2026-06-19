@@ -18,6 +18,7 @@ export * from "./edits.js";
 export * from "./browser.js";
 export * from "./ideContext.js";
 export * from "./derive.js";
+export * from "./scopedHost.js";
 
 import type { HostFileSystem } from "./fs.js";
 import type { HostCommandRunner } from "./commands.js";

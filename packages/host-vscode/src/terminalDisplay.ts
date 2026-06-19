@@ -17,7 +17,7 @@ const terminals = new Map<string, vscode.Terminal>();
 const terminalCwds = new Map<string, string>();
 
 /** 获取或创建指定 key 的终端实例 */
-function getOrCreateTerminal(terminalKey: string): vscode.Terminal {
+function getOrCreateTerminal(terminalKey: string, cwd?: string): vscode.Terminal {
   const existing = terminals.get(terminalKey);
   if (existing && !existing.exitStatus) {
     return existing;
@@ -25,6 +25,7 @@ function getOrCreateTerminal(terminalKey: string): vscode.Terminal {
   const t = vscode.window.createTerminal({
     name: "Axon",
     iconPath: new vscode.ThemeIcon("sparkle"),
+    cwd: cwd || undefined,
     env: { GIT_PAGER: "cat", AXON_AI_TERMINAL: "1" },
   });
   terminals.set(terminalKey, t);
@@ -88,13 +89,13 @@ export async function runInTerminalCaptured(
   onWaitingInput?: () => void,
 ): Promise<TerminalRunResult> {
   const notifyWaiting = () => onWaitingInput?.();
-  const t = getOrCreateTerminal(terminalKey);
+  const t = getOrCreateTerminal(terminalKey, cwd);
   t.show(true); // 聚焦终端，让用户看到交互提示（如 Y/N、密码等）
 
-  const prevCwd = terminalCwds.get(terminalKey);
-  const needCd = cwd && cwd !== prevCwd;
-  if (needCd) {
-    terminalCwds.set(terminalKey, cwd!);
+  // 无条件 cd 到目标 cwd：不信任 prevCwd 缓存（AI 或脚本可能已改变终端实际目录）
+  const needCd = !!cwd;
+  if (cwd) {
+    terminalCwds.set(terminalKey, cwd);
   }
   const effectiveCommand = needCd ? cdCommand(cwd!) + command : command;
 

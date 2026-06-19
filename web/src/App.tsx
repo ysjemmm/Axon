@@ -6,7 +6,8 @@ import { RelayTabView } from "./components/RelayTabView";
 import { PowerStudio } from "./components/PowerStudio";
 import { McpStudio } from "./components/McpStudio";
 import { ProviderStudio } from "./components/ProviderStudio";
-import { History, X, Plus, HelpCircle } from "lucide-react";
+import { ParallelPanel } from "./components/parallel/ParallelPanel";
+import { History, X, Plus, HelpCircle, GitBranch } from "lucide-react";
 import { listSessions } from "./lib/apiClient";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { sessionEventBus } from "./hooks/useSessionEvents";
@@ -100,10 +101,10 @@ function App() {
   }
 
   // 默认：Chat 模式
-  type ChatMode = "agent" | "quest";
-  // 顶层模式：Axon（智能体）/ 问答（纯问答）
+  type ChatMode = "agent" | "quest" | "parallel";
+  // 顶层模式：Axon（智能体）/ 问答（纯问答）/ 并行（多 Agent 并行）
   const [mode, setMode] = useState<ChatMode>(() => {
-    try { const m = localStorage.getItem("axon_mode"); if (m === "quest" || m === "agent") return m; } catch { /* ignore */ }
+    try { const m = localStorage.getItem("axon_mode"); if (m === "quest" || m === "agent" || m === "parallel") return m; } catch { /* ignore */ }
     return "agent";
   });
 
@@ -123,12 +124,12 @@ function App() {
   });
 
   // 每个模式各自的激活 tab key
-  const [activeKeys, setActiveKeys] = useState<{ agent: string | null; quest: string | null }>(() => {
+  const [activeKeys, setActiveKeys] = useState<{ agent: string | null; quest: string | null; parallel: string | null }>(() => {
     try {
       const saved = localStorage.getItem("axon_activeKeys");
-      if (saved) { const p = JSON.parse(saved); if (p && typeof p === "object") return { agent: p.agent ?? null, quest: p.quest ?? null }; }
+      if (saved) { const p = JSON.parse(saved); if (p && typeof p === "object") return { agent: p.agent ?? null, quest: p.quest ?? null, parallel: p.parallel ?? null }; }
     } catch { /* ignore */ }
-    return { agent: null, quest: null };
+    return { agent: null, quest: null, parallel: null };
   });
 
   // App 级持有唯一 Agent 连接，所有面板共享；事件统一分发到 sessionEventBus 按 clientId 路由
@@ -146,6 +147,19 @@ function App() {
   useEffect(() => { try { localStorage.setItem("axon_tabs", JSON.stringify(tabs)); } catch { /* 忽略 */ } }, [tabs]);
   useEffect(() => { try { localStorage.setItem("axon_activeKeys", JSON.stringify(activeKeys)); } catch { /* 忽略 */ } }, [activeKeys]);
   useEffect(() => { try { localStorage.setItem("axon_mode", mode); } catch { /* 忽略 */ } }, [mode]);
+
+  // 跨 webview 导航：Relay Tab 点击"查看并行"→ 扩展转发 navigate_parallel → 切到并行 tab
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      const data = e.data;
+      if (!data || typeof data !== "object" || data.type !== "navigate_parallel") return;
+      setMode("parallel");
+      // 通知并行面板定位到指定 batchId（通过 sessionEventBus 广播，并行面板监听）
+      sessionEventBus.dispatch({ type: "navigate_parallel", batchId: data.batchId, relayId: data.relayId } as any);
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, []);
 
   const [historyOpen, setHistoryOpen] = useState(false);
   // Tab 右键菜单状态（按 key 定位）
@@ -183,7 +197,9 @@ function App() {
   }, [activeKey]);
 
   // 确保当前模式至少有一个 tab，且有合法激活项（切到空模式时自动建一个）
+  // 确保当前模式至少有一个 tab，且有合法激活项（并行模式不需要 tab）
   useEffect(() => {
+    if (mode === "parallel") return;
     if (modeTabs.length === 0) {
       const t: SessionTab = { id: null, title: "新对话", key: genTabKey(), mode };
       setTabs((prev) => [...prev, t]);
@@ -328,7 +344,7 @@ function App() {
 
   return (
     <div className="h-screen bg-background text-foreground flex flex-col">
-      {/* 顶层模式栏：Axon / 问答 */}
+      {/* 顶层模式栏：Axon / 问答 / 并行 */}
       <div className="flex items-center gap-1 px-2 border-b border-border shrink-0 h-[34px] bg-[var(--vscode-editorGroupHeader-tabsBackground,transparent)]">
         <button
           onClick={() => setMode("agent")}
@@ -350,9 +366,21 @@ function App() {
           <HelpCircle className="w-3.5 h-3.5" />
           问答
         </button>
+        <button
+          onClick={() => setMode("parallel")}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+            mode === "parallel" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+          }`}
+          title="并行：多 Agent 同时执行互不依赖的子任务"
+        >
+          <GitBranch className="w-3.5 h-3.5" />
+          并行
+          <span className="px-1 py-px rounded text-[9px] font-bold leading-none bg-gradient-to-r from-violet-500 to-blue-500 text-white">BETA</span>
+        </button>
       </div>
 
-      {/* 会话 Tab 栏（当前模式） */}
+      {/* 会话 Tab 栏（当前模式）—— 并行模式无 tab 栏 */}
+      {mode !== "parallel" && (
       <div className="flex items-center border-b border-border shrink-0 h-[35px] bg-[var(--vscode-editorGroupHeader-tabsBackground,transparent)]">
         <div
           ref={tabsContainerRef}
@@ -398,7 +426,6 @@ function App() {
           ))}
         </div>
 
-        {/* 新建 tab + 右侧工具按钮 */}
         <div className="flex items-center px-1 gap-1 shrink-0 h-full">
           <button
             onClick={handleNewTab}
@@ -416,6 +443,7 @@ function App() {
           </button>
         </div>
       </div>
+      )}
 
       {/* Tab 右键菜单 */}
       {contextMenu && (
@@ -451,40 +479,57 @@ function App() {
 
       {/* 主体内容 */}
       <div className="flex-1 min-h-0 relative overflow-hidden">
-        {/* 历史面板：覆盖在对话区上方（按当前模式过滤） */}
-        {historyOpen && (
-          <div className="absolute inset-0 z-50 bg-background flex flex-col">
-            <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-              <span className="text-sm font-medium">历史会话 · {mode === "quest" ? "问答" : "Axon"}</span>
-              <button
-                onClick={() => setHistoryOpen(false)}
-                className="p-1.5 rounded-md hover:bg-muted transition-colors cursor-pointer"
-              >
-                <X className="w-4 h-4 text-muted-foreground" />
-              </button>
-            </div>
-            <div className="flex-1 overflow-hidden [&>div]:w-full [&>div]:border-r-0">
-              <SessionSidebar
-                currentSessionId={currentTab?.id ?? null}
-                connected={connected}
-                filterMode={mode}
-                onSelectSession={handleSelectSession}
-                onNewSession={handleNewSession}
-                onSessionDeleted={handleSessionDeleted}
-              />
-            </div>
-          </div>
-        )}
+        {/* 并行面板：始终挂载（保持事件监听），通过 display 控制可见性 */}
+        <div
+          className="absolute inset-0"
+          style={{ display: mode === "parallel" ? "flex" : "none", flexDirection: "column" }}
+        >
+          <ParallelPanel
+            connected={connected}
+            send={send}
+          />
+        </div>
 
-        {/* 对话面板（多会话生命周期由 SessionContainer 管理，Axon/问答 面板并集，互不打断） */}
-        <SessionContainer
-          tabs={tabs}
-          activeKey={activeKey}
-          connected={connected}
-          send={send}
-          onSessionCreated={handleSessionCreated}
-          onCompactionMigrated={handleCompactionMigrated}
-        />
+        {/* agent/quest 模式面板 */}
+        <div
+          className="absolute inset-0"
+          style={{ display: mode !== "parallel" ? "block" : "none" }}
+        >
+          {/* 历史面板：覆盖在对话区上方（按当前模式过滤） */}
+          {historyOpen && (
+            <div className="absolute inset-0 z-50 bg-background flex flex-col">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-border">
+                <span className="text-sm font-medium">历史会话 · {mode === "quest" ? "问答" : "Axon"}</span>
+                <button
+                  onClick={() => setHistoryOpen(false)}
+                  className="p-1.5 rounded-md hover:bg-muted transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4 text-muted-foreground" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-hidden [&>div]:w-full [&>div]:border-r-0">
+                <SessionSidebar
+                  currentSessionId={currentTab?.id ?? null}
+                  connected={connected}
+                  filterMode={mode === "parallel" ? "agent" : mode}
+                  onSelectSession={handleSelectSession}
+                  onNewSession={handleNewSession}
+                  onSessionDeleted={handleSessionDeleted}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* 对话面板（多会话生命周期由 SessionContainer 管理，Axon/问答 面板并集，互不打断） */}
+          <SessionContainer
+            tabs={tabs}
+            activeKey={activeKey}
+            connected={connected}
+            send={send}
+            onSessionCreated={handleSessionCreated}
+            onCompactionMigrated={handleCompactionMigrated}
+          />
+        </div>
       </div>
     </div>
   );

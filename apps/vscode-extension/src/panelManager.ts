@@ -20,6 +20,8 @@ export interface PanelOptions {
   router?: { handle(method: string, path: string, body?: unknown): Promise<unknown> };
   /** 可选：Tab 图标路径（相对 extensionUri） */
   icon?: string;
+  /** 可选：向侧栏 webview 发消息（跨 webview 通信） */
+  postToSidebar?: (message: unknown) => void;
 }
 
 /**
@@ -50,7 +52,8 @@ export function openOrFocusPanel(options: PanelOptions): vscode.WebviewPanel {
 
   // 设置 Tab 图标
   if (options.icon) {
-    panel.iconPath = vscode.Uri.joinPath(options.extensionUri, options.icon);
+    const iconUri = vscode.Uri.joinPath(options.extensionUri, options.icon);
+    panel.iconPath = { light: iconUri, dark: iconUri };
   }
 
   // 绑定 REST 请求代理（让 Panel 内的 apiClient 能通过 postMessage 走 RequestRouter）
@@ -82,6 +85,16 @@ export function openOrFocusPanel(options: PanelOptions): vscode.WebviewPanel {
           await vscode.window.showTextDocument(vscode.Uri.file(m.filePath as string), { preview: true });
         } catch {
           vscode.window.showWarningMessage(`无法打开文件：${m.filePath}`);
+        }
+        return;
+      }
+
+      // 从 Relay Tab 跳转到并行面板：转发给侧栏 webview
+      if (m.type === "navigate_parallel") {
+        if (options.postToSidebar) {
+          options.postToSidebar({ type: "navigate_parallel", batchId: m.batchId || null, relayId: m.relayId || null });
+        } else {
+          vscode.window.showInformationMessage("未找到关联的并行执行记录。请在侧栏「并行」面板中查看。");
         }
         return;
       }
