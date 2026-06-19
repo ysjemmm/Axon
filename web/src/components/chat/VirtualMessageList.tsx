@@ -15,7 +15,7 @@ interface MeasuredItem {
   height: number;
 }
 
-interface VirtualMessageListHandle {
+export interface VirtualMessageListHandle {
   /** 滚动到列表底部 */
   scrollToBottom: (behavior?: ScrollBehavior) => void;
   /** 滚动到指定 index 的消息 */
