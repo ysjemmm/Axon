@@ -181,6 +181,44 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     }
   }, [session.chatHistory.length]);
 
+  // 持久化会话加载完成后滚到底部（window.reload / 切回历史会话）。
+  // 虚拟列表的消息是异步测量的——单次 RAF 不够，需要多次重试直到
+  // scrollHeight 稳定或触达真正的底部。
+  const prevLoadingRef = useRef(session.isLoadingSession);
+  useEffect(() => {
+    const wasLoading = prevLoadingRef.current;
+    prevLoadingRef.current = session.isLoadingSession;
+    // 仅当 loading → done 且有消息时才触发
+    if (!wasLoading || session.isLoadingSession || session.chatHistory.length === 0) return;
+
+    let attempts = 0;
+    const MAX_ATTEMPTS = 10;
+    const tryScroll = () => {
+      const container = virtualListRef.current?.getScrollContainer();
+      if (!container) return;
+      const state = virtualListRef.current?.getScrollState();
+      if (!state) return;
+      container.scrollTo({ top: 99999999, behavior: "instant" });
+      const afterTop = container.scrollTop;
+      attempts++;
+      // 如果 scrollHeight 还在增长（消息还在测量中），继续重试
+      if (attempts < MAX_ATTEMPTS && afterTop < 100) {
+        // 内容还没渲染出来
+        requestAnimationFrame(tryScroll);
+      } else if (attempts < MAX_ATTEMPTS) {
+        // 等一帧再滚一次（消息高度测量完毕后 scrollHeight 会变大）
+        setTimeout(() => {
+          container.scrollTo({ top: 99999999, behavior: "instant" });
+          // 最后一轮：等渲染稳定后再滚一次
+          setTimeout(() => {
+            container.scrollTo({ top: 99999999, behavior: "instant" });
+          }, 150);
+        }, 150);
+      }
+    };
+    requestAnimationFrame(tryScroll);
+  }, [session.isLoadingSession, session.chatHistory.length]);
+
   // 流式输出时自动跟随底部：用 wheel 事件精确判断用户意图。
   // 向上滚一次 → 停止追底；滚回底部 → 恢复追底。简单、可靠、无竞态。
   const autoScrollRef = useRef(true);

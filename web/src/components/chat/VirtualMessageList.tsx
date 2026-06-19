@@ -236,11 +236,29 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
       scrollToIndex(index: number, behavior: ScrollBehavior = "smooth") {
         const container = containerRef.current;
         if (!container) return;
+        // 先按预估偏移粗定位（把所有未测量消息按预估值算），再用 DOM scrollIntoView 精确落点。
+        // 直接 scrollIntoView 在虚拟列表中可能因为目标不在 DOM 中而失败，
+        // 所以先 scrollTo 保证目标进入渲染窗口，再 scrollIntoView 微调。
         let top = 0;
         for (let i = 0; i < Math.min(index, messages.length); i++) {
           top += heightMap.current.get(messages[i].id) ?? estimateHeight;
         }
-        container.scrollTo({ top, behavior });
+        container.scrollTo({ top, behavior: "instant" });
+        // 等虚拟列表渲染出目标后，用 DOM 精确定位
+        const targetId = messages[index]?.id;
+        if (targetId) {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              const el = container.querySelector(`[data-msg-id="${targetId}"]`);
+              if (el) {
+                el.scrollIntoView({ block: "start", behavior });
+              } else {
+                // 兜底：DOM 没出来就用预估位置
+                container.scrollTo({ top, behavior });
+              }
+            });
+          });
+        }
       },
       getScrollState() {
         const c = containerRef.current;
