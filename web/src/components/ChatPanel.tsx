@@ -221,21 +221,23 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     };
     container.addEventListener("wheel", onWheel, { passive: true });
 
-    // 内容高度变化追底：tool card 执行完成/输出展开等会让已有消息变高，
-    // 但 totalCount 不变、virtuoso 的 followOutput 不触发。用 ResizeObserver
-    // 监听内容高度变化，用户未手动离开底部时保持贴底。
-    const ro = new ResizeObserver(() => {
-      if (autoScrollUserOverride.current) return;
-      container.scrollTo({ top: container.scrollHeight, behavior: "instant" });
-    });
-    // 观察容器内的内容包裹层（virtuoso 的内部列表），回退到容器自身
-    const inner = container.firstElementChild as HTMLElement | null;
-    if (inner) ro.observe(inner);
-    ro.observe(container);
+    // 内容高度变化追底：tool card 执行完成/输出展开/footer(思考中) 等会让内容变高，
+    // 但 totalCount 不变、virtuoso 的 followOutput 不触发。直接轮询 scrollHeight，
+    // 它能捕获所有高度变化（含 footer 兄弟节点）。用户未手动离开底部时保持贴底。
+    let prevScrollHeight = container.scrollHeight;
+    const poller = setInterval(() => {
+      const sh = container.scrollHeight;
+      if (sh !== prevScrollHeight) {
+        prevScrollHeight = sh;
+        if (!autoScrollUserOverride.current) {
+          container.scrollTo({ top: sh, behavior: "instant" });
+        }
+      }
+    }, 60);
 
     return () => {
       container.removeEventListener("wheel", onWheel);
-      ro.disconnect();
+      clearInterval(poller);
     };
   }, [session.isLoading]);
 
