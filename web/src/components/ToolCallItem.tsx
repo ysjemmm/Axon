@@ -236,7 +236,7 @@ interface ToolCallItemProps {
 /** 输出结果区（带内部滚动），execute_command 使用 */
 function OutputBlock({ output }: { output: string }) {
   return (
-    <div className="border-t border-border/60 bg-foreground/[0.02] px-4 py-2 max-h-32 overflow-y-overlay [&]:overflow-y-auto [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-transparent [&::-webkit-scrollbar-track]:bg-transparent [&:hover::-webkit-scrollbar-thumb]:bg-muted-foreground/30">
+    <div className="border-t border-border/60 bg-foreground/[0.02] px-4 py-2 max-h-32 overflow-y-auto [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-transparent [&::-webkit-scrollbar-track]:bg-transparent hover:[&::-webkit-scrollbar-thumb]:bg-muted-foreground/30 [scrollbar-width:thin] [scrollbar-color:transparent_transparent] hover:[scrollbar-color:rgba(128,128,128,0.3)_transparent]">
       <pre className="text-[10px] font-mono text-muted-foreground/70 whitespace-pre-wrap break-all leading-relaxed">{output}</pre>
     </div>
   );
@@ -734,7 +734,9 @@ export function ToolCallItem({ tool, onAcceptEdit, onRejectEdit, onUndoEdit }: T
   // 文件名 + 可选的行号区间（如 read_file 的 "ChatPanel.tsx 1-10" / "2-EOF"）
   const parts = cleanDesc.match(/^(.+?)\s+(\S+\.\S+)(?:\s+(\d+-(?:\d+|EOF)))?$/);
   const action = parts ? parts[1] : cleanDesc;
-  const fileName = parts ? parts[2] : null;
+  // 只取文件名（去掉路径前缀）
+  const rawFn = parts ? parts[2] : null;
+  const fileName = rawFn ? (rawFn.split("/").pop()?.split("\\").pop() || rawFn) : null;
   const lineRange = parts && parts[3] ? parts[3] : null;
   // 是否有可展示的本次修改 diff
   const hasDiff = !!tool.diff && tool.status === "success" && (tool.name === "str_replace" || tool.name === "create_file" || tool.name === "apply_patch");

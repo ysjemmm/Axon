@@ -368,10 +368,18 @@ export async function executeToolCall(
     }
     case "execute_command": {
       // 命令在用户可见的 "Axon" 终端里执行（可交互输入），用 Shell Integration 捕获输出。
-      // 解析 cwd 参数：支持相对路径或绝对路径，不传时用会话默认 cwd
-      const execCwd = typeof args.cwd === "string" && args.cwd.trim()
-        ? await resolveInWorkspaces(args.cwd, cwd, host, workspaces)
-        : cwd;
+      // 解析 cwd 参数：支持相对路径或绝对路径，不传时从命令文本智能推断工作区
+      let execCwd: string;
+      if (typeof args.cwd === "string" && args.cwd.trim()) {
+        execCwd = await resolveInWorkspaces(args.cwd, cwd, host, workspaces);
+      } else if (workspaces && workspaces.length > 1) {
+        // 多工作区：从命令文本中匹配路径推断目标工作区
+        const cmd = String(args.command || "");
+        const matched = workspaces.find((ws) => cmd.includes(ws) || cmd.includes(ws.replace(/\\/g, "/")));
+        execCwd = matched || cwd;
+      } else {
+        execCwd = cwd;
+      }
       // 等待输入超时：进程卡在等待 stdin（最常见场景：引号不匹配导致 shell 等待闭合）时，
       // 10 秒后自动报错，避免 AI 永久阻塞。进程本身会继续留在终端中，用户可手动处理。
       let rejectWaiting: ((err: Error) => void) | null = null;

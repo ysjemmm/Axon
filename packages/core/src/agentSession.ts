@@ -1413,9 +1413,13 @@ export class AgentSession {
   /** 当前轮次不需要保留到下一轮的"瞬态"工具：其结果只在当轮有意义，跨轮重复只会污染上下文。
    *  read_file 也纳入瞬态：文件内容已被 AI 消化，下轮若仍需可重读（成本远低于每轮重复发送）。 */
   private static readonly TRANSIENT_TOOLS = new Set(["search", "list_dir", "web_search", "web_fetch", "read_file"]);
+  /** DeepSeek 等慢模型额外纳入瞬态的工具（execute_command 输出跨轮后意义极小，但 token 占比大） */
+  private static readonly TRANSIENT_TOOLS_AGGRESSIVE = new Set([...AgentSession.TRANSIENT_TOOLS, "execute_command", "check_diagnostics"]);
 
   private buildRequestMessages(): ChatCompletionMessageParam[] {
     const injections = this.buildInjections();
+    const isDeepSeek = /deepseek/i.test(this.model);
+    const transientSet = isDeepSeek ? AgentSession.TRANSIENT_TOOLS_AGGRESSIVE : AgentSession.TRANSIENT_TOOLS;
 
     // 先移除跨轮瞬态工具结果（search/list_dir/web_search/web_fetch/read_file），
     // 必须在 sanitizeToolPairing 之前执行：先删掉不需要的工具结果，
@@ -1424,7 +1428,7 @@ export class AgentSession {
     const preFiltered = this.messages.filter((m) => {
       if ((m as any).role !== "tool") return true;
       const toolName = (m as any)._toolName as string | undefined;
-      if (!toolName || !AgentSession.TRANSIENT_TOOLS.has(toolName)) return true;
+      if (!toolName || !transientSet.has(toolName)) return true;
       // 只保留当前轮次的瞬态结果（在原始数组上的下标与 turnStartMsgCount 对齐）
       const idx = this.messages.indexOf(m);
       return idx >= this.turnStartMsgCount;
@@ -1434,10 +1438,12 @@ export class AgentSession {
     // 而产生的孤儿），避免历史损坏导致 API 400
     const cleaned = sanitizeToolPairing(preFiltered);
 
-    // 滑动窗口截断：对非当前轮的 tool 消息，只保留前 200 字符摘要。
+    // 滑动窗口截断：对非当前轮的 tool 消息，只保留摘要。
     // user/assistant 文字全部保留（"记忆"不丢），tool 调用记录保留（知道做过什么），
     // 只有旧工具的大块正文数据被截短（文件内容、命令输出等）。
-    const SUMMARY_LIMIT = 200;
+    // DeepSeek 类模型更激进截断（长 context 下 TTFT 急剧上升）。
+    const isDeepSeek = /deepseek/i.test(this.model);
+    const SUMMARY_LIMIT = isDeepSeek ? 80 : 200;
     const truncated = cleaned.map((m, idx) => {
       if ((m as any).role !== "tool") return m;
       // 当前轮次的工具结果保留完整
@@ -1453,6 +1459,11 @@ export class AgentSession {
     if (injections.length === 0) return truncated;
     if (truncated.length === 0) return injections;
     const [systemMsg, ...rest] = truncated;
+    // Prompt caching 优化：DeepSeek 支持前缀缓存，注入放尾部保证 [system + 历史] 前缀稳定。
+    // 其他模型（GPT/Claude）注入放前面（靠近 system prompt 时遵守度更高）。
+    if (isDeepSeek) {
+      return [systemMsg, ...rest, ...injections];
+    }
     return [systemMsg, ...injections, ...rest];
   }
 
@@ -1481,11 +1492,11 @@ export class AgentSession {
         role: "system",
         content:
           `当前会话绑定了多个工作区：\n${wsInfo}\n\n` +
-          `主工作区（命令执行的默认目录、相对路径的基准）：${this.cwd}\n\n` +
           `重要规则：\n` +
-          `- 访问非主工作区的文件时，必须使用该文件的完整绝对路径（如上面列出的路径开头）\n` +
+          `- 所有路径一律使用绝对路径，禁止使用相对路径\n` +
+          `- execute_command 必须始终传 cwd 参数（绝对路径），指定命令要在哪个工作区目录执行（不要省略）\n` +
+          `- 访问文件时，path 必须使用完整绝对路径\n` +
           `- 不要用 ../、../../ 等相对路径去猜测其他工作区的位置\n` +
-          `- 例如要读取第 2 个工作区的文件，path 应写为 "${this.workspaces[1]}\\xxx" 而不是 "../xxx"\n` +
           `- search 工具的 path 参数：搜索某个工作区时直接传该工作区的绝对路径`,
       });
     }

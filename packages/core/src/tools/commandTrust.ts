@@ -86,12 +86,16 @@ export class CommandTrustTrie {
     if (rule.scope === "all") {
       this.root.wildcard = true;
       this.root.children.clear(); // 全覆盖：剪掉所有子树
+      this.exactWithMeta.clear(); // 全覆盖：清掉所有精确规则
       return;
     }
     if (rule.scope === "exact") {
       const norm = normalizeCommand(rule.pattern);
       if (hasShellMetacharacters(norm)) {
-        if (!this.root.wildcard) this.exactWithMeta.add(norm);
+        // 检查是否已被某个 prefix 覆盖（含元字符命令的第一段 token 匹配到 wildcard 节点）
+        if (!this.root.wildcard && !this.isPrefixCovered(norm)) {
+          this.exactWithMeta.add(norm);
+        }
         return;
       }
       this.addExact(tokenize(norm));
@@ -99,6 +103,21 @@ export class CommandTrustTrie {
     }
     // prefix
     this.addPrefix(tokenize(normalizeCommand(rule.pattern)));
+  }
+
+  /** 检查含元字符的命令是否已被 trie 中的某个 prefix 覆盖 */
+  private isPrefixCovered(norm: string): boolean {
+    // 取 ; 或其他元字符之前的部分作为"第一条命令"来匹配 trie
+    const firstCmd = norm.split(/[;&`]/)[0].trim();
+    if (!firstCmd) return false;
+    let node = this.root;
+    for (const t of tokenize(firstCmd)) {
+      const child = node.children.get(t);
+      if (!child) return false;
+      if (child.wildcard) return true;
+      node = child;
+    }
+    return false;
   }
 
   private addExact(tokens: string[]): void {
@@ -120,6 +139,13 @@ export class CommandTrustTrie {
     }
     node.wildcard = true;
     node.children.clear(); // 剪掉被本前缀包含的整棵子树
+    // 同时清理 exactWithMeta 中被新 prefix 覆盖的精确规则
+    const prefixStr = tokens.join(" ");
+    for (const exact of this.exactWithMeta) {
+      if (exact === prefixStr || exact.startsWith(prefixStr + " ")) {
+        this.exactWithMeta.delete(exact);
+      }
+    }
   }
 
   private childOrCreate(node: TrieNode, token: string): TrieNode {

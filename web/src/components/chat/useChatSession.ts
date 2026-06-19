@@ -864,7 +864,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
               ...updated[i],
               streaming: false,
               turnStatus: "cancelled",
-              turnStats: updated[i].turnStats || stats,
+              turnStats: stats,
             };
             found = true;
             break;
@@ -1068,7 +1068,13 @@ export function useChatSession(opts: UseChatSessionOptions) {
               const isExplore = seg.name === "search" || seg.name === "list_dir";
               const pendingDesc = seg.description;
               const parts = pendingDesc.match(/^(.+?)\s+(\S+\.\S+)(?:\s+(\d+-(?:\d+|EOF)))?$/);
-              const fileName = parts ? parts[2] : null;
+              const rawFileName = parts ? parts[2] : null;
+              // 只取文件名（去掉路径前缀，防止显示完整绝对路径）
+              // 兜底：从 seg.args.path 或 msg.args.path 提取（pending 阶段 description 可能没有文件名）
+              const extractBasename = (p: unknown) => typeof p === "string" && p ? (p.split("/").pop()?.split("\\").pop() || null) : null;
+              const fileName = (rawFileName ? (rawFileName.split("/").pop()?.split("\\").pop() || rawFileName) : null)
+                || extractBasename(seg.args?.path)
+                || extractBasename((msg as any).args?.path);
               const lineSuffix = parts && parts[3] ? ` ${parts[3]}` : "";
               const hasOutput = seg.name === "execute_command" || OUTPUT_TOOLS.has(seg.name);
               let finalDesc: string;
