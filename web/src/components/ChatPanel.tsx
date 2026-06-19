@@ -586,22 +586,41 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                   <div className="bg-muted/40 rounded-xl px-5 py-4 text-left">
                     <p className="text-xs font-medium text-foreground mb-2.5">快速上手</p>
                     <div className="space-y-2">
-                      <div className="flex items-start gap-2.5">
-                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">1</span>
-                        <p className="text-xs text-muted-foreground leading-relaxed">打开项目文件夹（可绑定工作区组，管理多根目录）</p>
-                      </div>
-                      <div className="flex items-start gap-2.5">
-                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">2</span>
-                        <p className="text-xs text-muted-foreground leading-relaxed">用自然语言描述需求：改 bug、加功能、分析代码、写脚本……</p>
-                      </div>
-                      <div className="flex items-start gap-2.5">
-                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">3</span>
-                        <p className="text-xs text-muted-foreground leading-relaxed">Axon 会读文件 → 改代码 → 跑命令验证，全程自动推进</p>
-                      </div>
-                      <div className="flex items-start gap-2.5">
-                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">4</span>
-                        <p className="text-xs text-muted-foreground leading-relaxed">输入 <code className="px-1 py-0.5 rounded bg-muted text-[10px] font-mono">/</code> 引用当前文件、终端选区或编辑器诊断</p>
-                      </div>
+                      {mode === "quest" ? (
+                        <>
+                          <div className="flex items-start gap-2.5">
+                            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">1</span>
+                            <p className="text-xs text-muted-foreground leading-relaxed">直接提问：技术方案、概念解释、代码分析、架构建议</p>
+                          </div>
+                          <div className="flex items-start gap-2.5">
+                            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">2</span>
+                            <p className="text-xs text-muted-foreground leading-relaxed">可开启「联网搜索」获取最新信息，或开启「思考过程」查看推理链</p>
+                          </div>
+                          <div className="flex items-start gap-2.5">
+                            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">3</span>
+                            <p className="text-xs text-muted-foreground leading-relaxed">问答模式只回答问题，不会读写文件或执行命令</p>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex items-start gap-2.5">
+                            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">1</span>
+                            <p className="text-xs text-muted-foreground leading-relaxed">打开项目文件夹（可绑定工作区组，管理多根目录）</p>
+                          </div>
+                          <div className="flex items-start gap-2.5">
+                            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">2</span>
+                            <p className="text-xs text-muted-foreground leading-relaxed">用自然语言描述需求：改 bug、加功能、分析代码、写脚本……</p>
+                          </div>
+                          <div className="flex items-start gap-2.5">
+                            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">3</span>
+                            <p className="text-xs text-muted-foreground leading-relaxed">Axon 会读文件 → 改代码 → 跑命令验证，全程自动推进</p>
+                          </div>
+                          <div className="flex items-start gap-2.5">
+                            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">4</span>
+                            <p className="text-xs text-muted-foreground leading-relaxed">输入 <code className="px-1 py-0.5 rounded bg-muted text-[10px] font-mono">/</code> 引用当前文件、终端选区或编辑器诊断</p>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>

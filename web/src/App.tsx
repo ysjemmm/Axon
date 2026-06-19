@@ -407,7 +407,6 @@ function App() {
           >
             <Plus className="w-3.5 h-3.5" />
           </button>
-          <div className={`w-1.5 h-1.5 rounded-full ${connected ? "bg-green-500" : "bg-red-500"}`} />
           <button
             onClick={() => setHistoryOpen(!historyOpen)}
             className="p-1 rounded hover:bg-muted transition-colors cursor-pointer"

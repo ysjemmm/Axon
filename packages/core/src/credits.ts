@@ -68,14 +68,14 @@ interface TierCoef {
  *   - 大记忆 100k vs 10k 做同一件事 ≈ 0.9 vs 0.45（约 2:1，而非 10:1）
  */
 const TIER_COEF: Record<ModelTier, TierCoef> = {
-  "低成本": { base: 0.05, memoryPer1K: 0.0008, systemPer1K: 0.002, inputPer1K: 0.008, outputPer1K: 0.03 },
-  "中端": { base: 0.1, memoryPer1K: 0.002, systemPer1K: 0.005, inputPer1K: 0.02, outputPer1K: 0.08 },
-  "高端": { base: 0.2, memoryPer1K: 0.004, systemPer1K: 0.008, inputPer1K: 0.04, outputPer1K: 0.2 },
-  "旗舰": { base: 0.3, memoryPer1K: 0.005, systemPer1K: 0.01, inputPer1K: 0.05, outputPer1K: 0.3 },
+  "低成本": { base: 0.2, memoryPer1K: 0.02, systemPer1K: 0.04, inputPer1K: 0.1, outputPer1K: 0.4 },
+  "中端": { base: 0.5, memoryPer1K: 0.048, systemPer1K: 0.09, inputPer1K: 0.25, outputPer1K: 1.0 },
+  "高端": { base: 1.0, memoryPer1K: 0.08, systemPer1K: 0.15, inputPer1K: 0.5, outputPer1K: 2.5 },
+  "旗舰": { base: 2.0, memoryPer1K: 0.12, systemPer1K: 0.25, inputPer1K: 1.0, outputPer1K: 5.0 },
 };
 
 /** 最低消耗（防 0 credits 的极端短请求） */
-export const MIN_CREDITS_PER_TURN = 0.1;
+export const MIN_CREDITS_PER_TURN = 0.5;
 
 /** 模型名模糊匹配档位（带版本/后缀也能命中），未知模型回退中端 */
 export function findRate(model: string): ModelCreditRate {

@@ -520,28 +520,5 @@ export function renderSegments(
  * 比黑方块更有生命感，呼应 AxonLogo 的"核心发光 + 信号脉冲"。
  */
 function StreamingCursor() {
-  return (
-    <span className="inline-block align-[-0.2em] ml-1" aria-hidden="true" style={{ width: 16, height: 16 }}>
-      <svg viewBox="0 0 24 24" width="16" height="16">
-        <defs>
-          <radialGradient id="axon-cursor-core" cx="42%" cy="38%" r="62%">
-            <stop offset="0%" stopColor="#ffffff" />
-            <stop offset="45%" stopColor="#38bdf8" />
-            <stop offset="100%" stopColor="#6366f1" />
-          </radialGradient>
-        </defs>
-        {/* 向外扩散的信号环（emit） */}
-        <circle cx="12" cy="12" r="4" fill="none" stroke="#818cf8" strokeWidth="1.6">
-          <animate attributeName="r" values="3.5;10" dur="1.4s" repeatCount="indefinite" />
-          <animate attributeName="opacity" values="0.7;0" dur="1.4s" repeatCount="indefinite" />
-          <animate attributeName="stroke" values="#6366f1;#a78bfa" dur="1.4s" repeatCount="indefinite" />
-        </circle>
-        {/* 呼吸的核心 */}
-        <circle cx="12" cy="12" r="4.5" fill="url(#axon-cursor-core)">
-          <animate attributeName="r" values="3.8;5.4;3.8" dur="1.4s" repeatCount="indefinite" calcMode="spline" keySplines="0.4 0 0.2 1;0.4 0 0.2 1" keyTimes="0;0.5;1" />
-          <animate attributeName="opacity" values="1;0.85;1" dur="1.4s" repeatCount="indefinite" />
-        </circle>
-      </svg>
-    </span>
-  );
+  return null;
 }
