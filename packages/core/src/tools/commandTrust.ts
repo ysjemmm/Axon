@@ -137,12 +137,15 @@ export class CommandTrustTrie {
     if (this.root.wildcard) return true;
     if (norm.length === 0) return false;
 
-    // 管道命令：按 | 拆分，每个子命令必须各自通过信任检查。
-    // 例如 "Select-String ... | Select-Object ..." → 两边都需被信任。
+    // 管道命令：只看 | 左边第一个命令。管道只是把输出传给下游，
+    // 下游 Select-Object/Sort-Object 等格式化工具不会造成安全风险，
+    // 真正的危险命令已被 detectDangerousCommand 硬拦。
+    // 要求两边都信任会导致用户永远没机会单独信任 Select-Object
+    // （AI 不会单独调它），从而每次管道都要手动确认——体验极差。
     if (norm.includes("|")) {
-      const parts = norm.split("|").map((s) => s.trim()).filter(Boolean);
-      if (parts.length === 0) return false;
-      return parts.every((part) => this.isTrustedSingle(part));
+      const firstPart = norm.split("|")[0].trim();
+      if (!firstPart) return false;
+      return this.isTrustedSingle(firstPart);
     }
 
     return this.isTrustedSingle(norm);
