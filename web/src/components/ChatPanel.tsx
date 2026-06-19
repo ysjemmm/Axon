@@ -8,7 +8,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Send, Loader2, Copy, ImagePlus, X, FileText, Paperclip, Plus, Camera, Feather, Check, ChevronDown, ListChecks, Sparkles, Globe, ShieldAlert, Undo2 } from "lucide-react";
+import { Send, Loader2, Copy, ImagePlus, X, FileText, Paperclip, Plus, Camera, Feather, Check, ChevronDown, ListChecks, Sparkles, Globe, ShieldAlert, Undo2, Minimize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -326,6 +326,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   const handleSend = () => {
     const { text, tags, segments } = editorRef.current?.read() ?? { text: "", tags: [], segments: [] };
     if (!text && images.length === 0 && tags.length === 0) return;
+    pushHistory(text);
     doSend(text, images, tags, segments);
     editorRef.current?.clear();
     setComposerEmpty(true);
@@ -333,10 +334,67 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     setFileError("");
   };
 
+  // ── 输入历史栈（上下箭头切换） ────────────────────────────────────────────
+  const MAX_INPUT_HISTORY = 50;
+  const inputHistory = useRef<string[]>([]); // 已发送的历史消息
+  const historyIndex = useRef(-1); // 当前浏览位置：-1 = 草稿（未进入历史）
+  const draft = useRef(""); // 用户当前正在编辑但未发送的草稿
+
+  /** 发送时记录历史 */
+  const pushHistory = useCallback((text: string) => {
+    if (!text.trim()) return;
+    // 去重：连续发送相同内容不重复记录
+    if (inputHistory.current[inputHistory.current.length - 1] === text) return;
+    inputHistory.current.push(text);
+    if (inputHistory.current.length > MAX_INPUT_HISTORY) {
+      inputHistory.current.shift(); // 丢弃最旧的
+    }
+    historyIndex.current = -1;
+    draft.current = "";
+  }, []);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
+      return;
+    }
+    // 上下箭头切换历史（仅在输入框内容为空或单行时生效）
+    const isUp = e.key === "ArrowUp";
+    const isDown = e.key === "ArrowDown";
+    if ((isUp || isDown) && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      const currentText = editorRef.current?.read().text || "";
+      const isMultiline = currentText.includes("\n");
+      // 多行文本时不拦截（让光标正常上下移动）
+      if (isMultiline) return;
+      if (isUp) {
+        // 首次按上：保存当前草稿
+        if (historyIndex.current === -1) {
+          draft.current = currentText;
+        }
+        const newIdx = historyIndex.current + 1;
+        const histLen = inputHistory.current.length;
+        if (newIdx < histLen) {
+          historyIndex.current = newIdx;
+          const histText = inputHistory.current[histLen - 1 - newIdx];
+          editorRef.current?.setText(histText);
+          e.preventDefault();
+        }
+      } else {
+        // 按下：往新方向走
+        if (historyIndex.current > 0) {
+          historyIndex.current--;
+          const histLen = inputHistory.current.length;
+          const histText = inputHistory.current[histLen - 1 - historyIndex.current];
+          editorRef.current?.setText(histText);
+          e.preventDefault();
+        } else if (historyIndex.current === 0) {
+          // 回到草稿
+          historyIndex.current = -1;
+          editorRef.current?.setText(draft.current);
+          e.preventDefault();
+        }
+      }
     }
   };
 
@@ -1111,15 +1169,12 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                       onClick={() => session.compactSession()}
                       disabled={session.isCompacting || session.isLoading || session.chatHistory.length < 6 || (session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35)}
                       className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                      title={session.isCompacting ? "压缩进行中" : session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35 ? "上下文未超过 35%，禁止手动压缩" : "手动压缩上下文"}
                     >
-                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                        <path d="M4 5l-2 2 2 2M7 3l2-2 2 2M9 8l2 2-2 2M12 13l2-2-2-2M3 13l-2-2 2-2" />
-                      </svg>
+                      <Minimize2 className="w-3.5 h-3.5" />
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="top" align="end">
-                    <p className="text-xs">{session.isCompacting ? "压缩进行中，不可操作" : session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35 ? "上下文未超过 35%，禁止手动压缩" : "压缩上下文"}</p>
+                  <TooltipContent side="top" align="end" className="max-w-[200px] border-zinc-700 bg-zinc-900 text-white shadow-xl">
+                    <p className="text-xs text-zinc-200">{session.isCompacting ? "压缩进行中，不可操作" : session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35 ? "上下文未超过 35%，禁止手动压缩" : "压缩上下文"}</p>
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>

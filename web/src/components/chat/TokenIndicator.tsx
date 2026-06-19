@@ -56,14 +56,13 @@ export function TokenIndicator({ used, max }: { used: number; max: number; cumul
             <Activity className="w-3 h-3 text-muted-foreground absolute" />
           </div>
         </TooltipTrigger>
-        <TooltipContent side="top" align="end" className="p-0">
+        <TooltipContent side="top" align="end" className="p-0 border-zinc-700 bg-zinc-900 text-white shadow-xl">
           <div className="w-56 text-xs">
-            <div className="px-3 pt-2.5 pb-1.5 font-medium text-sm">Context usage</div>
-            <div className="px-3 py-1.5 flex justify-between font-medium">
+            <div className="px-3 pt-2.5 pb-1.5 font-medium text-sm text-white">Context usage</div>
+            <div className="px-3 py-1.5 flex justify-between font-medium text-zinc-200">
               <span>已用</span>
               <span>{hasMax ? `${Math.ceil(percent)}%（${formatTokenCount(used)} / ${formatTokenCount(max)}）` : formatTokenCount(used)}</span>
             </div>
-            {/* 累计发送数据对用户无意义且容易造成困惑（与当前上下文差异巨大），不再展示 */}
           </div>
         </TooltipContent>
       </Tooltip>

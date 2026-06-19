@@ -1442,7 +1442,6 @@ export class AgentSession {
     // user/assistant 文字全部保留（"记忆"不丢），tool 调用记录保留（知道做过什么），
     // 只有旧工具的大块正文数据被截短（文件内容、命令输出等）。
     // DeepSeek 类模型更激进截断（长 context 下 TTFT 急剧上升）。
-    const isDeepSeek = /deepseek/i.test(this.model);
     const SUMMARY_LIMIT = isDeepSeek ? 80 : 200;
     const truncated = cleaned.map((m, idx) => {
       if ((m as any).role !== "tool") return m;
@@ -1522,6 +1521,21 @@ export class AgentSession {
     // Power 清单（轻量层，本轮开头预取）
     if (this.powersPromptCache) {
       injections.push({ role: "system", content: this.powersPromptCache });
+    }
+
+    // 上下文使用率较高时提醒 AI 告知用户
+    if (this.lastPromptTokens > 0 && this.getContextWindow() > 0) {
+      const usagePercent = this.lastPromptTokens / this.getContextWindow();
+      if (usagePercent >= 0.6) {
+        const pct = Math.round(usagePercent * 100);
+        injections.push({
+          role: "system",
+          content:
+            `⚠️ 上下文使用率已达 ${pct}%。如果用户接下来要求做一个较大的功能（需要读写多个文件、多轮工具调用），` +
+            `你应该在开始前简要提醒用户：当前会话上下文已较满（${pct}%），复杂任务可能导致上下文溢出或响应变慢，` +
+            `建议开一个新会话来做这个功能。如果用户坚持在当前会话做，则正常执行不再重复提醒。`,
+        });
+      }
     }
 
     return injections;
