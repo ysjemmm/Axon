@@ -1998,11 +1998,13 @@ export class AgentSession {
                 .join("\n");
               console.log(`[agent-loop] 自动 diagnostics 发现错误，注入修复引导`);
               this.messages.push({ role: "assistant", content: contentBuffer });
+              const okFiles = diagResults.filter((r) => r.ok).map((r) => r.path);
+              const okNote = okFiles.length > 0 ? `\n（已检查通过：${okFiles.join("、")}）` : "";
               this.messages.push({
                 role: "system",
                 content:
-                  `你刚才改动的文件有语法/类型错误（自动检测到的，不是用户报告的）：\n${errSummary}\n\n` +
-                  `请立即修复这些错误（用 str_replace），修好后再给最终回答。不要把有错误的代码交给用户。`,
+                  `⚠️ 自动语法检查：你改动的文件中有错误。你必须修复它们。\n${errSummary}${okNote}\n\n` +
+                  `用 str_replace 逐个修复后，再次调 check_diagnostics 确认全部无错。全部通过后再给用户最终回答。`,
               });
               continue;
             }

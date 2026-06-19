@@ -767,7 +767,12 @@ export async function executeToolCall(
         meta.diagnostics = results.map((r) => ({ path: r.path, ok: r.ok, errorCount: r.errorCount }));
       }
       const diagResult = formatDiagnostics(results);
-      return diagResult + pendingNote;
+      // 强制引导：有错误时在结果开头加一句醒目的指令，防止模型忽略
+      const hasAnyError = results.some((r) => !r.ok);
+      const forceHint = hasAnyError
+        ? "⚠️ 语法/类型检查发现错误（见下方）。你必须立即修复这些问题，不要把有错误的代码交给用户。如果所有文件都已修好，再次调用 check_diagnostics 确认无错后再回复。\n\n"
+        : "";
+      return forceHint + diagResult + pendingNote;
     }
     case "web_search": {
       const query = (args.query as string || "").trim();

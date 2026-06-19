@@ -671,6 +671,8 @@ export function toolContentLimit(toolName: string): number {
       return 32_000;
     case "web_fetch":
       return 24_000;
+    case "check_diagnostics":
+      return 16_000;
     case "search":
     case "list_dir":
       return 8_000;
