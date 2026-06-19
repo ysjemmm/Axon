@@ -668,16 +668,16 @@ export interface ToolMeta {
 export function toolContentLimit(toolName: string): number {
   switch (toolName) {
     case "read_file":
-      return 32_000;
+      return 12_000;
     case "web_fetch":
-      return 24_000;
+      return 10_000;
     case "check_diagnostics":
-      return 16_000;
+      return 8_000;
     case "search":
     case "list_dir":
-      return 8_000;
-    default:
       return 4_000;
+    default:
+      return 3_000;
   }
 }
 

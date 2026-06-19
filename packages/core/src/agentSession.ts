@@ -1412,7 +1412,7 @@ export class AgentSession {
   private buildRequestMessages(): ChatCompletionMessageParam[] {
     const injections = this.buildInjections();
 
-    // 先移除跨轮瞬态工具结果（search/list_dir/web_search/web_fetch），
+    // 先移除跨轮瞬态工具结果（search/list_dir/web_search/web_fetch/read_file），
     // 必须在 sanitizeToolPairing 之前执行：先删掉不需要的工具结果，
     // 再让 sanitizer 把关联的孤儿 tool_calls 一并清理，避免产生
     // "assistant(tool_calls) 后缺少 tool 结果" 的消息序列导致 API 400。
@@ -1429,9 +1429,25 @@ export class AgentSession {
     // 而产生的孤儿），避免历史损坏导致 API 400
     const cleaned = sanitizeToolPairing(preFiltered);
 
-    if (injections.length === 0) return cleaned;
-    if (cleaned.length === 0) return injections; // 防御：cleaned 为空时至少返回 injections，避免 systemMsg 为 undefined
-    const [systemMsg, ...rest] = cleaned;
+    // 滑动窗口截断：对非当前轮的 tool 消息，只保留前 200 字符摘要。
+    // user/assistant 文字全部保留（"记忆"不丢），tool 调用记录保留（知道做过什么），
+    // 只有旧工具的大块正文数据被截短（文件内容、命令输出等）。
+    const SUMMARY_LIMIT = 200;
+    const truncated = cleaned.map((m, idx) => {
+      if ((m as any).role !== "tool") return m;
+      // 当前轮次的工具结果保留完整
+      if (idx >= this.turnStartMsgCount) return m;
+      const content = (m as any).content as string;
+      if (!content || content.length <= SUMMARY_LIMIT) return m;
+      const toolName = (m as any)._toolName as string || "";
+      const preview = content.slice(0, SUMMARY_LIMIT);
+      const truncatedContent = `${preview}\n\n[内容已截断（原 ${content.length} 字符）。这是 ${toolName} 的历史结果，如需完整内容请重新调用该工具。]`;
+      return { ...m, content: truncatedContent };
+    });
+
+    if (injections.length === 0) return truncated;
+    if (truncated.length === 0) return injections;
+    const [systemMsg, ...rest] = truncated;
     return [systemMsg, ...injections, ...rest];
   }
 
