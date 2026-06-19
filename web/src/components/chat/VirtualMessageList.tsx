@@ -1,19 +1,17 @@
 /**
- * VirtualMessageList —— 聊天消息虚拟滚动容器
+ * VirtualMessageList —— 基于 react-virtuoso 的聊天消息虚拟滚动容器
  *
- * 在消息列表外层做 turn 级虚拟化：只渲染可视区 + 少量 overscan 的消息，
- * 离屏消息用占位高度替代。每条消息首次渲染后通过 ResizeObserver 测量真实高度，
- * 后续使用已测量高度计算偏移，避免滚动跳动。
+ * 替代原手写虚拟列表，利用 react-virtuoso 的成熟能力解决：
+ * - 加载后自动定位底部（initialTopMostItemIndex）
+ * - 流式输出自动追底（followOutput）
+ * - scrollToIndex 精确跳转
+ * - 不定高动态测量无跳动
  */
 
-import { useState, useRef, useEffect, useMemo, useCallback, useImperativeHandle, forwardRef, type ReactNode } from "react";
+import { useRef, useCallback, useImperativeHandle, forwardRef, type ReactNode } from "react";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 
 // #region Types
-
-interface MeasuredItem {
-  id: string;
-  height: number;
-}
 
 export interface VirtualMessageListHandle {
   /** 滚动到列表底部 */
@@ -22,20 +20,16 @@ export interface VirtualMessageListHandle {
   scrollToIndex: (index: number, behavior?: ScrollBehavior) => void;
   /** 获取当前滚动状态 */
   getScrollState: () => { scrollTop: number; scrollHeight: number; clientHeight: number };
-  /** 强制重新测量所有已渲染项 */
-  remeasure: () => void;
-  /** 获取指定消息 id 的累积偏移（从列表顶部算起） */
-  getMessageOffset: (id: string) => number | undefined;
   /** 获取滚动容器 DOM 元素 */
-  getScrollContainer: () => HTMLDivElement | null;
+  getScrollContainer: () => HTMLElement | null;
 }
 
 interface VirtualMessageListProps {
   messages: readonly { id: string; role?: string }[];
   renderMessage: (msg: { id: string }, index: number) => ReactNode;
-  /** 未测量消息的预估高度（px） */
+  /** 未测量消息的预估高度（px）—— 传给 virtuoso 的 defaultItemHeight */
   estimateHeight?: number;
-  /** 视口外额外渲染的条数 */
+  /** 视口外额外渲染的条数（映射为 increaseViewportBy） */
   overscan?: number;
   /** 列表底部插槽（reasoning / loading / bottomRef 等） */
   footer?: ReactNode;
@@ -43,277 +37,142 @@ interface VirtualMessageListProps {
   header?: ReactNode;
   /** 滚动事件回调 */
   onScroll?: (scrollTop: number) => void;
-}
-
-// #endregion
-
-// #region Item Measurer
-
-/** 单条消息的高度测量包装器 */
-function MeasureWrapper({
-  id,
-  onHeight,
-  children,
-}: {
-  id: string;
-  onHeight: (id: string, height: number) => void;
-  children: ReactNode;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  const prevHeight = useRef(0);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-
-    const ro = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const h = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
-        if (h > 0 && h !== prevHeight.current) {
-          prevHeight.current = h;
-          onHeight(id, h);
-        }
-      }
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [id, onHeight]);
-
-  return <div ref={ref}>{children}</div>;
+  /** 可见范围变化回调（顶部可见消息的 index） */
+  onTopItemChange?: (topIndex: number) => void;
+  /** 是否自动追随新内容滚动到底部（流式输出时启用） */
+  followOutput?: boolean;
+  /** 初始显示底部（加载历史后定位到最后一条消息） */
+  initialBottom?: boolean;
 }
 
 // #endregion
 
 // #region Component
 
-const DEFAULT_ESTIMATE = 200;
-const DEFAULT_OVERSCAN = 5;
-
 export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMessageListProps>(
   function VirtualMessageList(
     {
       messages,
       renderMessage,
-      estimateHeight = DEFAULT_ESTIMATE,
-      overscan = DEFAULT_OVERSCAN,
+      estimateHeight = 200,
+      overscan = 300,
       footer,
       header,
       onScroll,
+      onTopItemChange,
+      followOutput = false,
+      initialBottom = false,
     },
     ref,
   ) {
-    // ---- state ----
-    const containerRef = useRef<HTMLDivElement>(null);
-    const [scrollTop, setScrollTop] = useState(0);
-    const [clientHeight, setClientHeight] = useState(0);
-    const heightMap = useRef(new Map<string, number>());
-    const visibleRangeRef = useRef({ start: 0, end: 0 });
-    const [measureVersion, setMeasureVersion] = useState(0);
+    const virtuosoRef = useRef<VirtuosoHandle>(null);
+    const scrollContainerRef = useRef<HTMLElement | null>(null);
 
-    // ---- height tracking ----
-    const recordHeight = useCallback((id: string, h: number) => {
-      const prev = heightMap.current.get(id);
-      if (prev === h) return;
-      // 消息在视口上方 → 高度变化时补偿 scrollTop，消除视觉抖动
-      const msgIndex = messages.findIndex((m) => m.id === id);
-      const isAbove = msgIndex >= 0 && msgIndex < visibleRangeRef.current.start;
-      heightMap.current.set(id, h);
-      if (isAbove) {
-        const delta = h - (prev ?? estimateHeight);
-        const c = containerRef.current;
-        if (c && delta !== 0) c.scrollTop += delta;
-      }
-      setMeasureVersion((n) => n + 1);
-    }, [messages, estimateHeight]);
-
-    /** 预先计算的每条消息偏移量数组（含兜底预估值） */
-    const getHeights = useCallback((): MeasuredItem[] => {
-      const result: MeasuredItem[] = [];
-      for (let i = 0; i < messages.length; i++) {
-        const id = messages[i].id;
-        result.push({ id, height: heightMap.current.get(id) ?? estimateHeight });
-      }
-      return result;
-    }, [messages, estimateHeight]);
-
-    // ---- compute visible range & offsets ----
-    const { totalHeight, visibleRange, topPadding, bottomPadding } = useMemo(() => {
-      const heights = getHeights();
-
-      let total = 0;
-      for (const h of heights) total += h.height;
-
-      // find start index
-      let offset = 0;
-      let startIdx = 0;
-      for (let i = 0; i < heights.length; i++) {
-        if (offset + heights[i].height >= scrollTop) {
-          startIdx = i;
-          break;
-        }
-        offset += heights[i].height;
-        startIdx = i + 1;
-      }
-      startIdx = Math.max(0, startIdx - overscan);
-
-      // find end index
-      offset = 0;
-      let endIdx = heights.length;
-      const limit = scrollTop + (clientHeight || window.innerHeight);
-      for (let i = 0; i < heights.length; i++) {
-        if (offset > limit) {
-          endIdx = i + overscan;
-          break;
-        }
-        offset += heights[i].height;
-      }
-      endIdx = Math.min(heights.length, endIdx);
-
-      // padding
-      let topPad = 0;
-      for (let i = 0; i < startIdx; i++) topPad += heights[i].height;
-      let bottomPad = 0;
-      for (let i = endIdx; i < heights.length; i++) bottomPad += heights[i].height;
-
-      visibleRangeRef.current = { start: startIdx, end: endIdx };
-
-      return {
-        totalHeight: total,
-        visibleRange: { start: startIdx, end: endIdx },
-        topPadding: topPad,
-        bottomPadding: bottomPad,
-      };
-    }, [getHeights, scrollTop, clientHeight, overscan, measureVersion]);
-
-    // ---- notify total height change ----
-    useEffect(() => {
-      const container = containerRef.current;
-      if (!container) return;
-
-      let prevWidth = container.clientWidth;
-
-      const handleScroll = () => {
-        setScrollTop(container.scrollTop);
-        onScroll?.(container.scrollTop);
-      };
-      const handleResize = () => {
-        const w = container.clientWidth;
-        // 宽度变化时仅触发重算（clientHeight 可能变了），不清理高度缓存。
-        // 内容重排带来的高度变化由每条消息自己的 ResizeObserver 精确捕获，
-        // 清空全部缓存只会让离屏消息回退到预估值，造成空白/跳动。
-        if (w !== prevWidth) {
-          prevWidth = w;
-          setMeasureVersion((n) => n + 1);
-        }
-        setClientHeight(container.clientHeight);
-      };
-
-      // observe with ResizeObserver for more accurate sizing
-      const ro = new ResizeObserver(() => {
-        handleResize();
-      });
-      ro.observe(container);
-
-      container.addEventListener("scroll", handleScroll, { passive: true });
-      handleResize(); // initial
-
-      return () => {
-        container.removeEventListener("scroll", handleScroll);
-        ro.disconnect();
-      };
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
-
-    // ---- imperative handle ----
+    // 暴露命令式 API（兼容现有 ChatPanel 调用方式）
     useImperativeHandle(ref, () => ({
       scrollToBottom(behavior: ScrollBehavior = "instant") {
-        const container = containerRef.current;
-        if (!container) return;
-        // 虚拟列表中未测量消息使用预估值，scrollHeight 可能远小于真实高度。
-        // 直接用极大值兜底——浏览器会自动 clamp 到实际最大可滚动位置。
-        container.scrollTo({ top: 99999999, behavior });
+        const smooth = behavior === "smooth";
+        virtuosoRef.current?.scrollToIndex({
+          index: "LAST",
+          align: "end",
+          behavior: smooth ? "smooth" : "auto",
+        });
+        // scrollToIndex 只滚到最后一条消息，footer（思考中/loading）在消息列表之外，
+        // 需要额外把容器滚到真正底部，把 footer 也带进视口。
+        const scrollContainerToBottom = () => {
+          const el = scrollContainerRef.current;
+          if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+        };
+        if (smooth) {
+          // 平滑模式：等 virtuoso 渲染末尾后再滚容器，保留动画
+          requestAnimationFrame(scrollContainerToBottom);
+        } else {
+          // instant 模式：多帧兜底，确保虚拟列表测量滞后时也能到底
+          scrollContainerToBottom();
+          requestAnimationFrame(scrollContainerToBottom);
+        }
       },
       scrollToIndex(index: number, behavior: ScrollBehavior = "smooth") {
-        const container = containerRef.current;
-        if (!container) return;
-        // 先按预估偏移粗定位（把所有未测量消息按预估值算），再用 DOM scrollIntoView 精确落点。
-        // 直接 scrollIntoView 在虚拟列表中可能因为目标不在 DOM 中而失败，
-        // 所以先 scrollTo 保证目标进入渲染窗口，再 scrollIntoView 微调。
-        let top = 0;
-        for (let i = 0; i < Math.min(index, messages.length); i++) {
-          top += heightMap.current.get(messages[i].id) ?? estimateHeight;
-        }
-        container.scrollTo({ top, behavior: "instant" });
-        // 等虚拟列表渲染出目标后，用 DOM 精确定位
-        const targetId = messages[index]?.id;
-        if (targetId) {
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              const el = container.querySelector(`[data-msg-id="${targetId}"]`);
-              if (el) {
-                el.scrollIntoView({ block: "start", behavior });
-              } else {
-                // 兜底：DOM 没出来就用预估位置
-                container.scrollTo({ top, behavior });
-              }
-            });
-          });
-        }
+        virtuosoRef.current?.scrollToIndex({
+          index,
+          align: "start",
+          behavior: behavior === "instant" ? "auto" : "smooth",
+        });
       },
       getScrollState() {
-        const c = containerRef.current;
-        if (!c) return { scrollTop: 0, scrollHeight: 0, clientHeight: 0 };
-        return { scrollTop: c.scrollTop, scrollHeight: c.scrollHeight, clientHeight: c.clientHeight };
-      },
-      remeasure() {
-        heightMap.current.clear();
-        setMeasureVersion((n) => n + 1);
-      },
-      getMessageOffset(id: string) {
-        let offset = 0;
-        for (let i = 0; i < messages.length; i++) {
-          if (messages[i].id === id) return offset;
-          offset += heightMap.current.get(messages[i].id) ?? estimateHeight;
-        }
-        return undefined;
+        const el = scrollContainerRef.current;
+        if (!el) return { scrollTop: 0, scrollHeight: 0, clientHeight: 0 };
+        return { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
       },
       getScrollContainer() {
-        return containerRef.current;
+        return scrollContainerRef.current;
       },
-    }), [messages, estimateHeight]);
+    }), []);
 
-    // ---- render ----
-    const visibleMessages = messages.slice(visibleRange.start, visibleRange.end);
+    // 滚动事件：通知外部
+    const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+      if (onScroll) {
+        const target = e.target as HTMLElement;
+        onScroll(target.scrollTop);
+      }
+    }, [onScroll]);
+
+    // 可见范围变化：通知外部顶部可见消息的 index（供 sticky 检测）
+    const handleRangeChanged = useCallback((range: { startIndex: number; endIndex: number }) => {
+      onTopItemChange?.(range.startIndex);
+    }, [onTopItemChange]);
+
+    // followOutput 回调：决定是否追底
+    const handleFollowOutput = useCallback((_isAtBottom: boolean) => {
+      // 外部通过 prop 控制是否追底
+      return followOutput ? "smooth" : false;
+    }, [followOutput]);
+
+    // 渲染单条消息
+    const itemContent = useCallback((index: number) => {
+      const msg = messages[index];
+      if (!msg) return null;
+      return (
+        <div className="py-1" data-msg-id={msg.id} data-msg-role={msg.role}>
+          {renderMessage(msg, index)}
+        </div>
+      );
+    }, [messages, renderMessage]);
+
+    // Header 组件
+    const HeaderComponent = useCallback(() => {
+      if (!header) return null;
+      return <>{header}</>;
+    }, [header]);
+
+    // Footer 组件
+    const FooterComponent = useCallback(() => {
+      if (!footer) return null;
+      return <>{footer}</>;
+    }, [footer]);
 
     return (
-      <div ref={containerRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
-        {/* 虚拟滚动区域：高度由消息 + 占位撑开 */}
-        <div style={{ height: totalHeight, position: "relative" }}>
-          {/* 顶部占位（离屏消息的虚拟高度） */}
-          {topPadding > 0 && <div style={{ height: topPadding }} />}
-
-          {/* header（断开连接提示等）——紧贴第一条可见消息上方 */}
-          {header && visibleRange.start === 0 && header}
-
-          {visibleMessages.map((msg, i) => {
-            const realIndex = visibleRange.start + i;
-            return (
-              <MeasureWrapper key={msg.id} id={msg.id} onHeight={recordHeight}>
-                <div className="py-1" data-msg-id={msg.id} data-msg-role={msg.role}>
-                  {renderMessage(msg, realIndex)}
-                </div>
-              </MeasureWrapper>
-            );
-          })}
-
-          {/* 底部占位 */}
-          {bottomPadding > 0 && <div style={{ height: bottomPadding }} />}
-        </div>
-
-        {/* footer 在虚拟区域之外、正常文档流中：内容变化（思考过程出现/消失等）
-            会自然影响容器的 scrollHeight，不会留下空白 */}
-        {footer}
-      </div>
+      <Virtuoso
+        ref={virtuosoRef}
+        totalCount={messages.length}
+        itemContent={itemContent}
+        defaultItemHeight={estimateHeight}
+        increaseViewportBy={overscan}
+        overscan={overscan}
+        followOutput={handleFollowOutput}
+        initialTopMostItemIndex={initialBottom && messages.length > 0 ? messages.length - 1 : undefined}
+        components={{
+          Header: HeaderComponent,
+          Footer: FooterComponent,
+        }}
+        scrollerRef={(el) => {
+          scrollContainerRef.current = el as HTMLElement;
+        }}
+        onScroll={handleScroll as any}
+        rangeChanged={handleRangeChanged}
+        className="flex-1 min-h-0"
+        style={{ height: "100%", overflowX: "hidden" }}
+      />
     );
   },
 );

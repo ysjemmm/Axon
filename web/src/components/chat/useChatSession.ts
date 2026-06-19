@@ -91,7 +91,7 @@ function toolPhaseText(name: string): string {
 }
 
 export function useChatSession(opts: UseChatSessionOptions) {
-  const { clientId, sessionId, mode, connected, send: baseSend, onSessionCreated, onStreamingChange } = opts;
+  const { clientId, sessionId, mode, connected, send: baseSend, onSessionCreated, onCompactionMigrated, onStreamingChange } = opts;
 
   // ── 会话状态 ──────────────────────────────────────────────────────────────
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
@@ -991,6 +991,11 @@ export function useChatSession(opts: UseChatSessionOptions) {
             updated[updated.length - 1] = { ...last, segments: segs };
             return updated;
           }
+          // executing 匹配失败：不创建新段，交给后续 tool_result 通过名字回退匹配来处理。
+          // 这避免了 id 不匹配时重复创建段（一个 pending 残留 + 一个 success 新建）。
+          if (msgStatus === "executing") {
+            return prev;
+          }
         }
 
         const toolSeg: ToolSegment = {
@@ -1113,7 +1118,6 @@ export function useChatSession(opts: UseChatSessionOptions) {
                 resolvedPath: (msg as any).resolvedPath || seg.resolvedPath,
               };
             }
-          }
           } else {
             // 无匹配段：tool_result 先于 tool_call 到达（软失败工具：tool_call 被跳过了）。
             // 直接用 tool_result 的数据新建成功段，不再需要 tool_call。

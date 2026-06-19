@@ -174,6 +174,9 @@ export function renderSegments(
   onRejectEdit?: (path: string) => void,
   onUndoEdit?: (path: string) => void,
 ): ReactNode[] {
+  // 过滤掉 hidden 的 tool segment（软失败的前 N 次重试不展示给用户）
+  segments = segments.filter((s) => !(s.type === "tool" && (s as ToolSegment).hidden));
+
   const nodes: ReactNode[] = [];
   let i = 0;
 

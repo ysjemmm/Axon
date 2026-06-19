@@ -32,7 +32,7 @@ function MessageBubbleImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit, on
         <div className="relative rounded-xl px-3 py-1.5 max-w-[85%] bg-muted border border-border/70 text-foreground shadow-sm">
           {/* Hover 操作按钮 */}
           {(message.content || hasSegments || (message.images && message.images.length > 0)) && (
-            <div className="absolute -left-16 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover/user:opacity-100 transition-opacity">
+            <div className="absolute -left-16 bottom-0 flex items-center gap-0.5 opacity-0 group-hover/user:opacity-100 transition-opacity">
               <button
                 onClick={(e) => {
                   navigator.clipboard.writeText(message.content || "");
