@@ -944,11 +944,19 @@ export function useChatSession(opts: UseChatSessionOptions) {
         const curGen = turnGeneration.current;
         // 陈旧 tool_call（来自被取消的上一轮）不作用于新轮 assistant
         if (last && last.role === "assistant" && last.turnGen !== curGen) return prev;
-        const status = (msg as any).status || "pending";
+        const msgStatus = (msg as any).status as string | undefined;
         const args = (msg.args as Record<string, unknown>) || {};
         const eventId = (msg as any).id as string || "";
 
-        if (last?.role === "assistant" && last.segments && status === "executing") {
+        // status="success" 来自软失败工具的延迟展示（str_replace/apply_patch/read_file 成功后才发）。
+        // 此时 tool_result 紧随其后——如果这里创建 pending 段且 tool_result 在同一批 React 更新中
+        // 执行，setState 的 prev 可能看不到刚加的 pending 段（竞态），导致 pending 段残留在 UI 上。
+        // 解法：success tool_call 不创建段，由紧随的 tool_result 负责创建最终的 success 段。
+        if (msgStatus === "success") {
+          return prev;
+        }
+
+        if (last?.role === "assistant" && last.segments && msgStatus === "executing") {
           const segs = [...last.segments];
           let idx = -1;
           if (eventId) {
@@ -1039,7 +1047,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
             }
           }
           if (matchIdx >= 0) {
-            const seg = segs[matchIdx];
+            const seg = segs[matchIdx] as ToolSegment;
             if (seg.type === "tool") {
               const isError = toolStatus === "error";
               const isExplore = seg.name === "search" || seg.name === "list_dir";
@@ -1105,6 +1113,45 @@ export function useChatSession(opts: UseChatSessionOptions) {
                 resolvedPath: (msg as any).resolvedPath || seg.resolvedPath,
               };
             }
+          }
+          } else {
+            // 无匹配段：tool_result 先于 tool_call 到达（软失败工具：tool_call 被跳过了）。
+            // 直接用 tool_result 的数据新建成功段，不再需要 tool_call。
+            const noMatchName = msg.name || "";
+            const noMatchArgs = (msg as any).args as Record<string, unknown> || {};
+            const shortName = typeof noMatchArgs.path === "string" ? (noMatchArgs.path as string).split("/").pop()?.split("\\").pop() || "" : "";
+            const isExplore = noMatchName === "search" || noMatchName === "list_dir";
+            const lineSuffix = noMatchName === "read_file" ? formatLineSuffix(noMatchArgs.startLine, noMatchArgs.endLine) : "";
+            let desc = `${noMatchName} 完成`;
+            if (noMatchName === "read_file") desc = shortName ? `已读取 ${shortName}${lineSuffix ? ` ${lineSuffix}` : ""}` : "已读取文件";
+            else if (noMatchName === "create_file") desc = shortName ? `${noMatchArgs.overwrite === true ? "已覆盖" : "已创建"} ${shortName}` : "已创建文件";
+            else if (noMatchName === "str_replace") desc = shortName ? `已编辑 ${shortName}` : "已编辑文件";
+            else if (isExplore) desc = (noMatchArgs.intent as string) || (noMatchArgs.query as string) || fallbackIntent(noMatchName);
+            else if (noMatchName === "execute_command") desc = "命令已执行";
+            else if (isRelayTool(noMatchName)) desc = relayToolLabel(noMatchName);
+            segs.push({
+              type: "tool",
+              id: eventId || `tool-${Date.now()}-${noMatchName}`,
+              boundId: !!eventId,
+              name: noMatchName,
+              status: toolStatus,
+              description: desc,
+              args: noMatchArgs,
+              command: (noMatchName === "execute_command" || noMatchName === "start_process") ? (noMatchArgs.command as string) : undefined,
+              query: isExplore ? ((noMatchArgs.intent as string) || (noMatchArgs.query as string) || fallbackIntent(noMatchName)) : undefined,
+              mcpServer: (msg as any).mcpServer,
+              mcpTool: (msg as any).mcpTool,
+              output: (noMatchName === "execute_command" || OUTPUT_TOOLS.has(noMatchName)) ? (msg.result || "") : undefined,
+              diff: (msg as any).fileDiff,
+              diffs: (msg as any).fileDiffs,
+              diagnostics: (msg as any).diagnostics,
+              searchResults: (msg as any).searchResults,
+              fetchResult: (msg as any).fetchResult,
+              powerActivated: (msg as any).powerActivated,
+              pending: (msg as any).pending,
+              hidden: (msg as any).hidden,
+              resolvedPath: (msg as any).resolvedPath,
+            });
           }
           updated[updated.length - 1] = { ...last, segments: segs };
         }
