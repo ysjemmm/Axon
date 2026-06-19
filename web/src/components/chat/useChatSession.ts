@@ -173,6 +173,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const modelRef = useRef(model); modelRef.current = model;
   const statusPhaseRef = useRef(statusPhase); statusPhaseRef.current = statusPhase;
   const editModeRef = useRef(editMode); editModeRef.current = editMode;
+  // tool_result 后延迟重置状态的定时器（防止连续工具调用时 "思考中" 闪烁）
+  const toolResultResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 命令授权门请求用 ref 持有，供取消/回传时读取最新映射，避免回调依赖 state
   const commandApprovalsRef = useRef<Record<string, CommandApproval>>({}); commandApprovalsRef.current = commandApprovals;
   const onSessionCreatedRef = useRef(onSessionCreated); onSessionCreatedRef.current = onSessionCreated;
@@ -1028,9 +1030,14 @@ export function useChatSession(opts: UseChatSessionOptions) {
     if (msg.type === "tool_result") {
       if (cancelled.current) return;
       if (msg.name === "delegate_task") return;
-      // 工具执行完成：重置底部状态为默认（等待下一个工具或流式回复）
-      setStatusText("思考中...");
-      setStatusPhase("thinking");
+      // 工具执行完成：延迟重置状态，避免下一个 tool_call 紧跟时出现 "思考中" 闪烁抖动。
+      // 如果 300ms 内有新的 tool_call/stream_start 到来会直接覆盖，不会看到中间态。
+      if (toolResultResetTimer.current) clearTimeout(toolResultResetTimer.current);
+      toolResultResetTimer.current = setTimeout(() => {
+        setStatusText("思考中...");
+        setStatusPhase("thinking");
+        toolResultResetTimer.current = null;
+      }, 300);
       const toolStatus = (msg as any).status as ToolStatus || "success";
       setChatHistory((prev) => {
         const updated = [...prev];

@@ -139,13 +139,14 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
       );
     }, [messages, renderMessage]);
 
-    // Header 组件
+    // Header/Footer 用 useCallback 包裹。footer/header 引用变化时 useCallback 更新，
+    // 但由于 SVG 改用了 CSS animation（不受 DOM patch 影响），即使 Virtuoso 更新
+    // Footer 内容也不会导致旋转动画重置。
     const HeaderComponent = useCallback(() => {
       if (!header) return null;
       return <>{header}</>;
     }, [header]);
 
-    // Footer 组件
     const FooterComponent = useCallback(() => {
       if (!footer) return null;
       return <>{footer}</>;

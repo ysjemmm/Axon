@@ -224,13 +224,17 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     // 内容高度变化追底：tool card 执行完成/输出展开/footer(思考中) 等会让内容变高，
     // 但 totalCount 不变、virtuoso 的 followOutput 不触发。直接轮询 scrollHeight，
     // 它能捕获所有高度变化（含 footer 兄弟节点）。用户未手动离开底部时保持贴底。
+    // 注意：只在真正没在底部时才 scrollTo，避免频繁调用导致 reflow 打断 CSS 动画。
     let prevScrollHeight = container.scrollHeight;
     const poller = setInterval(() => {
       const sh = container.scrollHeight;
       if (sh !== prevScrollHeight) {
         prevScrollHeight = sh;
         if (!autoScrollUserOverride.current) {
-          container.scrollTo({ top: sh, behavior: "instant" });
+          const distanceToBottom = sh - container.scrollTop - container.clientHeight;
+          if (distanceToBottom > 2) {
+            container.scrollTo({ top: sh, behavior: "instant" });
+          }
         }
       }
     }, 60);
@@ -628,16 +632,15 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                 {session.isLoading && (
                   <div className="flex items-center gap-2.5 text-muted-foreground text-sm px-3 py-1 pb-6">
                     <svg width="28" height="28" viewBox="0 0 40 40" className="shrink-0">
-                      <circle cx="20" cy="20" r="17" fill="none" stroke="url(#axon-glow)" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="20 80" opacity="0.8">
-                        <animateTransform attributeName="transform" type="rotate" from="0 20 20" to="360 20 20" dur="1.5s" repeatCount="indefinite" />
-                      </circle>
+                      {/* 外圈：CSS 旋转，不受 React patch 影响 */}
+                      <g style={{ transformOrigin: "20px 20px", animation: "spin 1.5s linear infinite" }}>
+                        <circle cx="20" cy="20" r="17" fill="none" stroke="url(#axon-glow)" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="20 80" opacity="0.8" />
+                      </g>
+                      {/* 脸部：静止不转 */}
                       <circle cx="20" cy="20" r="13" fill="white" stroke="#1e1b4b" strokeWidth="1.5" />
-                      <ellipse cx="15" cy="19" rx="2" ry="2.5" fill="#6366f1">
-                        <animate attributeName="ry" values="2.5;1;2.5" dur="2.5s" repeatCount="indefinite" begin="0s" />
-                      </ellipse>
-                      <ellipse cx="25" cy="19" rx="2" ry="2.5" fill="#6366f1">
-                        <animate attributeName="ry" values="2.5;1;2.5" dur="2.5s" repeatCount="indefinite" begin="0.1s" />
-                      </ellipse>
+                      {/* 眼睛：CSS 眨眼动画 */}
+                      <ellipse cx="15" cy="19" rx="2" ry="2.5" fill="#6366f1" style={{ transformOrigin: "15px 19px", animation: "blink 2.5s ease-in-out infinite" }} />
+                      <ellipse cx="25" cy="19" rx="2" ry="2.5" fill="#6366f1" style={{ transformOrigin: "25px 19px", animation: "blink 2.5s ease-in-out 0.1s infinite" }} />
                       <defs>
                         <linearGradient id="axon-glow" x1="0%" y1="0%" x2="100%" y2="100%">
                           <stop offset="0%" stopColor="#6366f1" />
