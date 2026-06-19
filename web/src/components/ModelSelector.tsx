@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { Check, ChevronDown, ChevronRight } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { getProviders, type ProviderModelInfo, type ResolvedProviderInfo } from "@/lib/apiClient";
 
 export interface ModelOption {
@@ -203,6 +204,9 @@ interface ModelSelectorProps {
   value: string;
   onChange: (modelId: string) => void;
   disabledModels?: string[];
+  /** 整个选择器禁用（如压缩期间） */
+  disabled?: boolean;
+  disabledTooltip?: string;
 }
 
 /** 单个模型行（菜单项） */
@@ -231,7 +235,7 @@ function ModelRow({ model, selected, disabled, onPick }: { model: ModelOption; s
   );
 }
 
-export function ModelSelector({ value, onChange, disabledModels = [] }: ModelSelectorProps) {
+export function ModelSelector({ value, onChange, disabledModels = [], disabled = false, disabledTooltip }: ModelSelectorProps) {
   const groups = useProviderGroups();
   const current = findModel(value);
   const [open, setOpen] = useState(false);
@@ -239,6 +243,7 @@ export function ModelSelector({ value, onChange, disabledModels = [] }: ModelSel
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const onOpenChange = (next: boolean) => {
+    if (disabled) return;
     setOpen(next);
     if (next) {
       void refreshModels(); // 打开即拉最新，配置改动即时反映
@@ -249,13 +254,33 @@ export function ModelSelector({ value, onChange, disabledModels = [] }: ModelSel
   const pick = (id: string) => { onChange(id); setOpen(false); };
   const autoDisabled = disabledModels.includes(AUTO_MODEL.id);
 
+  const trigger = (
+    <button
+      className={`inline-flex items-center h-7 gap-1 rounded-md px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors ${disabled ? "opacity-30 cursor-not-allowed" : ""}`}
+      onClick={() => { if (!disabled) setOpen(!open); }}
+    >
+      {current?.name || value}
+      <ChevronDown className="w-3 h-3 opacity-60" />
+    </button>
+  );
+
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
-        <button className="inline-flex items-center h-7 gap-1 rounded-md px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors">
-          {current?.name || value}
-          <ChevronDown className="w-3 h-3 opacity-60" />
-        </button>
+        {disabled && disabledTooltip ? (
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">{trigger}</span>
+              </TooltipTrigger>
+              <TooltipContent side="top" align="start">
+                <p className="text-xs">{disabledTooltip}</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        ) : (
+          trigger
+        )}
       </PopoverTrigger>
       <PopoverContent
         side="top"

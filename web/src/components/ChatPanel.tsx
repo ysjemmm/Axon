@@ -914,7 +914,13 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
           {/* 底部工具栏 */}
           <div className="flex items-center justify-between px-2 pb-1.5">
             <div className="flex items-center gap-1">
-              <ModelSelector value={session.model} onChange={handleModelChange} disabledModels={images.length > 0 ? models.filter((m) => !m.vision).map((m) => m.id) : []} />
+              <ModelSelector
+                value={session.model}
+                onChange={handleModelChange}
+                disabledModels={images.length > 0 ? models.filter((m) => !m.vision).map((m) => m.id) : []}
+                disabled={session.isCompacting}
+                disabledTooltip="压缩期间不可切换模型"
+              />
 
               <Popover open={menuOpen} onOpenChange={setMenuOpen}>
                 <PopoverTrigger asChild>
@@ -1068,7 +1074,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                       onClick={() => session.compactSession()}
                       disabled={session.isCompacting || session.isLoading || session.chatHistory.length < 6 || (session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35)}
                       className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                      title={session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35 ? "上下文未超过 35%，禁止手动压缩" : "手动压缩上下文"}
+                      title={session.isCompacting ? "压缩进行中" : session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35 ? "上下文未超过 35%，禁止手动压缩" : "手动压缩上下文"}
                     >
                       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
                         <path d="M4 5l-2 2 2 2M7 3l2-2 2 2M9 8l2 2-2 2M12 13l2-2-2-2M3 13l-2-2 2-2" />
@@ -1076,7 +1082,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="top" align="end">
-                    <p className="text-xs">压缩上下文</p>
+                    <p className="text-xs">{session.isCompacting ? "压缩进行中，不可操作" : session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35 ? "上下文未超过 35%，禁止手动压缩" : "压缩上下文"}</p>
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
