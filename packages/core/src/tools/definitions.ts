@@ -104,12 +104,12 @@ export function getToolDefinitions() {
       type: "function" as const,
       function: {
         name: "execute_command",
-        description: "执行 shell 命令",
+        description: "在 Axon 终端中执行 shell 命令。每条命令执行前系统会自动 cd 到指定的 cwd 目录，确保执行环境正确。严禁在命令中使用 cd、Set-Location、pushd 等切换目录的指令——它们会污染终端状态。如需在子目录执行，用 cwd 参数指定。",
         parameters: {
           type: "object",
           properties: {
-            command: { type: "string", description: "命令" },
-            cwd: { type: "string", description: "工作目录（绝对路径）。不传则使用终端当前目录。多工作区时用它指定目标项目目录。不要在命令里手动 cd / Set-Location——系统会自动切换到该目录执行" },
+            command: { type: "string", description: "要执行的命令。禁止包含 cd / Set-Location / pushd 等目录切换指令" },
+            cwd: { type: "string", description: "工作目录（绝对路径）。系统会在执行命令前无条件 cd 到此目录。不传则使用会话默认工作区根目录" },
           },
           required: ["command"],
         },
