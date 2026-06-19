@@ -379,7 +379,9 @@ export class AgentSession {
 
   /** 在 cancel() 被调用但 agent loop 尚未产出任何统计时的兜底 */
   private sendTurnCancelledFallback(): void {
-    const breakdown = { ...this.buildTokenBreakdown(), outputTokens: 0 };
+    // 取消时用字符估算兜底 outputTokens（已接收的流式内容字符数 * 0.4）
+    const estimatedOutput = this.lastTurnOutputTokens || this.lastCompletionTokens || 0;
+    const breakdown = { ...this.buildTokenBreakdown(), outputTokens: estimatedOutput };
     const turnTokens = breakdown.memoryTokens + breakdown.systemTokens + breakdown.questionTokens + breakdown.outputTokens;
     if (turnTokens <= 0) return; // 没有任何数据可发
     const credits = calculateCredits(this.model, breakdown);
@@ -436,7 +438,10 @@ export class AgentSession {
       }
     }
     const elapsed = Date.now() - turnStartTime;
-    const breakdown = { ...this.buildTokenBreakdown(), outputTokens: this.lastTurnOutputTokens || this.lastCompletionTokens || 0 };
+    // outputTokens：优先用 API 返回的真实值，没有时用流式内容字符数估算（约 0.4 token/字符）
+    const estimatedOutput = this.lastTurnOutputTokens || this.lastCompletionTokens
+      || (streamedContent ? Math.ceil(streamedContent.length * 0.4) : 0);
+    const breakdown = { ...this.buildTokenBreakdown(), outputTokens: estimatedOutput };
     // 取消时可能没有任何 LLM 返回数据（lastTurnTokens=0, cumulative 也没涨）。
     // 用 buildTokenBreakdown 的字符估算兜底，至少不显示 0。
     const turnTokens = this.lastTurnTokens
@@ -2031,7 +2036,10 @@ export class AgentSession {
         const elapsed = Date.now() - turnStartTime;
         const turnTokens = this.lastTurnTokens || contentBuffer.length;
         // Credits 计算：请求级四段加权（记忆/system/本次输入/输出），见 credits.ts
-        const breakdown = { ...this.buildTokenBreakdown(), outputTokens: this.lastTurnOutputTokens || this.lastCompletionTokens || 0 };
+        // outputTokens：优先用 API 返回的真实值，没有时用流式内容 + 工具调用参数的字符数估算
+        const realOutput = this.lastTurnOutputTokens || this.lastCompletionTokens;
+        const estimatedOutput = realOutput > 0 ? realOutput : Math.ceil((contentBuffer.length + streamedContentThisRound.length) * 0.4);
+        const breakdown = { ...this.buildTokenBreakdown(), outputTokens: estimatedOutput };
         const credits = calculateCredits(this.model, breakdown);
         const creditDetail = buildCreditDetail(this.model, breakdown);
         this.messages.push({ role: "assistant", content: contentBuffer, turnStats: { elapsed, tokens: turnTokens, model: this.model, credits, creditDetail } } as any);
