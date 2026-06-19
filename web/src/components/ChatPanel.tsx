@@ -612,7 +612,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             overscan={300}
             onScroll={stableOnScroll}
             onTopItemChange={handleTopItemChange}
-            followOutput={session.isLoading && !autoScrollUserOverride.current}
+            followOutput={false}
             initialBottom={!session.isLoadingSession && session.chatHistory.length > 0}
             header={
               !connected && session.chatHistory.length > 0 ? (
