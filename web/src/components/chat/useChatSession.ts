@@ -1028,6 +1028,9 @@ export function useChatSession(opts: UseChatSessionOptions) {
     if (msg.type === "tool_result") {
       if (cancelled.current) return;
       if (msg.name === "delegate_task") return;
+      // 工具执行完成：重置底部状态为默认（等待下一个工具或流式回复）
+      setStatusText("思考中...");
+      setStatusPhase("thinking");
       const toolStatus = (msg as any).status as ToolStatus || "success";
       setChatHistory((prev) => {
         const updated = [...prev];
