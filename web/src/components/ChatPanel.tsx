@@ -629,29 +629,6 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             footer={
               <>
                 {session.reasoning && session.isLoading && <ReasoningBlock content={session.reasoning} />}
-                {session.isLoading && (
-                  <div className="flex items-center gap-2.5 text-muted-foreground text-sm px-3 py-1 pb-6">
-                    <svg width="28" height="28" viewBox="0 0 40 40" className="shrink-0">
-                      {/* 外圈：CSS 旋转，不受 React patch 影响 */}
-                      <g style={{ transformOrigin: "20px 20px", animation: "spin 1.5s linear infinite" }}>
-                        <circle cx="20" cy="20" r="17" fill="none" stroke="url(#axon-glow)" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="20 80" opacity="0.8" />
-                      </g>
-                      {/* 脸部：静止不转 */}
-                      <circle cx="20" cy="20" r="13" fill="white" stroke="#1e1b4b" strokeWidth="1.5" />
-                      {/* 眼睛：CSS 眨眼动画 */}
-                      <ellipse cx="15" cy="19" rx="2" ry="2.5" fill="#6366f1" style={{ transformOrigin: "15px 19px", animation: "blink 2.5s ease-in-out infinite" }} />
-                      <ellipse cx="25" cy="19" rx="2" ry="2.5" fill="#6366f1" style={{ transformOrigin: "25px 19px", animation: "blink 2.5s ease-in-out 0.1s infinite" }} />
-                      <defs>
-                        <linearGradient id="axon-glow" x1="0%" y1="0%" x2="100%" y2="100%">
-                          <stop offset="0%" stopColor="#6366f1" />
-                          <stop offset="50%" stopColor="#a78bfa" />
-                          <stop offset="100%" stopColor="#38bdf8" />
-                        </linearGradient>
-                      </defs>
-                    </svg>
-                    <span className="animate-pulse">{session.statusText}</span>
-                  </div>
-                )}
                 <div ref={bottomRef} />
               </>
             }
@@ -677,6 +654,26 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             )}
           />
           )}
+        {/* Loading 指示器：放在 Virtuoso 外面，DOM 始终存在，动画不被重建打断。
+            用 hidden 控制可见性而非条件渲染，保证 CSS animation 不中断。 */}
+        <div className={`flex items-center gap-2.5 text-muted-foreground text-sm px-3 py-1 pb-2 ${session.isLoading ? "" : "hidden"}`}>
+          <svg width="28" height="28" viewBox="0 0 40 40" className="shrink-0">
+            <g style={{ transformOrigin: "20px 20px", animation: "spin 1.5s linear infinite" }}>
+              <circle cx="20" cy="20" r="17" fill="none" stroke="url(#axon-glow-outer)" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="20 80" opacity="0.8" />
+            </g>
+            <circle cx="20" cy="20" r="13" fill="white" stroke="#1e1b4b" strokeWidth="1.5" />
+            <ellipse cx="15" cy="19" rx="2" ry="2.5" fill="#6366f1" style={{ transformOrigin: "15px 19px", animation: "blink 2.5s ease-in-out infinite" }} />
+            <ellipse cx="25" cy="19" rx="2" ry="2.5" fill="#6366f1" style={{ transformOrigin: "25px 19px", animation: "blink 2.5s ease-in-out 0.1s infinite" }} />
+            <defs>
+              <linearGradient id="axon-glow-outer" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#6366f1" />
+                <stop offset="50%" stopColor="#a78bfa" />
+                <stop offset="100%" stopColor="#38bdf8" />
+              </linearGradient>
+            </defs>
+          </svg>
+          <span className="animate-pulse">{session.statusText}</span>
+        </div>
         <button
           onClick={animatedScrollToBottom}
           className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-10 w-9 h-9 rounded-full bg-background border border-border shadow-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:shadow-lg transition-all duration-200 ${showScrollBtn ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-2 pointer-events-none"}`}

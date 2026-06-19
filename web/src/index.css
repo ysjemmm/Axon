@@ -429,3 +429,16 @@ body.vscode-high-contrast {
   --input: var(--vscode-input-background, #000000);
   --ring: var(--vscode-focusBorder, #f38518);
 }
+
+
+/* Axon loading 图标动画 */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes blink {
+  0%, 100% { transform: scaleY(1); }
+  45% { transform: scaleY(0.4); }
+  50% { transform: scaleY(0.4); }
+  55% { transform: scaleY(1); }
+}
