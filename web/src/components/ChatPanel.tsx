@@ -551,19 +551,40 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               </div>
             ) : (
               <div className="flex-1 flex items-center justify-center">
-                <div className="text-center text-muted-foreground">
+                <div className="text-center max-w-md px-6">
                   <AxonLogo size={64} className="mx-auto mb-4" />
                   {mode === "quest" ? (
                     <>
-                      <p className="text-lg">Axon · 问答</p>
-                      <p className="text-sm mt-2">概念、方案、答疑。我不会改你的代码。</p>
+                      <p className="text-lg font-medium text-foreground">Axon · 问答</p>
+                      <p className="text-sm text-muted-foreground mt-1 mb-6">概念、方案、答疑。我不会改你的代码。</p>
                     </>
                   ) : (
                     <>
-                      <p className="text-lg">Axon</p>
-                      <p className="text-sm mt-2">读写代码、执行命令、搜索项目、联网查询。</p>
+                      <p className="text-lg font-medium text-foreground">Axon</p>
+                      <p className="text-sm text-muted-foreground mt-1 mb-6">读写代码、执行命令、搜索项目、联网查询。</p>
                     </>
                   )}
+                  <div className="bg-muted/40 rounded-xl px-5 py-4 text-left">
+                    <p className="text-xs font-medium text-foreground mb-2.5">快速上手</p>
+                    <div className="space-y-2">
+                      <div className="flex items-start gap-2.5">
+                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">1</span>
+                        <p className="text-xs text-muted-foreground leading-relaxed">打开项目文件夹（可绑定工作区组，管理多根目录）</p>
+                      </div>
+                      <div className="flex items-start gap-2.5">
+                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">2</span>
+                        <p className="text-xs text-muted-foreground leading-relaxed">用自然语言描述需求：改 bug、加功能、分析代码、写脚本……</p>
+                      </div>
+                      <div className="flex items-start gap-2.5">
+                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">3</span>
+                        <p className="text-xs text-muted-foreground leading-relaxed">Axon 会读文件 → 改代码 → 跑命令验证，全程自动推进</p>
+                      </div>
+                      <div className="flex items-start gap-2.5">
+                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">4</span>
+                        <p className="text-xs text-muted-foreground leading-relaxed">输入 <code className="px-1 py-0.5 rounded bg-muted text-[10px] font-mono">/</code> 引用当前文件、终端选区或编辑器诊断</p>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -1045,9 +1066,9 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                   <TooltipTrigger asChild>
                     <button
                       onClick={() => session.compactSession()}
-                      disabled={session.isCompacting || session.isLoading || session.chatHistory.length < 6 || session.tokenUsage.used < session.tokenUsage.max * 0.35}
+                      disabled={session.isCompacting || session.isLoading || session.chatHistory.length < 6 || (session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35)}
                       className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                      title={session.tokenUsage.used < session.tokenUsage.max * 0.35 ? "上下文未超过 35%，禁止手动压缩" : "手动压缩上下文"}
+                      title={session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35 ? "上下文未超过 35%，禁止手动压缩" : "手动压缩上下文"}
                     >
                       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
                         <path d="M4 5l-2 2 2 2M7 3l2-2 2 2M9 8l2 2-2 2M12 13l2-2-2-2M3 13l-2-2 2-2" />

@@ -690,15 +690,18 @@ export function useChatSession(opts: UseChatSessionOptions) {
       setIsCompacting(false);
       const ok = (msg as any).success as boolean;
       const endMsg = (msg as any).message as string || (ok ? "上下文已压缩" : "压缩失败");
-      // 在聊天末尾追加一条压缩结果系统行
-      setChatHistory((prev) => {
-        // 避免重复追加：最后一条已是一条同内容的压缩提示
-        const last = prev[prev.length - 1];
-        const label = `[${endMsg}]`;
-        if ((last as any)?.role === "system" && last.content === label) return prev;
-        return [...prev, { id: `compact-${Date.now()}`, role: "system" as any, content: label, timestamp: Date.now() }];
-      });
-      setStatusText(ok ? "思考中..." : "压缩失败，请重试");
+      if (!ok) {
+        // 失败提示：用轻 toast 而非藏到聊天历史的系统消息
+        setUndoNotice({ id: Date.now(), text: endMsg });
+      } else {
+        setChatHistory((prev) => {
+          const last = prev[prev.length - 1];
+          const label = `[${endMsg}]`;
+          if ((last as any)?.role === "system" && last.content === label) return prev;
+          return [...prev, { id: `compact-${Date.now()}`, role: "system" as any, content: label, timestamp: Date.now() }];
+        });
+      }
+      setStatusText(ok ? "思考中..." : endMsg);
       return;
     }
 
