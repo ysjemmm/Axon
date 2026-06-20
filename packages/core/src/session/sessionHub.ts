@@ -568,6 +568,15 @@ export class SessionHub {
         migrateData.userInput.provider,
         migrateData.userInput.userMeta as { displayText?: string; attachedFiles?: { name: string; size: number }[]; replyStyle?: string } | undefined,
       );
+    } catch (err) {
+      const error = err as Error;
+      if (error.name !== "AbortError" && !error.message?.includes("aborted")) {
+        console.error(`[sessionHub] 压缩迁移 LLM 错误:`, error.message);
+        const errMsg = `❌ ${error.message}`;
+        session.getMessages().push({ role: "assistant", content: errMsg } as any);
+        this.sendTo(created.id, clientId, { type: "stream_delta", content: errMsg } as AgentEvent);
+        this.sendTo(created.id, clientId, { type: "stream_end", elapsed: 0, tokens: 0, model: migrateData.userInput.model || "auto" } as AgentEvent);
+      }
     } finally {
       this.runningSessions.delete(created.id);
     }
@@ -686,6 +695,18 @@ export class SessionHub {
         replyStyle: cmd.replyStyle,
         userSegments: cmd.userSegments as unknown[] | undefined,
       });
+    } catch (err) {
+      // 非取消异常（如 LLM 403/网络错误）：向该会话前端展示错误，
+      // 不向上抛——避免串台到其他正在运行的后台会话
+      const error = err as Error;
+      if (error.name !== "AbortError" && !error.message?.includes("aborted")) {
+        console.error(`[sessionHub] ${execSessionId} LLM 错误:`, error.message);
+        const errMsg = `❌ ${error.message}`;
+        execSession.getMessages().push({ role: "assistant", content: errMsg } as any);
+        this.sendTo(execSessionId, clientId, { type: "stream_delta", content: errMsg } as AgentEvent);
+        const model = this.getActiveSession(execSessionId)?.getMessages() ? cmd.model || "auto" : "auto";
+        this.sendTo(execSessionId, clientId, { type: "stream_end", elapsed: 0, tokens: 0, model } as AgentEvent);
+      }
     } finally {
       this.runningSessions.delete(execSessionId);
     }
