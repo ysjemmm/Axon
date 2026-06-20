@@ -130,20 +130,29 @@ export function getClient(provider: string, model?: string): OpenAI {
 /** 已创建的策略缓存 */
 const strategies: Record<string, LLMStrategy> = {};
 
+/** 获取模型级协议：model.protocol 优先，provider.protocol 仅作为旧配置 fallback */
+function protocolForModel(provider: string, model: string): ProviderProtocol {
+  const name = normalizeProvider(provider);
+  const resolved = _resolved?.get(name);
+  const modelDef = resolved?.models.find((m) => m.id === model);
+  if (modelDef?.protocol === "responses" || modelDef?.protocol === "chat") return modelDef.protocol;
+  return configFor(name)?.protocol ?? (name === ESIGN_PROVIDER ? "responses" : "chat");
+}
+
 /**
  * 获取指定 provider + model 的 LLM 调用策略。
- * - provider 协议为 responses 且模型为 GPT 系 → ResponsesStrategy（原生 agentic loop，防自停）
+ * - model.protocol = responses 且模型为 GPT 系 → ResponsesStrategy（原生 agentic loop，防自停）
  * - 其他 → ChatCompletionsStrategy
  */
 export function getStrategy(provider: string, model: string): LLMStrategy {
   const name = normalizeProvider(provider);
-  const protocol = configFor(name)?.protocol ?? (name === ESIGN_PROVIDER ? "responses" : "chat");
+  const protocol = protocolForModel(name, model);
   const useResponses = protocol === "responses" && /^gpt/i.test(model);
-  const key = `${name}:${useResponses ? "responses" : "chat"}`;
+  const key = `${name}:${model}:${useResponses ? "responses" : "chat"}`;
   if (!strategies[key]) {
     const client = getClient(name, model);
     strategies[key] = useResponses ? new ResponsesStrategy(client) : new ChatCompletionsStrategy(client);
-    console.log(`[agent] 使用策略 ${strategies[key].name}（provider=${name}, model=${model}）`);
+    console.log(`[agent] 使用策略 ${strategies[key].name}（provider=${name}, model=${model}, protocol=${protocol}）`);
   }
   return strategies[key];
 }

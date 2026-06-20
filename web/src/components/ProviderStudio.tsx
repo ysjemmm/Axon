@@ -26,6 +26,7 @@ import {
   type ResolvedProviderInfo,
   type ProviderModelInfo,
   type ProbedModelInfo,
+  type ProviderProtocol,
 } from "@/lib/apiClient";
 
 function isInVSCode(): boolean {
@@ -297,6 +298,7 @@ function ModelManager({ models, editable, onSave, providerName, level, workspace
         name: p.name || p.id,
         contextWindow: p.contextWindow ?? 128000,
         vision: p.vision ?? false,
+        protocol: p.protocol,
         vendor: p.vendor,
       }));
     setProbed(null);
@@ -386,6 +388,7 @@ function ModelRow({ model, editable, confirmDelete, onToggle, onEdit, onDelete }
       <div className="min-w-0 flex-1">
         <span className={`text-xs font-medium ${model.disabled ? "line-through" : ""}`}>{model.name || model.id}</span>
         {model.vendor && <span className="ml-1 text-[9px] px-1 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">{model.vendor}</span>}
+        {model.protocol && <span className="ml-1 text-[9px] px-1 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{model.protocol}</span>}
         {model.vision && <span className="ml-1 text-[9px] px-1 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">多模态</span>}
         {model.disabled && <span className="ml-1 text-[9px] px-1 rounded bg-muted text-muted-foreground">已禁用</span>}
         <span className="ml-1.5 text-[10px] text-muted-foreground font-mono">{model.id} · {win}</span>
@@ -415,6 +418,7 @@ function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo;
   const [win, setWin] = useState(String(initial?.contextWindow || 128000));
   const [vision, setVision] = useState(!!initial?.vision);
   const [vendor, setVendor] = useState(initial?.vendor || "");
+  const [protocol, setProtocol] = useState<"chat" | "responses">(initial?.protocol || "chat");
 
   const vendorOptions = [
     { id: "openai", label: "OpenAI" },
@@ -427,7 +431,7 @@ function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo;
   const submit = () => {
     if (!id.trim()) return;
     const contextWindow = /^\d+$/.test(win.trim()) ? parseInt(win.trim(), 10) : 128000;
-    onSave({ id: id.trim(), name: name.trim() || id.trim(), contextWindow, vision, vendor: vendor || undefined, disabled: initial?.disabled });
+    onSave({ id: id.trim(), name: name.trim() || id.trim(), contextWindow, vision, protocol, vendor: vendor || undefined, disabled: initial?.disabled });
   };
 
   return (
@@ -454,6 +458,8 @@ function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo;
       </div>
       <div className="flex items-center gap-2">
         <Input placeholder="上下文窗口" value={win} onChange={(e) => setWin(e.target.value)} className="h-7 text-xs w-32" />
+        <LevelButton active={protocol === "chat"} onClick={() => setProtocol("chat")} label="Chat" />
+        <LevelButton active={protocol === "responses"} onClick={() => setProtocol("responses")} label="Responses" />
         <label className="flex items-center gap-1 text-xs text-muted-foreground cursor-pointer">
           <input type="checkbox" checked={vision} onChange={(e) => setVision(e.target.checked)} className="w-3 h-3 accent-primary" />
           多模态
@@ -468,13 +474,14 @@ function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo;
   );
 }
 
-/** 把 "id | 显示名 | 窗口 | 多模态(y/n) | 厂商" 多行文本解析为模型列表 */
+/** 把 "id | 显示名 | 窗口 | 多模态(y/n) | 厂商 | 协议" 多行文本解析为模型列表 */
 function parseModels(text: string): ProviderModelInfo[] {
   return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
-    const [id, name, win, visionFlag, vendor] = line.split(/[|,]/).map((s) => s.trim());
+    const [id, name, win, visionFlag, vendor, protocol] = line.split(/[|,]/).map((s) => s.trim());
     const contextWindow = win && /^\d+$/.test(win) ? parseInt(win, 10) : 128000;
     const vision = visionFlag ? /^y|yes|true|1$/i.test(visionFlag) : false;
-    return { id, name: name || id, contextWindow, vision, vendor: vendor || undefined };
+    const proto: ProviderProtocol | undefined = protocol === "responses" ? "responses" : (protocol === "chat" ? "chat" : undefined);
+    return { id, name: name || id, contextWindow, vision, protocol: proto, vendor: vendor || undefined };
   }).filter((m) => m.id);
 }
 
@@ -485,10 +492,9 @@ function AddCustomForm({ level, workspace, onChanged }: { level: ProviderLevel; 
   const [label, setLabel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
-  const [protocol, setProtocol] = useState<"chat" | "responses">("chat");
   const [modelsText, setModelsText] = useState("");
 
-  const reset = () => { setName(""); setLabel(""); setBaseUrl(""); setApiKey(""); setProtocol("chat"); setModelsText(""); setShow(false); };
+  const reset = () => { setName(""); setLabel(""); setBaseUrl(""); setApiKey(""); setModelsText(""); setShow(false); };
 
   const submit = async () => {
     if (!name.trim() || !baseUrl.trim()) return;
@@ -497,7 +503,6 @@ function AddCustomForm({ level, workspace, onChanged }: { level: ProviderLevel; 
         label: label.trim() || name.trim(),
         baseUrl: baseUrl.trim(),
         apiKey: apiKey.trim(),
-        protocol,
         models: parseModels(modelsText),
       }, workspace);
       reset();
@@ -517,13 +522,8 @@ function AddCustomForm({ level, workspace, onChanged }: { level: ProviderLevel; 
       <Input placeholder="展示名（可选，如 我的 OpenAI）" value={label} onChange={(e) => setLabel(e.target.value)} className="h-8 text-sm" />
       <Input placeholder="Base URL，如 https://api.openai.com/v1" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} className="h-8 text-sm" />
       <Input type="password" placeholder="API Key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} className="h-8 text-sm" />
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-muted-foreground">协议</span>
-        <LevelButton active={protocol === "chat"} onClick={() => setProtocol("chat")} label="Chat Completions" />
-        <LevelButton active={protocol === "responses"} onClick={() => setProtocol("responses")} label="Responses" />
-      </div>
       <textarea
-        placeholder={"模型，每行一个：模型id | 显示名 | 上下文窗口 | 多模态(y/n) | 厂商\n例：gpt-4o | GPT-4o | 128000 | y | openai\ngpt-4o-mini | GPT-4o Mini | 128000 | n | openai"}
+        placeholder={"模型，每行一个：模型id | 显示名 | 上下文窗口 | 多模态(y/n) | 厂商 | 协议\n例：gpt-4o | GPT-4o | 128000 | y | openai | chat\ngpt-4o-mini | GPT-4o Mini | 128000 | n | openai | chat"}
         value={modelsText}
         onChange={(e) => setModelsText(e.target.value)}
         rows={4}

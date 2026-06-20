@@ -30,6 +30,8 @@ export interface ProviderModel {
   contextWindow: number;
   /** 是否多模态（支持图片） */
   vision?: boolean;
+  /** LLM 调用协议：chat（通用）/ responses（OpenAI Responses API）。未填则回退 provider.protocol 或 chat */
+  protocol?: ProviderProtocol;
   /** 一句话描述（下拉里展示） */
   description?: string;
   /** 厂商（openai / anthropic / qwen / zhipu 等），后端据此做厂商兼容 */
@@ -54,6 +56,7 @@ export interface ResolvedProvider {
   apiKey: string;
   /** 认证头格式：bearer（默认）= Authorization: Bearer / x-api-key = x-api-key */
   apiKeyHeader: ApiKeyHeader;
+  /** 旧配置兼容：provider 级默认协议；新配置推荐写到 model.protocol */
   protocol: ProviderProtocol;
   models: ProviderModel[];
   /** 是否内置（esign / zhipu） */
