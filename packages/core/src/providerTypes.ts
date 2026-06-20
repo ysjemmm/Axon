@@ -10,6 +10,9 @@
 /** provider 的 LLM 调用协议：chat = Chat Completions（通用）；responses = OpenAI Responses API（原生 agentic loop） */
 export type ProviderProtocol = "chat" | "responses";
 
+/** 认证头类型：bearer = Authorization: Bearer <key>（默认）；x-api-key = x-api-key: <key>（Anthropic 等） */
+export type ApiKeyHeader = "bearer" | "x-api-key";
+
 /** provider 名常量（唯一真源，避免字面量散落） */
 export const ESIGN_PROVIDER = "esign";
 export const ZHIPU_PROVIDER = "zhipu";
@@ -47,6 +50,8 @@ export interface ResolvedProvider {
   label: string;
   baseUrl: string;
   apiKey: string;
+  /** 认证头格式：bearer（默认）= Authorization: Bearer / x-api-key = x-api-key */
+  apiKeyHeader: ApiKeyHeader;
   protocol: ProviderProtocol;
   models: ProviderModel[];
   /** 是否内置（esign / zhipu） */
@@ -64,6 +69,8 @@ export interface RawProviderEntry {
   label?: string;
   baseUrl?: string;
   apiKey?: string;
+  /** 认证头格式：bearer（默认）= Authorization: Bearer / x-api-key（Anthropic 等） */
+  apiKeyHeader?: ApiKeyHeader;
   protocol?: ProviderProtocol;
   models?: ProviderModel[];
 }

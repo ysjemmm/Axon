@@ -24,6 +24,8 @@ export interface ProviderConfig {
   apiKey: string;
   baseUrl: string;
   protocol: ProviderProtocol;
+  /** 认证头格式，默认 bearer */
+  apiKeyHeader?: ApiKeyHeader;
 }
 
 /**
@@ -70,7 +72,7 @@ export function getResolvedProviders(): ResolvedProvider[] {
  */
 function configFor(name: string): ProviderConfig | undefined {
   const hit = _resolved?.get(name);
-  if (hit) return { apiKey: hit.apiKey, baseUrl: hit.baseUrl, protocol: hit.protocol };
+  if (hit) return { apiKey: hit.apiKey, baseUrl: hit.baseUrl, protocol: hit.protocol, apiKeyHeader: hit.apiKeyHeader };
 
   // env 兜底
   const apiKey = (process.env[`PROVIDER_${name.toUpperCase()}_API_KEY`] || "").trim();
@@ -94,7 +96,17 @@ export function getClient(provider: string): OpenAI {
       const known = getResolvedProviders().map((p) => p.name).join(", ") || "（无）";
       throw new Error(`未知 provider: ${name}，已配置: ${known}`);
     }
-    clients[name] = new OpenAI({ apiKey: conf.apiKey, baseURL: conf.baseUrl });
+    // Anthropic / 自定义 x-api-key 认证头：OpenAI SDK 默认发 Authorization: Bearer，
+    // 用 defaultHeaders 覆盖为 x-api-key
+    const defaultHeaders: Record<string, string> = {};
+    if (conf.apiKeyHeader === "x-api-key") {
+      defaultHeaders["x-api-key"] = conf.apiKey;
+    }
+    clients[name] = new OpenAI({
+      apiKey: conf.apiKeyHeader === "x-api-key" ? "not-used" : conf.apiKey,
+      baseURL: conf.baseUrl,
+      defaultHeaders: Object.keys(defaultHeaders).length ? defaultHeaders : undefined,
+    });
   }
   return clients[name];
 }
