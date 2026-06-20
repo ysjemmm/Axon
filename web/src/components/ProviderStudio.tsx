@@ -411,12 +411,13 @@ function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo;
   );
 }
 
-/** 把 "id | 显示名 | 窗口" 多行文本解析为模型列表 */
+/** 把 "id | 显示名 | 窗口 | 多模态(y/n)" 多行文本解析为模型列表 */
 function parseModels(text: string): ProviderModelInfo[] {
   return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
-    const [id, name, win] = line.split(/[|,]/).map((s) => s.trim());
+    const [id, name, win, visionFlag] = line.split(/[|,]/).map((s) => s.trim());
     const contextWindow = win && /^\d+$/.test(win) ? parseInt(win, 10) : 128000;
-    return { id, name: name || id, contextWindow, vision: false };
+    const vision = visionFlag ? /^y|yes|true|1$/i.test(visionFlag) : false;
+    return { id, name: name || id, contextWindow, vision };
   }).filter((m) => m.id);
 }
 
@@ -465,7 +466,7 @@ function AddCustomForm({ level, workspace, onChanged }: { level: ProviderLevel; 
         <LevelButton active={protocol === "responses"} onClick={() => setProtocol("responses")} label="Responses" />
       </div>
       <textarea
-        placeholder={"模型，每行一个：模型id | 显示名 | 上下文窗口\n例：gpt-4o | GPT-4o | 128000"}
+        placeholder={"模型，每行一个：模型id | 显示名 | 上下文窗口 | 多模态(y/n)\n例：gpt-4o | GPT-4o | 128000 | y\ngpt-4o-mini | GPT-4o Mini | 128000 | n"}
         value={modelsText}
         onChange={(e) => setModelsText(e.target.value)}
         rows={4}
