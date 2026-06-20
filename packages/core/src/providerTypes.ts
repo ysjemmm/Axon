@@ -32,6 +32,8 @@ export interface ProviderModel {
   vision?: boolean;
   /** 一句话描述（下拉里展示） */
   description?: string;
+  /** 厂商（openai / anthropic / qwen / zhipu 等），后端据此做厂商兼容 */
+  vendor?: string;
   /** 下拉分组标签（厂商/来源） */
   group?: string;
   /** 是否免费 */

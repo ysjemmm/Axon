@@ -454,6 +454,8 @@ export interface ProviderModelInfo {
   contextWindow: number;
   vision?: boolean;
   description?: string;
+  /** 厂商（openai / anthropic / qwen / zhipu 等），后端据此做厂商兼容 */
+  vendor?: string;
   group?: string;
   free?: boolean;
   disabled?: boolean;
@@ -492,6 +494,8 @@ export interface RawProviderEntry {
   label?: string;
   baseUrl?: string;
   apiKey?: string;
+  /** 认证头格式：bearer（默认）= Authorization: Bearer / x-api-key（Anthropic 等） */
+  apiKeyHeader?: string;
   protocol?: ProviderProtocol;
   models?: ProviderModelInfo[];
 }
@@ -522,7 +526,7 @@ export function saveProviderConfig(level: ProviderLevel, config: ProviderConfigF
 }
 
 /** 新增/覆盖一个自定义 provider */
-export function addCustomProvider(level: ProviderLevel, name: string, entry: RawProviderEntry, workspace?: string): Promise<{ ok: boolean }> {
+export function addCustomProvider(level: ProviderLevel, name: string, entry: RawProviderEntry & { apiKeyHeader?: string }, workspace?: string): Promise<{ ok: boolean }> {
   return post(`/api/providers/${level}/custom${providerQuery(workspace)}`, { name, entry });
 }
 
@@ -552,6 +556,7 @@ export interface ProbedModelInfo {
   name?: string;
   contextWindow?: number;
   vision?: boolean;
+  vendor?: string;
 }
 
 /**

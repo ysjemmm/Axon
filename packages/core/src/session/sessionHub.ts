@@ -696,16 +696,12 @@ export class SessionHub {
         userSegments: cmd.userSegments as unknown[] | undefined,
       });
     } catch (err) {
-      // 非取消异常（如 LLM 403/网络错误）：向该会话前端展示错误，
+      // 非取消异常（如 LLM 403/网络错误）：agentSession 内部已经推送了完整错误信息
+      // （stream_start → stream_delta → stream_end）到前端，此处只记录日志 + 清理，
       // 不向上抛——避免串台到其他正在运行的后台会话
       const error = err as Error;
       if (error.name !== "AbortError" && !error.message?.includes("aborted")) {
         console.error(`[sessionHub] ${execSessionId} LLM 错误:`, error.message);
-        const errMsg = `❌ ${error.message}`;
-        execSession.getMessages().push({ role: "assistant", content: errMsg } as any);
-        this.sendTo(execSessionId, clientId, { type: "stream_delta", content: errMsg } as AgentEvent);
-        const model = this.getActiveSession(execSessionId)?.getMessages() ? cmd.model || "auto" : "auto";
-        this.sendTo(execSessionId, clientId, { type: "stream_end", elapsed: 0, tokens: 0, model } as AgentEvent);
       }
     } finally {
       this.runningSessions.delete(execSessionId);

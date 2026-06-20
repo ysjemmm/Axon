@@ -13,7 +13,7 @@ import OpenAI from "openai";
 import { ChatCompletionsStrategy } from "./llm/chatCompletionsStrategy.js";
 import { ResponsesStrategy } from "./llm/responsesStrategy.js";
 import type { LLMStrategy } from "./llm/types.js";
-import { ESIGN_PROVIDER, type ProviderProtocol, type ResolvedProvider } from "./providerTypes.js";
+import { ESIGN_PROVIDER, type ProviderProtocol, type ResolvedProvider, type ApiKeyHeader } from "./providerTypes.js";
 import type { ProviderRegistry } from "./providerRegistry.js";
 
 // 重新导出，保持 `import { ESIGN_PROVIDER } from "@axon/core"` 的公开 API 不变
@@ -82,33 +82,49 @@ function configFor(name: string): ProviderConfig | undefined {
   return { apiKey, baseUrl, protocol };
 }
 
+/** 根据模型厂商返回对应的认证头格式（仅用于 OpenAI 兼容端点）。
+ *  注意：Anthropic 的 OpenAI 兼容端点使用标准 Bearer 认证，x-api-key 仅用于原生 Messages API。
+ *  其他厂商如有特殊需求，在此添加 case。 */
+function vendorToApiKeyHeader(_vendor: string): ApiKeyHeader | undefined {
+  // 当前所有厂商的 OpenAI 兼容端点均使用标准 Bearer 认证，无需特殊处理
+  return undefined;
+}
+
 // ── client / strategy 缓存 ────────────────────────────────────────────────
 
-/** 已创建的 OpenAI client 缓存（按归一化后的 provider name） */
+/** 已创建的 OpenAI client 缓存（按归一化后的 provider name + apiKeyHeader） */
 const clients: Record<string, OpenAI> = {};
 
-/** 获取或创建指定 provider 的 OpenAI client */
-export function getClient(provider: string): OpenAI {
+/** 获取或创建指定 provider 的 OpenAI client，可选传 model 以根据模型厂商自动选择认证头 */
+export function getClient(provider: string, model?: string): OpenAI {
   const name = normalizeProvider(provider);
-  if (!clients[name]) {
-    const conf = configFor(name);
-    if (!conf) {
-      const known = getResolvedProviders().map((p) => p.name).join(", ") || "（无）";
-      throw new Error(`未知 provider: ${name}，已配置: ${known}`);
+  const conf = configFor(name);
+  if (!conf) {
+    const known = getResolvedProviders().map((p) => p.name).join(", ") || "（无）";
+    throw new Error(`未知 provider: ${name}，已配置: ${known}`);
+  }
+  // apiKeyHeader：provider 级别配置优先，其次从 model vendor 推断
+  let apiKeyHeader: ApiKeyHeader = conf.apiKeyHeader || "bearer";
+  if (!conf.apiKeyHeader && model && _resolved) {
+    const resolved = _resolved.get(name);
+    const modelDef = resolved?.models.find(m => m.id === model);
+    if (modelDef?.vendor) {
+      apiKeyHeader = vendorToApiKeyHeader(modelDef.vendor) || apiKeyHeader;
     }
-    // Anthropic / 自定义 x-api-key 认证头：OpenAI SDK 默认发 Authorization: Bearer，
-    // 用 defaultHeaders 覆盖为 x-api-key
+  }
+  const cacheKey = `${name}:${apiKeyHeader}`;
+  if (!clients[cacheKey]) {
     const defaultHeaders: Record<string, string> = {};
-    if (conf.apiKeyHeader === "x-api-key") {
+    if (apiKeyHeader === "x-api-key") {
       defaultHeaders["x-api-key"] = conf.apiKey;
     }
-    clients[name] = new OpenAI({
-      apiKey: conf.apiKeyHeader === "x-api-key" ? "not-used" : conf.apiKey,
+    clients[cacheKey] = new OpenAI({
+      apiKey: apiKeyHeader === "x-api-key" ? "not-used" : conf.apiKey,
       baseURL: conf.baseUrl,
       defaultHeaders: Object.keys(defaultHeaders).length ? defaultHeaders : undefined,
     });
   }
-  return clients[name];
+  return clients[cacheKey];
 }
 
 /** 已创建的策略缓存 */
@@ -125,7 +141,7 @@ export function getStrategy(provider: string, model: string): LLMStrategy {
   const useResponses = protocol === "responses" && /^gpt/i.test(model);
   const key = `${name}:${useResponses ? "responses" : "chat"}`;
   if (!strategies[key]) {
-    const client = getClient(name);
+    const client = getClient(name, model);
     strategies[key] = useResponses ? new ResponsesStrategy(client) : new ChatCompletionsStrategy(client);
     console.log(`[agent] 使用策略 ${strategies[key].name}（provider=${name}, model=${model}）`);
   }

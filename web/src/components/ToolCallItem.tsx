@@ -126,8 +126,8 @@ export function formatToolDescription(name: string, result?: string, args?: Reco
       case "str_replace": return shortName ? `编辑 ${shortName}` : "修改文件中...";
       case "apply_patch": return "应用补丁中...";
       case "execute_command": return "执行命令中...";
-      case "search": return intent || (args?.query as string) || fallbackIntent("search");
-      case "list_dir": return intent || (args?.query as string) || fallbackIntent("list_dir");
+      case "search": return intent || fallbackIntent("search");
+      case "list_dir": return intent || fallbackIntent("list_dir");
       case "check_diagnostics": return "检查中...";
       default: return `${name}...`;
     }
@@ -143,8 +143,8 @@ export function formatToolDescription(name: string, result?: string, args?: Reco
     case "str_replace": return shortName ? `已编辑 ${shortName}` : result;
     case "apply_patch": return "已应用补丁";
     case "execute_command": return "命令已执行";
-    case "search": return intent || (args?.query as string) || fallbackIntent("search");
-    case "list_dir": return intent || (args?.query as string) || fallbackIntent("list_dir");
+    case "search": return intent || fallbackIntent("search");
+    case "list_dir": return intent || fallbackIntent("list_dir");
     case "check_diagnostics": return result.includes("无错误") ? "无错误" : "发现错误";
     default: return result;
   }

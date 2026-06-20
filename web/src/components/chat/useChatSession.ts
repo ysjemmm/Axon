@@ -1076,7 +1076,19 @@ export function useChatSession(opts: UseChatSessionOptions) {
               const fileName = (rawFileName ? (rawFileName.split("/").pop()?.split("\\").pop() || rawFileName) : null)
                 || extractBasename(seg.args?.path)
                 || extractBasename((msg as any).args?.path);
-              const lineSuffix = parts && parts[3] ? ` ${parts[3]}` : "";
+              // read_file 行号：优先从结构化 args 取（实时段 args 可能为空，用 msg.args 兜底），
+              // 再回退到 pending 描述正则提取（兼容旧数据）
+              let lineSuffix = "";
+              if (msg.name === "read_file" || seg.name === "read_file") {
+                const fromArgs = formatLineSuffix(
+                  (msg as any).args?.startLine ?? seg.args?.startLine,
+                  (msg as any).args?.endLine ?? seg.args?.endLine,
+                );
+                if (fromArgs) lineSuffix = ` ${fromArgs}`;
+              }
+              if (!lineSuffix && parts && parts[3]) {
+                lineSuffix = ` ${parts[3]}`;
+              }
               const hasOutput = seg.name === "execute_command" || OUTPUT_TOOLS.has(seg.name);
               let finalDesc: string;
               if (isError && !isExplore && seg.name !== "check_diagnostics") {

@@ -439,7 +439,7 @@ export class AgentSession {
     this.isCompacting = true;
     this.send("compacting_start", {});
     try {
-      const client = getClient(this.provider);
+      const client = getClient(this.provider, this.model);
       this.send("status", { content: "整理上下文..." });
       this.messages = await compactMessages(this.messages, client, this.model);
       this.isCompacting = false;
@@ -557,7 +557,7 @@ export class AgentSession {
 
     // new_session：压缩消息并存储用于迁移
     try {
-      const client = getClient(this.provider);
+      const client = getClient(this.provider, this.model);
       this.send("status", { content: "整理上下文..." });
       // 压缩前移除本轮刚推送的用户消息（它会在新会话中重新发送）
       const userMsg = this.messages.pop();
@@ -1020,7 +1020,7 @@ export class AgentSession {
       skillLoader: this.loadSkillForTool,
       web: this.web,
       // 子 Agent 也共享父会话的 LLM client，用于卡住时的"摘要重启"
-      client: getClient(this.provider),
+      client: getClient(this.provider, this.model),
       // 子 Agent 的 execute_command 复用父会话的信任门：灾难硬拦 + 白名单 + 冒泡到用户审批
       gateCommand: (command, toolCallId) => this.gateCommand(command, toolCallId),
     });
@@ -1323,7 +1323,7 @@ export class AgentSession {
       skillLoader: this.loadSkillForTool,
       web: this.web,
       emitFor,
-      client: getClient(this.provider),
+      client: getClient(this.provider, this.model),
       maxConcurrency: 3,
     });
 
@@ -1387,7 +1387,7 @@ export class AgentSession {
       skillLoader: this.loadSkillForTool,
       web: this.web,
       emitFor,
-      client: getClient(this.provider),
+      client: getClient(this.provider, this.model),
       maxConcurrency: 3,
       snapshotStore: batchSnapshots,
     });
@@ -1931,7 +1931,7 @@ export class AgentSession {
     // 保存本轮用户输入（压缩迁移时需要在新会话中重放）
     this.lastUserInput = { content: input, model, images, provider, userMeta: userMeta as Record<string, unknown> | undefined };
 
-    const client = getClient(this.provider);
+    const client = getClient(this.provider, this.model);
     const strategy = getStrategy(this.provider, this.model);
     const turnStartTime = Date.now();
     this.abortController = new AbortController();
@@ -2623,13 +2623,22 @@ export class AgentSession {
       return;
     }
     } catch (err) {
-      // AbortError（用户取消）：持久化已输出的内容，不丢失
       const error = err as Error;
       if (error.name === "AbortError" || error.message?.includes("aborted") || this.cancelled) {
         this.stampCancelledTurnStats(turnStartTime, streamedContentThisRound);
         throw err; // 继续上抛让外层 persistOnCancel 处理
       }
-      throw err; // 非取消异常继续上抛
+      // 非取消异常（LLM 403/网络错误等）：推送错误到前端——确保 stream_start 先于 stream_delta，
+      // 否则前端会因缺少 stream_start 而丢弃 stream_delta，导致用户看不到错误
+      const errMsg = `❌ 出错了: ${error.message}`;
+      this.messages.push({ role: "assistant", content: errMsg } as any);
+      if (!streamedContentThisRound) {
+        this.send("stream_start", {});
+      }
+      this.send("stream_delta", { content: errMsg });
+      const model = (this as any)._lastSentModel || this.model;
+      this.send("stream_end", { elapsed: Date.now() - turnStartTime, tokens: this.lastTotalTokens, model } as any);
+      throw err; // 继续上抛让 sessionHub 做清理（runningSessions.delete 等）
     }
   }
 

@@ -12,7 +12,7 @@ import { ESIGN_PROVIDER, ZHIPU_PROVIDER, type ProviderModel, type ProviderProtoc
 
 // 把这两个"值"常量经由本模块（被 index 以 export * 暴露）对外导出，
 // 供 server / extension 运行时使用；ESIGN_PROVIDER 已由 providers.ts 再导出，故此处不重复导出它。
-export { ZHIPU_PROVIDER, RESERVED_PROVIDER_NAMES } from "./providerTypes.js";
+export { ZHIPU_PROVIDER, RESERVED_PROVIDER_NAMES, type ApiKeyHeader } from "./providerTypes.js";
 
 /** 内置 provider 定义（apiKey 不在此处，运行时从 env / providers.json 注入） */
 export interface BuiltinProviderDef {
@@ -23,6 +23,8 @@ export interface BuiltinProviderDef {
   /** 仅 esign：除 apiKey 外全部锁定 */
   locked: boolean;
   models: ProviderModel[];
+  /** 认证头格式：bearer（默认）= Authorization: Bearer / x-api-key（Anthropic 等） */
+  apiKeyHeader?: "bearer" | "x-api-key";
 }
 
 /** 内置 provider 目录 */

@@ -10,9 +10,10 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
-import { Loader2, Cloud, Plus, Trash2, Save, KeyRound, ChevronRight, Pencil, Ban, RotateCcw, Download } from "lucide-react";
+import { Loader2, Cloud, Plus, Trash2, Save, KeyRound, ChevronRight, Pencil, Ban, RotateCcw, Download, Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   getProviders,
   setBuiltinProviderKey,
@@ -183,15 +184,28 @@ function BuiltinCard({ provider, level, workspace, onChanged }: { provider: Reso
 /** 自定义 provider 卡片：展示 + 删除 + 模型增删改禁用 */
 function CustomCard({ provider, level, workspace, onChanged }: { provider: ResolvedProviderInfo; level: ProviderLevel; workspace?: string; onChanged: () => void }) {
   const [expanded, setExpanded] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const remove = async () => {
-    if (!confirm(`确定删除 provider「${provider.label || provider.name}」？`)) return;
+    setDeleting(true);
     try {
       await removeCustomProvider(level, provider.name, workspace);
       onChanged();
     } catch (e) {
       alert(`删除失败: ${(e as Error).message}`);
+      setConfirmDelete(false);
     }
+    setDeleting(false);
+  };
+
+  const handleDeleteClick = () => {
+    if (!confirmDelete) {
+      setConfirmDelete(true);
+      setTimeout(() => setConfirmDelete(false), 4000); // 4 秒后自动取消
+      return;
+    }
+    remove();
   };
 
   const saveModels = async (models: ProviderModelInfo[]) => {
@@ -206,17 +220,23 @@ function CustomCard({ provider, level, workspace, onChanged }: { provider: Resol
   return (
     <div className="rounded-lg border border-border bg-muted/20">
       <div className="group flex items-center gap-2 px-3 py-2">
-        <button onClick={() => setExpanded((v) => !v)} className="shrink-0 text-muted-foreground hover:text-foreground">
+        <button onClick={() => { setExpanded((v) => !v); setConfirmDelete(false); }} className="shrink-0 text-muted-foreground hover:text-foreground">
           <ChevronRight className={`w-3.5 h-3.5 transition-transform ${expanded ? "rotate-90" : ""}`} />
         </button>
         <Cloud className={`w-4 h-4 shrink-0 ${provider.configured ? "text-blue-500" : "text-muted-foreground"}`} />
-        <div className="min-w-0 flex-1 cursor-pointer" onClick={() => setExpanded((v) => !v)}>
+        <div className="min-w-0 flex-1 cursor-pointer" onClick={() => { setExpanded((v) => !v); setConfirmDelete(false); }}>
           <div className="text-sm font-medium truncate">{provider.label || provider.name}</div>
           <div className="text-xs text-muted-foreground truncate">{provider.baseUrl} · {provider.models.length} 模型 · {provider.protocol}</div>
         </div>
         {!provider.configured && <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">未配置</span>}
-        <button onClick={remove} className="opacity-0 group-hover:opacity-100 p-1 rounded text-muted-foreground hover:text-red-500 hover:bg-muted transition-opacity" title="删除 provider">
-          <Trash2 className="w-3.5 h-3.5" />
+        <button
+          onClick={handleDeleteClick}
+          className={`shrink-0 p-1 rounded transition-all flex items-center whitespace-nowrap ${confirmDelete ? "bg-red-100 dark:bg-red-900/30 text-red-600 opacity-100 px-1.5" : "opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 hover:bg-muted"}`}
+          title={confirmDelete ? "再次点击确认删除" : "删除 provider"}
+          disabled={deleting}
+        >
+          {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5 shrink-0" />}
+          {confirmDelete && <span className="ml-1 text-[11px] font-medium">确认删除</span>}
         </button>
       </div>
       {expanded && (
@@ -244,9 +264,15 @@ function ModelManager({ models, editable, onSave, providerName, level, workspace
   const [importing, setImporting] = useState(false);
   const [probed, setProbed] = useState<ProbedModelInfo[] | null>(null);
 
-  const commit = (next: ProviderModelInfo[]) => { onSave?.(next); setEditing(null); };
+  const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
+
+  const commit = (next: ProviderModelInfo[]) => { onSave?.(next); setEditing(null); setConfirmDeleteIdx(null); };
   const toggle = (i: number) => commit(models.map((m, idx) => (idx === i ? { ...m, disabled: !m.disabled } : m)));
-  const del = (i: number) => { if (confirm(`删除模型「${models[i].name || models[i].id}」？`)) commit(models.filter((_, idx) => idx !== i)); };
+  const del = (i: number) => {
+    if (confirmDeleteIdx !== i) { setConfirmDeleteIdx(i); setTimeout(() => setConfirmDeleteIdx(null), 4000); return; }
+    setConfirmDeleteIdx(null);
+    commit(models.filter((_, idx) => idx !== i));
+  };
   const saveOne = (model: ProviderModelInfo, idx: number | "new") =>
     commit(idx === "new" ? [...models, model] : models.map((m, i) => (i === idx ? model : m)));
 
@@ -271,6 +297,7 @@ function ModelManager({ models, editable, onSave, providerName, level, workspace
         name: p.name || p.id,
         contextWindow: p.contextWindow ?? 128000,
         vision: p.vision ?? false,
+        vendor: p.vendor,
       }));
     setProbed(null);
     if (added.length > 0) onSave?.([...models, ...added]);
@@ -289,6 +316,7 @@ function ModelManager({ models, editable, onSave, providerName, level, workspace
             key={i}
             model={m}
             editable={!!editable}
+            confirmDelete={confirmDeleteIdx === i}
             onToggle={() => toggle(i)}
             onEdit={() => setEditing(i)}
             onDelete={() => del(i)}
@@ -351,12 +379,13 @@ function ImportPanel({ probed, existingIds, onApply, onCancel }: { probed: Probe
 }
 
 /** 单行模型展示（含禁用态样式与悬浮操作） */
-function ModelRow({ model, editable, onToggle, onEdit, onDelete }: { model: ProviderModelInfo; editable: boolean; onToggle: () => void; onEdit: () => void; onDelete: () => void }) {
+function ModelRow({ model, editable, confirmDelete, onToggle, onEdit, onDelete }: { model: ProviderModelInfo; editable: boolean; confirmDelete?: boolean; onToggle: () => void; onEdit: () => void; onDelete: () => void }) {
   const win = model.contextWindow >= 1000000 ? `${(model.contextWindow / 1000000).toFixed(0)}M` : `${(model.contextWindow / 1000).toFixed(0)}K`;
   return (
     <div className={`group/m flex items-center gap-2 px-2 py-1 rounded ${model.disabled ? "opacity-50" : ""}`}>
       <div className="min-w-0 flex-1">
         <span className={`text-xs font-medium ${model.disabled ? "line-through" : ""}`}>{model.name || model.id}</span>
+        {model.vendor && <span className="ml-1 text-[9px] px-1 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">{model.vendor}</span>}
         {model.vision && <span className="ml-1 text-[9px] px-1 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">多模态</span>}
         {model.disabled && <span className="ml-1 text-[9px] px-1 rounded bg-muted text-muted-foreground">已禁用</span>}
         <span className="ml-1.5 text-[10px] text-muted-foreground font-mono">{model.id} · {win}</span>
@@ -369,8 +398,9 @@ function ModelRow({ model, editable, onToggle, onEdit, onDelete }: { model: Prov
           <button onClick={onEdit} title="编辑" className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted">
             <Pencil className="w-3 h-3" />
           </button>
-          <button onClick={onDelete} title="删除" className="p-1 rounded text-muted-foreground hover:text-red-500 hover:bg-muted">
-            <Trash2 className="w-3 h-3" />
+          <button onClick={onDelete} title={confirmDelete ? "再次点击确认删除" : "删除"} className={`p-1 rounded transition-all flex items-center whitespace-nowrap ${confirmDelete ? "bg-red-100 dark:bg-red-900/30 text-red-600 px-1" : "text-muted-foreground hover:text-red-500 hover:bg-muted"}`}>
+            <Trash2 className="w-3 h-3 shrink-0" />
+            {confirmDelete && <span className="ml-0.5 text-[10px] font-medium">确认</span>}
           </button>
         </div>
       )}
@@ -384,17 +414,44 @@ function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo;
   const [name, setName] = useState(initial?.name || "");
   const [win, setWin] = useState(String(initial?.contextWindow || 128000));
   const [vision, setVision] = useState(!!initial?.vision);
+  const [vendor, setVendor] = useState(initial?.vendor || "");
+
+  const vendorOptions = [
+    { id: "openai", label: "OpenAI" },
+    { id: "anthropic", label: "Anthropic" },
+    { id: "qwen", label: "Qwen" },
+    { id: "zhipu", label: "Zhipu" },
+    { id: "ollama", label: "Ollama" },
+  ];
 
   const submit = () => {
     if (!id.trim()) return;
     const contextWindow = /^\d+$/.test(win.trim()) ? parseInt(win.trim(), 10) : 128000;
-    onSave({ id: id.trim(), name: name.trim() || id.trim(), contextWindow, vision, disabled: initial?.disabled });
+    onSave({ id: id.trim(), name: name.trim() || id.trim(), contextWindow, vision, vendor: vendor || undefined, disabled: initial?.disabled });
   };
 
   return (
     <div className="p-2 rounded-md border border-border bg-background space-y-1.5 my-1">
       <Input placeholder="模型 id（发给 API 的那个，如 gpt-4o）" value={id} onChange={(e) => setId(e.target.value)} className="h-7 text-xs" />
-      <Input placeholder="显示名（可选）" value={name} onChange={(e) => setName(e.target.value)} className="h-7 text-xs" />
+      <div className="flex items-center gap-2">
+        <Input placeholder="显示名（可选）" value={name} onChange={(e) => setName(e.target.value)} className="h-7 text-xs flex-1" />
+        <Select value={vendor} onValueChange={setVendor}>
+          <SelectTrigger className="h-7 text-xs w-[130px]">
+            <SelectValue placeholder="厂商" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectLabel>厂商</SelectLabel>
+              {vendorOptions.map((v) => (
+                <SelectItem key={v.id} value={v.id}>
+                  <Globe className="w-3 h-3 mr-1" />
+                  {v.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </div>
       <div className="flex items-center gap-2">
         <Input placeholder="上下文窗口" value={win} onChange={(e) => setWin(e.target.value)} className="h-7 text-xs w-32" />
         <label className="flex items-center gap-1 text-xs text-muted-foreground cursor-pointer">
@@ -411,13 +468,13 @@ function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo;
   );
 }
 
-/** 把 "id | 显示名 | 窗口 | 多模态(y/n)" 多行文本解析为模型列表 */
+/** 把 "id | 显示名 | 窗口 | 多模态(y/n) | 厂商" 多行文本解析为模型列表 */
 function parseModels(text: string): ProviderModelInfo[] {
   return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
-    const [id, name, win, visionFlag] = line.split(/[|,]/).map((s) => s.trim());
+    const [id, name, win, visionFlag, vendor] = line.split(/[|,]/).map((s) => s.trim());
     const contextWindow = win && /^\d+$/.test(win) ? parseInt(win, 10) : 128000;
     const vision = visionFlag ? /^y|yes|true|1$/i.test(visionFlag) : false;
-    return { id, name: name || id, contextWindow, vision };
+    return { id, name: name || id, contextWindow, vision, vendor: vendor || undefined };
   }).filter((m) => m.id);
 }
 
@@ -466,7 +523,7 @@ function AddCustomForm({ level, workspace, onChanged }: { level: ProviderLevel; 
         <LevelButton active={protocol === "responses"} onClick={() => setProtocol("responses")} label="Responses" />
       </div>
       <textarea
-        placeholder={"模型，每行一个：模型id | 显示名 | 上下文窗口 | 多模态(y/n)\n例：gpt-4o | GPT-4o | 128000 | y\ngpt-4o-mini | GPT-4o Mini | 128000 | n"}
+        placeholder={"模型，每行一个：模型id | 显示名 | 上下文窗口 | 多模态(y/n) | 厂商\n例：gpt-4o | GPT-4o | 128000 | y | openai\ngpt-4o-mini | GPT-4o Mini | 128000 | n | openai"}
         value={modelsText}
         onChange={(e) => setModelsText(e.target.value)}
         rows={4}

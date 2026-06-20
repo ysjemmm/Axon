@@ -237,10 +237,17 @@ function ModelRow({ model, selected, disabled, onPick }: { model: ModelOption; s
 
 export function ModelSelector({ value, onChange, disabledModels = [], disabled = false, disabledTooltip }: ModelSelectorProps) {
   const groups = useProviderGroups();
-  const current = findModel(value);
   const [open, setOpen] = useState(false);
-  // 当前展开（hover）的 provider；打开时默认展开当前所选模型所属 provider
+  // 当前展开的 provider；打开时默认展开当前所选模型所属 provider
   const [expanded, setExpanded] = useState<string | null>(null);
+  // 记住最后选择的 provider，同名模型优先匹配它
+  const [lastProvider, setLastProvider] = useState<string | null>(null);
+
+  /** 按 value 找模型：优先 lastProvider，回退到任意匹配 */
+  const allModels = getModels();
+  const current = lastProvider
+    ? allModels.find((m) => m.id === value && m.provider === lastProvider) ?? allModels.find((m) => m.id === value)
+    : allModels.find((m) => m.id === value);
 
   const onOpenChange = (next: boolean) => {
     if (disabled) return;
@@ -251,7 +258,7 @@ export function ModelSelector({ value, onChange, disabledModels = [], disabled =
     }
   };
 
-  const pick = (id: string) => { onChange(id); setOpen(false); };
+  const pick = (id: string, providerName?: string) => { if (providerName) setLastProvider(providerName); onChange(id); setOpen(false); };
   const autoDisabled = disabledModels.includes(AUTO_MODEL.id);
 
   const trigger = (
@@ -296,21 +303,27 @@ export function ModelSelector({ value, onChange, disabledModels = [], disabled =
         {/* provider 一级 + hover 内联展开二级模型 */}
         {/* side="top" 向上弹出时，底部离按钮最近。将当前选中的 provider 排到最后（最靠近按钮）以减少误触 */}
         {[...groups].sort((a, b) => {
-          const aCurrent = a.models.some((m) => m.id === value) ? 1 : 0;
-          const bCurrent = b.models.some((m) => m.id === value) ? 1 : 0;
+          const aCurrent = current && a.name === current.provider ? 1 : 0;
+          const bCurrent = current && b.name === current.provider ? 1 : 0;
           return aCurrent - bCurrent;
         }).map((g) => {
           const isExpanded = expanded === g.name;
           return (
-            <div key={g.name} onMouseEnter={() => setExpanded(g.name)}>
-              <div className={`flex items-center justify-between gap-2 py-1.5 pl-2 pr-2 rounded-md text-xs cursor-default ${isExpanded ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+            <div key={g.name}>
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => setExpanded(expanded === g.name ? null : g.name)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded(expanded === g.name ? null : g.name); } }}
+                className={`flex items-center justify-between gap-2 py-1.5 pl-2 pr-2 rounded-md text-xs cursor-pointer transition-colors ${isExpanded ? "text-foreground bg-muted/30" : "text-muted-foreground hover:text-foreground hover:bg-muted/20"}`}
+              >
                 <span className="font-medium truncate">{g.label}</span>
                 <ChevronRight className={`w-3 h-3 opacity-60 shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
               </div>
               {isExpanded && (
                 <div className="pl-2 border-l border-border/40 ml-2 mb-1">
                   {g.models.map((m) => (
-                    <ModelRow key={m.id} model={m} selected={m.id === value} disabled={disabledModels.includes(m.id)} onPick={() => pick(m.id)} />
+                    <ModelRow key={m.id} model={m} selected={m.id === current?.id && m.provider === current?.provider} disabled={disabledModels.includes(m.id)} onPick={() => pick(m.id, m.provider)} />
                   ))}
                 </div>
               )}
