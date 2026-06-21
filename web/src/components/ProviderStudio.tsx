@@ -160,7 +160,6 @@ function BuiltinCard({ provider, level, workspace, onChanged }: { provider: Reso
           {provider.models.length} 模型 · {provider.protocol}
         </button>
       </div>
-      <div className="text-[11px] text-muted-foreground mb-2 truncate">{provider.baseUrl}</div>
       <div className="flex gap-2">
         <Input
           type="password"
