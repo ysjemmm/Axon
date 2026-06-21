@@ -108,6 +108,10 @@ function normalizeFences(text: string): string {
       i += 1;
     }
   }
+  // 奇数个围栏 = 未闭合代码块 → 补闭合，防止流式输出中断时后续内容被吞
+  if (count % 2 === 1) {
+    result += "\n```";
+  }
   return result;
 }
 
