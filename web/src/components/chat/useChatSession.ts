@@ -525,7 +525,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
               }
               const pathArg = tcArgs.path as string || "";
               const shortName = pathArg ? (pathArg.split("/").pop()?.split("\\").pop() || pathArg) : "";
-              const intentArg = (tcArgs.intent as string) || (tcArgs.query as string) || "";
+              const intentArg = (tcArgs.intent as string) || "";
               const isExplore = toolName === "search" || toolName === "list_dir";
               const lineSuffix = toolName === "read_file" ? formatLineSuffix(tcArgs.startLine, tcArgs.endLine) : "";
               const readNameWithLines = shortName + (lineSuffix ? ` ${lineSuffix}` : "");
@@ -756,7 +756,17 @@ export function useChatSession(opts: UseChatSessionOptions) {
           const len = typewriterBuffer.current.length;
           // 比例出字：buffer 越长每帧出字越多，避免积压；收尾阶段加速排空
           const ratio = streamEnding.current ? 0.3 : 0.15;
-          const batchSize = Math.min(streamEnding.current ? 80 : 40, Math.max(1, Math.ceil(len * ratio)));
+          // 上限远高于旧值（40），确保 buffer 积压时每帧消费量能随比例增长，
+          // 形成负反馈：积压越多 → 出字越快 → 自动追平 chunk 到达速度。
+          // ratio 0.15 意味着每帧消费 15%，呈指数衰减——任何大小的 buffer
+          // 都能在 ~0.5 秒内排空到接近零，无需担心一帧全出。
+          let batchSize = Math.min(streamEnding.current ? 300 : 150, Math.max(1, Math.ceil(len * ratio)));
+          // Unicode 安全切片：如果 batchSize 落在代理对中间（末尾码元是高代理），
+          // 多取一个码元避免切断 emoji 等 BMP 外字符——否则前端会短暂渲染 �
+          if (batchSize < typewriterBuffer.current.length) {
+            const lastCode = typewriterBuffer.current.charCodeAt(batchSize - 1);
+            if (lastCode >= 0xD800 && lastCode <= 0xDBFF) batchSize++;
+          }
           const batch = typewriterBuffer.current.slice(0, batchSize);
           typewriterBuffer.current = typewriterBuffer.current.slice(batchSize);
 
@@ -1005,7 +1015,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
               command: (msg.name === "execute_command" || msg.name === "start_process") ? (args.command as string) : seg.command,
               cwd: (msg.name === "execute_command" || msg.name === "start_process") ? (msg as any).cwd : seg.cwd,
               query: (msg.name === "search" || msg.name === "list_dir")
-                ? ((args.intent as string) || (args.query as string) || seg.query || fallbackIntent(msg.name))
+                ? ((args.intent as string) || seg.query || fallbackIntent(msg.name))
                 : seg.query,
             };
             updated[updated.length - 1] = { ...last, segments: segs };
@@ -1029,7 +1039,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
           command: (msg.name === "execute_command" || msg.name === "start_process") ? (args.command as string) : undefined,
           cwd: (msg.name === "execute_command" || msg.name === "start_process") ? (msg as any).cwd : undefined,
           query: (msg.name === "search" || msg.name === "list_dir")
-            ? ((args.intent as string) || (args.query as string) || fallbackIntent(msg.name))
+            ? ((args.intent as string) || fallbackIntent(msg.name))
             : undefined,
           mcpServer: (msg as any).mcpServer,
           mcpTool: (msg as any).mcpTool,
@@ -1121,7 +1131,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
               } else if (msg.name === "check_diagnostics") {
                 finalDesc = (msg.result || "").includes("无错误") ? "无错误" : "error";
               } else if (isExplore) {
-                finalDesc = seg.query || (msg.args as Record<string, unknown>)?.query as string || fallbackIntent(seg.name);
+                finalDesc = seg.query || fallbackIntent(seg.name);
               } else if (isRelayTool(msg.name || "")) {
                 finalDesc = msg.result ? firstLine(msg.result) : relayToolLabel(msg.name || "");
               } else if (fileName) {
@@ -1176,7 +1186,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
             if (noMatchName === "read_file") desc = shortName ? `已读取 ${shortName}${lineSuffix ? ` ${lineSuffix}` : ""}` : "已读取文件";
             else if (noMatchName === "create_file") desc = shortName ? `${noMatchArgs.overwrite === true ? "已覆盖" : "已创建"} ${shortName}` : "已创建文件";
             else if (noMatchName === "str_replace") desc = shortName ? `已编辑 ${shortName}` : "已编辑文件";
-            else if (isExplore) desc = (noMatchArgs.intent as string) || (noMatchArgs.query as string) || fallbackIntent(noMatchName);
+            else if (isExplore) desc = (noMatchArgs.intent as string) || fallbackIntent(noMatchName);
             else if (noMatchName === "execute_command") desc = "命令已执行";
             else if (isRelayTool(noMatchName)) desc = relayToolLabel(noMatchName);
             segs.push({
@@ -1188,7 +1198,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
               description: desc,
               args: noMatchArgs,
               command: (noMatchName === "execute_command" || noMatchName === "start_process") ? (noMatchArgs.command as string) : undefined,
-              query: isExplore ? ((noMatchArgs.intent as string) || (noMatchArgs.query as string) || fallbackIntent(noMatchName)) : undefined,
+              query: isExplore ? ((noMatchArgs.intent as string) || fallbackIntent(noMatchName)) : undefined,
               mcpServer: (msg as any).mcpServer,
               mcpTool: (msg as any).mcpTool,
               output: (noMatchName === "execute_command" || OUTPUT_TOOLS.has(noMatchName)) ? (msg.result || "") : undefined,

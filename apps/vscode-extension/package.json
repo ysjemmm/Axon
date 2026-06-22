@@ -98,6 +98,40 @@
           "default": 0.1,
           "scope": "resource",
           "markdownDescription": "补全模型的采样温度（0-2）。越低结果越确定，越高结果越多样。"
+        },
+        "axon.compaction.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "**滚动压缩（推荐开启）**：长对话中自动把早期消息压缩为摘要，让 AI 始终拥有充足上下文窗口。\n\n**开启**：对话再多也不撞上下文上限，节省 Token 费用；代价是早期对话细节会被摘要替代（摘要会保留关键决策和已完成操作）。\n\n**关闭**：完整保留每一条原始消息，AI 能回忆更多早期细节；代价是长对话后期可能因上下文超限被迫手动压缩，费用更高。\n\n工具结果的自动裁剪不受此开关影响（由下方 `#axon.compaction.toolResultKeepTurns#` 独立控制）。"
+        },
+        "axon.compaction.triggerTokens": {
+          "type": "number",
+          "default": 30000,
+          "minimum": 5000,
+          "scope": "resource",
+          "markdownDescription": "触发滚动压缩的 Token 累计阈值。自上次压缩后，新增 Token 超过此值即异步触发一次压缩。\n\n- **值越小**：压缩越频繁，上下文体积维持越低，但压缩次数多（每次压缩消耗一次额外 LLM 调用）\n- **值越大**：压缩越懒，省调用次数，但上下文体积在压缩间期涨得更高\n\n默认 30000（约 10 轮工具密集型对话后触发）。"
+        },
+        "axon.compaction.keepRecentMessages": {
+          "type": "number",
+          "default": 8,
+          "minimum": 2,
+          "scope": "resource",
+          "markdownDescription": "压缩时保留最近多少条消息的原文不压缩。\n\n- **值越大**：AI 能看到更多近期原文上下文，理解更连贯；但上下文体积更大\n- **值越小**：压缩更激进，体积更小，但可能丢失近期上下文细节\n\n默认 8（约 3-4 轮完整对话）。"
+        },
+        "axon.compaction.toolResultPruneChars": {
+          "type": "number",
+          "default": 800,
+          "minimum": 50,
+          "scope": "resource",
+          "markdownDescription": "旧工具结果裁剪后保留的字符数。超过 N 轮（见下方设置）的工具结果会被截断到这个长度，超出部分用标记替代。\n\n- **值越大**：旧工具输出保留越多细节（如完整搜索结果、完整命令输出）\n- **值越小**：上下文更精简，但旧工具输出可能丢失有用信息\n\n`read_file` / `list_dir` 保留开头，`execute_command` / `search` 保留末尾。"
+        },
+        "axon.compaction.toolResultKeepTurns": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0,
+          "scope": "resource",
+          "markdownDescription": "保留最近几轮对话中的工具结果不被裁剪。设为 0 表示裁剪所有非当前轮的工具结果。\n\n- **值越大**：AI 能回看更多轮的完整工具输出（如之前读过的文件内容、跑过的命令结果）\n- **值越小**：上下文更精简\n\n注意：此裁剪独立于滚动压缩开关——即使关闭滚动压缩，旧工具结果仍会按此设置裁剪。"
         }
       }
     },

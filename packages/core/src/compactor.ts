@@ -32,6 +32,32 @@ const DEFAULT_CONFIG: CompactConfig = {
 };
 
 /**
+ * 滚动压缩的用户可调配置。
+ * 由呈现端（VS Code 设置 / CLI flag）注入，AgentSession 在触发压缩时读取。
+ */
+export interface CompactionUserConfig {
+  /** 滚动压缩总开关。关闭后不再自动压缩历史（工具结果裁剪仍生效，见 toolResultKeepTurns） */
+  enabled: boolean;
+  /** 触发阈值：自上次压缩后累计 token 超过此值，异步触发滚动压缩 */
+  triggerTokens: number;
+  /** 保留最近多少条消息不压缩（原文保留） */
+  keepRecentMessages: number;
+  /** 旧工具结果 content 裁剪后保留的最大字符数 */
+  toolResultPruneChars: number;
+  /** 保留最近几轮的工具结果不裁剪（0 = 全裁） */
+  toolResultKeepTurns: number;
+}
+
+/** 默认滚动压缩配置（与历史硬编码值一致） */
+export const DEFAULT_COMPACTION_CONFIG: CompactionUserConfig = {
+  enabled: true,
+  triggerTokens: 30_000,
+  keepRecentMessages: 8,
+  toolResultPruneChars: 800,
+  toolResultKeepTurns: 2,
+};
+
+/**
  * 检查是否需要压缩。
  * @param totalTokens 当前累计 token（优先传 API 返回的真实值）
  * @param maxTokens 当前模型的真实上下文窗口
@@ -379,6 +405,14 @@ ${newHistoryText}
 /** 单个 tool 结果 content 保留的最大字符数（超出部分替换为截断标记） */
 const PRUNE_KEEP_CHARS = 800;
 
+/** 工具结果裁剪配置（运行时可被 CompactionUserConfig 覆盖） */
+let _pruneKeepChars = PRUNE_KEEP_CHARS;
+
+/** 设置工具结果裁剪保留字符数（由 AgentSession 在配置变更时调用） */
+export function setPruneKeepChars(chars: number): void {
+  _pruneKeepChars = Math.max(50, Math.floor(chars));
+}
+
 /**
  * 根据工具名决定裁剪方向：保留开头还是末尾。
  * - read_file / list_dir：开头最重要（签名、import、目录结构）
@@ -480,6 +514,7 @@ export function pruneOldToolResults(
 
   if (toPrune.length === 0) return messages;
 
+  const keepChars = _pruneKeepChars;
   // 构建裁剪后的数组（浅拷贝 + 替换被裁剪的消息）
   const result = [...messages];
   for (const { idx, originalLen } of toPrune) {
@@ -491,17 +526,17 @@ export function pruneOldToolResults(
     let pruned: string;
     if (keepTail) {
       // 保留末尾（最新内容）：search 最新匹配、命令最终输出
-      const tail = content.slice(-PRUNE_KEEP_CHARS);
+      const tail = content.slice(-keepChars);
       pruned = `[... 已裁剪，原始结果 ${originalLen} 字符（保留最新 ${tail.length} 字符）...]\n\n${tail}`;
     } else {
       // 保留开头（函数签名、目录结构等）
-      const head = content.slice(0, PRUNE_KEEP_CHARS);
+      const head = content.slice(0, keepChars);
       pruned = `${head}\n\n[... 已裁剪，原始结果 ${originalLen} 字符 ...]`;
     }
     result[idx] = { ...original, content: pruned } as ChatCompletionMessageParam;
   }
 
-  const savedChars = toPrune.reduce((sum, p) => sum + (p.originalLen - PRUNE_KEEP_CHARS - 40), 0);
+  const savedChars = toPrune.reduce((sum, p) => sum + (p.originalLen - keepChars - 40), 0);
   if (savedChars > 0) {
     console.debug(`[prune] 裁剪了 ${toPrune.length} 条旧 tool 结果，节省约 ${savedChars} 字符 (≈${Math.round(savedChars / 4)} tokens)`);
   }

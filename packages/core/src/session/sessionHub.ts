@@ -150,6 +150,23 @@ export class SessionHub {
     }
   }
 
+  /**
+   * 热更新滚动压缩配置到所有活跃会话。
+   * 在 VS Code 设置变化时由 host 调用，保证配置实时生效——无需重载窗口。
+   */
+  reloadCompactionConfig(): void {
+    if (!this.deps.getCompactionConfig) return;
+    try {
+      const cfg = this.deps.getCompactionConfig();
+      for (const session of this.activeSessions.values()) {
+        session.setCompactionConfig(cfg);
+      }
+      console.debug("[compaction] 压缩配置已热更新到所有活跃会话");
+    } catch (err) {
+      console.warn("[compaction] 同步压缩配置失败:", (err as Error).message);
+    }
+  }
+
   /** 获取或创建一个 session 的代理 channel；传入 clientId 时更新其归属面板 */
   private getOrCreateSessionChannel(sessionId: string, clientId?: string): SessionChannel {
     let ch = this.sessionChannels.get(sessionId);
@@ -188,6 +205,10 @@ export class SessionHub {
     if (clientId) {
       const desiredMode = this.clientEditModes.get(clientId);
       if (desiredMode) session.setEditMode(desiredMode);
+    }
+    // 注入滚动压缩配置
+    if (this.deps.getCompactionConfig) {
+      session.setCompactionConfig(this.deps.getCompactionConfig());
     }
     return session;
   }

@@ -12,7 +12,8 @@ import { calculateCredits, buildCreditDetail } from "./credits.js";
 import type { AgentHost, FileEdit } from "./host/index.js";
 import { deriveSubAgentHost } from "./host/index.js";
 import type { AgentChannel, AgentEvent } from "./channel/index.js";
-import { needsCompaction, compactMessages, reflectiveCompact, pruneOldToolResults, rollingCompact } from "./compactor.js";
+import { needsCompaction, compactMessages, reflectiveCompact, pruneOldToolResults, rollingCompact, DEFAULT_COMPACTION_CONFIG, setPruneKeepChars } from "./compactor.js";
+import type { CompactionUserConfig } from "./compactor.js";
 import type { SerializedPendingEdit } from "./storage/types.js";
 import type { LLMStreamCallbacks, ToolDef } from "./llm/types.js";
 import { SkillRegistry, type LoadedSkill } from "./skills/skillLoader.js";
@@ -127,8 +128,8 @@ export class AgentSession {
   private rollingSummaryAccumulated = 0;
   /** 滚动摘要是否正在进行中（防止并发）。 */
   private rollingSummaryInProgress = false;
-  /** 滚动摘要触发阈值（累计 token） */
-  private static readonly ROLLING_SUMMARY_THRESHOLD = 30_000;
+  /** 滚动压缩配置（运行时可更新）。来自呈现端注入，默认启用。 */
+  private compactionConfig: CompactionUserConfig = { ...DEFAULT_COMPACTION_CONFIG };
   // 执行中的 relay 任务上下文：记录当前正在执行哪个 relay/任务，及该任务改动过的文件（供评审定位）
   private activeRelayTask: { relayId: string; taskId: string; changedFiles: Set<string> } | null = null;
   // 本轮用户输入内是否已推进过一次 Relay 阶段。确认门铁律：一条用户消息最多推进一个文档阶段，
@@ -161,6 +162,18 @@ export class AgentSession {
     this.mcp = mcp;
     this.mcpRegistry = new McpRegistry(this.workspaces, this.host, this.homeDir, this.powerRegistry);
     this.relayStore = new RelayStore(this.cwd, this.host);
+  }
+
+  /** 设置滚动压缩配置（由呈现端在启动时 / 配置变更时调用） */
+  setCompactionConfig(cfg: Partial<CompactionUserConfig>): void {
+    this.compactionConfig = { ...this.compactionConfig, ...cfg };
+    // 同步工具结果裁剪参数到 compactor 模块
+    setPruneKeepChars(this.compactionConfig.toolResultPruneChars);
+  }
+
+  /** 获取当前压缩配置（诊断 / UI 展示用） */
+  getCompactionConfig(): CompactionUserConfig {
+    return this.compactionConfig;
   }
 
   /** 获取当前完整消息列表（持久化用） */
@@ -470,11 +483,13 @@ export class AgentSession {
   private async maybeRollingSummary(): Promise<void> {
     // 防止并发：已经在压缩中 / 正在手动压缩 / 正在溢出压缩
     if (this.rollingSummaryInProgress || this.isCompacting) return;
+    // 用户关闭了滚动压缩 → 跳过（工具结果裁剪仍独立生效）
+    if (!this.compactionConfig.enabled) return;
     this.rollingSummaryInProgress = true;
 
     try {
       const client = getClient(this.provider, this.model);
-      const [newMessages, didCompact] = await rollingCompact(this.messages, client, this.model);
+      const [newMessages, didCompact] = await rollingCompact(this.messages, client, this.model, this.compactionConfig.keepRecentMessages);
       if (didCompact) {
         // 安全区替换：用压缩后的消息替换当前 messages
         this.messages = newMessages;
@@ -2264,12 +2279,12 @@ export class AgentSession {
         // 本轮真实 token（拿不到 usage 时回退到字符数估算）
         this.send("stream_end", { elapsed, tokens: turnTokens, model: this.model, credits, creditDetail });
         // 本轮结束：裁剪旧 tool 结果，控制上下文体积增长（每轮都做，用户无感）
-        this.messages = pruneOldToolResults(this.messages);
+        this.messages = pruneOldToolResults(this.messages, this.compactionConfig.toolResultKeepTurns);
         this.persistMessages();
 
         // 滚动摘要：累计 token 超阈值 → 异步触发（不阻塞用户发下一条）
         this.rollingSummaryAccumulated += turnTokens;
-        if (this.rollingSummaryAccumulated >= AgentSession.ROLLING_SUMMARY_THRESHOLD) {
+        if (this.rollingSummaryAccumulated >= this.compactionConfig.triggerTokens) {
           this.maybeRollingSummary();
         }
         return;

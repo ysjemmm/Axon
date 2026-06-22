@@ -14,7 +14,8 @@
 import * as vscode from "vscode";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { SessionHub, type ControlCommand, type WorkspaceGroup, webSearch, webFetch } from "@axon/core";
+import { SessionHub, type ControlCommand, type WorkspaceGroup, type CompactionUserConfig, webSearch, webFetch } from "@axon/core";
+import { DEFAULT_COMPACTION_CONFIG } from "@axon/core";
 import { createVSCodeAgentHost, VSCodeCommandTrustStore } from "@axon/host-vscode";
 import { JsonFileStorage, createNodeMcpCapability } from "@axon/host-node";
 import { loadProviderEnv } from "./loadEnv.js";
@@ -38,6 +39,21 @@ interface ImportResult {
 /** 带源目录绝对路径的 QuickPick 选项 */
 interface DirPickItem extends vscode.QuickPickItem {
   dir: string;
+}
+
+/**
+ * 读取 VS Code 设置中的滚动压缩配置（axon.compaction.*）。
+ * 读取时机：会话创建时（注入初始值）+ 设置变更时（热更新）。
+ */
+function readCompactionConfig(): CompactionUserConfig {
+  const cfg = vscode.workspace.getConfiguration("axon.compaction");
+  return {
+    enabled: cfg.get<boolean>("enabled", DEFAULT_COMPACTION_CONFIG.enabled),
+    triggerTokens: cfg.get<number>("triggerTokens", DEFAULT_COMPACTION_CONFIG.triggerTokens),
+    keepRecentMessages: cfg.get<number>("keepRecentMessages", DEFAULT_COMPACTION_CONFIG.keepRecentMessages),
+    toolResultPruneChars: cfg.get<number>("toolResultPruneChars", DEFAULT_COMPACTION_CONFIG.toolResultPruneChars),
+    toolResultKeepTurns: cfg.get<number>("toolResultKeepTurns", DEFAULT_COMPACTION_CONFIG.toolResultKeepTurns),
+  };
 }
 
 /**
@@ -272,6 +288,8 @@ export function activate(context: vscode.ExtensionContext): void {
     mcp: createNodeMcpCapability(),
     // 命令信任白名单：读写 `axon.trustedCommands` 配置（弹窗授权与设置管理共用同一份数据）
     commandTrust: new VSCodeCommandTrustStore(),
+    // 滚动压缩配置：读取 VS Code 设置（axon.compaction.*），默认启用
+    getCompactionConfig: () => readCompactionConfig(),
   });
 
   // REST 请求路由（webview 形态下替代 Express）
@@ -325,6 +343,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("axon.trustedCommands")) {
         hub.reloadTrustedCommands();
+      }
+      if (e.affectsConfiguration("axon.compaction")) {
+        hub.reloadCompactionConfig();
       }
     })
   );

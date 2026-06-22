@@ -14,6 +14,7 @@ import type { AgentHost } from "../host/index.js";
 import type { SessionStorage } from "../storage/types.js";
 import type { WebCapability, TrustRule } from "../tools/index.js";
 import type { McpCapability } from "../mcp/types.js";
+import type { CompactionUserConfig } from "../compactor.js";
 
 /** 工作区组（迁自 server/config.ts 的纯类型部分） */
 export interface WorkspaceGroup {
@@ -60,4 +61,10 @@ export interface SessionHubDeps {
   mcp?: McpCapability;
   /** 可选：命令信任白名单存储（不注入则仅用内置默认集 + 会话级批准） */
   commandTrust?: CommandTrustStore;
+  /**
+   * 可选：滚动压缩配置提供器。返回当前生效的压缩配置（含开关、阈值等）。
+   * 在会话创建时和配置变更时调用，使配置热更新到所有活跃会话。
+   * 不注入则使用 DEFAULT_COMPACTION_CONFIG（默认启用）。
+   */
+  getCompactionConfig?: () => CompactionUserConfig;
 }
