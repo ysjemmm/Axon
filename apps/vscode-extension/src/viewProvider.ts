@@ -160,6 +160,12 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
+      // 打开 Provider 配置面板
+      if (m.type === "open_provider") {
+        vscode.commands.executeCommand("axon.openProvider");
+        return;
+      }
+
       // 打开 Relay 详情 Tab（webview panel 渲染完整 Relay 面板）
       if (m.type === "open_relay" && typeof m.relayId === "string") {
         const relayId = m.relayId as string;

@@ -15,7 +15,7 @@
 
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { AgentSession } from "../agentSession.js";
-import { ESIGN_PROVIDER } from "../providers.js";
+import { ZHIPU_PROVIDER } from "../providers.js";
 import { RelayStore } from "../relay/relayStore.js";
 import type { ControlCommand, UserMessageCommand } from "../channel/index.js";
 import type { AgentChannel, AgentEvent } from "../channel/index.js";
@@ -485,7 +485,7 @@ export class SessionHub {
       id: cmd.sessionId || "",
       title: "新对话",
       model: cmd.model || "auto",
-      provider: cmd.provider || ESIGN_PROVIDER,
+      provider: cmd.provider || ZHIPU_PROVIDER,
       workspace: ws_dir,
       mode,
       messages: [],
@@ -529,7 +529,7 @@ export class SessionHub {
       id: "",
       title,
       model: migrateData.userInput.model || "auto",
-      provider: migrateData.userInput.provider || ESIGN_PROVIDER,
+      provider: migrateData.userInput.provider || ZHIPU_PROVIDER,
       workspace: ws_dir,
       workspaces: ws_dirs.length > 1 ? ws_dirs : undefined,
       mode,
@@ -647,7 +647,7 @@ export class SessionHub {
         id: cmd.sessionId || "",
         title: "新对话",
         model: cmd.model || "auto",
-        provider: cmd.provider || ESIGN_PROVIDER,
+        provider: cmd.provider || ZHIPU_PROVIDER,
         workspace: ws_dir,
         workspaces: ws_dirs.length > 1 ? ws_dirs : undefined,
         mode,

@@ -2,7 +2,7 @@
  * Provider / Model 的数据模型（零形态依赖，纯类型 + 常量）
  *
  * 这是"可自定义 provider"功能的数据契约：
- *  - 内置 provider（esign / zhipu）由 providerCatalog.ts 提供出厂目录
+ *  - 内置 provider（zhipu）由 providerCatalog.ts 提供出厂目录
  *  - 自定义 provider 来自 ~/.axon/settings/providers.json（用户级）/ <ws>/.axon/settings/providers.json（工作区级）
  *  - ProviderRegistry 把两者合并成 ResolvedProvider[]，供 getClient / getStrategy / 前端选择器消费
  */
@@ -14,11 +14,10 @@ export type ProviderProtocol = "chat" | "responses";
 export type ApiKeyHeader = "bearer" | "x-api-key";
 
 /** provider 名常量（唯一真源，避免字面量散落） */
-export const ESIGN_PROVIDER = "esign";
 export const ZHIPU_PROVIDER = "zhipu";
 
 /** 内置 provider 的保留名（自定义 provider 不允许占用） */
-export const RESERVED_PROVIDER_NAMES = [ESIGN_PROVIDER, ZHIPU_PROVIDER];
+export const RESERVED_PROVIDER_NAMES = [ZHIPU_PROVIDER];
 
 /** 单个模型的元数据 */
 export interface ProviderModel {
@@ -67,6 +66,8 @@ export interface ResolvedProvider {
   configured: boolean;
   /** 来源：内置目录 / 配置文件自定义 / 仅环境变量 */
   source: "builtin" | "custom" | "env";
+  /** 自定义 provider 的来源层级（仅 source="custom" 时有值） */
+  customLevel?: "user" | "workspace";
 }
 
 /** providers.json 里单个自定义 provider 的原始配置 */

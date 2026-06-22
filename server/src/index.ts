@@ -18,7 +18,7 @@ import { registerSkillRoutes } from "./skills/skillRoutes.js";
 import { registerPowerRoutes } from "./powers/powerRoutes.js";
 import { registerMcpRoutes } from "./mcp/mcpRoutes.js";
 import { registerProviderRoutes } from "./providers/providerRoutes.js";
-import { RelayStore, SessionHub, ESIGN_PROVIDER, ProviderRegistry, refreshProviders, type AgentEvent, type ControlCommand } from "@axon/core";
+import { RelayStore, SessionHub, ZHIPU_PROVIDER, ProviderRegistry, refreshProviders, type AgentEvent, type ControlCommand } from "@axon/core";
 import { createNodeAgentHost, FileCommandTrustStore, createNodeMcpCapability } from "@axon/host-node";
 import { WsChannel } from "./wsChannel.js";
 import { webSearch, webFetch } from "./webSearch.js";
@@ -86,7 +86,7 @@ app.post("/api/sessions", async (req, res) => {
     id: "",
     title: title || "新对话",
     model: model || "auto",
-    provider: provider || ESIGN_PROVIDER,
+    provider: provider || ZHIPU_PROVIDER,
     workspace: workspace || DEFAULT_WORKSPACE,
     messages: [],
     totalTokens: 0,

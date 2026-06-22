@@ -136,7 +136,7 @@ export function registerProviderRoutes(app: Express, deps: ProviderRouterDeps): 
     }
   });
 
-  /** 设置内置 provider 的 apiKey 覆盖（esign 仅此项可改） */
+  /** 设置内置 provider 的 apiKey 覆盖 */
   app.put("/api/providers/:level/builtin-key", async (req, res) => {
     try {
       const level = parseLevel(req.params.level);

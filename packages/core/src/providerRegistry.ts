@@ -3,7 +3,7 @@
  * 产出归一化的 ResolvedProvider[]（零形态依赖，读文件走注入的 host.fs）。
  *
  * 来源与优先级（同名后者覆盖前者）：
- *   · 内置目录（esign / zhipu）：baseUrl/协议/模型固定，apiKey 由 env 或 providers.json.builtinApiKeys 注入
+ *   · 内置目录（zhipu）：baseUrl/协议/模型固定，apiKey 由 env 或 providers.json.builtinApiKeys 注入
  *   · 用户级：  ~/.axon/settings/providers.json
  *   · 工作区级：<workspace>/.axon/settings/providers.json
  *   · 纯 env：  PROVIDER_<NAME>_API_KEY/_BASE_URL（无模型元数据，仅保证 getClient 可用，向后兼容）
@@ -20,6 +20,9 @@ import {
   type RawProviderEntry,
   type ResolvedProvider,
 } from "./providerTypes.js";
+
+/** 已废弃的内置 provider 名——env 中残留的旧 key 也不应复活 */
+const DEPRECATED_BUILTIN_NAMES = ["esign", "codex"];
 
 /** 用户级 provider 配置路径：~/.axon/settings/providers.json */
 export function userProviderConfigPath(homeDir: string): string {
@@ -66,30 +69,37 @@ export class ProviderRegistry {
     // 2) 自定义 provider（保留名不可占用）
     for (const [name, entry] of Object.entries(file.providers || {})) {
       if (RESERVED_PROVIDER_NAMES.includes(name)) continue;
-      byName.set(name, this.fromCustom(name, entry));
+      byName.set(name, this.fromCustom(name, entry, file._providerLevels?.[name]));
     }
 
-    // 3) 纯 env provider（既非内置也非自定义，向后兼容老配置）
+    // 3) 纯 env provider（既非内置也非自定义，向后兼容老配置；跳过已废弃名）
     for (const name of this.envProviderNames()) {
       if (byName.has(name)) continue;
+      if (DEPRECATED_BUILTIN_NAMES.includes(name)) continue;
       byName.set(name, this.fromEnv(name));
     }
 
     return [...byName.values()];
   }
 
-  /** 合并读取用户级 + 各工作区级 providers.json（providers/builtinApiKeys 同名后者覆盖前者） */
-  private async readMergedConfig(): Promise<ProviderConfigFile> {
+  /** 合并读取用户级 + 各工作区级 providers.json，同时追踪每个自定义 provider 的来源层级 */
+  private async readMergedConfig(): Promise<ProviderConfigFile & { _providerLevels?: Record<string, "user" | "workspace"> }> {
     const merged: ProviderConfigFile = { providers: {}, builtinApiKeys: {} };
-    const apply = (cfg: ProviderConfigFile) => {
-      Object.assign(merged.providers!, cfg.providers || {});
-      Object.assign(merged.builtinApiKeys!, cfg.builtinApiKeys || {});
-    };
-    apply(await this.readFile(userProviderConfigPath(this.homeDir)));
+    const levels: Record<string, "user" | "workspace"> = {};
+
+    const userCfg = await this.readFile(userProviderConfigPath(this.homeDir));
+    Object.assign(merged.providers!, userCfg.providers || {});
+    Object.assign(merged.builtinApiKeys!, userCfg.builtinApiKeys || {});
+    for (const name of Object.keys(userCfg.providers || {})) levels[name] = "user";
+
     for (const ws of this.workspaces) {
-      apply(await this.readFile(workspaceProviderConfigPath(ws)));
+      const wsCfg = await this.readFile(workspaceProviderConfigPath(ws));
+      Object.assign(merged.providers!, wsCfg.providers || {});
+      Object.assign(merged.builtinApiKeys!, wsCfg.builtinApiKeys || {});
+      for (const name of Object.keys(wsCfg.providers || {})) levels[name] = "workspace";
     }
-    return merged;
+
+    return { ...merged, _providerLevels: levels };
   }
 
   /** 读单个 providers.json，文件不存在/损坏返回空配置 */
@@ -122,7 +132,7 @@ export class ProviderRegistry {
   }
 
   /** providers.json 自定义条目 → ResolvedProvider */
-  private fromCustom(name: string, entry: RawProviderEntry): ResolvedProvider {
+  private fromCustom(name: string, entry: RawProviderEntry, level?: "user" | "workspace"): ResolvedProvider {
     const apiKey = (entry.apiKey || "").trim();
     return {
       name,
@@ -136,6 +146,7 @@ export class ProviderRegistry {
       locked: false,
       configured: !!apiKey && !!entry.baseUrl,
       source: "custom",
+      customLevel: level,
     };
   }
 
@@ -157,12 +168,13 @@ export class ProviderRegistry {
     };
   }
 
-  /** 扫描 env 里所有 PROVIDER_<NAME>_API_KEY 的小写 name */
+  /** 扫描 env 里所有 PROVIDER_<NAME>_API_KEY 的小写 name（跳过已废弃名） */
   private envProviderNames(): string[] {
     return Object.keys(process.env)
       .map((k) => k.match(/^PROVIDER_(\w+)_API_KEY$/))
       .filter((m): m is RegExpMatchArray => !!m)
-      .map((m) => m[1].toLowerCase());
+      .map((m) => m[1].toLowerCase())
+      .filter((n) => !DEPRECATED_BUILTIN_NAMES.includes(n));
   }
 }
 

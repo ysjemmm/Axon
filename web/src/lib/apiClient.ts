@@ -474,6 +474,7 @@ export interface ResolvedProviderInfo {
   locked: boolean;
   configured: boolean;
   source: "builtin" | "custom" | "env";
+  customLevel?: "user" | "workspace";
 }
 
 /** 扁平模型（含 provider 归属），供模型选择器 */
@@ -537,7 +538,7 @@ export function removeCustomProvider(level: ProviderLevel, name: string, workspa
   return del(`/api/providers/${level}/custom/${encodeURIComponent(name)}${providerQuery(workspace)}`);
 }
 
-/** 设置内置 provider（esign / zhipu）的 apiKey 覆盖（esign 仅此项可改） */
+/** 设置内置 provider 的 apiKey 覆盖 */
 export function setBuiltinProviderKey(level: ProviderLevel, name: string, apiKey: string, workspace?: string): Promise<{ ok: boolean }> {
   return put(`/api/providers/${level}/builtin-key${providerQuery(workspace)}`, { name, apiKey });
 }

@@ -12,7 +12,7 @@ import { writeFile, rm, mkdir } from "node:fs/promises";
 import { join as pathJoin } from "node:path";
 import { homedir } from "node:os";
 import OpenAI from "openai";
-import { globalSkillsDir, parseFrontmatter, SkillRegistry, ESIGN_PROVIDER, type SkillMeta } from "@axon/core";
+import { globalSkillsDir, parseFrontmatter, SkillRegistry, ZHIPU_PROVIDER, type SkillMeta } from "@axon/core";
 import { createNodeAgentHost } from "@axon/host-node";
 import {
   resolveSkillDir,
@@ -79,15 +79,14 @@ export class SkillService {
   }
 
   /**
-   * 用 LLM 生成 SKILL.md 内容（Skill Creator）。
-   * provider/model 固定走 esign/gpt-5.5（与原 index.ts 行为一致）。
+   * 用 LLM 生成 SKILL.md 内容（Skill Creator），走智谱免费模型。
    */
   async generate(prompt: string): Promise<string> {
     if (!prompt || typeof prompt !== "string") {
       throw new Error("prompt（skill 需求描述）必填");
     }
-    const providerName = ESIGN_PROVIDER;
-    const modelName = "gpt-5.5";
+    const providerName = ZHIPU_PROVIDER;
+    const modelName = "glm-4-flash";
     const apiKey = process.env[`PROVIDER_${providerName.toUpperCase()}_API_KEY`];
     const baseURL = process.env[`PROVIDER_${providerName.toUpperCase()}_BASE_URL`];
     if (!apiKey) {

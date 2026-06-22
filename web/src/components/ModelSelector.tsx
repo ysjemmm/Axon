@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { Check, ChevronDown, ChevronRight } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Settings } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { getProviders, type ProviderModelInfo, type ResolvedProviderInfo } from "@/lib/apiClient";
@@ -26,26 +26,16 @@ export interface ModelOption {
 }
 
 /**
- * Provider 键名常量（必须与后端 @axon/core 的 ESIGN_PROVIDER 保持一致）。
+ * Provider 键名常量（必须与后端 @axon/core 的 ZHIPU_PROVIDER 保持一致）。
  * web 是独立工程、引用不到 @axon/core，故在此本地镜像一份，集中收口，
  * 避免 provider 字面量散落到每个模型条目里、改名时漏改。
  */
-const PROVIDER_ESIGN = "esign";
 const PROVIDER_ZHIPU = "zhipu";
 
 export const MODELS: ModelOption[] = [
   // ── 系统 ──
-  { id: "auto", name: "Auto", contextWindow: 0, description: "根据任务和当前可用模型自动选择", free: false, vision: true, provider: PROVIDER_ESIGN, group: "系统" },
-  // ── OpenAI ──
-  { id: "gpt-5.5", name: "GPT-5.5", contextWindow: 1000000, description: "最新旗舰模型", free: false, vision: true, provider: PROVIDER_ESIGN, group: "OpenAI", tier: "flagship" },
-  { id: "gpt-5.4", name: "GPT-5.4", contextWindow: 1000000, description: "高性能模型", free: false, vision: true, provider: PROVIDER_ESIGN, group: "OpenAI", tier: "flagship" },
-  // ── DeepSeek ──
-  { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", contextWindow: 1000000, description: "1.6T MoE，1M 上下文，开源旗舰", free: false, vision: false, provider: PROVIDER_ESIGN, group: "DeepSeek", tier: "balanced" },
-  // ── Anthropic ──
-  { id: "claude-opus-4-6", name: "Claude Opus 4.6", contextWindow: 1000000, description: "Anthropic 旗舰，超强推理", free: false, vision: true, provider: PROVIDER_ESIGN, group: "Anthropic", tier: "flagship" },
-  { id: "claude-opus-4-7", name: "Claude Opus 4.7", contextWindow: 1000000, description: "最新 Opus，代码/分析顶级", free: false, vision: true, provider: PROVIDER_ESIGN, group: "Anthropic", tier: "flagship" },
+  { id: "auto", name: "Auto", contextWindow: 0, description: "根据任务和当前可用模型自动选择", free: false, vision: true, provider: PROVIDER_ZHIPU, group: "系统" },
   // ── 智谱 ──
-  { id: "glm-5.1", name: "GLM-5.1", contextWindow: 200000, description: "智谱最新旗舰模型", free: false, vision: false, provider: PROVIDER_ESIGN, group: "智谱", tier: "balanced" },
   { id: "glm-4-flash", name: "GLM-4 Flash", contextWindow: 128000, description: "免费，快速响应", free: true, vision: false, provider: PROVIDER_ZHIPU, group: "智谱", tier: "fast" },
   { id: "glm-4-flashx", name: "GLM-4 FlashX", contextWindow: 128000, description: "免费，极速推理", free: true, vision: false, provider: PROVIDER_ZHIPU, group: "智谱", tier: "fast" },
 ];
@@ -61,7 +51,7 @@ const _subs = new Set<() => void>();
 /** Auto 系统伪模型（始终置于菜单顶部） */
 const AUTO_MODEL = MODELS.find((m) => m.id === "auto")!;
 /** 内置 provider 的展示名兜底 */
-const BUILTIN_LABELS: Record<string, string> = { [PROVIDER_ESIGN]: "eSign", [PROVIDER_ZHIPU]: "智谱" };
+const BUILTIN_LABELS: Record<string, string> = { [PROVIDER_ZHIPU]: "智谱" };
 
 function _notify(): void {
   for (const fn of _subs) fn();
@@ -97,8 +87,8 @@ function _toOption(providerName: string, group: string, m: ProviderModelInfo): M
   };
 }
 
-/** provider 分组（已配置且含未禁用模型）；内置在前、自定义在后。供两级菜单。 */
-export interface ProviderGroup { name: string; label: string; builtin: boolean; models: ModelOption[] }
+/** provider 分组（含未配置 provider）；内置在前、自定义在后。供两级菜单。 */
+export interface ProviderGroup { name: string; label: string; builtin: boolean; configured: boolean; models: ModelOption[] }
 
 export function getProviderGroups(): ProviderGroup[] {
   // 兜底：后端不可用时，从内置 MODELS（去掉 auto）按 provider 分组
@@ -109,17 +99,17 @@ export function getProviderGroups(): ProviderGroup[] {
       if (!map.has(m.provider)) map.set(m.provider, []);
       map.get(m.provider)!.push(m);
     }
-    return [...map.entries()].map(([name, models]) => ({ name, label: BUILTIN_LABELS[name] || name, builtin: true, models }));
+    return [...map.entries()].map(([name, models]) => ({ name, label: BUILTIN_LABELS[name] || name, builtin: true, configured: true, models }));
   }
+  // 显示所有 provider（含未配置），未配置的模型的 disabledModels 由 UI 层处理
   const groups = _providers
-    .filter((p) => p.configured)
     .map((p) => ({
       name: p.name,
       label: p.label || BUILTIN_LABELS[p.name] || p.name,
       builtin: p.builtin,
+      configured: p.configured,
       models: p.models.filter((m) => !m.disabled).map((m) => _toOption(p.name, p.label || p.name, m)),
-    }))
-    .filter((g) => g.models.length > 0);
+    }));
   // 内置在前、自定义在后
   return [...groups.filter((g) => g.builtin), ...groups.filter((g) => !g.builtin)];
 }
@@ -163,8 +153,8 @@ export function useProviderGroups(): ProviderGroup[] {
  */
 export function autoSelectModel(input: string, hasImages: boolean): ModelOption {
   const available = getModels().filter((m) => m.id !== "auto");
-  // 极端：一个 provider 都没配 → 退回内置 gpt-5.5（运行时会提示"未配置"，这是真实的未配置状态）
-  if (available.length === 0) return MODELS.find((m) => m.id === "gpt-5.5")!;
+  // 极端：一个 provider 都没配 → 退回 Auto（UI 会提示未配置）
+  if (available.length === 0) return AUTO_MODEL;
 
   const tierOf = (m: ModelOption): "fast" | "balanced" | "flagship" => m.tier || "balanced";
   /** 在 pool 里按档位偏好顺序取第一个命中的；都没有则取 pool 第一个，pool 空再退回任意可用 */
@@ -200,6 +190,14 @@ export function autoSelectModel(input: string, hasImages: boolean): ModelOption 
   return pick(["fast", "balanced", "flagship"], available);
 }
 
+/** 打开 VS Code 侧边栏 Provider 配置面板 */
+function openProviderPanel() {
+  const vscode = (window as any).__axonVSCode;
+  if (vscode) {
+    vscode.postMessage({ type: "open_provider" });
+  }
+}
+
 interface ModelSelectorProps {
   value: string;
   onChange: (modelId: string) => void;
@@ -210,10 +208,10 @@ interface ModelSelectorProps {
 }
 
 /** 单个模型行（菜单项） */
-function ModelRow({ model, selected, disabled, onPick }: { model: ModelOption; selected: boolean; disabled: boolean; onPick: () => void }) {
+function ModelRow({ model, selected, disabled, disabledHint, onPick }: { model: ModelOption; selected: boolean; disabled: boolean; disabledHint?: string; onPick: () => void }) {
   const win = model.contextWindow >= 1000000 ? `${(model.contextWindow / 1000000).toFixed(0)}M` : `${(model.contextWindow / 1000).toFixed(0)}K`;
   const sub = model.contextWindow > 0 ? `${model.description} · ${win}` : model.description;
-  return (
+  const btn = (
     <button
       disabled={disabled}
       onClick={onPick}
@@ -233,6 +231,21 @@ function ModelRow({ model, selected, disabled, onPick }: { model: ModelOption; s
       {selected && <Check className="w-3 h-3 text-muted-foreground shrink-0" />}
     </button>
   );
+  if (disabled && disabledHint) {
+    return (
+      <TooltipProvider delayDuration={300}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="block">{btn}</span>
+          </TooltipTrigger>
+          <TooltipContent side="right" align="center" sideOffset={8}>
+            <p className="text-xs">{disabledHint}</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
+  return btn;
 }
 
 export function ModelSelector({ value, onChange, disabledModels = [], disabled = false, disabledTooltip }: ModelSelectorProps) {
@@ -317,19 +330,39 @@ export function ModelSelector({ value, onChange, disabledModels = [], disabled =
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded(expanded === g.name ? null : g.name); } }}
                 className={`flex items-center justify-between gap-2 py-1.5 pl-2 pr-2 rounded-md text-xs cursor-pointer transition-colors ${isExpanded ? "text-foreground bg-muted/30" : "text-muted-foreground hover:text-foreground hover:bg-muted/20"}`}
               >
-                <span className="font-medium truncate">{g.label}</span>
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="font-medium truncate">{g.label}</span>
+                  {!g.configured && <span className="text-[9px] px-1 py-px rounded bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 shrink-0">未配置</span>}
+                </div>
                 <ChevronRight className={`w-3 h-3 opacity-60 shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
               </div>
               {isExpanded && (
                 <div className="pl-2 border-l border-border/40 ml-2 mb-1">
                   {g.models.map((m) => (
-                    <ModelRow key={m.id} model={m} selected={m.id === current?.id && m.provider === current?.provider} disabled={disabledModels.includes(m.id)} onPick={() => pick(m.id, m.provider)} />
+                    <ModelRow
+                      key={m.id}
+                      model={m}
+                      selected={m.id === current?.id && m.provider === current?.provider}
+                      disabled={!g.configured || disabledModels.includes(m.id)}
+                      disabledHint={!g.configured ? "请先配置 API Key" : undefined}
+                      onPick={() => { if (g.configured) pick(m.id, m.provider); }}
+                    />
                   ))}
                 </div>
               )}
             </div>
           );
         })}
+
+        {/* 底部操作栏 */}
+        <div className="border-t border-border/50 my-1" />
+        <button
+          onClick={openProviderPanel}
+          className="flex items-center gap-2 w-full py-1.5 pl-2 pr-3 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+        >
+          <Settings className="w-3 h-3" />
+          去配置自定义 Provider
+        </button>
       </PopoverContent>
     </Popover>
   );

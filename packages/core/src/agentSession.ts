@@ -23,7 +23,7 @@ import { McpRegistry } from "./mcp/mcpRegistry.js";
 import { encodeMcpToolName, MCP_TOOL_PREFIX, type McpCapability } from "./mcp/types.js";
 import { modelContextWindow } from "./llm/modelContext.js";
 import { SYSTEM_PROMPT, QUEST_SYSTEM_PROMPT } from "./systemPrompt.js";
-import { getClient, getStrategy, ESIGN_PROVIDER } from "./providers.js";
+import { getClient, getStrategy, ZHIPU_PROVIDER } from "./providers.js";
 import { sanitizeToolPairing } from "./messageSanitizer.js";
 import { RelayStore } from "./relay/relayStore.js";
 import type { RelayPhase, RelayQualityConfig } from "./relay/types.js";
@@ -139,7 +139,7 @@ export class AgentSession {
   constructor(cwd: string, channel: AgentChannel, host: AgentHost, existingMessages?: ChatCompletionMessageParam[], workspaces?: string[], homeDir?: string, web?: WebCapability, mode: "agent" | "quest" = "agent", mcp?: McpCapability) {
     this.mode = mode;
     this.model = process.env.DEFAULT_MODEL || "gpt-5.5";
-    this.provider = process.env.DEFAULT_PROVIDER || ESIGN_PROVIDER;
+    this.provider = process.env.DEFAULT_PROVIDER || ZHIPU_PROVIDER;
     this.messages = existingMessages && existingMessages.length > 0
       ? existingMessages
       : [{ role: "system", content: mode === "quest" ? QUEST_SYSTEM_PROMPT : SYSTEM_PROMPT }];

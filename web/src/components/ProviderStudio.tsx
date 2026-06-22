@@ -2,7 +2,7 @@
  * ProviderStudio —— 全局 Provider 配置管理器（编辑器 Tab WebView，view=providers）
  *
  * 管理 .axon/settings/providers.json：
- *   - 内置 provider（esign / zhipu）：只暴露 API Key 输入（esign 的 baseUrl/模型/协议锁定）
+ *   - 内置 provider（zhipu）：只暴露 API Key 输入
  *   - 自定义 provider：name / baseUrl / apiKey / 协议 / 模型，可增删
  *   - 写入层级：用户级（全局）/ 工作区级（仅当前项目）
  *
@@ -39,7 +39,7 @@ interface ProviderStudioProps {
 }
 
 export function ProviderStudio({ workspace }: ProviderStudioProps) {
-  const [level, setLevel] = useState<ProviderLevel>(workspace ? "workspace" : "user");
+  const [level, setLevel] = useState<ProviderLevel>("user");
   const [providers, setProviders] = useState<ResolvedProviderInfo[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -61,7 +61,7 @@ export function ProviderStudio({ workspace }: ProviderStudioProps) {
   }
 
   const builtins = providers.filter((p) => p.builtin);
-  const customs = providers.filter((p) => !p.builtin);
+  const customs = providers.filter((p) => !p.builtin && p.customLevel === level);
   const wsArg = workspace || undefined;
 
   return (
@@ -128,7 +128,7 @@ function LevelButton({ active, onClick, label, disabled }: { active: boolean; on
   );
 }
 
-/** 内置 provider 卡片：只暴露 API Key（esign 的 baseUrl/模型/协议锁定），模型列表只读 */
+/** 内置 provider 卡片：只暴露 API Key，模型列表只读 */
 function BuiltinCard({ provider, level, workspace, onChanged }: { provider: ResolvedProviderInfo; level: ProviderLevel; workspace?: string; onChanged: () => void }) {
   const [apiKey, setApiKey] = useState("");
   const [saving, setSaving] = useState(false);

@@ -13,11 +13,11 @@ import OpenAI from "openai";
 import { ChatCompletionsStrategy } from "./llm/chatCompletionsStrategy.js";
 import { ResponsesStrategy } from "./llm/responsesStrategy.js";
 import type { LLMStrategy } from "./llm/types.js";
-import { ESIGN_PROVIDER, type ProviderProtocol, type ResolvedProvider, type ApiKeyHeader } from "./providerTypes.js";
+import { ZHIPU_PROVIDER, type ProviderProtocol, type ResolvedProvider, type ApiKeyHeader } from "./providerTypes.js";
 import type { ProviderRegistry } from "./providerRegistry.js";
 
-// 重新导出，保持 `import { ESIGN_PROVIDER } from "@axon/core"` 的公开 API 不变
-export { ESIGN_PROVIDER } from "./providerTypes.js";
+// 重新导出，保持 `import { ZHIPU_PROVIDER } from "@axon/core"` 的公开 API 不变
+export { ZHIPU_PROVIDER } from "./providerTypes.js";
 
 /** Provider 运行时配置（client 创建所需的最小信息） */
 export interface ProviderConfig {
@@ -28,14 +28,8 @@ export interface ProviderConfig {
   apiKeyHeader?: ApiKeyHeader;
 }
 
-/**
- * 旧 provider 名 → 当前名 的向后兼容映射。
- * 历史会话 JSON 与旧配置里可能仍写着已废弃的 provider 名，运行时统一归一化，
- * 避免恢复旧会话时报"未知 provider"。
- */
-const LEGACY_PROVIDER_ALIASES: Record<string, string> = {
-  codex: ESIGN_PROVIDER, // 原 codex 网关已更名为 esign（e签宝 / timevale AI 路由）
-};
+/** 旧 provider 名 → 当前名 的向后兼容映射 */
+const LEGACY_PROVIDER_ALIASES: Record<string, string> = {};
 
 /** 归一化 provider 名：把已废弃的旧名映射到当前名 */
 export function normalizeProvider(provider: string): string {
@@ -66,10 +60,7 @@ export function getResolvedProviders(): ResolvedProvider[] {
   return _resolved ? [..._resolved.values()] : [];
 }
 
-/**
- * 取某 provider 的运行时配置：先查已注入的解析结果，再回退到环境变量。
- * 回退时协议按 esign=responses、其余=chat 推断（与历史行为一致）。
- */
+/** 取某 provider 的运行时配置：先查已注入的解析结果，再回退到环境变量。 */
 function configFor(name: string): ProviderConfig | undefined {
   const hit = _resolved?.get(name);
   if (hit) return { apiKey: hit.apiKey, baseUrl: hit.baseUrl, protocol: hit.protocol, apiKeyHeader: hit.apiKeyHeader };
@@ -78,7 +69,7 @@ function configFor(name: string): ProviderConfig | undefined {
   const apiKey = (process.env[`PROVIDER_${name.toUpperCase()}_API_KEY`] || "").trim();
   if (!apiKey) return undefined;
   const baseUrl = (process.env[`PROVIDER_${name.toUpperCase()}_BASE_URL`] || "").trim();
-  const protocol: ProviderProtocol = name === ESIGN_PROVIDER ? "responses" : "chat";
+  const protocol: ProviderProtocol = "chat";
   return { apiKey, baseUrl, protocol };
 }
 
@@ -136,7 +127,7 @@ function protocolForModel(provider: string, model: string): ProviderProtocol {
   const resolved = _resolved?.get(name);
   const modelDef = resolved?.models.find((m) => m.id === model);
   if (modelDef?.protocol === "responses" || modelDef?.protocol === "chat") return modelDef.protocol;
-  return configFor(name)?.protocol ?? (name === ESIGN_PROVIDER ? "responses" : "chat");
+  return configFor(name)?.protocol ?? "chat";
 }
 
 /**
