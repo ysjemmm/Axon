@@ -10,6 +10,12 @@ import * as vscode from "vscode";
 /** 已打开的面板缓存（按 panelId 去重） */
 const activePanels = new Map<string, vscode.WebviewPanel>();
 
+/** 向指定 id 的已打开面板发送 postMessage（找不到则忽略） */
+export function postToPanel(panelId: string, message: unknown): void {
+  const panel = activePanels.get(panelId);
+  if (panel) panel.webview.postMessage(message);
+}
+
 export interface PanelOptions {
   id: string;
   title: string;
@@ -31,7 +37,7 @@ export interface PanelOptions {
 export function openOrFocusPanel(options: PanelOptions): vscode.WebviewPanel {
   const existing = activePanels.get(options.id);
   if (existing) {
-    existing.reveal(vscode.ViewColumn.One);
+    existing.reveal(vscode.ViewColumn.One, false);
     return existing;
   }
 

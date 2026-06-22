@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
-import { Check, Circle, Loader2, FileText, ListChecks, Lightbulb, PencilRuler, ShieldCheck, ShieldAlert, FlaskConical, Trash2 } from "lucide-react";
+import { Check, Circle, Loader2, FileText, ListChecks, Lightbulb, PencilRuler, ShieldCheck, ShieldAlert, FlaskConical, Trash2, RefreshCw } from "lucide-react";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from "@/components/ui/dialog";
@@ -45,6 +45,16 @@ export function RelayTabView({ workspace, relayId }: RelayTabViewProps) {
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleted, setDeleted] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  /** 静默刷新（不显示 loading 状态，避免 UI 闪烁） */
+  const silentRefresh = useCallback(async () => {
+    if (!relayId || !workspace) return;
+    try {
+      const data = await getRelay(relayId, workspace);
+      setRelay(data);
+    } catch { /* 忽略静默刷新失败 */ }
+  }, [relayId, workspace]);
 
   /** 加载 relay 详情 */
   const loadRelay = useCallback(async () => {
@@ -70,6 +80,35 @@ export function RelayTabView({ workspace, relayId }: RelayTabViewProps) {
   }, [relayId, workspace]);
 
   useEffect(() => { loadRelay(); }, [loadRelay]);
+
+  /** 监听扩展转发的 relay 事件（事件驱动刷新） */
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      const data = e.data;
+      if (!data || typeof data !== "object") return;
+      if (data.type === "relay_updated" && data.relayId === relayId) {
+        silentRefresh();
+      } else if (data.type === "relay_deleted" && data.relayId === relayId) {
+        setDeleted(true);
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, [relayId, silentRefresh]);
+
+  /** 自动轮询：Relay 未完成时每 5 秒静默刷新 */
+  useEffect(() => {
+    if (!relay || relay.phase === "done") return;
+    const timer = setInterval(silentRefresh, 5000);
+    return () => clearInterval(timer);
+  }, [relay, silentRefresh]);
+
+  /** 手动刷新按钮 */
+  const handleManualRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await silentRefresh();
+    setRefreshing(false);
+  }, [silentRefresh]);
 
   /** 手动切换任务状态 */
   const toggleTask = async (task: RelayTask) => {
@@ -134,6 +173,9 @@ export function RelayTabView({ workspace, relayId }: RelayTabViewProps) {
               <div className="text-xs text-muted-foreground mt-1">{relay.summary}</div>
             )}
           </div>
+          <button onClick={handleManualRefresh} className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground shrink-0" title="刷新" disabled={refreshing}>
+            <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
+          </button>
           <button onClick={() => setConfirmDelete(true)} className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive shrink-0" title="删除">
             <Trash2 className="w-4 h-4" />
           </button>

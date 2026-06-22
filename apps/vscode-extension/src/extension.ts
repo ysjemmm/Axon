@@ -23,7 +23,7 @@ import { AxonViewProvider } from "./viewProvider.js";
 import { RequestRouter, vscodeBrowse } from "./requestRouter.js";
 import { registerTreeViews } from "./treeViews.js";
 import { registerAxonStatusBar } from "./statusBar.js";
-import { openOrFocusPanel } from "./panelManager.js";
+import { openOrFocusPanel, postToPanel } from "./panelManager.js";
 import { registerGitBlameAnnotation } from "./gitBlameAnnotation.js";
 import { registerInlineCompletion } from "./inlineCompletion.js";
 import { registerAskAxonCodeAction } from "./codeActionProvider.js";
@@ -905,6 +905,14 @@ export function activate(context: vscode.ExtensionContext): void {
         const relayStore = new RelayStore(defaultWorkspace, createHost());
         const relays = await relayStore.list();
         relayTree.refresh(relays.map((r) => ({ id: r.id, title: r.title, phase: r.phase })));
+
+        // 转发 relay 事件到已打开的 Relay Tab 面板，驱动自动刷新
+        if (event.type === "relay_updated" && event.relay?.id) {
+          postToPanel(`relay-${event.relay.id}`, { type: "relay_updated", relayId: event.relay.id });
+        }
+        if (event.type === "relay_deleted" && event.relayId) {
+          postToPanel(`relay-${event.relayId}`, { type: "relay_deleted", relayId: event.relayId });
+        }
       } catch { /* 忽略 */ }
     }
   });
