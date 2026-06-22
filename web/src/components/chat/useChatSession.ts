@@ -11,7 +11,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { MODELS, findModel } from "@/components/ModelSelector";
+import { MODELS, findModel, useModels } from "@/components/ModelSelector";
 import { formatToolDescription, fallbackIntent, formatLineSuffix, type ToolStatus } from "@/components/ToolCallItem";
 import { listRelays, getRelay, type RelayData } from "@/lib/apiClient";
 import type { WsMessage } from "@/hooks/useWebSocket";
@@ -20,6 +20,8 @@ import type { AttachedFile, ChatMessage, CreditDetail, SubAgentSegment, TextSegm
 import type { CommandDecision } from "./commandApprovalContext";
 import { isRelayTool, relayToolLabel, firstLine } from "./relayUtils";
 import { updateSubAgentInner } from "./subAgentEvents";
+
+const DEFAULT_MODEL_ID = "glm-4-flash";
 
 /** 发送用户消息的载荷（由壳层根据输入/模型/附件计算后交给 hook） */
 export interface SubmitPayload {
@@ -92,19 +94,20 @@ function toolPhaseText(name: string): string {
 
 export function useChatSession(opts: UseChatSessionOptions) {
   const { clientId, sessionId, mode, connected, send: baseSend, onSessionCreated, onCompactionMigrated, onStreamingChange } = opts;
+  const models = useModels();
 
   // ── 会话状态 ──────────────────────────────────────────────────────────────
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingSession, setIsLoadingSession] = useState(!!sessionId);
   const [tokenUsage, setTokenUsage] = useState<{ used: number; max: number; cumulative: number }>(() => {
-    let savedModel = "deepseek-v4-pro";
-    try { savedModel = localStorage.getItem("axon-last-model") || "deepseek-v4-pro"; } catch { /* ignore */ }
-    const currentModel = MODELS.find((m) => m.id === savedModel);
+    let savedModel = DEFAULT_MODEL_ID;
+    try { savedModel = localStorage.getItem("axon-last-model") || DEFAULT_MODEL_ID; } catch { /* ignore */ }
+    const currentModel = findModel(savedModel) || MODELS.find((m) => m.id === savedModel);
     return { used: 0, max: currentModel?.contextWindow || 128000, cumulative: 0 };
   });
   const [model, setModelState] = useState(() => {
-    try { return localStorage.getItem("axon-last-model") || "deepseek-v4-pro"; } catch { return "deepseek-v4-pro"; }
+    try { return localStorage.getItem("axon-last-model") || DEFAULT_MODEL_ID; } catch { return DEFAULT_MODEL_ID; }
   });
   const [workspace, setWorkspace] = useState<string>("");
   const [workspaces, setWorkspaces] = useState<string[]>([]);
@@ -207,6 +210,14 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const send = useCallback((cmd: Record<string, unknown>) => {
     baseSend({ ...cmd, clientId });
   }, [baseSend, clientId]);
+
+  // Provider/模型目录异步加载完成后，同步修正当前模型的最大上下文，
+  // 避免重启初期先按静态兜底 MODELS（128K）显示，待用户再次手点模型才变正确。
+  useEffect(() => {
+    const currentModel = models.find((m) => m.id === model);
+    if (!currentModel?.contextWindow) return;
+    setTokenUsage((prev) => (prev.max === currentModel.contextWindow ? prev : { ...prev, max: currentModel.contextWindow }));
+  }, [model, models]);
 
   // ── 通知上层流式状态变化（供 SessionContainer 决定保活/卸载） ──
   useEffect(() => { onStreamingChange?.(isLoading); }, [isLoading, onStreamingChange]);

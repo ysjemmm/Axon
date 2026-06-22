@@ -136,6 +136,22 @@ export function registerProviderRoutes(app: Express, deps: ProviderRouterDeps): 
     }
   });
 
+  /** 在用户级 / 工作区级之间迁移一个自定义 provider（迁移后源层级删除） */
+  app.post("/api/providers/move", async (req, res) => {
+    try {
+      const fromLevel = parseLevel(req.body?.fromLevel);
+      const toLevel = parseLevel(req.body?.toLevel);
+      const ws = queryStr(req, "workspace");
+      const name = String(req.body?.name || "").trim();
+      if (!name) throw new Error("provider 名称不能为空");
+      await service.moveProvider(fromLevel, toLevel, name, ws);
+      await refresh(ws);
+      res.json({ ok: true });
+    } catch (err) {
+      fail(res, err, 500);
+    }
+  });
+
   /** 设置内置 provider 的 apiKey 覆盖 */
   app.put("/api/providers/:level/builtin-key", async (req, res) => {
     try {

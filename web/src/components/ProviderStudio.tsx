@@ -10,7 +10,7 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
-import { Loader2, Cloud, Plus, Trash2, Save, KeyRound, ChevronRight, Pencil, Ban, RotateCcw, Download, Globe } from "lucide-react";
+import { Loader2, Cloud, Plus, Trash2, Save, KeyRound, ChevronRight, Pencil, Ban, RotateCcw, Download, Globe, ArrowUpToLine, ArrowDownToLine } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -22,6 +22,7 @@ import {
   setCustomProviderModels,
   probeProviderModels,
   openProviderConfigInEditor,
+  moveCustomProvider,
   type ProviderLevel,
   type ResolvedProviderInfo,
   type ProviderModelInfo,
@@ -133,15 +134,17 @@ function BuiltinCard({ provider, level, workspace, onChanged }: { provider: Reso
   const [apiKey, setApiKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
 
   const save = async () => {
     setSaving(true);
+    setErrorMessage("");
     try {
       await setBuiltinProviderKey(level, provider.name, apiKey, workspace);
       setApiKey("");
       onChanged();
     } catch (e) {
-      alert(`保存失败: ${(e as Error).message}`);
+      setErrorMessage(`保存失败: ${(e as Error).message}`);
     }
     setSaving(false);
   };
@@ -172,6 +175,7 @@ function BuiltinCard({ provider, level, workspace, onChanged }: { provider: Reso
           {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <KeyRound className="w-3.5 h-3.5" />}保存
         </Button>
       </div>
+      {errorMessage && <div className="mt-2 text-xs text-red-600 dark:text-red-400">{errorMessage}</div>}
       {expanded && (
         <div className="mt-2 pt-2 border-t border-border/60">
           <ModelManager models={provider.models} editable={false} />
@@ -186,14 +190,17 @@ function CustomCard({ provider, level, workspace, onChanged }: { provider: Resol
   const [expanded, setExpanded] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [moving, setMoving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
 
   const remove = async () => {
     setDeleting(true);
+    setErrorMessage("");
     try {
       await removeCustomProvider(level, provider.name, workspace);
       onChanged();
     } catch (e) {
-      alert(`删除失败: ${(e as Error).message}`);
+      setErrorMessage(`删除失败: ${(e as Error).message}`);
       setConfirmDelete(false);
     }
     setDeleting(false);
@@ -209,12 +216,30 @@ function CustomCard({ provider, level, workspace, onChanged }: { provider: Resol
   };
 
   const saveModels = async (models: ProviderModelInfo[]) => {
+    setErrorMessage("");
     try {
       await setCustomProviderModels(level, provider.name, models, workspace);
       onChanged();
     } catch (e) {
-      alert(`保存模型失败: ${(e as Error).message}`);
+      setErrorMessage(`保存模型失败: ${(e as Error).message}`);
     }
+  };
+
+  const targetLevel: ProviderLevel = level === "workspace" ? "user" : "workspace";
+  const canMove = level === "user" ? !!workspace : true;
+  const moveLabel = level === "workspace" ? "提升为用户级" : "降级为工作区级";
+
+  const move = async () => {
+    if (!canMove) return;
+    setMoving(true);
+    setErrorMessage("");
+    try {
+      await moveCustomProvider(level, targetLevel, provider.name, workspace);
+      onChanged();
+    } catch (e) {
+      setErrorMessage(`迁移失败: ${(e as Error).message}`);
+    }
+    setMoving(false);
   };
 
   return (
@@ -241,6 +266,16 @@ function CustomCard({ provider, level, workspace, onChanged }: { provider: Resol
       </div>
       {expanded && (
         <div className="px-3 pb-3 pt-1 border-t border-border/60">
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <div className="text-[11px] text-muted-foreground">
+              当前层级：{level === "user" ? "用户级（全局）" : "工作区级"}
+            </div>
+            <Button size="sm" variant="outline" onClick={move} disabled={moving || !canMove}>
+              {moving ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : level === "workspace" ? <ArrowUpToLine className="w-3.5 h-3.5 mr-1" /> : <ArrowDownToLine className="w-3.5 h-3.5 mr-1" />}
+              {moveLabel}
+            </Button>
+          </div>
+          {errorMessage && <div className="mb-3 text-xs text-red-600 dark:text-red-400">{errorMessage}</div>}
           <ModelManager models={provider.models} editable onSave={saveModels} providerName={provider.name} level={level} workspace={workspace} />
         </div>
       )}

@@ -2111,7 +2111,7 @@ export class AgentSession {
       const finishReason = turn.finishReason;
 
       // ── 循环诊断日志 ──（排查"不收尾/空转"：每轮打印一行摘要，复现一次即可看清卡在哪）
-      console.log(
+      console.debug(
         `[agent-loop] round=${rounds}/${MAX_ROUNDS} model=${this.model} ` +
         `toolCalls=${toolCalls.length}${toolCalls.length ? "(" + toolCalls.map((t) => t.name).join(",") + ")" : ""} ` +
         `finish=${finishReason} contentLen=${(contentBuffer || "").length} ` +
@@ -2176,7 +2176,7 @@ export class AgentSession {
         // 这通常是 API 侧偶发的 SSE 异常（output item 未产出）。不要给用户显示空白——
         // 注入引导让模型重新生成一次回复。最多重试 1 次，防无限循环。
         if (!contentBuffer && !emptyRetried) {
-          console.log(`[agent-loop] round=${rounds} 空回复兜底：content 为空但 finish=stop，注入重说引导`);
+          console.debug(`[agent-loop] round=${rounds} 空回复兜底：content 为空但 finish=stop，注入重说引导`);
           emptyRetried = true;
           this.messages.push({
             role: "system",
@@ -2200,7 +2200,7 @@ export class AgentSession {
                 .filter((r) => !r.ok)
                 .map((r) => `${r.path}: ${r.details || `${r.errorCount} 个错误`}`)
                 .join("\n");
-              console.log(`[agent-loop] 自动 diagnostics 发现错误，注入修复引导`);
+              console.debug(`[agent-loop] 自动 diagnostics 发现错误，注入修复引导`);
               this.messages.push({ role: "assistant", content: contentBuffer });
               const okFiles = diagResults.filter((r) => r.ok).map((r) => r.path);
               const okNote = okFiles.length > 0 ? `\n（已检查通过：${okFiles.join("、")}）` : "";
@@ -2227,8 +2227,8 @@ export class AgentSession {
         const creditDetail = buildCreditDetail(this.model, breakdown);
         this.messages.push({ role: "assistant", content: contentBuffer, turnStats: { elapsed, tokens: turnTokens, model: this.model, credits, creditDetail } } as any);
         this.persistMessages(); // 最终回复落盘，切走也保留
-        console.log("[stream] Turn 结束，总耗时:", elapsed, "ms");
-        console.log(`[agent-loop] round=${rounds} 分支=正常收尾（stream_end，本轮结束对话）`);
+        console.debug("[stream] Turn 结束，总耗时:", elapsed, "ms");
+        console.debug(`[agent-loop] round=${rounds} 分支=正常收尾（stream_end，本轮结束对话）`);
         // 本轮真实 token（拿不到 usage 时回退到字符数估算）
         this.send("stream_end", { elapsed, tokens: turnTokens, model: this.model, credits, creditDetail });
         return;
@@ -2238,7 +2238,7 @@ export class AgentSession {
       if (turnStreamStarted && contentBuffer) {
         // 过滤掉工具调用间夹带的英文内心 OS（如 "Need rest."、"Need save/add methods."）
         if (looksLikeIncompleteReply(contentBuffer)) {
-          console.log("[agent] 过滤工具调用间的 reasoning 泄露:", JSON.stringify(contentBuffer.slice(0, 60)));
+          console.debug("[agent] 过滤工具调用间的 reasoning 泄露:", JSON.stringify(contentBuffer.slice(0, 60)));
           contentBuffer = "";
         } else {
           this.send("stream_pause", {});
@@ -2585,17 +2585,17 @@ export class AgentSession {
       if (guard.isStuck()) {
         const stuck = guard.getStuckTarget();
         if (guard.canReflect()) {
-          console.log(`[agent] 卡住（${stuck?.key ?? "连续失败"}）→ 反思·换路`);
+          console.debug(`[agent] 卡住（${stuck?.key ?? "连续失败"}）→ 反思·换路`);
           await this.injectReflection(stuck, guard);
           continue;
         }
         if (guard.canSummaryRestart()) {
-          console.log(`[agent] 反思仍无效（${stuck?.key ?? "连续失败"}）→ 摘要重启`);
+          console.debug(`[agent] 反思仍无效（${stuck?.key ?? "连续失败"}）→ 摘要重启`);
           await this.injectSummaryRestart(stuck, guard, client);
           continue;
         }
         // 阶梯耗尽仍卡住 → 强制收尾投降，让模型如实向用户说明
-        console.log(`[agent] 升级阶梯耗尽，强制中断`);
+        console.debug(`[agent] 升级阶梯耗尽，强制中断`);
         this.messages.push({
           role: "system",
           content:

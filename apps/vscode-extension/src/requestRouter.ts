@@ -403,6 +403,16 @@ export class RequestRouter {
       await resolveProviders(ws);
       return { ok: true };
     }
+    if (path === "/api/providers/move" && method === "POST") {
+      const { fromLevel, toLevel, name } = (body || {}) as { fromLevel?: string; toLevel?: string; name?: string };
+      if (!fromLevel || !toLevel) throw new Error("fromLevel 和 toLevel 不能为空");
+      if (!(fromLevel === "user" || fromLevel === "workspace")) throw new Error(`非法的 fromLevel：${fromLevel}`);
+      if (!(toLevel === "user" || toLevel === "workspace")) throw new Error(`非法的 toLevel：${toLevel}`);
+      const ws = query.get("workspace") || d.defaultWorkspace;
+      await moveCustomProvider(fromLevel, toLevel, name || "", ws);
+      await resolveProviders(ws);
+      return { ok: true };
+    }
     if (path === "/api/providers/probe-models" && method === "POST") {
       const { baseUrl, apiKey, name, level, workspace } = (body || {}) as { baseUrl?: string; apiKey?: string; name?: string; level?: string; workspace?: string };
       let url = (baseUrl || "").trim();
@@ -537,6 +547,30 @@ async function removeCustomProvider(level: "user" | "workspace", name: string, w
   if (!config.providers || !(name in config.providers)) throw new Error(`provider 不存在：${name}`);
   delete config.providers[name];
   await writeProviderConfig(level, config, workspace);
+}
+
+/** 在用户级 / 工作区级之间迁移自定义 provider（迁移后源层级删除） */
+async function moveCustomProvider(
+  fromLevel: "user" | "workspace",
+  toLevel: "user" | "workspace",
+  name: string,
+  workspace?: string,
+): Promise<void> {
+  if (fromLevel === toLevel) throw new Error("源层级与目标层级相同，无需迁移");
+  if (RESERVED_PROVIDER_NAMES.includes(name)) throw new Error(`「${name}」是内置 provider，不能迁移`);
+
+  const fromConfig = await readProviderConfig(fromLevel, workspace);
+  const entry = (fromConfig.providers || {})[name] as RawProviderEntry | undefined;
+  if (!entry) throw new Error(`provider 不存在：${name}`);
+
+  const toConfig = await readProviderConfig(toLevel, workspace);
+  toConfig.providers = toConfig.providers || {};
+  toConfig.providers[name] = entry;
+
+  delete fromConfig.providers![name];
+
+  await writeProviderConfig(toLevel, toConfig, workspace);
+  await writeProviderConfig(fromLevel, fromConfig, workspace);
 }
 
 /** 设置内置 provider 的 apiKey 覆盖 */

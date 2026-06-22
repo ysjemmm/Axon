@@ -80,6 +80,25 @@ export class ProviderConfigService {
     await this.write(level, config, workspace);
   }
 
+  /** 在用户级 / 工作区级之间迁移一个自定义 provider（迁移后源层级删除） */
+  async moveProvider(fromLevel: ProviderLevel, toLevel: ProviderLevel, name: string, workspace?: string): Promise<void> {
+    if (fromLevel === toLevel) throw new Error("源层级与目标层级相同，无需迁移");
+    if (RESERVED_PROVIDER_NAMES.includes(name)) throw new Error(`「${name}」是内置 provider，不能迁移`);
+
+    const fromConfig = await this.read(fromLevel, workspace);
+    const entry = fromConfig.providers?.[name];
+    if (!entry) throw new Error(`provider 不存在：${name}`);
+
+    const toConfig = await this.read(toLevel, workspace);
+    toConfig.providers = toConfig.providers || {};
+    toConfig.providers[name] = entry;
+
+    delete fromConfig.providers?.[name];
+
+    await this.write(toLevel, toConfig, workspace);
+    await this.write(fromLevel, fromConfig, workspace);
+  }
+
   /** 设置内置 provider（zhipu）的 apiKey 覆盖 */
   async setBuiltinKey(level: ProviderLevel, name: string, apiKey: string, workspace?: string): Promise<void> {
     if (!RESERVED_PROVIDER_NAMES.includes(name)) throw new Error(`「${name}」不是内置 provider`);

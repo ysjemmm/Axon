@@ -538,6 +538,11 @@ export function removeCustomProvider(level: ProviderLevel, name: string, workspa
   return del(`/api/providers/${level}/custom/${encodeURIComponent(name)}${providerQuery(workspace)}`);
 }
 
+/** 在用户级 / 工作区级之间迁移一个自定义 provider（迁移后源层级删除） */
+export function moveCustomProvider(fromLevel: ProviderLevel, toLevel: ProviderLevel, name: string, workspace?: string): Promise<{ ok: boolean }> {
+  return post(`/api/providers/move${providerQuery(workspace)}`, { fromLevel, toLevel, name });
+}
+
 /** 设置内置 provider 的 apiKey 覆盖 */
 export function setBuiltinProviderKey(level: ProviderLevel, name: string, apiKey: string, workspace?: string): Promise<{ ok: boolean }> {
   return put(`/api/providers/${level}/builtin-key${providerQuery(workspace)}`, { name, apiKey });
