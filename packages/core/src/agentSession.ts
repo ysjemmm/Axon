@@ -12,7 +12,7 @@ import { calculateCredits, buildCreditDetail } from "./credits.js";
 import type { AgentHost, FileEdit } from "./host/index.js";
 import { deriveSubAgentHost } from "./host/index.js";
 import type { AgentChannel, AgentEvent } from "./channel/index.js";
-import { needsCompaction, compactMessages, reflectiveCompact } from "./compactor.js";
+import { needsCompaction, compactMessages, reflectiveCompact, pruneOldToolResults, rollingCompact } from "./compactor.js";
 import type { SerializedPendingEdit } from "./storage/types.js";
 import type { LLMStreamCallbacks, ToolDef } from "./llm/types.js";
 import { SkillRegistry, type LoadedSkill } from "./skills/skillLoader.js";
@@ -123,6 +123,12 @@ export class AgentSession {
   private currentRelaySessionId?: string;
   /** 正在执行上下文压缩时为 true。此期间不允许取消，避免压缩中断导致消息状态不完整。 */
   isCompacting = false;
+  /** 滚动摘要：自上次摘要以来的累计 token 增量。每轮 stream_end 后累加，超过阈值触发异步摘要。 */
+  private rollingSummaryAccumulated = 0;
+  /** 滚动摘要是否正在进行中（防止并发）。 */
+  private rollingSummaryInProgress = false;
+  /** 滚动摘要触发阈值（累计 token） */
+  private static readonly ROLLING_SUMMARY_THRESHOLD = 30_000;
   // 执行中的 relay 任务上下文：记录当前正在执行哪个 relay/任务，及该任务改动过的文件（供评审定位）
   private activeRelayTask: { relayId: string; taskId: string; changedFiles: Set<string> } | null = null;
   // 本轮用户输入内是否已推进过一次 Relay 阶段。确认门铁律：一条用户消息最多推进一个文档阶段，
@@ -449,6 +455,41 @@ export class AgentSession {
     } catch (err) {
       this.isCompacting = false;
       this.send("compacting_end", { success: false, message: `压缩失败：${(err as Error).message}` });
+    }
+  }
+
+  /**
+   * 滚动摘要：异步把旧消息压成摘要，控制上下文体积。
+   *
+   * 用户无感设计：
+   * - 异步执行，不阻塞用户发下一条消息
+   * - 不弹窗、不暂停（与 compactSession 的"暂停 + 弹窗"不同）
+   * - 压缩期间用户如果又发了消息，那条消息用未压缩的 context 答复，压缩结果下一轮再生效
+   * - 完成后只重置计数器 + 静默替换 messages + 持久化
+   */
+  private async maybeRollingSummary(): Promise<void> {
+    // 防止并发：已经在压缩中 / 正在手动压缩 / 正在溢出压缩
+    if (this.rollingSummaryInProgress || this.isCompacting) return;
+    this.rollingSummaryInProgress = true;
+
+    try {
+      const client = getClient(this.provider, this.model);
+      const [newMessages, didCompact] = await rollingCompact(this.messages, client, this.model);
+      if (didCompact) {
+        // 安全区替换：用压缩后的消息替换当前 messages
+        this.messages = newMessages;
+        this.rollingSummaryAccumulated = 0; // 重置计数
+        this.persistMessages();
+        this.updateAndSendTokenUsage();
+        console.debug("[rolling] 滚动摘要完成，上下文体积已缩减");
+        // 静默通知前端（状态栏可显示但不弹窗）
+        this.send("rolling_summary_done", { success: true });
+      }
+    } catch (err) {
+      // 压缩失败不阻塞：保留原 messages，下次再试
+      console.warn("[rolling] 滚动摘要失败（忽略）:", (err as Error).message);
+    } finally {
+      this.rollingSummaryInProgress = false;
     }
   }
 
@@ -2011,24 +2052,15 @@ export class AgentSession {
 
     this.send("status", { content: "思考中...", phase: "thinking" });
 
-    // 预取 IDE 上下文（仅 IDE 形态有 host.ideContext；git diff 异步，统一在此拼好）
-    this.ideContextCache = await this.buildIdeContextPrompt();
-
-    // 预取 skill 清单（渐进式披露的轻量层），供 buildRequestMessages 同步注入
-    try {
-      this.skillsPromptCache = await this.skillRegistry.buildSkillsPrompt();
-    } catch (err) {
-      console.warn("[skill] 发现 skill 失败（忽略）:", (err as Error).message);
-      this.skillsPromptCache = null;
-    }
-
-    // 预取 Power 清单，供 buildRequestMessages 同步注入
-    try {
-      this.powersPromptCache = this.powerRegistry ? await this.powerRegistry.buildPowersPrompt() : null;
-    } catch (err) {
-      console.warn("[power] 发现 power 失败（忽略）:", (err as Error).message);
-      this.powersPromptCache = null;
-    }
+    // 预取 IDE 上下文 / skill / power / MCP —— 它们之间无依赖，并行拉取以缩短首字延迟
+    const [ideCtx, skillsPrompt, powersPrompt] = await Promise.all([
+      this.buildIdeContextPrompt().catch((e) => { console.warn("[ide-ctx] 预取失败（忽略）:", (e as Error).message); return null; }),
+      this.skillRegistry.buildSkillsPrompt().catch((e) => { console.warn("[skill] 发现 skill 失败（忽略）:", (e as Error).message); return null; }),
+      this.powerRegistry ? this.powerRegistry.buildPowersPrompt().catch((e) => { console.warn("[power] 发现 power 失败（忽略）:", (e as Error).message); return null; }) : Promise.resolve(null),
+    ]);
+    this.ideContextCache = ideCtx;
+    this.skillsPromptCache = skillsPrompt;
+    this.powersPromptCache = powersPrompt;
 
     // 预取 MCP 工具：解析配置 → 连接 server → 拉工具清单，并入本轮工具集（失败不阻塞）
     await this.prefetchMcpTools();
@@ -2231,6 +2263,15 @@ export class AgentSession {
         console.debug(`[agent-loop] round=${rounds} 分支=正常收尾（stream_end，本轮结束对话）`);
         // 本轮真实 token（拿不到 usage 时回退到字符数估算）
         this.send("stream_end", { elapsed, tokens: turnTokens, model: this.model, credits, creditDetail });
+        // 本轮结束：裁剪旧 tool 结果，控制上下文体积增长（每轮都做，用户无感）
+        this.messages = pruneOldToolResults(this.messages);
+        this.persistMessages();
+
+        // 滚动摘要：累计 token 超阈值 → 异步触发（不阻塞用户发下一条）
+        this.rollingSummaryAccumulated += turnTokens;
+        if (this.rollingSummaryAccumulated >= AgentSession.ROLLING_SUMMARY_THRESHOLD) {
+          this.maybeRollingSummary();
+        }
         return;
       }
 

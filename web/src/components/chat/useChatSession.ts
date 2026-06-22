@@ -162,7 +162,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
 
   // ── refs ────────────────────────────────────────────────────────────────
   const typewriterBuffer = useRef<string>("");
-  const typewriterTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const typewriterRAF = useRef<number | null>(null);
   const streamEnding = useRef<{ elapsed: number; tokens: number } | null>(null);
   const cancelled = useRef(false);
   /** 被取消那轮 assistant 消息的 id——turn_cancelled 事件用此精确定位，
@@ -748,12 +748,15 @@ export function useChatSession(opts: UseChatSessionOptions) {
         }
         return [...prev, { id: `assistant-${Date.now()}`, role: "assistant", segments: [{ type: "text", content: "" }], streaming: true, turnStatus: "running", turnGen: turnGeneration.current }];
       });
-      if (typewriterTimer.current) clearInterval(typewriterTimer.current);
+      if (typewriterRAF.current) cancelAnimationFrame(typewriterRAF.current);
       streamEnding.current = null;
-      typewriterTimer.current = setInterval(() => {
+
+      const typewriterTick = () => {
         if (typewriterBuffer.current.length > 0) {
           const len = typewriterBuffer.current.length;
-          const batchSize = len > 100 ? 12 : len > 30 ? 5 : 2;
+          // 比例出字：buffer 越长每帧出字越多，避免积压；收尾阶段加速排空
+          const ratio = streamEnding.current ? 0.3 : 0.15;
+          const batchSize = Math.min(streamEnding.current ? 80 : 40, Math.max(1, Math.ceil(len * ratio)));
           const batch = typewriterBuffer.current.slice(0, batchSize);
           typewriterBuffer.current = typewriterBuffer.current.slice(batchSize);
 
@@ -777,16 +780,14 @@ export function useChatSession(opts: UseChatSessionOptions) {
             }
             return updated;
           });
+          typewriterRAF.current = requestAnimationFrame(typewriterTick);
           return;
         }
 
         if (streamEnding.current) {
           const stats = streamEnding.current;
           streamEnding.current = null;
-          if (typewriterTimer.current) {
-            clearInterval(typewriterTimer.current);
-            typewriterTimer.current = null;
-          }
+          typewriterRAF.current = null;
           const finalFlush = typewriterBuffer.current;
           typewriterBuffer.current = "";
           setChatHistory((prev) => {
@@ -812,8 +813,13 @@ export function useChatSession(opts: UseChatSessionOptions) {
             return updated;
           });
           finishLoading();
+          return;
         }
-      }, 15);
+        // buffer 空且未收尾：继续等下一帧（新数据可能随时到达）
+        typewriterRAF.current = requestAnimationFrame(typewriterTick);
+      };
+
+      typewriterRAF.current = requestAnimationFrame(typewriterTick);
       return;
     }
 
@@ -827,9 +833,9 @@ export function useChatSession(opts: UseChatSessionOptions) {
       if (cancelled.current) return;
       const remaining = typewriterBuffer.current;
       typewriterBuffer.current = "";
-      if (typewriterTimer.current) {
-        clearInterval(typewriterTimer.current);
-        typewriterTimer.current = null;
+      if (typewriterRAF.current) {
+        cancelAnimationFrame(typewriterRAF.current);
+        typewriterRAF.current = null;
       }
       if (remaining) {
         setChatHistory((prev) => {
@@ -916,7 +922,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
         credits: (msg as any).credits as number | undefined,
         creditDetail: (msg as any).creditDetail as CreditDetail | undefined,
       };
-      if (typewriterTimer.current) {
+      if (typewriterRAF.current) {
         streamEnding.current = stats;
         return;
       }
@@ -1339,9 +1345,9 @@ export function useChatSession(opts: UseChatSessionOptions) {
       setChatHistory([]);
       setIsLoading(false);
       typewriterBuffer.current = "";
-      if (typewriterTimer.current) {
-        clearInterval(typewriterTimer.current);
-        typewriterTimer.current = null;
+      if (typewriterRAF.current) {
+        cancelAnimationFrame(typewriterRAF.current);
+        typewriterRAF.current = null;
       }
       streamEnding.current = null;
       send({ type: "load_session", sessionId });
@@ -1481,9 +1487,9 @@ export function useChatSession(opts: UseChatSessionOptions) {
     typewriterBuffer.current = "";
     streamEnding.current = null;
     setWaitingInputIds(new Set()); // 取消时清除所有呼吸灯
-    if (typewriterTimer.current) {
-      clearInterval(typewriterTimer.current);
-      typewriterTimer.current = null;
+    if (typewriterRAF.current) {
+      cancelAnimationFrame(typewriterRAF.current);
+      typewriterRAF.current = null;
     }
     // 记录被取消的 assistant 消息 id，供 turn_cancelled 事件精确匹配
     setChatHistory((prev) => {
