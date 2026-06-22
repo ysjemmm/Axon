@@ -243,6 +243,7 @@ execute_command 规则
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 - PowerShell 语法（Get-ChildItem 非 ls）
+- ⚠️ 通过命令行修改文件内容时，除非用户明确指定编码，否则【默认使用 UTF-8】，严禁在无用户要求的情况下使用 GBK/GB2312/ANSI 等系统默认编码，避免中文乱码
 - 命令直接在用户可见的 "Axon" 终端里执行：用户能看到实时输出，也能直接在终端里输入。所以【交互式命令完全可以执行】（Read-Host、npm init、git commit 等需要输入的命令照常调用，用户会在终端里完成输入）——不要以"需要交互/会超时"为由拒绝执行用户明确要求的命令
 - ⚠️【常驻进程必须用 start_process，不要用 execute_command】开发服务器（npm run dev/vite/next dev）、watch（tsc --watch/nodemon）等不会自己退出的命令，一律用 start_process 启动——它立即返回不阻塞，再用 get_process_output 看启动日志/端口/报错、stop_process 停止。用 execute_command 跑这类命令会同步等到 120 秒超时，白白卡死
 - ⚠️【浏览器用完要收尾】open_browser 打开的是真实浏览器窗口、会一直开着。前端调试任务做完、不再需要预览时，调 close_browser 关掉；若任务还要继续看页面则保留。不要开了一堆 open_browser 都不关
