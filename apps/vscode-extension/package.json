@@ -289,6 +289,26 @@
         "command": "axon.git.toggleBlameAnnotation",
         "title": "使用 Git 追溯注解",
         "category": "Axon"
+      },
+      {
+        "command": "axon.quickExplain",
+        "title": "Axon: 解释这段代码",
+        "category": "Axon"
+      },
+      {
+        "command": "axon.quickFindBug",
+        "title": "Axon: 检查这段代码有没有 bug",
+        "category": "Axon"
+      },
+      {
+        "command": "axon.quickTest",
+        "title": "Axon: 为这段代码生成测试",
+        "category": "Axon"
+      },
+      {
+        "command": "axon.quickRefactor",
+        "title": "Axon: 重构这段代码",
+        "category": "Axon"
       }
     ],
     "menus": {

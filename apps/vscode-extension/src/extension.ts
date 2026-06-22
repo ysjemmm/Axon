@@ -326,7 +326,54 @@ export function activate(context: vscode.ExtensionContext): void {
       if (e.affectsConfiguration("axon.trustedCommands")) {
         hub.reloadTrustedCommands();
       }
-    }),
+    })
+  );
+
+  // ── 编辑器选区一键操作 helper ───────────────────────────────────────────
+  const quickAction = async (
+      action: string,
+      payload: { text?: string; fileName?: string; startLine?: number; startColumn?: number; endLine?: number; endColumn?: number } | undefined,
+      axProvider: AxonViewProvider,
+    ) => {
+      const text = payload?.text?.trim();
+      if (!text) {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor || editor.selection.isEmpty) {
+          vscode.window.showWarningMessage("请先在编辑器中选中一段代码");
+          return;
+        }
+        const sel = editor.selection;
+        const t = editor.document.getText(sel);
+        if (!t.trim()) return;
+        const name = require("path").basename(editor.document.fileName);
+        await vscode.commands.executeCommand("workbench.action.focusAuxiliaryBar");
+        await vscode.commands.executeCommand("axon.chat.focus");
+        axProvider.postToWebview({
+          type: "add_context",
+          source: "editor",
+          label: `${name} ${sel.start.line + 1}:${sel.start.character + 1}-${sel.end.line + 1}:${sel.end.character + 1}`,
+          text: t,
+          quickAction: action,
+        });
+        return;
+      }
+      const name = payload?.fileName || "选区";
+      const sl = payload?.startLine ?? 0;
+      const sc = payload?.startColumn ?? 0;
+      const el = payload?.endLine ?? sl;
+      const ec = payload?.endColumn ?? sc;
+      await vscode.commands.executeCommand("workbench.action.focusAuxiliaryBar");
+      await vscode.commands.executeCommand("axon.chat.focus");
+      axProvider.postToWebview({
+        type: "add_context",
+        source: "editor",
+        label: `${name} ${sl}:${sc}-${el}:${ec}`,
+        text,
+        quickAction: action,
+      });
+  };
+
+  context.subscriptions.push(
     vscode.commands.registerCommand("axon.newSession", () => provider.postToWebview({ type: "command:new_session" })),
     vscode.commands.registerCommand("axon.focusChat", () => {
       // 先确保辅助侧栏可见，再聚焦 Axon chat view
@@ -376,6 +423,19 @@ export function activate(context: vscode.ExtensionContext): void {
         label: `${name} ${sl}:${sc}-${el}:${ec}`,
         text: payload.text,
       });
+    }),
+    // ── 编辑器选区一键操作：解释 / 找 bug / 写测试 / 重构 ──────────────────
+    vscode.commands.registerCommand("axon.quickExplain", async (payload?: { text?: string; fileName?: string; startLine?: number; startColumn?: number; endLine?: number; endColumn?: number }) => {
+      await quickAction("explain", payload, provider);
+    }),
+    vscode.commands.registerCommand("axon.quickFindBug", async (payload?: { text?: string; fileName?: string; startLine?: number; startColumn?: number; endLine?: number; endColumn?: number }) => {
+      await quickAction("findBug", payload, provider);
+    }),
+    vscode.commands.registerCommand("axon.quickTest", async (payload?: { text?: string; fileName?: string; startLine?: number; startColumn?: number; endLine?: number; endColumn?: number }) => {
+      await quickAction("test", payload, provider);
+    }),
+    vscode.commands.registerCommand("axon.quickRefactor", async (payload?: { text?: string; fileName?: string; startLine?: number; startColumn?: number; endLine?: number; endColumn?: number }) => {
+      await quickAction("refactor", payload, provider);
     }),
     vscode.commands.registerCommand("axon.openRelay", (relayId: string) => {
       // 点击 Relay 树节点：在编辑器 Tab 打开 Relay 详情面板

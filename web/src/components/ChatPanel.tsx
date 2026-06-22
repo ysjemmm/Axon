@@ -564,8 +564,30 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
       editorRef.current?.insertTag({ name: label, content: text, size, kind });
     }
     setComposerEmpty(editorRef.current?.isEmpty() ?? false);
+
+    // 一键操作：解释 / 找 bug / 写测试 / 重构
+    // ⚠️ 不能用 setText()：它会 clear dataMap，导致刚插入的代码 tag 丢失
+    const quickAction = (msg as { quickAction?: string }).quickAction;
+    if (quickAction) {
+      const prompts: Record<string, string> = {
+        explain: "请解释以下代码",
+        findBug: "请帮我检查以下代码是否有bug",
+        test: "请为以下代码写单元测试",
+        refactor: "请重构以下代码，提高可读性和可维护性",
+      };
+      const prompt = prompts[quickAction];
+      if (prompt) {
+        editorRef.current?.appendText(prompt);
+        setComposerEmpty(false);
+        // 等 React 渲染完 tag 后再提交
+        requestAnimationFrame(() => handleSendRef.current());
+      }
+    }
   }, [clientId]));
 
+  // quickAction auto-send：handleSend 在 add_context 回调外定义，用 ref 桥接
+  const handleSendRef = useRef(handleSend);
+  handleSendRef.current = handleSend;
   // Skill Studio 整页接管
   if (skillStudioOpen) {
     return <SkillStudio workspace={session.workspace} onBack={() => setSkillStudioOpen(false)} />;
