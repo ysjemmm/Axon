@@ -61,8 +61,10 @@ export function parseVerdict(text: string): ReviewVerdict {
   let m: RegExpExecArray | null;
   while ((m = lineRe.exec(text)) !== null) {
     const desc = m[2].trim();
-    // 过滤元描述："/[major]/[minor]" 这种是列举分类而非真实问题，长度<20 的也是噪音
-    if (desc.length < 20 || /^\/\[(major|minor|critical)\]/i.test(desc)) continue;
+    // 过滤元描述：
+    // ① 描述包含另一个 [xxx] 分类标记（如 "、[major]、[minor] 问题。"）——这是列举分类而非真实问题
+    // ② 描述 < 30 字符，可能是噪音片段
+    if (desc.length < 30 || /\[(critical|major|minor)\]/.test(desc)) continue;
     issues.push({
       severity: m[1].toLowerCase() as "critical" | "major" | "minor",
       description: desc,
@@ -122,6 +124,8 @@ function buildQualityPrompt(ctx: ReviewContext): string {
     `你是代码质量评审员。请审查一个刚完成的开发任务的代码质量。\n\n` +
     `## 任务 ${ctx.taskId}：${ctx.taskTitle}\n` +
     `> ⚠️ 这是多步计划中的一个子任务，评审范围仅限于本子任务自己的代码。\n` +
+    `\n## 需求文档（节选）\n${ctx.requirements.slice(0, 2000)}\n` +
+    `\n## 设计文档（节选）\n${ctx.design.slice(0, 2000)}\n` +
     `\n## 本次改动的文件\n${ctx.changedFiles.map((f) => `- ${f}`).join("\n") || "（未提供）"}\n\n` +
     `审查要点：\n` +
     `1. 是否引入坏味道：重复代码、超长函数、职责不清、魔法值硬编码？\n` +
