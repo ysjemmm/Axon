@@ -10,7 +10,6 @@
  * 评审子 Agent 只读（read_file/search/list_dir），不改代码——评审者不应顺手改东西。
  */
 
-import { SubAgentRunner } from "../skills/subAgentRunner.js";
 import type { LLMStrategy } from "../llm/types.js";
 import type { SkillLoaderFn, WebCapability } from "../tools/index.js";
 import type { AgentHost } from "../host/index.js";
@@ -130,28 +129,64 @@ function buildQualityPrompt(ctx: ReviewContext): string {
   );
 }
 
-/** 跑一个只读评审子 Agent，返回结构化裁决与消耗的 token */
-async function runOneReview(prompt: string, reviewId: string, deps: ReviewDeps): Promise<{ verdict: ReviewVerdict; tokens: number }> {
-  const runner = new SubAgentRunner({
-    strategy: deps.strategy,
-    model: deps.model,
-    cwd: deps.cwd,
-    workspaces: deps.workspaces,
-    host: deps.host,
-    signal: deps.signal,
-    emit: deps.emitFor(reviewId),
-    skillLoader: deps.skillLoader,
-    web: deps.web,
-    readOnly: true, // 评审者只读
-  });
-  const res = await runner.run(prompt, null);
-  if (!res.ok) {
+/** 读取改动文件的完整内容，拼成评审上下文 */
+async function readChangedFiles(changedFiles: string[], deps: ReviewDeps): Promise<string> {
+  if (!changedFiles.length) return "（未提供改动文件列表，请基于需求/设计文档审查）";
+  const parts: string[] = [];
+  for (const f of changedFiles.slice(0, 15)) { // 最多 15 个文件，防止 token 爆炸
+    try {
+      const raw = await deps.host.fs.read(f);
+      const content = raw ?? "";
+      const truncated = content.length > 8000 ? content.slice(0, 8000) + "\n... (已截断)" : content;
+      parts.push(`--- ${f} ---\n${truncated}`);
+    } catch {
+      parts.push(`--- ${f} ---\n（无法读取，可能已被删除或路径无效）`);
+    }
+  }
+  return parts.join("\n\n");
+}
+
+/** 跑一次轻量级评审：直接读文件 + 单次 LLM 调用（不再启动完整子 Agent 循环） */
+async function runOneReview(prompt: string, reviewId: string, deps: ReviewDeps, changedFiles: string[]): Promise<{ verdict: ReviewVerdict; tokens: number }> {
+  const emit = deps.emitFor(reviewId);
+  emit("status", { content: "正在读取改动文件..." });
+
+  // 把改动文件内容直接拼进 prompt，让 LLM 一次性评审（无需 agent loop 反复读文件）
+  const fileContents = await readChangedFiles(changedFiles, deps);
+  const fullPrompt = prompt + "\n\n## 改动文件内容\n\n" + fileContents;
+
+  emit("status", { content: "正在评审..." });
+
+  const messages: import("openai/resources/chat/completions").ChatCompletionMessageParam[] = [
+    { role: "system", content: "你是资深代码评审员。请基于提供的改动文件内容和任务描述，给出严格的评审结论。只输出评审结果，不要尝试读取文件或调用任何工具。" },
+    { role: "user", content: fullPrompt },
+  ];
+
+  let reviewText = "";
+  let tokens = 0;
+  try {
+    const result = await deps.strategy.runTurn({
+      model: deps.model,
+      messages,
+      tools: [], // 无工具，纯文本评审
+      signal: deps.signal,
+      callbacks: {
+        onReasoningDelta: () => {},
+        onTextDelta: () => {},
+        onToolCallDetected: () => {},
+      },
+    });
+    reviewText = result.content || "";
+    tokens = result.usage?.totalTokens || 0;
+  } catch (err) {
     return {
-      verdict: { passed: false, issues: [{ severity: "major", description: "评审子 Agent 未能完成评审" }], summary: res.text.slice(0, 400) },
-      tokens: res.tokens,
+      verdict: { passed: false, issues: [{ severity: "major", description: `评审 LLM 调用失败: ${err instanceof Error ? err.message : String(err)}` }], summary: "评审因 LLM 调用失败而终止" },
+      tokens: 0,
     };
   }
-  return { verdict: parseVerdict(res.text), tokens: res.tokens };
+
+  emit("stream_end", { elapsed: 0, tokens });
+  return { verdict: parseVerdict(reviewText), tokens };
 }
 
 /**
@@ -162,13 +197,13 @@ export async function runTwoStageReview(ctx: ReviewContext, deps: ReviewDeps): P
   const base = `review-${ctx.taskId}-${Date.now()}`;
 
   // 第一阶段：规格符合性
-  const specRes = await runOneReview(buildSpecPrompt(ctx), `${base}-spec`, deps);
+  const specRes = await runOneReview(buildSpecPrompt(ctx), `${base}-spec`, deps, ctx.changedFiles);
   if (!specRes.verdict.passed) {
     return { spec: specRes.verdict, passed: false, reviewedAt: new Date().toISOString(), tokens: specRes.tokens };
   }
 
   // 第二阶段：代码质量
-  const qualityRes = await runOneReview(buildQualityPrompt(ctx), `${base}-quality`, deps);
+  const qualityRes = await runOneReview(buildQualityPrompt(ctx), `${base}-quality`, deps, ctx.changedFiles);
   return {
     spec: specRes.verdict,
     quality: qualityRes.verdict,

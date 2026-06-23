@@ -364,7 +364,7 @@ function CommandCardItem({ tool, approval }: { tool: ToolCallData; approval: Ret
   const isEditing = !!approval && editing;
 
   return (
-    <div className={`my-2 rounded-lg border bg-popover overflow-hidden ${approval ? "border-amber-400/70" : (isWaitingInput && tool.status === "pending") ? "border-primary/50 animate-pulse" : "border-border"}`}>
+    <div className={`my-2 rounded-lg border bg-popover overflow-hidden tool-card-enter ${approval ? "border-amber-400/70" : (isWaitingInput && tool.status === "pending") ? "border-primary/50 animate-pulse" : "border-border"}`}>
       {/* 标题栏 */}
       <div className="flex items-center gap-2 py-1.5 px-2.5 text-xs border-b border-border/60 bg-foreground/[0.04]">
         {tool.status === "pending" && isWaitingInput && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-primary" />}

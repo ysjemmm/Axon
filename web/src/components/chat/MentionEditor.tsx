@@ -18,6 +18,8 @@ export interface MentionEditorHandle {
   focus(): void;
   clear(): void;
   isEmpty(): boolean;
+  /** 获取内部 contentEditable DOM 元素（供父组件做光标位置判断等） */
+  getEditorElement(): HTMLDivElement | null;
   /** 按 DOM 顺序读取：纯文本（tag 以其名称内联）+ tag 列表 + 内联片段（文本/tag） */
   read(): { text: string; tags: AttachedFile[]; segments: UserSegment[] };
   /** 当前文本节点中光标前的文本（供 “/” 触发检测） */
@@ -162,6 +164,7 @@ export const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>
       const el = editorRef.current;
       return !el || ((el.textContent ?? "").trim() === "" && !el.querySelector("[data-cid]"));
     },
+    getEditorElement: () => editorRef.current,
     read: () => {
       const el = editorRef.current;
       const tags: AttachedFile[] = [];

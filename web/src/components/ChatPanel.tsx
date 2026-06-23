@@ -353,20 +353,54 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     draft.current = "";
   }, []);
 
+  /**
+   * 判断光标是否位于「首行行首」（checkTop=true）或「末行行尾」（checkTop=false）。
+   * 用于上下箭头切换历史的触发条件——与终端 bash/zsh 行为一致：
+   *   ↑ 只有在光标已在本行最前面时才翻历史，否则让光标正常上移
+   *   ↓ 只有在光标已在本行最后面时才翻历史，否则让光标正常下移
+   * contentEditable 可能有多个文本节点 + tag 节点，需综合判断。
+   */
+  const caretAtLineEdge = useCallback((checkTop: boolean): boolean => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return false;
+    const el = editorRef.current?.getEditorElement();
+    if (!el || !el.contains(sel.focusNode)) return false;
+
+    // 光标未选中范围（collapsed）才判断，有选区时不拦截
+    if (!sel.isCollapsed) return false;
+
+    if (checkTop) {
+      // ── 判断「首行行首」：光标在整个编辑器内容的最前面 ──
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.setEnd(sel.focusNode!, sel.focusOffset);
+      const before = range.toString();
+      return before.length === 0;
+    } else {
+      // ── 判断「末行行尾」：光标在整个编辑器内容的最后面 ──
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.setStart(sel.focusNode!, sel.focusOffset);
+      const after = range.toString();
+      return after.length === 0;
+    }
+  }, []);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
       return;
     }
-    // 上下箭头切换历史（仅在输入框内容为空或单行时生效）
+    // 上下箭头切换历史：仅在「光标位于首行行首（↑）/末行行尾（↓）」时拦截，
+    // 其余位置让光标正常移动（用户可在文本内自由导航）。与终端 bash/zsh 行为一致。
     const isUp = e.key === "ArrowUp";
     const isDown = e.key === "ArrowDown";
     if ((isUp || isDown) && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      const atEdge = caretAtLineEdge(isUp); // ↑查行首，↓查行尾
+      if (!atEdge) return; // 光标不在边缘 → 不拦截，光标正常移动
+
       const currentText = editorRef.current?.read().text || "";
-      const isMultiline = currentText.includes("\n");
-      // 多行文本时不拦截（让光标正常上下移动）
-      if (isMultiline) return;
       if (isUp) {
         // 首次按上：保存当前草稿
         if (historyIndex.current === -1) {

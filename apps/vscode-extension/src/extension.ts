@@ -288,7 +288,7 @@ export function activate(context: vscode.ExtensionContext): void {
     mcp: createNodeMcpCapability(),
     // 命令信任白名单：读写 `axon.trustedCommands` 配置（弹窗授权与设置管理共用同一份数据）
     commandTrust: new VSCodeCommandTrustStore(),
-    // 滚动压缩配置：读取 VS Code 设置（axon.compaction.*），默认启用
+    // 滚动压缩配置：读取 VS Code 设置（axon.compaction.*），默认关闭
     getCompactionConfig: () => readCompactionConfig(),
   });
 

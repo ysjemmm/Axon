@@ -101,9 +101,9 @@
         },
         "axon.compaction.enabled": {
           "type": "boolean",
-          "default": true,
+          "default": false,
           "scope": "resource",
-          "markdownDescription": "**滚动压缩（推荐开启）**：长对话中自动把早期消息压缩为摘要，让 AI 始终拥有充足上下文窗口。\n\n**开启**：对话再多也不撞上下文上限，节省 Token 费用；代价是早期对话细节会被摘要替代（摘要会保留关键决策和已完成操作）。\n\n**关闭**：完整保留每一条原始消息，AI 能回忆更多早期细节；代价是长对话后期可能因上下文超限被迫手动压缩，费用更高。\n\n工具结果的自动裁剪不受此开关影响（由下方 `#axon.compaction.toolResultKeepTurns#` 独立控制）。"
+          "markdownDescription": "**滚动压缩**：长对话中自动把早期消息压缩为摘要，让 AI 始终拥有充足上下文窗口。\n\n**开启**：对话再多也不撞上下文上限，节省 Token 费用；代价是早期对话细节会被摘要替代（摘要会保留关键决策和已完成操作）。\n\n**关闭（默认）**：完整保留每一条原始消息，AI 能回忆更多早期细节；代价是长对话后期可能因上下文超限被迫手动压缩，费用更高。\n\n工具结果的自动裁剪不受此开关影响（由下方 `#axon.compaction.toolResultKeepTurns#` 独立控制）。"
         },
         "axon.compaction.triggerTokens": {
           "type": "number",

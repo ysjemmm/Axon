@@ -77,6 +77,16 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
+      // 用系统浏览器打开外部链接（webview 中 target=_blank 被拦截）
+      if (m.type === "open_external" && typeof m.url === "string") {
+        try {
+          await vscode.env.openExternal(vscode.Uri.parse(m.url as string));
+        } catch {
+          vscode.window.showWarningMessage(`无法打开链接：${m.url}`);
+        }
+        return;
+      }
+
       // 打开文件（从工具卡片文件名标签点击）
       if (m.type === "open_file" && typeof m.path === "string") {
         const filePath = m.path as string;

@@ -2292,12 +2292,12 @@ export class AgentSession {
 
       // 有工具调用 → 如果之前有流式文字，先发 stream_pause 告知前端文字暂停
       if (turnStreamStarted && contentBuffer) {
-        // 过滤掉工具调用间夹带的英文内心 OS（如 "Need rest."、"Need save/add methods."）
+        // 先无条件通知前端 flush 打字机 buffer（避免前端丢字），
+        // 然后再判断是否为 reasoning 泄露（决定是否持久化）。
+        this.send("stream_pause", {});
         if (looksLikeIncompleteReply(contentBuffer)) {
           console.debug("[agent] 过滤工具调用间的 reasoning 泄露:", JSON.stringify(contentBuffer.slice(0, 60)));
           contentBuffer = "";
-        } else {
-          this.send("stream_pause", {});
         }
       }
 
@@ -2315,6 +2315,13 @@ export class AgentSession {
 
       for (const toolCall of toolCalls) {
         const toolName = toolCall.name;
+        // 多工具串行执行时，让前端有时间渲染上一个工具的终态卡片。
+        // 不加间隔时，多个 tool_call/tool_result 事件在同一 microtask batch 到达前端，
+        // React 批量 setState 导致多个卡片"同时弹出"，用户无法看清顺序。
+        // setTimeout(0) 让事件循环刷新一次，确保前端的 postMessage 已被处理。
+        if (toolCalls.length > 1) {
+          await new Promise<void>((r) => setTimeout(r, 0));
+        }
         // 健壮解析参数：模型偶尔生成非法 JSON（如未转义的 Windows 路径反斜杠），
         // 不能让整轮崩掉。解析失败时当作"该工具调用失败"，反馈给模型重写。
         let toolArgs: Record<string, unknown>;

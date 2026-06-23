@@ -42,6 +42,11 @@ const defaultRender =
   };
 
 md.renderer.rules.link_open = function (tokens, idx, options, env, self) {
+  const href = tokens[idx].attrGet("href") || "";
+  // 外部 http(s) 链接：打标记供前端事件委托识别（webview 里 target=_blank 会被拦截，需走 openExternal）
+  if (/^https?:\/\//i.test(href)) {
+    tokens[idx].attrSet("data-external-link", href);
+  }
   tokens[idx].attrSet("target", "_blank");
   tokens[idx].attrSet("rel", "noopener noreferrer");
   return defaultRender(tokens, idx, options, env, self);
