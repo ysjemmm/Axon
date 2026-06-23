@@ -40,7 +40,7 @@ export function handleStreamPause(_msg: WsMessage, ctx: EventHandlerCtx): void {
     cancelAnimationFrame(tw.raf.current);
     tw.raf.current = null;
   }
-  tw.flushRemaining(ctx);
+  tw.flush(ctx);
 }
 
 export function handleStreamEnd(msg: WsMessage, ctx: EventHandlerCtx): void {

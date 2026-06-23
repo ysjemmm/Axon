@@ -7,18 +7,22 @@
 
 import { useRef, useCallback } from "react";
 import type { TextSegment } from "./types";
-import type { EventHandlerCtx } from "./eventHandlers/types";
+
+/** 打字机只需要的最小上下文（解耦循环类型引用，不与 EventHandlerCtx 形成循环依赖） */
+export interface TypewriterCtx {
+  setChatHistory: React.Dispatch<React.SetStateAction<import("./types").ChatMessage[]>>;
+  finishLoading: () => void;
+}
 
 export interface TypewriterApi {
   buffer: React.MutableRefObject<string>;
   raf: React.MutableRefObject<number | null>;
   streamEnding: React.MutableRefObject<{ elapsed: number; tokens: number } | null>;
-  /** 启动打字机 RAF 循环（stream_start 时调用） */
-  start: (ctx: EventHandlerCtx) => void;
-  /** 停止 RAF + 清空 buffer（取消/暂停时调用） */
+  start: (ctx: TypewriterCtx) => void;
   cancel: () => void;
-  /** flush buffer 中残留的内容到 text segment（stream_end 无 RAF 时调用） */
-  flushRemaining: (ctx: EventHandlerCtx) => void;
+  pause: () => void;
+  reset: () => void;
+  flush: (ctx: TypewriterCtx) => void;
 }
 
 export function useTypewriter(): TypewriterApi {
@@ -26,7 +30,7 @@ export function useTypewriter(): TypewriterApi {
   const raf = useRef<number | null>(null);
   const streamEnding = useRef<{ elapsed: number; tokens: number } | null>(null);
 
-  const start = useCallback((ctx: EventHandlerCtx) => {
+  const start = useCallback((ctx: TypewriterCtx) => {
     if (raf.current) cancelAnimationFrame(raf.current);
     streamEnding.current = null;
 
@@ -109,7 +113,16 @@ export function useTypewriter(): TypewriterApi {
     }
   }, []);
 
-  const flushRemaining = useCallback((ctx: EventHandlerCtx) => {
+  const pause = useCallback(() => {
+    if (raf.current) {
+      cancelAnimationFrame(raf.current);
+      raf.current = null;
+    }
+  }, []);
+
+  const reset = cancel;
+
+  const flush = useCallback((ctx: TypewriterCtx) => {
     const remaining = buffer.current;
     buffer.current = "";
     if (remaining) {
@@ -134,5 +147,5 @@ export function useTypewriter(): TypewriterApi {
     }
   }, []);
 
-  return { buffer, raf, streamEnding, start, cancel, flushRemaining };
+  return { buffer, raf, streamEnding, start, cancel, pause, reset, flush };
 }

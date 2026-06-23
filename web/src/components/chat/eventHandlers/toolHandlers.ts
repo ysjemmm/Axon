@@ -24,7 +24,7 @@ export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
       cancelAnimationFrame(tw.raf.current);
       tw.raf.current = null;
     }
-    tw.flushRemaining(ctx);
+    tw.flush(ctx);
   }
   ctx.setStatusText(toolPhaseText(msg.name || ""));
   ctx.setStatusPhase("tool");

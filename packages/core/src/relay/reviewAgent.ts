@@ -55,14 +55,17 @@ export interface ReviewContext {
  * 完全没有明确结论信号时，回退到"是否存在 critical 问题"判定，再不行才保守判未通过。
  */
 export function parseVerdict(text: string): ReviewVerdict {
-  // 先抽取问题条目（[critical]/[major]/[minor]）
+  // 先抽取问题条目（[critical]/[major]/[minor]），过滤掉"无问题"类的元描述
   const issues: ReviewVerdict["issues"] = [];
   const lineRe = /\[(critical|major|minor)\]\s*(.+)/gi;
   let m: RegExpExecArray | null;
   while ((m = lineRe.exec(text)) !== null) {
+    const desc = m[2].trim();
+    // 过滤元描述："/[major]/[minor]" 这种是列举分类而非真实问题，长度<20 的也是噪音
+    if (desc.length < 20 || /^\/\[(major|minor|critical)\]/i.test(desc)) continue;
     issues.push({
       severity: m[1].toLowerCase() as "critical" | "major" | "minor",
-      description: m[2].trim(),
+      description: desc,
     });
   }
   const hasCritical = issues.some((i) => i.severity === "critical");
@@ -95,35 +98,37 @@ export function parseVerdict(text: string): ReviewVerdict {
 /** 构造规格符合性评审的 prompt */
 function buildSpecPrompt(ctx: ReviewContext): string {
   return (
-    `你是规格符合性评审员（只读）。请核查一个刚完成的开发任务【是否真正满足要求】，不要顺手改代码。\n\n` +
+    `你是规格符合性评审员。请核查一个刚完成的开发任务【是否真正满足要求】。\n\n` +
     `## Relay：${ctx.relayTitle}\n` +
     `## 任务 ${ctx.taskId}：${ctx.taskTitle}\n` +
     (ctx.taskDetails ? `### 实现要点\n${ctx.taskDetails}\n` : "") +
+    `\n> ⚠️ 这是多步计划中的一个子任务，评审范围仅限于本子任务自己的交付物，不要以整体需求未全部达成为由判失败。\n` +
     `\n## 需求文档（节选）\n${ctx.requirements.slice(0, 3000)}\n` +
     `\n## 设计文档（节选）\n${ctx.design.slice(0, 3000)}\n` +
-    `\n## 本次改动的文件\n${ctx.changedFiles.map((f) => `- ${f}`).join("\n") || "（未提供，请自行搜索定位）"}\n\n` +
-    `请用 read_file/search 核查这些改动，重点判断：\n` +
-    `1. 任务卡要求的功能是否都实现了？有没有漏做的子项？\n` +
+    `\n## 本次改动的文件\n${ctx.changedFiles.map((f) => `- ${f}`).join("\n") || "（未提供）"}\n\n` +
+    `审查要点：\n` +
+    `1. 本子任务要求的内容是否都做了？有没有漏项？\n` +
     `2. 实现是否偏离了需求/设计的意图？\n` +
     `3. 有没有"看起来做了但实际是占位/TODO/假实现"的情况？\n\n` +
-    `输出要求（中文）：先给简明评审小结，逐条列出问题（用 [critical]/[major]/[minor] 前缀），` +
+    `输出：先给简明评审小结，逐条列出问题（用 [critical]/[major]/[minor] 前缀），` +
     `最后【单独一行】输出机器标记：VERDICT: PASS 或 VERDICT: FAIL。` +
-    `只有"功能完整、未跑偏、无假实现"才 PASS；有任何 critical 问题必须 FAIL。`
+    `只有"本子任务内容完整、未跑偏、无假实现"才 PASS。`
   );
 }
 
 /** 构造代码质量评审的 prompt */
 function buildQualityPrompt(ctx: ReviewContext): string {
   return (
-    `你是代码质量评审员（只读）。请审查一个刚完成的开发任务的代码质量，不要改代码。\n\n` +
+    `你是代码质量评审员。请审查一个刚完成的开发任务的代码质量。\n\n` +
     `## 任务 ${ctx.taskId}：${ctx.taskTitle}\n` +
-    `## 本次改动的文件\n${ctx.changedFiles.map((f) => `- ${f}`).join("\n") || "（未提供，请自行搜索定位）"}\n\n` +
-    `请用 read_file/search 审查，重点判断：\n` +
+    `> ⚠️ 这是多步计划中的一个子任务，评审范围仅限于本子任务自己的代码。\n` +
+    `\n## 本次改动的文件\n${ctx.changedFiles.map((f) => `- ${f}`).join("\n") || "（未提供）"}\n\n` +
+    `审查要点：\n` +
     `1. 是否引入坏味道：重复代码、超长函数、职责不清、魔法值硬编码？\n` +
     `2. 边界与错误处理是否充分？有没有吞异常、漏判空、未处理失败路径？\n` +
-    `3. 是否破坏了现有逻辑或接口契约（调用方、被调用方）？\n` +
+    `3. 是否破坏了现有逻辑或接口契约？\n` +
     `4. 命名、风格是否与项目现有约定一致？\n\n` +
-    `输出要求（中文）：先给简明评审小结，逐条列出问题（用 [critical]/[major]/[minor] 前缀），` +
+    `输出：先给简明评审小结，逐条列出问题（用 [critical]/[major]/[minor] 前缀），` +
     `最后【单独一行】输出机器标记：VERDICT: PASS 或 VERDICT: FAIL。` +
     `结构性缺陷（破坏现有逻辑、严重坏味道）判 critical → FAIL；纯风格小问题判 minor 可 PASS。`
   );
@@ -133,9 +138,11 @@ function buildQualityPrompt(ctx: ReviewContext): string {
 async function readChangedFiles(changedFiles: string[], deps: ReviewDeps): Promise<string> {
   if (!changedFiles.length) return "（未提供改动文件列表，请基于需求/设计文档审查）";
   const parts: string[] = [];
-  for (const f of changedFiles.slice(0, 15)) { // 最多 15 个文件，防止 token 爆炸
+  for (const f of changedFiles.slice(0, 15)) {
+    // 相对路径基于 deps.cwd 解析为绝对路径
+    const absPath = f.startsWith("/") || /^[A-Za-z]:/.test(f) ? f : `${deps.cwd}/${f}`;
     try {
-      const raw = await deps.host.fs.read(f);
+      const raw = await deps.host.fs.read(absPath);
       const content = raw ?? "";
       const truncated = content.length > 8000 ? content.slice(0, 8000) + "\n... (已截断)" : content;
       parts.push(`--- ${f} ---\n${truncated}`);
@@ -149,16 +156,23 @@ async function readChangedFiles(changedFiles: string[], deps: ReviewDeps): Promi
 /** 跑一次轻量级评审：直接读文件 + 单次 LLM 调用（不再启动完整子 Agent 循环） */
 async function runOneReview(prompt: string, reviewId: string, deps: ReviewDeps, changedFiles: string[]): Promise<{ verdict: ReviewVerdict; tokens: number }> {
   const emit = deps.emitFor(reviewId);
-  emit("status", { content: "正在读取改动文件..." });
+  emit("status", { content: changedFiles.length > 0 ? "正在读取改动文件..." : "正在分析任务与设计文档..." });
 
-  // 把改动文件内容直接拼进 prompt，让 LLM 一次性评审（无需 agent loop 反复读文件）
+  // 把改动文件内容拼进 prompt（如果有），否则告知 LLM 做纯逻辑审查
   const fileContents = await readChangedFiles(changedFiles, deps);
-  const fullPrompt = prompt + "\n\n## 改动文件内容\n\n" + fileContents;
+  const noFilesNotice = changedFiles.length === 0
+    ? "\n\n> 注意：代码文件内容暂不可用，本次评审为纯逻辑审查——请仅基于下方的任务描述、需求/设计文档判断任务设计的合理性、完整性和一致性；不要因为看不到代码而判失败。"
+    : "";
+  const fullPrompt = prompt + noFilesNotice + "\n\n## 改动文件内容\n\n" + fileContents;
 
   emit("status", { content: "正在评审..." });
 
+  const sysMsg = changedFiles.length > 0
+    ? "你是资深代码评审员。请基于提供的改动文件内容和任务描述，给出严格的评审结论。只输出评审结果，不要尝试读取文件或调用任何工具。"
+    : "你是资深系统设计评审员。代码文件暂不可用，请仅基于任务描述、需求文档和设计文档进行纯逻辑审查——检查任务拆分是否合理、设计是否一致、是否有遗漏。不要因为看不到实际代码而判失败，纯结构/设计层面的问题才需要标记。";
+
   const messages: import("openai/resources/chat/completions").ChatCompletionMessageParam[] = [
-    { role: "system", content: "你是资深代码评审员。请基于提供的改动文件内容和任务描述，给出严格的评审结论。只输出评审结果，不要尝试读取文件或调用任何工具。" },
+    { role: "system", content: sysMsg },
     { role: "user", content: fullPrompt },
   ];
 

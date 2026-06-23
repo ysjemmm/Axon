@@ -12,6 +12,7 @@ import type {
 } from "../types";
 import type { CommandApproval } from "../useChatSession";
 import type { RelayData } from "@/lib/apiClient";
+import type { TypewriterApi } from "../useTypewriter";
 
 export interface EventHandlerCtx {
   // ── 状态 setter ──
@@ -54,14 +55,7 @@ export interface EventHandlerCtx {
   onCompactionMigratedRef: MutableRefObject<((id: string) => void) | undefined>;
 
   // ── 打字机 API ──
-  typewriter: {
-    buffer: MutableRefObject<string>;
-    raf: MutableRefObject<number | null>;
-    streamEnding: MutableRefObject<{ elapsed: number; tokens: number } | null>;
-    start: (ctx: EventHandlerCtx) => void;
-    flushRemaining: (ctx: EventHandlerCtx) => void;
-    cancel: () => void;
-  };
+  typewriter: TypewriterApi;
 
   // ── 杂项 ──
   clientId: string;

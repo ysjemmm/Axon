@@ -215,8 +215,10 @@ export function useChatSession(opts: UseChatSessionOptions) {
       raf: typewriter.raf,
       streamEnding: typewriter.streamEnding,
       start: typewriter.start,
-      flushRemaining: typewriter.flushRemaining,
+      flush: typewriter.flush,
       cancel: typewriter.cancel,
+      pause: typewriter.pause,
+      reset: typewriter.reset,
     },
     clientId, send, finishLoading,
   };

@@ -65,13 +65,6 @@ export function RelayProgressCard({ steps, pending }: { steps: { name: string; d
   const relayId = steps.find((s) => s.relayId)?.relayId;
 
   const handleClick = () => {
-    if (relayId) {
-      const vs = (window as any).__axonVSCode;
-      if (vs) {
-        vs.postMessage({ type: "open_relay", relayId });
-        return;
-      }
-    }
     setExpanded((v) => !v);
   };
 
@@ -99,10 +92,24 @@ export function RelayProgressCard({ steps, pending }: { steps: { name: string; d
             <div key={idx} className="flex items-center gap-2 text-xs">
               {s.status === "error"
                 ? <X className="w-3 h-3 shrink-0 text-red-500" />
-                : <Check className="w-3 h-3 shrink-0 text-green-600" />}
+                : s.status === "pending"
+                  ? <Loader2 className="w-3 h-3 shrink-0 animate-spin text-muted-foreground" />
+                  : <Check className="w-3 h-3 shrink-0 text-green-600" />}
               <span className="text-muted-foreground/80 truncate">{s.description}</span>
             </div>
           ))}
+          {relayId && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                const vs = (window as any).__axonVSCode;
+                if (vs) vs.postMessage({ type: "open_relay", relayId });
+              }}
+              className="mt-1 text-[10px] text-primary/70 hover:text-primary underline cursor-pointer"
+            >
+              在 Relay 面板中查看 →
+            </button>
+          )}
         </div>
       )}
     </div>

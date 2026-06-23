@@ -295,7 +295,15 @@ export class LoopGuard {
    * @param toolName 工具名
    * @param rawArgs 原始参数 JSON 字符串（用作指纹的一部分）
    */
+  // 指纹去重只对文件写入类工具生效：同一工具+相同参数反复调用 str_replace/apply_patch/create_file
+  // 是典型的死循环信号（参数没调对一直在撞），拦截后引导模型换思路。
+  // 其他工具（如 relay_review_task、search、read_file）允许重试，不在此处拦截。
+  private static LOOP_CHECK_TOOLS = new Set(["create_file", "str_replace", "apply_patch"]);
+
   checkToolCall(toolName: string, rawArgs: string): ToolGuardVerdict {
+    if (!LoopGuard.LOOP_CHECK_TOOLS.has(toolName)) {
+      return { allowed: true };
+    }
     const fingerprint = `${toolName}:${rawArgs}`;
     const repeat = (this.callFingerprints.get(fingerprint) || 0) + 1;
     this.callFingerprints.set(fingerprint, repeat);
