@@ -27,6 +27,7 @@ import { SYSTEM_PROMPT, QUEST_SYSTEM_PROMPT } from "./systemPrompt.js";
 import { getClient, getStrategy, ZHIPU_PROVIDER } from "./providers.js";
 import { sanitizeToolPairing } from "./messageSanitizer.js";
 import { RelayStore } from "./relay/relayStore.js";
+import { SnapshotManager, SNAPSHOT_TOOLS } from "./snapshot/index.js";
 import type { RelayPhase, RelayQualityConfig } from "./relay/types.js";
 import { nextPhase, PHASE_DOC_FILE } from "./relay/types.js";
 import { runParallelResearch, aggregateResearchResults, type ResearchTask } from "./relay/parallelResearch.js";
@@ -53,6 +54,10 @@ export class AgentSession {
   private mcpRegistry: McpRegistry;
   private mcpToolDefsCache: ToolDef[] = [];
   private mcpToolMap = new Map<string, { serverId: string; toolName: string; serverName: string; autoApprove: boolean }>();
+  /** 快照管理器（闪电回滚） */
+  private snapshotMgr: SnapshotManager;
+  /** 对话轮次计数（用于快照 id） */
+  private turnCount = 0;
   private lastTotalTokens = 0;
   private lastPromptTokens = 0;
   private lastCompletionTokens = 0;
@@ -162,6 +167,9 @@ export class AgentSession {
     this.mcp = mcp;
     this.mcpRegistry = new McpRegistry(this.workspaces, this.host, this.homeDir, this.powerRegistry);
     this.relayStore = new RelayStore(this.cwd, this.host);
+    this.snapshotMgr = new SnapshotManager(this.host, this.cwd);
+    // 延迟初始化快照：等第一次实际需要时才 init（不在构造函数里跑 git 命令，
+    // 避免 session 切换时终端面板被意外弹出）
   }
 
   /** 设置滚动压缩配置（由呈现端在启动时 / 配置变更时调用） */
@@ -370,6 +378,20 @@ export class AgentSession {
     }
     // 无论成功失败都通知前端撤销结果：成功→更新卡片为已撤销；失败→轻提示
     this.send("edit_undo_result", { path, ok: result.ok, reason: result.reason });
+  }
+
+  /** 列出所有快照（供前端展示回滚时间线） */
+  async listSnapshots() {
+    return this.snapshotMgr.list();
+  }
+
+  /** 回滚到指定快照 */
+  async restoreSnapshot(id: string): Promise<boolean> {
+    const ok = await this.snapshotMgr.restore(id);
+    if (ok) {
+      this.send("status", { content: `已回滚到快照 ${id}`, phase: "done" });
+    }
+    return ok;
   }
 
   /**
@@ -1972,6 +1994,7 @@ export class AgentSession {
     provider?: string,
     userMeta?: { displayText?: string; attachedFiles?: { name: string; size: number }[]; replyStyle?: string; userSegments?: unknown[] },
   ): Promise<void> {
+    this.turnCount++;
     // 动态切换模型和 provider
     if (model && model !== this.model) {
       this.model = model;
@@ -2135,12 +2158,13 @@ export class AgentSession {
         },
         onToolCallDetected: (name, id) => {
           console.log(`[stream] tool detected: ${name} id=${id}`);
-          // 立即推送 pending 卡片：大文件 str_replace/create_file 的参数（整份新内容）要流式很久，
-          // 若等到执行阶段才显示，用户几十秒看不到任何反馈、卡片一出来就是 ✓。
-          // 前端按 id 关联，执行阶段的 executing / tool_result 会更新同一张卡，不会重复。
-          // delegate_task / parallel_execute / parallel_research 有专门的 sub_agent 卡片，跳过。
+          // ⚠️ 不在这里发 tool_call(pending)！
+          // onToolCallDetected 在流式输出阶段被调用，此时 LLM 可能一次返回多个 tool_calls，
+          // 每个都会触发此回调。如果在这里全发 pending 卡片，用户会同时看到 N 张"准备执行"卡片，
+          // 而后端实际还在串行执行第一个。pending 卡片改到串行执行循环中按序发送。
+          // delegate_task / parallel_execute / parallel_research 有专门的 sub_agent 卡片，也跳过。
           if (name === "delegate_task" || name === "parallel_execute" || name === "parallel_research") return;
-          this.send("tool_call", { id: id || "", name, args: {}, cwd: this.cwd, status: "pending", ...this.mcpMetaFor(name) });
+          // 仅记录检测到工具，不发事件（pending 事件在执行循环中发）
         },
       };
 
@@ -2374,6 +2398,9 @@ export class AgentSession {
         // 这些工具容易软失败：str_replace/apply_patch/read_file。
         const SOFT_FAIL_TOOLS = new Set(["str_replace", "apply_patch", "read_file"]);
         if (!SOFT_FAIL_TOOLS.has(toolName)) {
+          // 先发 pending（卡片出现），再立即发 executing（更新参数）。
+          // 这样卡片严格在串行执行到该工具时才出现，不会提前 N 个同时弹出。
+          this.send("tool_call", { id: toolCall.id, name: toolName, args: {}, cwd: displayCwd, status: "pending", ...this.mcpMetaFor(toolName) });
           this.send("tool_call", { id: toolCall.id, name: toolName, args: toolArgs, cwd: displayCwd, status: "executing", ...this.mcpMetaFor(toolName) });
         }
 
@@ -2517,6 +2544,14 @@ export class AgentSession {
           status = out.status;
           if (out.userMessage) meta.userMessage = out.userMessage; // 给前端卡片的简短文案（区别于给 AI 的详细 result）
         } else {
+          // 通用工具执行：在写文件工具执行前创建快照
+          if (SNAPSHOT_TOOLS.has(toolName)) {
+            const filesToSnapshot = await extractTargetFiles(toolName, toolArgs, this.cwd, this.host, this.workspaces);
+            if (filesToSnapshot.length > 0) {
+              const turnId = `turn-${this.turnCount}`;
+              await this.snapshotMgr.beforeEdit(turnId, filesToSnapshot).catch(() => {});
+            }
+          }
           try {
             result = await executeToolCall(toolName, toolArgs, this.cwd, this.host, meta, this.workspaces, this.loadSkillForTool, this.web, this.loadPowerForTool);
             this.trackTerminalCwd(toolName, toolArgs, meta);
@@ -2760,6 +2795,50 @@ export class AgentSession {
     const summaryCredits = calculateCredits(this.model, summaryBreakdown);
     const summaryCreditDetail = buildCreditDetail(this.model, summaryBreakdown);
     this.send("stream_end", { elapsed: Date.now() - turnStartTime, tokens: summaryTokens, model: this.model, credits: summaryCredits, creditDetail: summaryCreditDetail });
+  }
+}
+
+/**
+ * 从工具参数中提取即将被修改的文件绝对路径（用于快照）。
+ * 只处理写文件类工具，其他工具返回空数组。
+ */
+async function extractTargetFiles(
+  toolName: string,
+  args: Record<string, unknown>,
+  cwd: string,
+  host: AgentHost,
+  workspaces?: string[],
+): Promise<string[]> {
+  const { resolveInWorkspaces } = await import("./tools/search.js");
+  switch (toolName) {
+    case "str_replace":
+    case "create_file": {
+      const p = args.path as string;
+      if (!p) return [];
+      try {
+        const resolved = await resolveInWorkspaces(p, cwd, host, workspaces);
+        return [resolved];
+      } catch { return []; }
+    }
+    case "apply_patch": {
+      const patch = args.patch as string;
+      if (!patch) return [];
+      // 从 patch 文本中提取文件路径
+      const paths: string[] = [];
+      const fileHeaders = patch.match(/\*\*\* (?:Update File|Add File): (.+)/g);
+      if (fileHeaders) {
+        for (const h of fileHeaders) {
+          const p = h.replace(/\*\*\* (?:Update File|Add File): /, "").trim();
+          try {
+            const resolved = await resolveInWorkspaces(p, cwd, host, workspaces);
+            paths.push(resolved);
+          } catch { /* skip */ }
+        }
+      }
+      return paths;
+    }
+    default:
+      return [];
   }
 }
 

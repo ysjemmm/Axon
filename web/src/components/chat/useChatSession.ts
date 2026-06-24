@@ -354,6 +354,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     ]);
     send({ type: "user_message", ...payload.send });
     setIsLoading(true);
+    setReasoning(""); // 新一轮开始：清空上一轮残留的思考过程
     setStatusText("思考中...");
     setStatusPhase("thinking");
     turnStartTime.current = Date.now();
@@ -571,5 +572,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
     toggleEditMode, acceptEdits, rejectEdits, undoEdits, confirmTool,
     approveCommand, dismissCommandBlocked, respondToDangerousCommand,
     setModel, selectWorkspace, selectGroup, groupUpdated,
+    // 闪电回滚
+    listSnapshots: () => send({ type: "list_snapshots" }),
+    restoreSnapshot: (id: string) => send({ type: "restore_snapshot", snapshotId: id }),
   };
 }

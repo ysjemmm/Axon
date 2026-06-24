@@ -15,6 +15,7 @@ import type { EventHandlerCtx, WsMessage } from "./types";
 
 export function handleSessionCreated(msg: WsMessage, ctx: EventHandlerCtx): void {
   if (ctx.compactionMigratedRef.current) return;
+  ctx.setReasoning(""); // 新会话：清空上一条会话残留的思考过程
   ctx.onSessionCreatedRef.current((msg as any).sessionId);
   if ((msg as any).workspace) ctx.setWorkspace((msg as any).workspace);
   if ((msg as any).workspaces) ctx.setWorkspaces((msg as any).workspaces);
@@ -27,6 +28,7 @@ export function handleSessionError(msg: WsMessage, ctx: EventHandlerCtx): void {
 
 export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void {
   ctx.setIsLoadingSession(false);
+  ctx.setReasoning(""); // 切换/恢复会话时清空思考过程残留
   const messages = (msg as any).messages || [];
   const totalTokens = (msg as any).totalTokens || 0;
   if ((msg as any).workspace) ctx.setWorkspace((msg as any).workspace);

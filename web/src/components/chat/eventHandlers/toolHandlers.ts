@@ -77,10 +77,19 @@ export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
         updated[updated.length - 1] = { ...last, segments: segs };
         return updated;
       }
-      if (msgStatus === "executing") return prev;
+      // executing 找不到匹配的 pending 段 → 不返回 prev，继续往下走到「新建工具段」。
+      // 原因：pending 事件可能还在 useToolCallQueue 的 150ms 延时队列里没处理，
+      // 如果这里 return prev，tool_result 也找不到段、fallback 创建一张瞬间 success 的段，
+      // 最后队列的 pending 事件再创建一张重复段——导致乱序+重复。
     }
 
-    // 新建工具段
+    // 新建工具段（先查重：pending 事件可能在 150ms 延迟队列里，此时 executing 已建过段）
+    if (eventId && last?.role === "assistant" && last.segments) {
+      for (let i = last.segments.length - 1; i >= 0; i--) {
+        const s = last.segments[i];
+        if (s.type === "tool" && s.id === eventId) return prev;
+      }
+    }
     const toolSeg: ToolSegment = {
       type: "tool",
       id: eventId || `tool-${Date.now()}-${msg.name}`,

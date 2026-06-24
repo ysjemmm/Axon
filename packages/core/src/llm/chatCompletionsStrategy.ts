@@ -43,6 +43,18 @@ export class ChatCompletionsStrategy implements LLMStrategy {
       return m;
     });
 
+    // ── Prompt Caching ──────────────────────────────────────────────
+    // 标记稳定前缀（system prompt + 除最后 2 条外的历史消息）为可缓存。
+    // DeepSeek/GLM/Claude 等均支持 OpenAI 兼容的 cache_control 参数。
+    // 命中缓存时 prefill 阶段跳过 → TTFT 降低 5-10 倍。
+    //
+    // 策略：倒数第 3 条消息打一个 cache breakpoint（覆盖 system + 绝大部分历史），
+    // 倒数第 1 条（最新 user 消息）不打（每轮都变）。
+    // 仅在消息数 > 6 时生效（太短的消息不值得打缓存标记）。
+    const cachedMessages = safeMessages.length > 6
+      ? applyCacheBreakpoints(safeMessages)
+      : safeMessages;
+
     // 无工具时不传 tools/tool_choice（如强制总结收尾场景）
     const hasTools = tools.length > 0;
     // DeepSeek 经中转网关并发调用工具时，容易产出空/重复 tool_call id 与交错的参数 JSON，
@@ -57,7 +69,7 @@ export class ChatCompletionsStrategy implements LLMStrategy {
     const stream: any = await this.client.chat.completions.create(
       {
         model,
-        messages: safeMessages,
+        messages: cachedMessages,
         ...(hasTools
           ? {
               tools: tools as ChatCompletionTool[],
@@ -81,7 +93,7 @@ export class ChatCompletionsStrategy implements LLMStrategy {
     const toolAcc: Array<{ id: string; name: string; arguments: string; announced: boolean }> = [];
 
     for await (const chunk of stream) {
-      // usage chunk：通常是最后一个 chunk，choices 为空数组
+      // usage chunk：通常是最后一个 chunk，choices 可能为空数组或 undefined
       if (chunk.usage) {
         usage = {
           promptTokens: chunk.usage.prompt_tokens ?? 0,
@@ -91,7 +103,29 @@ export class ChatCompletionsStrategy implements LLMStrategy {
           cachedTokens: (chunk.usage as any).prompt_tokens_details?.cached_tokens ?? 0,
         };
       }
-      const choice = chunk.choices[0];
+      // ⚠️ 防御：部分中转站（Anthropic 原生格式）返回的 chunk 没有 choices 字段，
+      // 直接 chunk.choices[0] 会报 "Cannot read properties of undefined (reading '0')"
+      const choices = (chunk as any).choices;
+      if (!Array.isArray(choices) || choices.length === 0) {
+        // 尝试 Anthropic 格式兜底
+        const anthropicContent = (chunk as any).content;
+        const anthropicDelta = (chunk as any).delta;
+        if (Array.isArray(anthropicContent)) {
+          for (const part of anthropicContent) {
+            if (part.type === "text" && part.text) {
+              content += part.text;
+              callbacks.onTextDelta(part.text);
+            }
+          }
+        }
+        if (anthropicDelta?.text) {
+          content += anthropicDelta.text;
+          callbacks.onTextDelta(anthropicDelta.text);
+        }
+        if ((chunk as any).stop_reason) finishReason = (chunk as any).stop_reason;
+        continue;
+      }
+      const choice = choices[0];
       const delta = choice?.delta;
       if (choice?.finish_reason) finishReason = choice.finish_reason;
       if (!delta) continue;
@@ -142,4 +176,43 @@ export class ChatCompletionsStrategy implements LLMStrategy {
 
     return { content, toolCalls, finishReason, usage };
   }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Prompt Caching 辅助
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * 给稳定前缀打 cache_control breakpoint。
+ *
+ * 策略：打两个 breakpoint，最大化缓存命中率：
+ * - breakpoint A：消息总长的 1/4 处（覆盖 system prompt + 早期历史）
+ * - breakpoint B：倒数第 3 条（覆盖绝大部分历史，只留最新 2 条变化）
+ * 双 breakpoint 让 API 提供商有更灵活的缓存粒度——即使前缀有微小变化（如早期消息被裁剪），
+ * breakpoint A 之后的缓存仍然有效。
+ */
+function applyCacheBreakpoints(messages: any[]): any[] {
+  if (messages.length <= 6) return messages;
+
+  const result = [...messages];
+  const breakpoints = new Set<number>();
+
+  // breakpoint A：1/4 处
+  breakpoints.add(Math.floor(result.length * 0.25));
+  // breakpoint B：倒数第 3 条
+  breakpoints.add(result.length - 3);
+
+  for (const idx of breakpoints) {
+    if (idx < 1 || idx >= result.length - 1) continue;
+    const msg = result[idx];
+    if (!msg || typeof msg.content !== "string") continue;
+    result[idx] = {
+      ...msg,
+      content: [
+        { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
+      ],
+    };
+  }
+
+  return result;
 }

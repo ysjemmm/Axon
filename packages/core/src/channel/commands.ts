@@ -66,6 +66,9 @@ export type ControlCommandPayload =
   | { type: "reject_edits"; path?: string }
   | { type: "undo_edits"; path: string }
   | { type: "undo_parallel_file"; path: string }
+  // 闪电回滚
+  | { type: "list_snapshots" }
+  | { type: "restore_snapshot"; snapshotId: string }
   // Relay
   | { type: "delete_relay"; relayId: string; workspace?: string }
   // 工具确认（用户确认/拒绝创建 Relay 等需要确认的操作）

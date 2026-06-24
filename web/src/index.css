@@ -443,10 +443,19 @@ body.vscode-high-contrast {
   to { transform: rotate(360deg); }
 }
 @keyframes blink {
-  0%, 100% { transform: scaleY(1); }
-  45% { transform: scaleY(0.4); }
-  50% { transform: scaleY(0.4); }
-  55% { transform: scaleY(1); }
+  0%, 20% { transform: scaleY(1); }
+  10% { transform: scaleY(0.05); }
+  30%, 100% { transform: scaleY(1); }
+}
+
+/* Logo 呼吸灯光晕：纯色填充 + opacity 呼吸，不依赖 gradient */
+@keyframes breath {
+  0%, 100% { opacity: 0.15; transform: scale(0.88); }
+  50% { opacity: 0.45; transform: scale(1.12); }
+}
+.breath-origin {
+  transform-origin: center;
+  transform-box: fill-box;
 }
 
 /* 工具卡片入场动画：轻微滑入+渐显，让用户能感知到卡片是逐个出现的 */

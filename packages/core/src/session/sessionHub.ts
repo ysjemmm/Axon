@@ -381,6 +381,20 @@ export class SessionHub {
         if (typeof cmd.path === "string" && cmd.path) await s?.undoParallelFile(cmd.path);
         return;
       }
+      case "list_snapshots": {
+        const sid = this.resolveSessionId(cmd);
+        const s = sid ? this.getActiveSession(sid) : null;
+        const snapshots = await s?.listSnapshots();
+        if (clientId) this.sendToClient(clientId, { type: "snapshots_listed", snapshots: snapshots || [] });
+        return;
+      }
+      case "restore_snapshot": {
+        const sid = this.resolveSessionId(cmd);
+        const s = sid ? this.getActiveSession(sid) : null;
+        const ok = await s?.restoreSnapshot(cmd.snapshotId);
+        if (clientId) this.sendToClient(clientId, { type: "snapshot_restored", snapshotId: cmd.snapshotId, ok: !!ok });
+        return;
+      }
       case "user_message":
         if (cmd.content || cmd.images) await this.handleUserMessage(cmd, clientId);
         return;

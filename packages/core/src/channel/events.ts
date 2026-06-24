@@ -154,7 +154,11 @@ export type AgentEventPayload =
   | { type: "relay_updated"; relay: Json }
   | { type: "relay_deleted"; relayId: string }
   | { type: "relay_review_start"; batchId: string; relayId: string; taskId: string }
-  | { type: "relay_review_end"; batchId: string; relayId: string; taskId: string; passed: boolean };
+  | { type: "relay_review_end"; batchId: string; relayId: string; taskId: string; passed: boolean }
+
+  // ── 闪电回滚 ──
+  | { type: "snapshots_listed"; snapshots: Array<{ id: string; createdAt: number; label: string; files: string[] }> }
+  | { type: "snapshot_restored"; snapshotId: string; ok: boolean };
 
 /**
  * AgentEvent —— 出站事件（含多会话路由标签）。

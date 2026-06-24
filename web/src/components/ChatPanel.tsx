@@ -8,7 +8,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Send, Loader2, Copy, ImagePlus, X, FileText, Paperclip, Plus, Camera, Feather, Check, ChevronDown, ListChecks, Sparkles, Globe, ShieldAlert, Undo2, Minimize2 } from "lucide-react";
+import { Send, Loader2, Copy, ImagePlus, X, Paperclip, Plus, Camera, Feather, Check, ChevronDown, ListChecks, Sparkles, Globe, ShieldAlert, Undo2, Minimize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -24,8 +24,7 @@ import { REPLY_STYLES } from "./chat/types";
 import { FILE_MAX_SIZE, isAllowedTextFile, looksBinary } from "./chat/fileUtils";
 import { ReasoningBlock } from "./chat/ReasoningBlock";
 import { MessageBubble } from "./chat/MessageBubble";
-import { PendingFileRow } from "./chat/PendingFileRow";
-import { disambiguatePaths } from "./ToolCallItem";
+import { AppliedChangesBar } from "./AppliedChangesBar";
 import { MentionEditor, type MentionEditorHandle } from "./chat/MentionEditor";
 import { TokenIndicator } from "./chat/TokenIndicator";
 import { useChatSession, type SubmitPayload } from "./chat/useChatSession";
@@ -791,19 +790,11 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             用 hidden 控制可见性而非条件渲染，保证 CSS animation 不中断。 */}
         <div className={`flex items-center gap-2.5 text-muted-foreground text-sm px-3 py-1 pb-2 ${session.isLoading ? "" : "hidden"}`}>
           <svg width="28" height="28" viewBox="0 0 40 40" className="shrink-0">
-            <g style={{ transformOrigin: "20px 20px", animation: "spin 1.5s linear infinite" }}>
-              <circle cx="20" cy="20" r="17" fill="none" stroke="url(#axon-glow-outer)" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="20 80" opacity="0.8" />
-            </g>
+            {/* 呼吸灯光晕：纯色 + opacity 动画，不依赖 gradient id 引用 */}
+            <circle cx="20" cy="20" r="17" fill="#6366f1" className="breath-origin" style={{ animation: "breath 2.5s ease-in-out infinite" }} />
             <circle cx="20" cy="20" r="13" fill="white" stroke="#1e1b4b" strokeWidth="1.5" />
-            <ellipse cx="15" cy="19" rx="2" ry="2.5" fill="#6366f1" style={{ transformOrigin: "15px 19px", animation: "blink 2.5s ease-in-out infinite" }} />
-            <ellipse cx="25" cy="19" rx="2" ry="2.5" fill="#6366f1" style={{ transformOrigin: "25px 19px", animation: "blink 2.5s ease-in-out 0.1s infinite" }} />
-            <defs>
-              <linearGradient id="axon-glow-outer" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor="#6366f1" />
-                <stop offset="50%" stopColor="#a78bfa" />
-                <stop offset="100%" stopColor="#38bdf8" />
-              </linearGradient>
-            </defs>
+            <ellipse cx="15" cy="19" rx="2" ry="2.5" fill="#6366f1" style={{ transformOrigin: "15px 19px", animation: "blink 3s ease-in-out infinite" }} />
+            <ellipse cx="25" cy="19" rx="2" ry="2.5" fill="#6366f1" style={{ transformOrigin: "25px 19px", animation: "blink 3s ease-in-out 0.12s infinite" }} />
           </svg>
           <span className="animate-pulse">{session.statusText}</span>
         </div>
@@ -819,45 +810,17 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
       {/* 输入区域 */}
       <div className="px-3 py-4">
-        {/* 待确认改动汇总条 */}
-        {session.pendingPaths.length > 0 && (
-          <div className="mb-2 rounded-lg border border-amber-300/60 bg-amber-50 dark:bg-amber-950/30 overflow-hidden">
-            <div className="flex items-center gap-2 px-3 py-2 text-sm">
-              <button
-                onClick={() => session.setPendingExpanded((v) => !v)}
-                className="flex items-center gap-1.5 flex-1 text-left text-amber-700 dark:text-amber-400"
-                title="展开/收起文件清单"
-              >
-                <ChevronDown className={`w-4 h-4 shrink-0 transition-transform ${session.pendingExpanded ? "" : "-rotate-90"}`} />
-                <FileText className="w-4 h-4 shrink-0" />
-                <span>{session.pendingPaths.length} 处改动待确认</span>
-              </button>
-              <button
-                onClick={() => session.acceptEdits()}
-                className="px-2.5 py-1 rounded-md bg-green-600 text-white text-xs hover:bg-green-700 transition-colors"
-              >
-                全部接受
-              </button>
-              <button
-                onClick={() => session.rejectEdits()}
-                className="px-2.5 py-1 rounded-md border border-border text-xs text-muted-foreground hover:bg-muted/50 transition-colors"
-              >
-                全部拒绝
-              </button>
-            </div>
-            {session.pendingExpanded && (
-              <div className="border-t border-amber-300/40 px-3 py-1.5 space-y-1">
-                {(() => {
-                  // 最小不重复路径：同名文件才补上区分路径，否则只显示文件名（复用 disambiguatePaths）
-                  const names = disambiguatePaths(session.pendingPaths);
-                  return session.pendingPaths.map((p, idx) => (
-                    <PendingFileRow key={p} path={p} displayName={names[idx]} diff={session.pendingDiffs[p]} onAccept={session.acceptEdits} onReject={session.rejectEdits} />
-                  ));
-                })()}
-              </div>
-            )}
-          </div>
-        )}
+        {/* 改动总览 + 闪电回滚（统一面板） */}
+        <AppliedChangesBar
+            chatHistory={session.chatHistory}
+            pendingPaths={session.pendingPaths}
+            pendingDiffs={session.pendingDiffs}
+            onAcceptAll={session.acceptEdits}
+            onRejectAll={session.rejectEdits}
+            onUndo={session.undoEdits}
+            onListSnapshots={session.listSnapshots}
+            onRestoreSnapshot={session.restoreSnapshot}
+          />
         <div className="relative">
           {/* 斜杠命令菜单（贴输入框上方，置于 overflow-hidden 容器之外避免被裁剪） */}
           {slash.open && (
