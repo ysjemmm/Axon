@@ -32,6 +32,8 @@ export interface ExecResult {
   exitCode: number | null;
   /** 命令执行后终端的实际工作目录（用于同步 agentSession.terminalCwd） */
   cwd?: string;
+  /** 终端层主动取消原因（如 PowerShell 续行/等待输入导致自动 Ctrl+C） */
+  cancelReason?: "terminal_stuck_waiting_input" | "aborted";
 }
 
 /** Agent 可用的命令执行能力 */

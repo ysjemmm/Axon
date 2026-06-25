@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 子 Agent 执行器 - 在隔离上下文中执行一个被委托的任务
  *
  * 设计要点（对齐 Superpowers + Kiro 的 subagent 模式）：
@@ -411,7 +411,7 @@ export class SubAgentRunner {
         status = "error";
       } else {
         try {
-          result = await executeToolCall(toolName, toolArgs, this.deps.cwd, this.deps.host, meta, this.deps.workspaces, this.deps.skillLoader, this.deps.web);
+          result = await executeToolCall(toolName, toolArgs, this.deps.cwd, this.deps.host, meta, this.deps.workspaces, this.deps.skillLoader, this.deps.web, undefined, this.deps.signal);
           // 同文件重复读检测
           if (toolName === "read_file" && typeof toolArgs.path === "string") {
             result += guard.noteFileRead(toolArgs.path);

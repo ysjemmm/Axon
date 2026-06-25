@@ -63,34 +63,44 @@ export class SnapshotManager {
    * 在写文件操作执行前创建快照。
    * 同一轮（相同 id）的多次修改只在第一次时创建快照。
    */
-  async beforeEdit(id: string, files: string[]): Promise<void> {
+  async beforeEdit(id: string, files: string[]): Promise<boolean> {
     // lazy init：首次调用时才初始化策略（跑 git 检测等），
     // 避免 AgentSession 构造函数触发命令执行弹出终端面板
     if (!this.initialized) {
       this.initialized = true;
       await this.init();
     }
-    if (!this.strategy) return;
-    // 同一轮已快照过 → 跳过
-    if (this._snapshotdTurns.has(id)) return;
+    if (!this.strategy) return false;
+    // 同一轮已快照过 → 跳过（不算新创建）
+    if (this._snapshotdTurns.has(id)) return false;
     this._snapshotdTurns.add(id);
 
     const ok = await this.strategy.create(id, files);
     if (!ok) {
       this._snapshotdTurns.delete(id);
       console.warn(`[snapshot] create failed for turn ${id}`);
+      return false;
     }
+    return true;
   }
   private _snapshotdTurns = new Set<string>();
 
   /** 回滚到指定快照 */
   async restore(id: string): Promise<boolean> {
+    if (!this.initialized) {
+      this.initialized = true;
+      await this.init();
+    }
     if (!this.strategy) return false;
     return this.strategy.restore(id);
   }
 
   /** 列出所有快照 */
   async list(): Promise<Snapshot[]> {
+    if (!this.initialized) {
+      this.initialized = true;
+      await this.init();
+    }
     if (!this.strategy) return [];
     return this.strategy.list();
   }

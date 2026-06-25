@@ -104,7 +104,7 @@ export function getToolDefinitions() {
       type: "function" as const,
       function: {
         name: "execute_command",
-        description: "在 Axon 终端中执行 shell 命令。每条命令执行前系统会自动 cd 到指定的 cwd 目录，确保执行环境正确。严禁在命令中使用 cd、Set-Location、pushd 等切换目录的指令——它们会污染终端状态。如需在子目录执行，用 cwd 参数指定。",
+        description: "在 Axon 终端中执行 shell 命令。每条命令执行前系统会自动 cd 到指定的 cwd 目录，确保执行环境正确。严禁在命令中使用 cd、Set-Location、pushd 等切换目录的指令——它们会污染终端状态。如需在子目录执行，用 cwd 参数指定。\n\n【命令书写安全】优先写简单、短小、可直接执行的一行命令。避免在 command 中拼接复杂引号/括号/多行脚本/正则嵌套/JSON 字符串；这类命令很容易让 PowerShell 进入 `>>` 续行/等待输入状态。遇到复杂逻辑请改为创建临时 .ps1/.js/.cjs 脚本文件再执行，或拆成多条简单命令。若工具提示命令疑似进入续行/等待输入状态，禁止原样重试，必须换成临时脚本或简化命令。",
         parameters: {
           type: "object",
           properties: {

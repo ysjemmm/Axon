@@ -27,6 +27,7 @@ import {
   mergeMultiRootResults,
 } from "./search.js";
 import type { ToolMeta, SkillLoaderFn, PowerLoaderFn } from "./definitions.js";
+import { ToolError, getToolDefinitions } from "./definitions.js";
 import type { AgentHost, DiagnosticFileResult } from "../host/index.js";
 import type { FileEdit } from "../host/index.js";
 import type { EditHunk } from "../host/index.js";
@@ -149,6 +150,7 @@ export async function executeToolCall(
   skillLoader?: SkillLoaderFn,
   web?: WebCapability,
   powerLoader?: PowerLoaderFn,
+  signal?: AbortSignal,
 ): Promise<string> {
   switch (name) {
     case "read_file": {
@@ -380,51 +382,52 @@ export async function executeToolCall(
       } else {
         execCwd = cwd;
       }
-      // 等待输入超时：进程卡在等待 stdin（最常见场景：引号不匹配导致 shell 等待闭合）时，
-      // 10 秒后自动报错，避免 AI 永久阻塞。进程本身会继续留在终端中，用户可手动处理。
-      let rejectWaiting: ((err: Error) => void) | null = null;
-      let waitingTimer: ReturnType<typeof setTimeout> | undefined;
-      const waitingInputTimeout = new Promise<never>((_, reject) => { rejectWaiting = reject; });
-      const wrappedOnWaitingInput = () => {
-        meta?.onWaitingInput?.();
-        if (!waitingTimer) {
-          waitingTimer = setTimeout(() => {
-            rejectWaiting?.(new Error(
-              `命令等待用户输入超时（10 秒）：${args.command}\n` +
-              `进程可能因语法错误（如引号不匹配）而卡住等待 stdin。` +
-              `命令仍在 "Axon" 终端中运行——如需手动补全请切换到终端面板操作。不要重试此命令。`
-            ));
-          }, 10_000);
-        }
-      };
       // 超时放宽到 120 秒——终端里跑较长命令是正常的；超时不代表失败，命令可能仍在运行。
-      const result = await Promise.race([
-        host.commands.exec(args.command as string, {
-          cwd: execCwd,
-          timeoutMs: 120_000,
-          onWaitingInput: wrappedOnWaitingInput,
-        }),
-        waitingInputTimeout,
-      ]).finally(() => {
-        if (waitingTimer) clearTimeout(waitingTimer);
+      const result = await host.commands.exec(args.command as string, {
+        cwd: execCwd,
+        timeoutMs: 120_000,
+        signal,
+        onWaitingInput: meta?.onWaitingInput,
       }) as Awaited<ReturnType<typeof host.commands.exec>>;
       // 同步终端实际工作目录（shell integration 返回的真实 cwd）
       if (meta && result.cwd) meta.terminalCwd = result.cwd;
+      // 终端层主动取消：通常是 PowerShell 续行/等待输入（引号或括号未闭合）
+      if (result.cancelReason === "terminal_stuck_waiting_input") {
+        const shellName = process.platform === "win32" ? "PowerShell" : "shell";
+        throw new ToolError(
+          `命令疑似进入 ${shellName} 续行/等待输入状态，已自动发送 Ctrl+C 取消：${args.command}\n` +
+          `常见原因是引号/括号未闭合，或命令过长导致 shell 解析为多行输入。` +
+          `不要原样重试；请改用临时脚本文件（${process.platform === "win32" ? ".ps1/.js/.cjs" : ".sh/.js"}）或拆分命令后再执行。`,
+          "AI 已获悉错误，它正尝试其他方式继续"
+        );
+      }
+      if (result.cancelReason === "aborted") {
+        throw new ToolError(
+          `命令已被取消：${args.command}`,
+          "命令已被取消"
+        );
+      }
       // 超时：命令在终端里可能仍在运行（如开发服务器、需要持续交互）
       if (result.timedOut) {
-        throw new Error(
+        throw new ToolError(
           `命令在 120 秒内未结束：${args.command}。` +
-          `它已在 "Axon" 终端中执行，可能是长时间运行的进程（开发服务器/watch）或正在等待你输入。` +
-          `请提示用户切换到终端面板查看并完成操作。不要重试此命令。`
+          `可能是长时间运行的进程（开发服务器/watch）或正在等待用户输入。` +
+          `请提示用户切换到终端面板查看并完成操作。不要重试此命令。`,
+          "命令超时，AI 已获悉"
         );
       }
       // 非零退出码：组织"命令失败"错误文本
       if (result.exitCode !== 0 && result.exitCode !== null) {
         const output = (result.stdout || "") + (result.stderr || "");
-        throw new Error(
-          `命令失败：${args.command}\n错误输出：${output || `命令以退出码 ${result.exitCode} 退出`}\n` +
-          `当前环境是 Windows PowerShell。如果是语法错误或"找不到命令"，` +
-          `请改用 PowerShell 的正确写法重试（例如用 Get-ChildItem 而非 ls，用 Get-Content 而非 cat）。`
+        const platform = process.platform;
+        const shellHint = platform === "win32"
+          ? `当前环境是 Windows（PowerShell）。如果是语法错误或"找不到命令"，请改用 PowerShell 的正确写法（例如 Get-ChildItem 而非 ls，Get-Content 而非 cat）。`
+          : platform === "darwin"
+          ? `当前环境是 macOS（zsh/bash）。如果是语法错误或"找不到命令"，请检查命令是否适用于 Unix 环境。`
+          : `当前环境是 Linux。如果是语法错误或"找不到命令"，请检查命令拼写和适用性。`;
+        throw new ToolError(
+          `命令失败（退出码 ${result.exitCode}）：${args.command}\n${output || "(无输出)"}\n${shellHint}`,
+          `命令执行失败（退出码 ${result.exitCode}），AI 已获悉并将尝试其他方式`
         );
       }
       return (result.stdout + (result.stderr ? `\n[stderr]\n${result.stderr}` : "")) || "(无输出)";

@@ -31,7 +31,8 @@ import { spawn } from "node:child_process";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const SI_READY_TIMEOUT_MS = 5_000;
 const SI_STREAM_END_GRACE_MS = 3_000;
-const IDLE_THRESHOLD = 3; // 秒
+const SI_IDLE_MS = 1_000;   // SI 层空输出/静默超时
+const TC_IDLE_MS  = 1_500;  // Terminal Content 层静默超时（内容模式噪声多，稍长）
 const IDLE_POLL_MS = 500;
 const SHELL_WARMUP_MS = 300;
 const MARKER_PREFIX = "__AXON_END_";
@@ -48,6 +49,8 @@ export interface TerminalRunResult {
   layer: "si" | "content" | "process";
   closed?: boolean;
   cwd?: string;
+  /** 终端层主动取消原因（如 PowerShell 续行/等待输入导致自动 Ctrl+C） */
+  cancelReason?: "terminal_stuck_waiting_input" | "aborted";
 }
 
 /** @internal 向后兼容的旧类型名 */
@@ -120,8 +123,11 @@ function getShellPath(): string {
 function stripAnsi(text: string): string {
   // eslint-disable-next-line no-control-regex
   return text
+    // CSI 序列：ESC [ ... letter
     .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "")
-    .replace(/\x1b\][^\x07]*\x07/g, "")
+    // OSC 序列：ESC ] ... （以 BEL \x07 或 ST ESC \ 结尾）
+    .replace(/\x1b\][^\x1b]*(?:\x07|\x1b\\)/g, "")
+    // 单字符 escape：ESC = / ESC > 等
     .replace(/\x1b[=>]/g, "");
 }
 
@@ -138,9 +144,18 @@ function isWaitingForStdin(output: string): boolean {
   const lines = tail.split(/\r?\n/).filter((l) => l.trim());
   const last = (lines[lines.length - 1] || "").trim();
   if (!last) return false;
+  // PowerShell 多行续行提示符（引号不匹配、未闭合的括号等导致）
+  if (/^>>\s*$/.test(last)) return true;
+  // 交互式提问（以 ? 或 ：结尾）
   const promptEnd = /[?：:]\s*$/.test(last) && last.length < 200;
   const choiceSyntax = /[\[\(]\s*[Yy](?:\s*\/\s*[Nn])?\s*[\]\)]/.test(last);
   return promptEnd || choiceSyntax;
+}
+
+/** 检查输出是否包含 PowerShell 续行符 >>（引号/括号未闭合） */
+function isContinuationLine(output: string): boolean {
+  const tail = output.slice(-600);
+  return /^>>\s*$/m.test(tail);
 }
 
 function generateMarker(): { id: string; marker: string } {
@@ -197,7 +212,7 @@ async function runWithShellIntegration(
   })();
 
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const exitCode = await waitForCompletion({
+  const completion = await waitForCompletion({
     timeoutMs,
     signal: opts.signal,
     onEnd: (cb) => {
@@ -218,11 +233,20 @@ async function runWithShellIntegration(
     isWaitingForStdin: () => isWaitingForStdin(stdout),
     onWaitingInput: opts.onWaitingInput,
     showTerminal: () => t.show(true),
+    cancelTerminal: () => t.sendText("\u0003", false),
+    command: effectiveCommand,
   });
 
-  await readPromise;
+  // read() 在 PowerShell 续行 + Ctrl+C 等场景可能永不结束。
+  // waitForCompletion 已经通过 onEnd / idle / abort 判定本次 run 结束后，
+  // 这里只给读流一个很短的收尾窗口，避免工具卡片永久 executing。
+  await Promise.race([
+    readPromise,
+    new Promise((resolve) => setTimeout(resolve, 200)),
+  ]);
 
   const actualCwd = (() => { try { return t.shellIntegration?.cwd?.fsPath; } catch { return undefined; } })();
+  const exitCode = completion.code;
 
   return {
     stdout: normalizeOutput(stdout),
@@ -231,6 +255,7 @@ async function runWithShellIntegration(
     layer: "si",
     closed: !!t.exitStatus,
     cwd: actualCwd,
+    cancelReason: completion.cancelReason,
   };
 }
 
@@ -262,7 +287,7 @@ async function runWithTerminalContent(
   return new Promise<TerminalRunResult>((resolve) => {
     let settled = false;
 
-    const finish = (exitCode: number | null, output: string) => {
+    const finish = (exitCode: number | null, output: string, cancelReason?: TerminalRunResult["cancelReason"]) => {
       if (settled) return;
       settled = true;
       clearInterval(poller);
@@ -273,6 +298,7 @@ async function runWithTerminalContent(
         captured: true,
         layer: "content",
         closed: !!t.exitStatus,
+        cancelReason,
       });
     };
 
@@ -295,13 +321,14 @@ async function runWithTerminalContent(
       }
 
       // idle 检测
-      if (normalized.length === lastLen && normalized.length > 0) {
+      if (normalized.length === lastLen) {
         idleCount++;
-        if (idleCount >= (IDLE_THRESHOLD * 1000) / IDLE_POLL_MS) {
+        const tcMax = TC_IDLE_MS / IDLE_POLL_MS;
+        if (idleCount >= tcMax) {
           if (!prompted && isWaitingForStdin(normalized)) {
             prompted = true;
             opts.onWaitingInput?.();
-            vscode.window.showInformationMessage("Axon 终端正在等待你的输入。", "打开终端")
+            vscode.window.showInformationMessage("Axon 终端正在等待你的输入。", { modal: true }, "打开终端")
               .then((c) => c === "打开终端" && t.show(true));
           } else {
             finish(0, normalized);
@@ -314,7 +341,10 @@ async function runWithTerminalContent(
       }
     }, IDLE_POLL_MS);
 
-    const onAbort = () => finish(null, "");
+    const onAbort = () => {
+      t.sendText("\u0003", false);
+      finish(null, "", "aborted");
+    };
     opts.signal?.addEventListener("abort", onAbort);
   });
 }
@@ -412,21 +442,44 @@ interface WaitForCompletionConfig {
   onStreamDone?: (cb: () => void) => vscode.Disposable;
   streamDoneGraceMs?: number;
   getOutput: () => string;
+  /** 读取终端可见文本（含 shell 提示符，用于检测 >> 续行等 SI stdout 不包含的内容） */
+  getTerminalText?: () => string;
   isWaitingForStdin: () => boolean;
+  /** 原始命令字符串（用于检测引号/括号不完整等） */
+  command?: string;
   onWaitingInput?: () => void;
   showTerminal: () => void;
+  cancelTerminal?: () => void;
+}
+
+/** 检查命令字符串是否语法不完整（引号/括号未闭合），用于判断 >> 续行 */
+function isCommandIncomplete(command: string): boolean {
+  if (!command) return false;
+  // 不检查单引号——反引号转义太复杂，而且续行绝大多数是双引号问题
+  let dq = false;
+  for (let i = 0; i < command.length; i++) {
+    if (command[i] === '"') dq = !dq;
+  }
+  if (dq) return true;
+  // 括号配对（粗略）
+  let paren = 0, brace = 0;
+  for (const ch of command) {
+    if (ch === '(') paren++; else if (ch === ')') paren--;
+    else if (ch === '{') brace++; else if (ch === '}') brace--;
+  }
+  return paren > 0 || brace > 0;
 }
 
 /**
  * 多路等待命令完成：end 事件 / close 事件 / stream 结束 / idle poll / 超时 / abort。
  * 统一管理 disposable 清理，防止资源泄漏。
  */
-function waitForCompletion(cfg: WaitForCompletionConfig): Promise<number | null> {
-  return new Promise<number | null>((resolve) => {
+function waitForCompletion(cfg: WaitForCompletionConfig): Promise<{ code: number | null; cancelReason?: TerminalRunResult["cancelReason"] }> {
+  return new Promise<{ code: number | null; cancelReason?: TerminalRunResult["cancelReason"] }>((resolve) => {
     let settled = false;
     const disposables: vscode.Disposable[] = [];
 
-    const finish = (code: number | null) => {
+    const finish = (code: number | null, cancelReason?: TerminalRunResult["cancelReason"]) => {
       if (settled) return;
       settled = true;
       disposables.forEach((d) => d.dispose());
@@ -434,7 +487,7 @@ function waitForCompletion(cfg: WaitForCompletionConfig): Promise<number | null>
       clearTimeout(streamEndTimer);
       clearInterval(idlePoller);
       cfg.signal?.removeEventListener("abort", onAbort);
-      resolve(code);
+      resolve({ code, cancelReason });
     };
 
     // ① 正常完成事件
@@ -447,22 +500,42 @@ function waitForCompletion(cfg: WaitForCompletionConfig): Promise<number | null>
     const timeoutTimer = setTimeout(() => finish(null), cfg.timeoutMs);
 
     // ④ idle poller：输出静默 → 交互输入检测 / 补偿丢失的 end 事件
+    // 不依赖终端可见文本（readTerminalText 不可靠），改为检查命令是否语法不完整。
+    // ④ idle poller：输出静默 → 交互输入检测 / 补偿丢失的 end 事件
+    // A) 命令不完整（引号/括号未闭合）且无输出 → 续行卡死，5s 后自动 cancel
+    // B) waiting stdin（Read-Host 等正常交互）→ 弹窗提示，不自动取消
     let lastLen = 0;
     let idleCount = 0;
     let prompted = false;
+    let stuckAt = 0;
     const idlePoller = setInterval(() => {
       const output = cfg.getOutput();
       const curLen = output.length;
-      if (curLen === lastLen && curLen > 0) {
+      if (curLen === lastLen) {
         idleCount++;
-        if (idleCount >= IDLE_THRESHOLD) {
-          if (!prompted && cfg.isWaitingForStdin()) {
+        if (idleCount >= (SI_IDLE_MS / IDLE_POLL_MS)) {
+          const incomplete = isCommandIncomplete(cfg.command ?? "");
+          const waiting = cfg.isWaitingForStdin();
+          // A：命令不完整 + 无输出 + idle → 续行卡死
+          if (incomplete && curLen === 0) {
+            if (!stuckAt) stuckAt = Date.now();
+            if (Date.now() - stuckAt > 5000) {
+              console.debug("[terminal] idle: incomplete command stuck too long → cancelling");
+              cfg.cancelTerminal?.();
+              finish(0, "terminal_stuck_waiting_input");
+              return;
+            }
+          }
+          // B：waiting stdin → 正常交互，弹窗提示
+          else if (waiting && !prompted) {
             prompted = true;
             console.debug("[terminal] idle: interactive prompt detected");
             cfg.onWaitingInput?.();
-            vscode.window.showInformationMessage("Axon 终端正在等待你的输入。", "打开终端")
+            vscode.window.showInformationMessage("Axon 终端正在等待你的输入。", { modal: true }, "打开终端")
               .then((c) => c === "打开终端" && cfg.showTerminal());
-          } else {
+          }
+          // 静默结束：有输出、不等待、命令完整 → 补偿 end 事件
+          else if (curLen > 0 && !waiting && !incomplete) {
             console.debug("[terminal] idle: treating as complete (lost end event)");
             finish(0);
           }
@@ -470,11 +543,10 @@ function waitForCompletion(cfg: WaitForCompletionConfig): Promise<number | null>
       } else {
         idleCount = 0;
         prompted = false;
+        stuckAt = 0;
         lastLen = curLen;
       }
-    }, IDLE_POLL_MS);
-
-    // ⑤ stream 结束兜底
+    }, IDLE_POLL_MS); // ⑤ stream 结束兜底
     let streamEndTimer: ReturnType<typeof setTimeout> | undefined;
     if (cfg.onStreamDone) {
       disposables.push(
@@ -488,7 +560,10 @@ function waitForCompletion(cfg: WaitForCompletionConfig): Promise<number | null>
     }
 
     // ⑥ abort
-    const onAbort = () => finish(null);
+    const onAbort = () => {
+      cfg.cancelTerminal?.();
+      finish(null);
+    };
     cfg.signal?.addEventListener("abort", onAbort);
   });
 }

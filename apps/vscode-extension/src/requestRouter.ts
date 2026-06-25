@@ -9,8 +9,12 @@
 
 import * as vscode from "vscode";
 import { homedir } from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { RelayStore, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry } from "@axon/core";
 import { createVSCodeAgentHost } from "@axon/host-vscode";
+
+const execFileAsync = promisify(execFile);
 
 export interface RouterDeps {
   storage: SessionStorage;
@@ -24,6 +28,20 @@ function parsePath(rawPath: string): { path: string; query: URLSearchParams } {
   const qIndex = rawPath.indexOf("?");
   if (qIndex === -1) return { path: rawPath, query: new URLSearchParams() };
   return { path: rawPath.slice(0, qIndex), query: new URLSearchParams(rawPath.slice(qIndex + 1)) };
+}
+
+/** 清理指定工作区中 axios 创建的 git 快照 ref */
+async function cleanupSnapshotRefs(workspace: string): Promise<void> {
+  try {
+    const [out] = await execFileAsync("git", ["for-each-ref", "--format=%(refname:short)", "refs/axon/snapshots/"], { cwd: workspace, timeout: 5000, maxBuffer: 256 * 1024 });
+    const refs = out.trim().split("\n").filter(Boolean);
+    if (refs.length === 0) return;
+    // 批量删除：git update-ref -d ref1 ref2 ...
+    await execFileAsync("git", ["update-ref", "-d", ...refs], { cwd: workspace, timeout: 5000, maxBuffer: 256 * 1024 });
+    console.log(`[snapshot] cleanup: deleted ${refs.length} refs from ${workspace}`);
+  } catch {
+    // 清理失败不影响删除流程
+  }
 }
 
 export class RequestRouter {
@@ -63,6 +81,15 @@ export class RequestRouter {
         return s;
       }
       if (method === "DELETE") {
+        // 删除前读取 session 获取工作区路径，清理 git 快照 ref 和 relay 数据
+        const s = await d.storage.getSession(id);
+        if (s) {
+          const wsList = s.workspaces?.length ? s.workspaces : (s.workspace ? [s.workspace] : []);
+          for (const ws of wsList) {
+            await cleanupSnapshotRefs(ws);
+            RelayStore.open(ws).remove(id).catch(() => {});
+          }
+        }
         await d.storage.deleteSession(id);
         return { ok: true };
       }

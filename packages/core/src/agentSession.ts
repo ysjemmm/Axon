@@ -36,6 +36,10 @@ import type { EditSnapshot } from "./host/scopedHost.js";
 import { runTwoStageReview, buildReviewFeedback, type ReviewContext } from "./relay/reviewAgent.js";
 import type { SubAgentEmit } from "./skills/subAgentRunner.js";
 
+/** 工具软失败阈值：软失败隐藏卡片 / 编辑工具连续失败持久化控制共用此阈值。
+ *  第 1~SOFT_FAIL_THRESHOLD 次失败静默处理，第 N+1 次才展示/落盘。 */
+const SOFT_FAIL_THRESHOLD = 3;
+
 
 export class AgentSession {
   private model: string;
@@ -202,6 +206,15 @@ export class AgentSession {
   /** 触发一次消息持久化回调（内部在关键节点调用）。回调内部自行容错，不阻塞主流程。 */
   private persistMessages(): void {
     try {
+      // 过滤编辑工具软失败不持久化的 transient 消息
+      const hasTransient = this.messages.some((m: any) => m._transient);
+      if (hasTransient) {
+        const original = this.messages;
+        this.messages = original.filter((m: any) => !m._transient);
+        this.onMessagesChanged?.();
+        this.messages = original;
+        return;
+      }
       this.onMessagesChanged?.();
     } catch (err) {
       console.warn("[session] 增量持久化回调出错（忽略）:", (err as Error).message);
@@ -484,6 +497,7 @@ export class AgentSession {
       this.send("status", { content: "整理上下文..." });
       this.messages = await compactMessages(this.messages, client, this.model);
       this.isCompacting = false;
+      this.lastPromptTokens = 0; // 重置缓存，让 updateAndSendTokenUsage 从压缩后的 messages 重新估算
       this.send("compacting_end", { success: true, message: "上下文已手动压缩" });
       this.persistMessages();
       this.updateAndSendTokenUsage();
@@ -516,6 +530,7 @@ export class AgentSession {
         // 安全区替换：用压缩后的消息替换当前 messages
         this.messages = newMessages;
         this.rollingSummaryAccumulated = 0; // 重置计数
+        this.lastPromptTokens = 0; // 重置缓存，让 updateAndSendTokenUsage 从压缩后的 messages 重新估算
         this.persistMessages();
         this.updateAndSendTokenUsage();
         console.debug("[rolling] 滚动摘要完成，上下文体积已缩减");
@@ -2059,7 +2074,9 @@ export class AgentSession {
         this.send("status", { content: "整理上下文..." });
         this.messages = await compactMessages(this.messages, client, this.model);
         this.isCompacting = false;
+        this.lastPromptTokens = 0; // 重置缓存，让 updateAndSendTokenUsage 从压缩后的 messages 重新估算
         this.send("compacting_end", { success: true, message: "切换模型后上下文已自动压缩" });
+        this.updateAndSendTokenUsage();
       } catch (err) {
         this.isCompacting = false;
         this.send("compacting_end", { success: false, message: `压缩失败：${(err as Error).message}` });
@@ -2075,7 +2092,9 @@ export class AgentSession {
           this.send("status", { content: "整理上下文..." });
           this.messages = await compactMessages(this.messages, client, this.model);
           this.isCompacting = false;
+          this.lastPromptTokens = 0; // 重置缓存，让 updateAndSendTokenUsage 从压缩后的 messages 重新估算
           this.send("compacting_end", { success: true, message: "上下文已压缩" });
+          this.updateAndSendTokenUsage();
         } catch (err) {
           this.isCompacting = false;
           this.send("compacting_end", { success: false, message: `压缩失败：${(err as Error).message}` });
@@ -2525,7 +2544,7 @@ export class AgentSession {
               : toolArgs;
             if (outcome.editedCommand) toolArgs = execArgs; // 仅用于 tool_result 事件展示实际执行的命令
             try {
-              result = await executeToolCall(toolName, execArgs, this.cwd, this.host, meta, this.workspaces, this.loadSkillForTool, this.web, this.loadPowerForTool);
+              result = await executeToolCall(toolName, execArgs, this.cwd, this.host, meta, this.workspaces, this.loadSkillForTool, this.web, this.loadPowerForTool, this.abortController?.signal);
               // 同步终端工作目录（后续命令不传 cwd 时默认在此执行）
               this.trackTerminalCwd(toolName, execArgs, meta);
             } catch (err) {
@@ -2549,11 +2568,16 @@ export class AgentSession {
             const filesToSnapshot = await extractTargetFiles(toolName, toolArgs, this.cwd, this.host, this.workspaces);
             if (filesToSnapshot.length > 0) {
               const turnId = `turn-${this.turnCount}`;
-              await this.snapshotMgr.beforeEdit(turnId, filesToSnapshot).catch(() => {});
+              const created = await this.snapshotMgr.beforeEdit(turnId, filesToSnapshot).catch(() => false);
+              // 快照创建成功 → 主动推送新列表给前端（无需用户手动刷新）
+              if (created) {
+                const snapshots = await this.snapshotMgr.list().catch(() => []);
+                this.send("snapshots_listed", { snapshots });
+              }
             }
           }
           try {
-            result = await executeToolCall(toolName, toolArgs, this.cwd, this.host, meta, this.workspaces, this.loadSkillForTool, this.web, this.loadPowerForTool);
+            result = await executeToolCall(toolName, toolArgs, this.cwd, this.host, meta, this.workspaces, this.loadSkillForTool, this.web, this.loadPowerForTool, this.abortController?.signal);
             this.trackTerminalCwd(toolName, toolArgs, meta);
             // 反复零碎读同一文件检测：超过阈值时追加提示，引导模型用已读内容而非继续切片重读
             if (toolName === "read_file" && typeof toolArgs.path === "string") {
@@ -2585,7 +2609,7 @@ export class AgentSession {
           const key = `softfail:${toolName}:${path}`;
           const prev = ((this as any).__softFailCounts ??= new Map<string, number>());
           prev.set(key, (prev.get(key) || 0) + 1);
-          if (prev.get(key)! < 3) {
+          if (prev.get(key)! < SOFT_FAIL_THRESHOLD) {
             meta.hidden = true;
             if (meta.userMessage) delete meta.userMessage;
           }
@@ -2597,6 +2621,25 @@ export class AgentSession {
             : toolName;
           const key = `softfail:${toolName}:${path}`;
           ((this as any).__softFailCounts ??= new Map<string, number>()).delete(key);
+        }
+
+        // ── 编辑工具连续失败持久化控制 ──
+        // str_replace / create_file / apply_patch 的"硬失败"（非 soft fail）连续失败时，
+        // 前 SOFT_FAIL_THRESHOLD 次不落盘，第 N+1 次起才持久化到磁盘。
+        const EDIT_PERSIST_TOOLS = new Set(["str_replace", "create_file", "apply_patch"]);
+        const isEditError = status === "error" && EDIT_PERSIST_TOOLS.has(toolName) && !softFail;
+        if (isEditError) {
+          (this as any).__consecutiveEditFailures = ((this as any).__consecutiveEditFailures ?? 0) + 1;
+        } else if (status === "success" && EDIT_PERSIST_TOOLS.has(toolName)) {
+          (this as any).__consecutiveEditFailures = 0;
+        } else if (status === "success" && !EDIT_PERSIST_TOOLS.has(toolName)) {
+          (this as any).__consecutiveEditFailures = 0;
+        }
+        // 标记：push 进 messages 后，给编辑工具在阈值内的失败消息打 transient
+        const c = (this as any).__consecutiveEditFailures as number | undefined;
+        if (isEditError && c !== undefined && c <= SOFT_FAIL_THRESHOLD) {
+          // 延迟标记——当前消息还没 push，在 push 后立即打标
+          (this as any).__markNextAsTransient = true;
         }
 
         // 手动模式下文件改动是否进入了暂存（待确认）
@@ -2639,6 +2682,11 @@ export class AgentSession {
           ? contentForAI.slice(0, maxToolContent) + `\n\n[内容已截断，原始长度 ${result.length} 字符。如需更多内容，请用更大的行范围一次性读取，不要分多次零碎读取]`
           : contentForAI;
         this.messages.push({ role: "tool", tool_call_id: toolCall.id, _toolName: toolName, content: storedResult, displayContent: commandWasEdited ? result : undefined, displayCommand: commandWasEdited || undefined, status, fileDiff: meta.fileDiff, fileDiffs: meta.fileDiffs, readRange: meta.readRange, diagnostics: meta.diagnostics, searchResults: (meta as any).searchResults, fetchResult: (meta as any).fetchResult, powerActivated: (meta as any).powerActivated, pending: isPending, userMessage: meta.userMessage, ...this.mcpMetaFor(toolName) } as any);
+        // 标记编辑工具连续软失败（在阈值内）为 transient，不落盘
+        if ((this as any).__markNextAsTransient) {
+          (this as any).__markNextAsTransient = false;
+          (this.messages[this.messages.length - 1] as any)._transient = true;
+        }
         // screenshot_page：收集截图 URL,等所有 tool 结果都 push 完后再统一追加 user 图片消息
         // （不能在 tool 结果中间插 user——会违反 "tool_calls must be immediately followed by tool messages" 规则导致 400）
         if (meta.screenshotDataUrl) {

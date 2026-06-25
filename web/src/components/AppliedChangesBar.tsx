@@ -41,6 +41,12 @@ interface ChangeFile {
 
 type TabKey = "changes" | "rollback";
 
+/** 从 "turn-10" 提取数字，用于排序 */
+function turnNum(id: string): number {
+  const m = id.match(/(\d+)/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
 export function AppliedChangesBar({
   chatHistory,
   pendingPaths,
@@ -69,12 +75,22 @@ export function AppliedChangesBar({
     const listener = (e: MessageEvent) => {
       const msg = e.data;
       if (msg?.type === "snapshots_listed") {
-        setSnapshots(msg.snapshots || []);
+        const snaps = (msg.snapshots || []) as Snapshot[];
+        // 前端兜底排序：按 createdAt 倒序，时间相同按 turn 序号倒序
+        snaps.sort((a, b) => {
+          if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
+          return turnNum(b.id) - turnNum(a.id);
+        });
+        setSnapshots(snaps);
         setSnapLoaded(true);
       }
       if (msg?.type === "snapshot_restored") {
         setRestoring(null);
         if (msg.ok && onListSnapshots) onListSnapshots();
+      }
+      // session 加载完成后重新拉快照（reload 时序竞态兜底）
+      if (msg?.type === "session_loaded" && onListSnapshots) {
+        onListSnapshots();
       }
     };
     window.addEventListener("message", listener);
@@ -99,24 +115,35 @@ export function AppliedChangesBar({
     const assistantMsgs = chatHistory.filter((m) => m.role === "assistant" && m.segments);
     const pendingSet = new Set(pendingPaths);
     const applied: ChangeFile[] = [];
-    const seen = new Set<string>();
+    const map = new Map<string, ChangeFile>();
 
     for (const msg of assistantMsgs) {
       for (const seg of msg.segments!) {
         if (seg.type !== "tool" || seg.status !== "success") continue;
         const collect = (path: string, editId?: string, reverted?: boolean, undoable?: boolean, oldContent?: string, newContent?: string) => {
-          if (pendingSet.has(path) || seen.has(path)) return;
-          seen.add(path);
-          applied.push({ path, editId, status: "applied", reverted, undoable, oldContent, newContent });
+          if (pendingSet.has(path)) return;
+          const existing = map.get(path);
+          if (existing) {
+            // 同一文件多次编辑：取最早 oldContent + 最新 newContent，撤销状态取最新
+            if (oldContent !== undefined) existing.oldContent = existing.oldContent ?? oldContent;
+            if (newContent !== undefined) existing.newContent = newContent;
+            existing.reverted = reverted ?? existing.reverted;
+            existing.undoable = undoable ?? existing.undoable;
+            if (editId) existing.editId = editId;
+          } else {
+            map.set(path, { path, editId, status: "applied", reverted, undoable, oldContent, newContent });
+          }
         };
         if (seg.diff?.path) collect(seg.diff.path, seg.diff.editId, seg.reverted, seg.undoable, seg.diff.oldContent, seg.diff.newContent);
         if (seg.diffs) for (const d of seg.diffs) collect(d.path, d.editId, seg.reverted, seg.undoable, d.oldContent, d.newContent);
       }
     }
+    // 保持出现顺序
+    const appliedArr = Array.from(map.values());
     const pending: ChangeFile[] = pendingPaths.map((p) => ({
       path: p, status: "pending" as const, oldContent: pendingDiffs[p]?.oldContent, newContent: pendingDiffs[p]?.newContent,
     }));
-    return { pendingFiles: pending, appliedFiles: applied };
+    return { pendingFiles: pending, appliedFiles: appliedArr };
   }, [chatHistory, pendingPaths, pendingDiffs]);
 
   // 搜索过滤（独立 useMemo，确保 search 变化时过滤立即生效，不受流式高频更新影响）
@@ -246,18 +273,20 @@ export function AppliedChangesBar({
                         <div key={snap.id} className="flex items-center gap-2 text-[11px] py-0.5 group">
                           <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${idx === 0 ? "bg-primary" : "bg-muted-foreground/30"}`} />
                           <span className="flex-1 text-muted-foreground truncate">{snap.label}</span>
-                          <span className="flex items-center gap-0.5 text-muted-foreground/50">
-                            <Clock className="w-2.5 h-2.5" />
+                          <span className="flex items-center gap-0.5 text-muted-foreground/50 shrink-0 w-14 justify-end tabular-nums">
+                            <Clock className="w-2.5 h-2.5 shrink-0" />
                             {new Date(snap.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
                           </span>
-                          {idx !== 0 ? (
-                            <button onClick={() => handleRestore(snap.id)} disabled={restoring !== null} className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 text-amber-500 hover:text-amber-600 hover:bg-amber-500/10 rounded px-1.5 py-px transition-all disabled:opacity-50">
-                              {restoring === snap.id ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <RotateCcw className="w-2.5 h-2.5" />}
-                              回滚
-                            </button>
-                          ) : (
-                            <span className="text-[9px] text-primary/60">当前</span>
-                          )}
+                          <span className="shrink-0 w-10 flex justify-end">
+                            {idx !== 0 ? (
+                              <button onClick={() => handleRestore(snap.id)} disabled={restoring !== null} className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 text-amber-500 hover:text-amber-600 hover:bg-amber-500/10 rounded px-1.5 py-px transition-all disabled:opacity-50">
+                                {restoring === snap.id ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <RotateCcw className="w-2.5 h-2.5" />}
+                                回滚
+                              </button>
+                            ) : (
+                              <span className="text-[9px] text-primary/60">当前</span>
+                            )}
+                          </span>
                         </div>
                       ))}
                     </div>

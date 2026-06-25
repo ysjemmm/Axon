@@ -360,15 +360,15 @@ export function useChatSession(opts: UseChatSessionOptions) {
     turnStartTime.current = Date.now();
   }, [send]);
 
-  /** 提交一条用户消息：AI 回复中则排队，否则立即发送。返回是否已排队。 */
+  /** 提交一条用户消息：AI 回复中或压缩中则排队，否则立即发送。返回是否已排队。 */
   const submit = useCallback((payload: SubmitPayload): boolean => {
-    if (isLoading) {
+    if (isLoading || isCompacting) {
       setMessageQueue((prev) => [...prev, { id: `q-${Date.now()}`, payload }]);
       return true;
     }
     sendNow(payload);
     return false;
-  }, [isLoading, sendNow]);
+  }, [isLoading, isCompacting, sendNow]);
 
   /** 手动压缩上下文 */
   const compactSession = useCallback(() => {

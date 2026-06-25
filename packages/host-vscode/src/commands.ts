@@ -57,6 +57,7 @@ export class VSCodeCommandRunner implements HostCommandRunner {
         timedOut,
         exitCode: timedOut ? null : result.exitCode,
         cwd: result.cwd,
+        cancelReason: result.cancelReason,
       } satisfies ExecResult;
     });
 

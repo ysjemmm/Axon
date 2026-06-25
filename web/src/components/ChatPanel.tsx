@@ -323,6 +323,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   };
 
   const handleSend = () => {
+    if (session.isCompacting) return;
     const { text, tags, segments } = editorRef.current?.read() ?? { text: "", tags: [], segments: [] };
     if (!text && images.length === 0 && tags.length === 0) return;
     pushHistory(text);
@@ -1210,7 +1211,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                 <Button
                   size="sm"
                   onClick={handleSend}
-                  disabled={!connected || (composerEmpty && images.length === 0) || !!session.compactionMigrated}
+                  disabled={!connected || (composerEmpty && images.length === 0) || !!session.compactionMigrated || session.isCompacting}
                   className="h-7 w-7 rounded-full shrink-0"
                 >
                   <Send className="w-3.5 h-3.5" />

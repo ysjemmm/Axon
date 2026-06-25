@@ -17,6 +17,8 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 import { AgentSession } from "../agentSession.js";
 import { ZHIPU_PROVIDER } from "../providers.js";
 import { RelayStore } from "../relay/relayStore.js";
+import { SnapshotManager } from "../snapshot/snapshotManager.js";
+import type { Snapshot } from "../snapshot/types.js";
 import type { ControlCommand, UserMessageCommand } from "../channel/index.js";
 import type { AgentChannel, AgentEvent } from "../channel/index.js";
 import type { AgentHost } from "../host/index.js";
@@ -384,8 +386,18 @@ export class SessionHub {
       case "list_snapshots": {
         const sid = this.resolveSessionId(cmd);
         const s = sid ? this.getActiveSession(sid) : null;
-        const snapshots = await s?.listSnapshots();
+        let snapshots: Snapshot[] | undefined;
+        if (s) {
+          snapshots = await s.listSnapshots();
+          console.log(`[hub] list_snapshots via session: sid=${sid} count=${snapshots?.length}`);
+        } else {
+          // session 未就绪（reload 时序竞态）：直接用 workspace 级 SnapshotManager 列 git ref
+          const tmpMgr = new SnapshotManager(this.deps.createHost(), this.deps.defaultWorkspace);
+          snapshots = await tmpMgr.list().catch(() => []);
+          console.log(`[hub] list_snapshots via fallback: defaultWs=${this.deps.defaultWorkspace} count=${snapshots?.length}`);
+        }
         if (clientId) this.sendToClient(clientId, { type: "snapshots_listed", snapshots: snapshots || [] });
+        else console.warn(`[hub] list_snapshots: no clientId!`);
         return;
       }
       case "restore_snapshot": {
@@ -648,17 +660,23 @@ export class SessionHub {
   }
 
   /** 设置编辑模式 */
-  private handleSetEditMode(
+  private async handleSetEditMode(
     cmd: Extract<ControlCommand, { type: "set_edit_mode" }>,
     clientId: string | undefined,
-  ): void {
+  ): Promise<void> {
     const mode = cmd.mode === "auto" ? "auto" : "manual";
     // 按 clientId 记住期望模式：即便此刻会话还没建好（reload 时序竞态），
     // 会话创建时也会从 clientEditModes 回填，确保 UI 的"自动确认"与后端真实落盘行为一致。
     if (clientId) this.clientEditModes.set(clientId, mode);
     const sid = this.resolveSessionId(cmd);
     const s = this.getActiveSession(sid);
-    s?.setEditMode(mode);
+    if (s) {
+      // 从 manual 切到 auto：自动接受所有 pending 编辑，避免遗留暂存区与磁盘不一致
+      if (mode === "auto" && s.hasPendingEdits()) {
+        await s.acceptEdits();
+      }
+      s.setEditMode(mode);
+    }
     this.emitResult(sid, clientId, { type: "edit_mode_set", mode } as AgentEvent);
   }
 

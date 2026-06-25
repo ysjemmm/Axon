@@ -7,75 +7,86 @@
  * - 回滚用 git checkout <ref> -- . （只恢复文件，不切分支）
  * - 用户即使在终端手动操作也不会意外删除
  *
- * 原理：git stash create 会创建悬空 commit（dangling commit），但它不会出现在
- * git stash list 中。但 stash 有被用户误删风险。使用自定义 ref 命名空间更安全——
- * git update-ref refs/axon/snapshots/{id} <tree-ish> 创建的 ref 对用户完全透明。
+ * 所有 git 命令通过 child_process 直接执行（绕过终端），
+ * 避免终端 ANSI 污染 / Shell Integration 不可靠 / 弹窗干扰用户。
  */
 
 import type { Snapshot, Snapshotter } from "./types.js";
 import type { AgentHost } from "../host/index.js";
+import { execFile } from "child_process";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
 
 const REF_PREFIX = "refs/axon/snapshots/";
 
+/** 从 "turn-10" 中提取数字 10，无法解析返回 0 */
+function turnNum(id: string): number {
+  const m = id.match(/(\d+)/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+/**
+ * 直接用 child_process 执行 git 命令（绕过终端捕获）。
+ * 快照是内部操作，不应弹出终端窗口干扰用户，也不依赖 Shell Integration 的输出捕获。
+ * 返回 [stdout, exitCode]。
+ */
+async function gitDirect(cwd: string, args: string[], timeoutMs = 8000): Promise<[string, number]> {
+  try {
+    const { stdout } = await execFileAsync("git", args, { cwd, timeout: timeoutMs, maxBuffer: 1024 * 1024 });
+    return [stdout.trim(), 0];
+  } catch (e: any) {
+    // git 命令失败时 stdout 可能在 e.stdout 里（例如 stash create 有改动时 stderr 有 warning）
+    const out = (e.stdout || "").trim();
+    if (e.code === "ENOENT") return ["", -1]; // git 不存在
+    return [out, e.code ?? 1];
+  }
+}
+
 export class GitSnapshotter implements Snapshotter {
   readonly name = "git";
-  private host: AgentHost;
   private cwd: string;
   private available = false;
 
-  constructor(host: AgentHost, cwd: string) {
-    this.host = host;
+  constructor(_host: AgentHost, cwd: string) {
     this.cwd = cwd;
   }
 
   async init(): Promise<boolean> {
     try {
-      const r = await this.host.commands.exec("git rev-parse --is-inside-work-tree", {
-        cwd: this.cwd,
-        timeoutMs: 3000,
-      });
-      this.available = r.exitCode === 0 && r.stdout.trim() === "true";
+      const [out, code] = await gitDirect(this.cwd, ["rev-parse", "--is-inside-work-tree"], 3000);
+      this.available = code === 0 && out === "true";
     } catch {
       this.available = false;
     }
+    console.log(`[snapshot] init: cwd=${this.cwd} available=${this.available}`);
     return this.available;
   }
 
   async create(id: string, _files: string[]): Promise<boolean> {
     if (!this.available) return false;
     try {
-      const refName = `${REF_PREFIX}${id}`;
-
-      // git stash create 会创建一个包含当前工作区完整状态的悬空 commit
+      // git stash create：创建包含当前工作区完整状态的悬空 commit
       // （包括未 staged 的修改和未 tracked 的文件），不修改 index、不弹 stash、不切分支。
-      // 然后存到 refs/axon/snapshots/{id} 命名空间。
-      // 这比 git add -A + write-tree 更可靠——后者只记录 index 状态，
-      // 如果 index 是干净的就会丢失未 staged 的改动。
-      const stashResult = await this.host.commands.exec(
-        "git stash create",
-        { cwd: this.cwd, timeoutMs: 8000 },
-      );
+      const [stashOut, stashCode] = await gitDirect(this.cwd, ["stash", "create"], 8000);
       let commitHash: string;
 
-      if (stashResult.exitCode === 0 && stashResult.stdout.trim()) {
-        // stash create 返回了 commit hash（有改动时）
-        commitHash = stashResult.stdout.trim();
+      if (stashCode === 0 && stashOut) {
+        commitHash = stashOut;
       } else {
-        // 没有改动（工作区干净）→ 用当前 HEAD 作为快照
-        const headResult = await this.host.commands.exec(
-          "git rev-parse HEAD",
-          { cwd: this.cwd, timeoutMs: 3000 },
-        );
-        if (headResult.exitCode !== 0) return false;
-        commitHash = headResult.stdout.trim();
+        // 工作区干净 → 用当前 HEAD
+        const [headOut, headCode] = await gitDirect(this.cwd, ["rev-parse", "HEAD"], 3000);
+        if (headCode !== 0) return false;
+        commitHash = headOut;
       }
 
-      // 存到自定义 ref 命名空间
-      const updateResult = await this.host.commands.exec(
-        `git update-ref ${refName} ${commitHash}`,
-        { cwd: this.cwd, timeoutMs: 3000 },
+      const [, updateCode] = await gitDirect(
+        this.cwd,
+        ["update-ref", `${REF_PREFIX}${id}`, commitHash],
+        3000,
       );
-      return updateResult.exitCode === 0;
+      console.log(`[snapshot] create ${id}: cwd=${this.cwd} hash=${commitHash} ok=${updateCode === 0}`);
+      return updateCode === 0;
     } catch {
       return false;
     }
@@ -85,20 +96,11 @@ export class GitSnapshotter implements Snapshotter {
     if (!this.available) return false;
     try {
       const refName = `${REF_PREFIX}${id}`;
-      // 验证 ref 存在
-      const verify = await this.host.commands.exec(
-        `git rev-parse --verify ${refName}`,
-        { cwd: this.cwd, timeoutMs: 3000 },
-      );
-      if (verify.exitCode !== 0) return false;
-
-      // 从快照 commit 恢复文件到工作区
-      // git checkout <commit> -- . 将 index 和工作区都恢复到该 commit 的文件状态
-      const checkout = await this.host.commands.exec(
-        `git checkout ${refName} -- .`,
-        { cwd: this.cwd, timeoutMs: 10000 },
-      );
-      return checkout.exitCode === 0;
+      const [, verifyCode] = await gitDirect(this.cwd, ["rev-parse", "--verify", refName], 3000);
+      if (verifyCode !== 0) return false;
+      const [, checkoutCode] = await gitDirect(this.cwd, ["checkout", refName, "--", "."], 15000);
+      console.log(`[snapshot] restore ${id}: ok=${checkoutCode === 0}`);
+      return checkoutCode === 0;
     } catch {
       return false;
     }
@@ -107,19 +109,25 @@ export class GitSnapshotter implements Snapshotter {
   async list(): Promise<Snapshot[]> {
     if (!this.available) return [];
     try {
-      const r = await this.host.commands.exec(
-        `git for-each-ref --format="%(refname:short) %(creatordate:unix)" ${REF_PREFIX}`,
-        { cwd: this.cwd, timeoutMs: 3000 },
+      const [out, code] = await gitDirect(
+        this.cwd,
+        ["for-each-ref", "--format=%(refname:short) %(creatordate:unix)", REF_PREFIX],
+        3000,
       );
-      if (r.exitCode !== 0) return [];
+      if (code !== 0) return [];
       const snapshots: Snapshot[] = [];
-      for (const line of r.stdout.trim().split("\n").filter(Boolean)) {
+      for (const line of out.split("\n").filter(Boolean)) {
         const [refPath, timestamp] = line.trim().split(/\s+/);
         const id = refPath.replace("axon/snapshots/", "");
-        const createdAt = parseInt(timestamp, 10) || Date.now();
+        const createdAt = parseInt(timestamp, 10) || 0;
         snapshots.push({ id, createdAt, label: `Git 快照 ${id}`, files: [] });
       }
-      return snapshots.sort((a, b) => b.createdAt - a.createdAt);
+      snapshots.sort((a, b) => {
+        if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
+        return turnNum(b.id) - turnNum(a.id);
+      });
+      console.log(`[snapshot] list: cwd=${this.cwd} count=${snapshots.length}`);
+      return snapshots;
     } catch {
       return [];
     }
@@ -128,11 +136,8 @@ export class GitSnapshotter implements Snapshotter {
   async remove(id: string): Promise<boolean> {
     if (!this.available) return false;
     try {
-      const r = await this.host.commands.exec(
-        `git update-ref -d ${REF_PREFIX}${id}`,
-        { cwd: this.cwd, timeoutMs: 3000 },
-      );
-      return r.exitCode === 0;
+      const [, code] = await gitDirect(this.cwd, ["update-ref", "-d", `${REF_PREFIX}${id}`], 3000);
+      return code === 0;
     } catch {
       return false;
     }
