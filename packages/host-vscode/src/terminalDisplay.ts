@@ -534,11 +534,8 @@ function waitForCompletion(cfg: WaitForCompletionConfig): Promise<{ code: number
             vscode.window.showInformationMessage("Axon 终端正在等待你的输入。", { modal: true }, "打开终端")
               .then((c) => c === "打开终端" && cfg.showTerminal());
           }
-          // 静默结束：有输出、不等待、命令完整 → 补偿 end 事件
-          else if (curLen > 0 && !waiting && !incomplete) {
-            console.debug("[terminal] idle: treating as complete (lost end event)");
-            finish(0);
-          }
+          // 普通命令不能仅凭 idle 判定完成：git commit / build / test 等可能长时间静默。
+          // 必须等待 SI end event / stream done / terminal close / timeout / abort。
         }
       } else {
         idleCount = 0;
