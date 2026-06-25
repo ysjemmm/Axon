@@ -206,15 +206,6 @@ export class AgentSession {
   /** 触发一次消息持久化回调（内部在关键节点调用）。回调内部自行容错，不阻塞主流程。 */
   private persistMessages(): void {
     try {
-      // 过滤编辑工具软失败不持久化的 transient 消息
-      const hasTransient = this.messages.some((m: any) => m._transient);
-      if (hasTransient) {
-        const original = this.messages;
-        this.messages = original.filter((m: any) => !m._transient);
-        this.onMessagesChanged?.();
-        this.messages = original;
-        return;
-      }
       this.onMessagesChanged?.();
     } catch (err) {
       console.warn("[session] 增量持久化回调出错（忽略）:", (err as Error).message);
@@ -2626,6 +2617,7 @@ export class AgentSession {
         // ── 编辑工具连续失败持久化控制 ──
         // str_replace / create_file / apply_patch 的"硬失败"（非 soft fail）连续失败时，
         // 前 SOFT_FAIL_THRESHOLD 次不落盘，第 N+1 次起才持久化到磁盘。
+        // 过滤在 sessionHub 的 onMessagesChanged 回调中根据 _transient 标记实现。
         const EDIT_PERSIST_TOOLS = new Set(["str_replace", "create_file", "apply_patch"]);
         const isEditError = status === "error" && EDIT_PERSIST_TOOLS.has(toolName) && !softFail;
         if (isEditError) {
@@ -2635,10 +2627,8 @@ export class AgentSession {
         } else if (status === "success" && !EDIT_PERSIST_TOOLS.has(toolName)) {
           (this as any).__consecutiveEditFailures = 0;
         }
-        // 标记：push 进 messages 后，给编辑工具在阈值内的失败消息打 transient
         const c = (this as any).__consecutiveEditFailures as number | undefined;
         if (isEditError && c !== undefined && c <= SOFT_FAIL_THRESHOLD) {
-          // 延迟标记——当前消息还没 push，在 push 后立即打标
           (this as any).__markNextAsTransient = true;
         }
 

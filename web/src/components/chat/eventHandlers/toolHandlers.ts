@@ -142,6 +142,50 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
   ctx.setChatHistory((prev) => {
     const updated = [...prev];
     const last = updated[updated.length - 1];
+    // 修复：tool_result 先于 tool_call_start（150ms 队列）到达，且 assistant 消息尚未创建时，
+    // 不要丢弃结果。新建一个 assistant 消息并插入 tool 段。
+    if (!last || last.role !== "assistant" || !last.segments) {
+      const toolStatus: ToolStatus = msg.status === "error" ? "error" : (msg.status === "cancelled" ? "cancelled" : "success");
+      const eventId = (msg as any).id as string || "";
+      const noMatchName = msg.name || "";
+      const noMatchArgs = (msg as any).args as Record<string, unknown> || {};
+      const shortName = typeof noMatchArgs.path === "string" ? (noMatchArgs.path as string).split("/").pop()?.split("\\").pop() || "" : "";
+      const isExplore = noMatchName === "search" || noMatchName === "list_dir";
+      const lineSuffix = noMatchName === "read_file" ? formatLineSuffix(noMatchArgs.startLine, noMatchArgs.endLine) : "";
+      let desc = `${noMatchName} 完成`;
+      if (noMatchName === "read_file") desc = shortName ? `已读取 ${shortName}${lineSuffix ? ` ${lineSuffix}` : ""}` : "已读取文件";
+      else if (noMatchName === "create_file") desc = shortName ? `${noMatchArgs.overwrite === true ? "已覆盖" : "已创建"} ${shortName}` : "已创建文件";
+      else if (noMatchName === "str_replace") desc = shortName ? `已编辑 ${shortName}` : "已编辑文件";
+      else if (isExplore) desc = (noMatchArgs.intent as string) || fallbackIntent(noMatchName);
+      else if (noMatchName === "execute_command") desc = "命令已执行";
+      else if (isRelayTool(noMatchName)) desc = relayToolLabel(noMatchName);
+      const segment: ToolSegment = {
+        type: "tool",
+        id: eventId || `tool-${Date.now()}-${noMatchName}`,
+        boundId: !!eventId,
+        name: noMatchName,
+        status: toolStatus,
+        description: desc,
+        args: noMatchArgs,
+        command: (noMatchName === "execute_command" || noMatchName === "start_process") ? (noMatchArgs.command as string) : undefined,
+        query: isExplore ? ((noMatchArgs.intent as string) || fallbackIntent(noMatchName)) : undefined,
+        mcpServer: (msg as any).mcpServer,
+        mcpTool: (msg as any).mcpTool,
+        output: (noMatchName === "execute_command" || OUTPUT_TOOLS.has(noMatchName)) ? (toolStatus === "error" && (msg as any).userMessage ? (msg as any).userMessage : (msg.result || "")) : undefined,
+        diff: (msg as any).fileDiff,
+        diffs: (msg as any).fileDiffs,
+        diagnostics: (msg as any).diagnostics,
+        searchResults: (msg as any).searchResults,
+        fetchResult: (msg as any).fetchResult,
+        powerActivated: (msg as any).powerActivated,
+        pending: (msg as any).pending,
+        hidden: (msg as any).hidden,
+        resolvedPath: (msg as any).resolvedPath,
+      };
+      updated.push({ id: `assistant-${Date.now()}`, role: "assistant", segments: [segment], streaming: true, turnGen: ctx.turnGeneration.current });
+      return updated;
+    }
+
     if (last?.role === "assistant" && last.segments) {
       const curGen = ctx.turnGeneration.current;
       if (last.turnGen !== curGen) return prev;
@@ -226,7 +270,7 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
             command: seg.name === "execute_command"
               ? (((msg as any).args?.command as string) ?? seg.command)
               : seg.command,
-            output: hasOutput ? (msg.result || "") : undefined,
+            output: hasOutput ? (isError && (msg as any).userMessage ? (msg as any).userMessage : (msg.result || "")) : undefined,
             diff: (msg as any).fileDiff || seg.diff,
             diffs: (msg as any).fileDiffs || seg.diffs,
             diagnostics: (msg as any).diagnostics || seg.diagnostics,
@@ -264,7 +308,7 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
           query: isExplore ? ((noMatchArgs.intent as string) || fallbackIntent(noMatchName)) : undefined,
           mcpServer: (msg as any).mcpServer,
           mcpTool: (msg as any).mcpTool,
-          output: (noMatchName === "execute_command" || OUTPUT_TOOLS.has(noMatchName)) ? (msg.result || "") : undefined,
+          output: (noMatchName === "execute_command" || OUTPUT_TOOLS.has(noMatchName)) ? (toolStatus === "error" && (msg as any).userMessage ? (msg as any).userMessage : (msg.result || "")) : undefined,
           diff: (msg as any).fileDiff,
           diffs: (msg as any).fileDiffs,
           diagnostics: (msg as any).diagnostics,

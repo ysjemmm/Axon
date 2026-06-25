@@ -243,8 +243,11 @@ export class SessionHub {
     });
     s.setOnMessagesChanged(async () => {
       const total = s.getLastTotalTokens();
+      // 过滤编辑工具软失败 transient 消息：不落盘，但保留在内存中供前端实时渲染
+      const allMessages = s.getMessages();
+      const persistable = allMessages.filter((m: any) => !m._transient);
       await this.storage.updateSession(sid, {
-        messages: s.getMessages(),
+        messages: persistable,
         // 仅在有有效值时写入 totalTokens：避免尚未拿到真实 usage 时用 0 覆盖磁盘已有统计。
         ...(total > 0 ? { totalTokens: total } : {}),
         pendingEdits: s.serializePendingEdits(),
