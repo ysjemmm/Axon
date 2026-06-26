@@ -49,15 +49,20 @@ export class VSCodeCommandRunner implements HostCommandRunner {
         } satisfies ExecResult;
       }
 
-      // 超时：exitCode 为 null 表示命令在超时窗口内未结束（可能仍在终端运行）
-      const timedOut = result.exitCode === null;
+      // 细分结束原因：不能把 exitCode === null 一律当成超时
+      let reason: ExecResult["reason"] = "completed";
+      if (result.cancelReason === "terminal_stuck_waiting_input") reason = "terminal_stuck_waiting_input";
+      else if (result.cancelReason === "aborted") reason = "aborted";
+      else if (result.exitCode === null) reason = "unknown_exit";
+      const timedOut = false;
       return {
         stdout: result.stdout,
         stderr: "",
         timedOut,
-        exitCode: timedOut ? null : result.exitCode,
+        exitCode: result.exitCode,
         cwd: result.cwd,
         cancelReason: result.cancelReason,
+        reason,
       } satisfies ExecResult;
     });
 

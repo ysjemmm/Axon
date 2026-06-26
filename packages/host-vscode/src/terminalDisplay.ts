@@ -51,6 +51,8 @@ export interface TerminalRunResult {
   cwd?: string;
   /** 终端层主动取消原因（如 PowerShell 续行/等待输入导致自动 Ctrl+C） */
   cancelReason?: "terminal_stuck_waiting_input" | "aborted";
+  /** 终端执行结束原因 */
+  reason?: "completed" | "timeout" | "aborted" | "terminal_stuck_waiting_input" | "unknown_exit";
 }
 
 /** @internal 向后兼容的旧类型名 */

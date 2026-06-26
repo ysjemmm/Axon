@@ -22,7 +22,7 @@ export interface ExecOptions {
   onWaitingInput?: () => void;
 }
 
-/** 命令执行结果（标准化，不抛超时异常，由 timedOut 标记） */
+/** 命令执行结果（标准化，不抛超时异常，由 reason 区分结束类型） */
 export interface ExecResult {
   stdout: string;
   stderr: string;
@@ -34,6 +34,8 @@ export interface ExecResult {
   cwd?: string;
   /** 终端层主动取消原因（如 PowerShell 续行/等待输入导致自动 Ctrl+C） */
   cancelReason?: "terminal_stuck_waiting_input" | "aborted";
+  /** 非正常结束但未拿到可靠退出码的原因分类 */
+  reason?: "completed" | "timeout" | "aborted" | "terminal_stuck_waiting_input" | "unknown_exit";
 }
 
 /** Agent 可用的命令执行能力 */

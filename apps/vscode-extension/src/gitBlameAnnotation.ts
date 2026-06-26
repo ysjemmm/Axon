@@ -135,16 +135,25 @@ class BlameController implements vscode.Disposable {
    * @param create true=首次开启（失败时提示用户）；false=编辑后静默刷新。
    */
   private async renderBlame(editor: vscode.TextEditor, filePath: string, cwd: string, create: boolean): Promise<void> {
-    let stdout: string;
+    let blameByLine: Map<number, LineBlame>;
     try {
-      stdout = await gitBlame(filePath, cwd, editor.document.getText());
+      const stdout = await gitBlame(filePath, cwd, editor.document.getText());
+      blameByLine = parseLinePorcelain(stdout);
     } catch (err) {
-      if (create) {
-        warn(`Git 追溯注解失败：${(err as Error).message}`);
+      // git blame 失败（文件 untracked / 未提交 / 二进制等）：
+      // 用文件 mtime 作为修改时间，作者为空，全部标记为 uncommitted。
+      try {
+        const stat = await vscode.workspace.fs.stat(vscode.Uri.file(filePath));
+        const mtime = Math.floor(stat.mtime / 1000);
+        blameByLine = new Map();
+        for (let i = 0; i < editor.document.lineCount; i++) {
+          blameByLine.set(i + 1, { author: "", time: mtime, uncommitted: true });
+        }
+      } catch {
+        if (create) warn(`Git 追溯注解失败：${(err as Error).message}`);
+        return;
       }
-      return;
     }
-    const blameByLine = parseLinePorcelain(stdout);
     const key = editor.document.uri.toString();
     const entry = this.active.get(key);
     const type = entry?.type ?? createBlameDecorationType();
@@ -268,8 +277,8 @@ function buildDecorationOptions(
   const options: vscode.DecorationOptions[] = [];
   for (let i = 0; i < doc.lineCount; i++) {
     const blame = blameByLine.get(i + 1);
-    // 未提交（尚未 commit）的行没有归属，注解列留空——对齐 IDEA 行为
-    const contentText = blame && !blame.uncommitted ? formatAnnotation(blame, authorWidth) : "";
+    // 未提交行：若有有效时间（untracked 文件 fallback），仍展示日期；否则留空
+    const contentText = blame ? formatAnnotation(blame, authorWidth) : "";
     options.push({
       range: new vscode.Range(i, 0, i, 0),
       renderOptions: { before: { contentText } },
@@ -293,6 +302,10 @@ function computeAuthorWidth(blameByLine: Map<number, LineBlame>): number {
 /** 单行注解文本：`YYYY/MM/DD  作者`（作者右侧补空格对齐）。 */
 function formatAnnotation(blame: LineBlame, authorWidth: number): string {
   const date = blame.time > 0 ? formatDate(blame.time) : "          ";
+  // 未提交行（untracked / 未 commit 改动）：只展示日期，作者列留空
+  if (blame.uncommitted) {
+    return authorWidth > 0 ? `${date}  ${"".padEnd(authorWidth)}` : date;
+  }
   const author = truncatePad(blame.author, authorWidth);
   return `${date}  ${author}`;
 }

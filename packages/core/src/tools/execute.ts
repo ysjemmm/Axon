@@ -408,12 +408,19 @@ export async function executeToolCall(
         );
       }
       // 超时：命令在终端里可能仍在运行（如开发服务器、需要持续交互）
-      if (result.timedOut) {
+      if (result.timedOut || result.reason === "timeout") {
         throw new ToolError(
           `命令在 120 秒内未结束：${args.command}。` +
           `可能是长时间运行的进程（开发服务器/watch）或正在等待用户输入。` +
           `请提示用户切换到终端面板查看并完成操作。不要重试此命令。`,
           "命令超时，AI 已获悉"
+        );
+      }
+      if (result.reason === "unknown_exit") {
+        throw new ToolError(
+          `命令已结束或中断，但未拿到可靠退出码：${args.command}\n` +
+          `终端里可能已有结果，请查看终端面板确认。不要把这类情况误判成超时。`,
+          "命令已结束或中断，AI 已获悉"
         );
       }
       // 非零退出码：组织"命令失败"错误文本
