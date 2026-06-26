@@ -22,6 +22,9 @@ import type { AgentHost } from "../host/index.js";
 /** 会触发快照的工具名称 */
 export const SNAPSHOT_TOOLS = new Set(["str_replace", "create_file", "apply_patch"]);
 
+/** FIFO 保留上限：超过此值的快照会被自动删除（最旧的先删） */
+const MAX_SNAPSHOTS = 30;
+
 export class SnapshotManager {
   private strategy: Snapshotter | null = null;
   /** 已初始化（策略已选定） */
@@ -81,9 +84,30 @@ export class SnapshotManager {
       console.warn(`[snapshot] create failed for turn ${id}`);
       return false;
     }
+    // FIFO 裁剪：超过上限时删除最旧的快照
+    await this.prune();
     return true;
   }
   private _snapshotdTurns = new Set<string>();
+
+  /** FIFO 裁剪：保留最近 MAX_SNAPSHOTS 条，删除多余的旧快照 */
+  private async prune(): Promise<void> {
+    try {
+      const all = await this.strategy!.list();
+      if (all.length <= MAX_SNAPSHOTS) return;
+      // list 已按 createdAt 倒序（最新在前），尾部是最旧的
+      const toRemove = all.slice(MAX_SNAPSHOTS);
+      for (const snap of toRemove) {
+        await this.strategy!.remove(snap.id).catch(() => {});
+        this._snapshotdTurns.delete(snap.id);
+      }
+      if (toRemove.length > 0) {
+        console.debug(`[snapshot] FIFO prune: removed ${toRemove.length} old snapshots, kept ${MAX_SNAPSHOTS}`);
+      }
+    } catch {
+      // 裁剪失败不影响主流程
+    }
+  }
 
   /** 回滚到指定快照 */
   async restore(id: string): Promise<boolean> {
