@@ -285,7 +285,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     }
 
     let actualModel = session.model;
-    let actualProvider = findModel(session.model)?.provider;
+    let actualProvider = session.provider || findModel(session.model)?.provider;
     if (session.model === "auto") {
       const selected = autoSelectModel(contentForModel, sendImages.length > 0);
       actualModel = selected.id;

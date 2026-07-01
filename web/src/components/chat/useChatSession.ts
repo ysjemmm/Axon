@@ -362,7 +362,16 @@ export function useChatSession(opts: UseChatSessionOptions) {
         turnGen: gen,
       },
     ]);
-    send({ type: "user_message", ...payload.send, provider: providerState });
+    // 优先用 payload 里计算好的 provider（来自用户在模型选择器里的选择），
+    // 回退到 session 级的 providerState（来自 setModel）。
+    const finalProvider = payload.send.provider ?? providerState;
+    console.log("[axon-send] provider 跟踪", {
+      payloadProvider: payload.send.provider,
+      sessionProviderState: providerState,
+      finalProvider,
+      model: payload.send.model,
+    });
+    send({ type: "user_message", ...payload.send, provider: finalProvider });
     setIsLoading(true);
     setReasoning(""); // 新一轮开始：清空上一轮残留的思考过程
     setStatusText("思考中...");
@@ -533,11 +542,17 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const dismissCommandBlocked = useCallback(() => setCommandBlocked(null), []);
 
   /** 选择模型：持久化 + 更新 token 上下文窗口 */
-  const [providerState, setProviderState] = useState<string | undefined>(undefined);
+  const [providerState, setProviderState] = useState<string | undefined>(() => {
+    try { return localStorage.getItem("axon-last-provider") || undefined; } catch { return undefined; }
+  });
   const setModel = useCallback((newModel: string, providerName?: string) => {
     setModelState(newModel);
     setProviderState(providerName);
-    try { localStorage.setItem("axon-last-model", newModel); } catch { /* ignore */ }
+    try {
+      localStorage.setItem("axon-last-model", newModel);
+      if (providerName) localStorage.setItem("axon-last-provider", providerName);
+      else localStorage.removeItem("axon-last-provider");
+    } catch { /* ignore */ }
     const targetModel = providerName
       ? getModels().find((m) => m.id === newModel && m.provider === providerName)
       : findModel(newModel);
@@ -576,7 +591,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     messageQueue, toolConfirm,
     waitingInputIds,
     commandApprovals, commandBlocked,
-    editMode, workspace, workspaces, currentGroupId, hasRelay, model,
+    editMode, workspace, workspaces, currentGroupId, hasRelay, model, provider: providerState,
     // 撤销轻提示
     undoNotice, setUndoNotice,
     // Quest
