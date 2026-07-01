@@ -241,7 +241,8 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
           } else if (msg.name === "check_diagnostics") {
             finalDesc = (msg.result || "").includes("无错误") ? "无错误" : "error";
           } else if (isExplore) {
-            finalDesc = seg.query || fallbackIntent(seg.name);
+            const latestIntent = (msg as any).args?.intent as string || seg.args?.intent as string || seg.query;
+            finalDesc = latestIntent || fallbackIntent(seg.name);
           } else if (isRelayTool(msg.name || "")) {
             finalDesc = msg.result ? firstLine(msg.result) : relayToolLabel(msg.name || "");
           } else if (fileName) {

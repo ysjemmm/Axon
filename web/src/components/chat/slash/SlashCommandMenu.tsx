@@ -74,13 +74,13 @@ export function SlashCommandMenu({
       >
         <span className="shrink-0 text-muted-foreground">{icon}</span>
         <span
-          className={`font-medium ${active ? "shrink-0 whitespace-nowrap" : "min-w-0 flex-1 truncate"}`}
+          className="min-w-0 flex-1 truncate font-medium"
           title={title}
         >
           {title}
         </span>
         <span
-          className={`truncate text-[10px] text-muted-foreground/70 ${active ? "min-w-0 flex-1 text-right" : "shrink-0"}`}
+          className="ml-2 max-w-[45%] min-w-0 shrink truncate text-right text-[10px] text-muted-foreground/70"
           title={subtitle}
         >
           {subtitle}

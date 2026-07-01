@@ -276,14 +276,18 @@ export async function executeToolCall(
             }
           }
         }
-        // 返回匹配位置附近的实际内容（上下各 10 行的窗口）
-        const contextStart = Math.max(0, bestLine - 5);
-        const contextEnd = Math.min(fileLines.length, bestLine + oldLines.length + 10);
+        // 返回匹配位置附近的实际内容（上下各 15 行的窗口，pending 时返回更大范围）
+        const contextRadius = eff.fromPending ? 20 : 15;
+        const contextStart = Math.max(0, bestLine - contextRadius);
+        const contextEnd = Math.min(fileLines.length, bestLine + oldLines.length + contextRadius * 2);
         const nearby = fileLines.slice(contextStart, contextEnd).join("\n");
         const totalLines = fileLines.length;
         throw new Error(
           `str_replace 失败：在 ${args.path} 中未找到 oldStr（共 ${totalLines} 行）。` +
-          `最可能的位置在第 ${contextStart + 1}-${contextEnd} 行附近，实际内容如下：\n` +
+          (eff.fromPending
+            ? `\n⚠️ 此文件在本轮对话中已被修改过（pending edit）。你提供的 oldStr 可能基于修改前的旧内容。\n` +
+              `请基于以下【最新内容】重新构造 oldStr：\n`
+            : `\n最可能的位置在第 ${contextStart + 1}-${contextEnd} 行附近，实际内容如下：\n`) +
           `\`\`\`\n${nearby}\n\`\`\`\n` +
           `请基于以上实际内容重新确定准确的 oldStr 后重试。注意空格、缩进和换行必须完全匹配。`
         );
@@ -319,7 +323,11 @@ export async function executeToolCall(
       const note = await presentEdit(
         host, meta, args.path, filePath, newContent, content, rollbackOriginal, !eff.existsOnDisk, [strReplaceHunk],
       );
-      return `已替换 ${args.path} 中的文本${note ? "\n" + note : ""}`;
+      // 返回行号定位信息：帮助 AI 在同一轮后续修改同一文件时基于准确状态构造 oldStr
+      const newLineCount = normalizedNewContent.split("\n").length;
+      const replacedLineStart = normalizedContent.substring(0, firstIdx).split("\n").length;
+      const replacedLineEnd = replacedLineStart + normalizedOldStr.split("\n").length - 1;
+      return `已替换 ${args.path} 中的文本（第 ${replacedLineStart}-${replacedLineEnd} 行，文件共 ${newLineCount} 行）${note ? "\n" + note : ""}`;
     }
     case "apply_patch": {
       if (typeof args.patch !== "string" || !args.patch.trim()) {

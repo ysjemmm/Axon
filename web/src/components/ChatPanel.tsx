@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { ModelSelector, autoSelectModel, useModels, findModel } from "@/components/ModelSelector";
+import { ModelSelector, autoSelectModel, useModels, findModel, getModels } from "@/components/ModelSelector";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
 import { WorkspaceGroupManager, type WorkspaceGroup } from "@/components/WorkspaceGroupManager";
 import { AxonLogo } from "@/components/AxonLogo";
@@ -432,10 +432,12 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     }
   };
 
-  const handleModelChange = (newModel: string) => {
-    const targetModel = findModel(newModel);
+  const handleModelChange = (newModel: string, providerName?: string) => {
+    const targetModel = providerName
+      ? getModels().find((m) => m.id === newModel && m.provider === providerName)
+      : findModel(newModel);
     if (images.length > 0 && targetModel && !targetModel.vision) return; // 有图片时禁止切到不支持 vision 的模型
-    session.setModel(newModel);
+    session.setModel(newModel, providerName);
   };
 
   // ── 图片/文件处理 ──────────────────────────────────────────────────────────

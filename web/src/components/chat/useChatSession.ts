@@ -362,7 +362,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
         turnGen: gen,
       },
     ]);
-    send({ type: "user_message", ...payload.send });
+    send({ type: "user_message", ...payload.send, provider: providerState });
     setIsLoading(true);
     setReasoning(""); // 新一轮开始：清空上一轮残留的思考过程
     setStatusText("思考中...");
@@ -533,10 +533,14 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const dismissCommandBlocked = useCallback(() => setCommandBlocked(null), []);
 
   /** 选择模型：持久化 + 更新 token 上下文窗口 */
-  const setModel = useCallback((newModel: string) => {
+  const [providerState, setProviderState] = useState<string | undefined>(undefined);
+  const setModel = useCallback((newModel: string, providerName?: string) => {
     setModelState(newModel);
+    setProviderState(providerName);
     try { localStorage.setItem("axon-last-model", newModel); } catch { /* ignore */ }
-    const targetModel = findModel(newModel);
+    const targetModel = providerName
+      ? getModels().find((m) => m.id === newModel && m.provider === providerName)
+      : findModel(newModel);
     // Auto（contextWindow=0）或自定义未知窗口时不要把 max 写成 0，保留上一次的有效值；
     // 真实窗口会在收到后端 token_usage 事件后被校正为"实际选用模型"的窗口。
     if (targetModel) setTokenUsage((prev) => ({ ...prev, max: targetModel.contextWindow > 0 ? targetModel.contextWindow : prev.max }));

@@ -596,9 +596,9 @@ function AddCustomForm({ level, workspace, onChanged }: { level: ProviderLevel; 
   const [label, setLabel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
-  const [modelsText, setModelsText] = useState("");
+  const [models, setModels] = useState<ProviderModelInfo[]>([]);
 
-  const reset = () => { setName(""); setLabel(""); setBaseUrl(""); setApiKey(""); setModelsText(""); setShow(false); };
+  const reset = () => { setName(""); setLabel(""); setBaseUrl(""); setApiKey(""); setModels([]); setShow(false); };
 
   const submit = async () => {
     if (!name.trim() || !baseUrl.trim()) return;
@@ -607,7 +607,7 @@ function AddCustomForm({ level, workspace, onChanged }: { level: ProviderLevel; 
         label: label.trim() || name.trim(),
         baseUrl: baseUrl.trim(),
         apiKey: apiKey.trim(),
-        models: parseModels(modelsText),
+        models,
       }, workspace);
       reset();
       onChanged();
@@ -626,17 +626,50 @@ function AddCustomForm({ level, workspace, onChanged }: { level: ProviderLevel; 
       <Input placeholder="展示名（可选，如 我的 OpenAI）" value={label} onChange={(e) => setLabel(e.target.value)} className="h-8 text-sm" />
       <Input placeholder="Base URL，如 https://api.openai.com/v1" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} className="h-8 text-sm" />
       <Input type="password" placeholder="API Key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} className="h-8 text-sm" />
-      <textarea
-        placeholder={"模型，每行一个：模型id | 显示名 | 上下文窗口 | 多模态(y/n) | 厂商 | 协议\n例：gpt-4o | GPT-4o | 128000 | y | openai | chat\ngpt-4o-mini | GPT-4o Mini | 128000 | n | openai | chat"}
-        value={modelsText}
-        onChange={(e) => setModelsText(e.target.value)}
-        rows={4}
-        className="w-full text-xs font-mono bg-background border border-border rounded-md px-2 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-primary/40"
-      />
+      <div className="border-t border-border/60 pt-2">
+        <div className="text-[11px] font-medium text-muted-foreground mb-1">模型列表</div>
+        <ModelEditor models={models} onChange={setModels} />
+      </div>
       <div className="flex gap-2">
         <Button size="sm" onClick={submit} disabled={!name.trim() || !baseUrl.trim()}><Save className="w-3.5 h-3.5" />保存</Button>
         <Button size="sm" variant="ghost" onClick={reset}>取消</Button>
       </div>
+    </div>
+  );
+}
+
+/** 轻量模型列表编辑（用于新增 provider 时逐个添加模型） */
+function ModelEditor({ models, onChange }: { models: ProviderModelInfo[]; onChange: (mm: ProviderModelInfo[]) => void }) {
+  const [editing, setEditing] = useState<number | "new" | null>(null);
+
+  const del = (i: number) => onChange(models.filter((_, idx) => idx !== i));
+  const save = (m: ProviderModelInfo, idx: number | "new") =>
+    onChange(idx === "new" ? [...models, m] : models.map((prev, i) => (i === idx ? m : prev)));
+
+  return (
+    <div className="space-y-1">
+      {models.map((m, i) =>
+        editing === i ? (
+          <ModelForm key={i} initial={m} onSave={(mm) => { save(mm, i); setEditing(null); }} onCancel={() => setEditing(null)} />
+        ) : (
+          <div key={i} className="flex items-center gap-2 px-2 py-1 rounded group/m">
+            <span className="text-xs font-medium flex-1 truncate">{m.name || m.id}</span>
+            <span className="text-[10px] text-muted-foreground font-mono">{m.id} · {m.contextWindow >= 1000 ? `${(m.contextWindow / 1000).toFixed(0)}K` : m.contextWindow}</span>
+            {m.vision && <span className="text-[9px] px-1 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">多模态</span>}
+            <div className="flex items-center gap-0.5 opacity-0 group-hover/m:opacity-100 transition-opacity">
+              <button onClick={() => setEditing(i)} className="p-1 rounded text-muted-foreground hover:text-foreground"><Pencil className="w-3 h-3" /></button>
+              <button onClick={() => del(i)} className="p-1 rounded text-muted-foreground hover:text-red-500"><Trash2 className="w-3 h-3" /></button>
+            </div>
+          </div>
+        ),
+      )}
+      {editing === "new" ? (
+        <ModelForm onSave={(mm) => { save(mm, "new"); setEditing(null); }} onCancel={() => setEditing(null)} />
+      ) : (
+        <button onClick={() => setEditing("new")} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mt-1">
+          <Plus className="w-3.5 h-3.5" />添加模型
+        </button>
+      )}
     </div>
   );
 }

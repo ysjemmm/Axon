@@ -509,6 +509,11 @@ export function pruneOldToolResults(
     if (content.includes("[... 已裁剪")) continue;
     if (content.length <= PRUNE_KEEP_CHARS) continue;
 
+    // read_file / list_dir 的结果通常是后续改代码的依据，裁剪会丢失关键信息导致 AI 反复读文件。
+    // 这些工具结果不在裁剪范围内，直接跳过。
+    const toolName = extractToolName(messages, i);
+    if (toolName === "read_file" || toolName === "list_dir") continue;
+
     toPrune.push({ idx: i, originalLen: content.length });
   }
 

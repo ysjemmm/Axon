@@ -200,7 +200,7 @@ function openProviderPanel() {
 
 interface ModelSelectorProps {
   value: string;
-  onChange: (modelId: string) => void;
+  onChange: (modelId: string, providerName?: string) => void;
   disabledModels?: string[];
   /** 整个选择器禁用（如压缩期间） */
   disabled?: boolean;
@@ -271,7 +271,7 @@ export function ModelSelector({ value, onChange, disabledModels = [], disabled =
     }
   };
 
-  const pick = (id: string, providerName?: string) => { if (providerName) setLastProvider(providerName); onChange(id); setOpen(false); };
+  const pick = (id: string, providerName?: string) => { if (providerName) setLastProvider(providerName); onChange(id, providerName); setOpen(false); };
   const autoDisabled = disabledModels.includes(AUTO_MODEL.id);
 
   const trigger = (
