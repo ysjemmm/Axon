@@ -95,6 +95,7 @@ export class CommandGate {
       return r.pattern;
     });
     const merged = [...new Set([...currentRules, ...patterns])];
+    console.log(`[axon-trust:reload] setTrustedPatterns load=${patterns.length} current=${currentRules.length} merged=${merged.length}`);
     this.trie = CommandTrustTrie.fromStrings([...BUILTIN_TRUSTED_PATTERNS, ...merged]);
   }
 
@@ -117,10 +118,15 @@ export class CommandGate {
     const danger = detectDangerousCommand(command);
     // 危险命令不再硬拦：与普通命令一样走人工确认，
     // 但把 danger 作为标记透传给前端，让工具卡片闪烁红色警示。
-    if (this.trie.isTrusted(command) && !danger) return { allow: true };
+    const alreadyTrusted = this.trie.isTrusted(command);
+    if (alreadyTrusted && !danger) return { allow: true };
+
+    const tid = Date.now().toString(36).slice(-4);
+    console.log(`[axon-trust:${tid}] gate("${command}") isTrusted=${alreadyTrusted} danger=${danger ? String(danger) : 'none'} rules=${JSON.stringify(this.trie.list().map((r: TrustRule) => r.scope+':'+r.pattern))}`);
 
     const decision = await deps.requestApproval(command, buildTrustOptions(command), danger);
     if (decision.choice === "reject") {
+      console.log(`[axon-trust:${tid}] -> REJECTED`);
       return {
         allow: false,
         aiMessage: danger
@@ -133,7 +139,10 @@ export class CommandGate {
 
     // exact / prefix / all → 写入信任；all 仅本会话不持久化
     const rule = ruleForChoice(command, decision.choice);
+    console.log(`[axon-trust:${tid}] -> choice=${decision.choice} rule={${rule.scope}:${rule.pattern}} target=${decision.target}`);
     this.trie.add(rule);
+    const verify = this.trie.isTrusted(command);
+    console.log(`[axon-trust:${tid}] -> after-add isTrusted("${command}")=${verify} rules=${JSON.stringify(this.trie.list().map((r: TrustRule) => r.scope+':'+r.pattern))}`);
     if (decision.choice !== "all") deps.persist?.(rule, decision.target);
     return { allow: true, editedCommand: decision.editedCommand };
   }

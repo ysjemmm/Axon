@@ -38,7 +38,9 @@ export class VSCodeCommandTrustStore implements CommandTrustStore {
 
     const trie = CommandTrustTrie.fromStrings(current);
     trie.add(rule);
-    void cfg.update(CONFIG_KEY, trie.serialize(), configTarget).then(undefined, (err: unknown) => {
+    const serialized = trie.serialize();
+    console.log(`[axon-trust:save] target=${target} useGlobal=${useGlobal} current=${JSON.stringify(current)} serialized=${JSON.stringify(serialized)}`);
+    void cfg.update(CONFIG_KEY, serialized, configTarget).then(undefined, (err: unknown) => {
       console.warn("[trust] 写回 axon.trustedCommands 失败:", (err as Error).message);
     });
   }
