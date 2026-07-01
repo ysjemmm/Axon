@@ -8,21 +8,23 @@
 
 import { createContext, useContext } from "react";
 
-/** 三档信任建议（来自后端 buildTrustOptions） */
+/** 四档信任建议（来自后端 buildTrustOptions） */
 export interface CommandTrustOption {
-  choice: "exact" | "prefix" | "all";
+  choice: "exact" | "partial" | "prefix" | "all";
   pattern: string;
   label: string;
 }
 
 /** 用户对一次命令授权的决策（once=仅本次运行，reject=拒绝，其余=加入白名单） */
-export type CommandDecision = { choice: "exact" | "prefix" | "all" | "once" | "reject"; pattern?: string; target?: "user" | "workspace"; editedCommand?: string };
+export type CommandDecision = { choice: "exact" | "partial" | "prefix" | "all" | "once" | "reject"; pattern?: string; target?: "user" | "workspace"; editedCommand?: string };
 
 /** 一条待审批命令（按 toolCallId 索引） */
 export interface CommandApprovalEntry {
   requestId: string;
   command: string;
   options: CommandTrustOption[];
+  /** 危险命令标记（非空表示该命令命中了危险规则，前端应闪烁红色警示） */
+  danger?: string;
 }
 
 interface CommandApprovalCtxValue {
@@ -44,7 +46,7 @@ export const CommandApprovalContext = createContext<CommandApprovalCtxValue>({
  * 在工具卡片里读取本次工具调用的待审批项。
  * @returns 有待审批则返回 { options, approve }，否则 null。
  */
-export function useCommandApproval(toolCallId: string): { options: CommandTrustOption[]; approve: (d: CommandDecision) => void } | null {
+export function useCommandApproval(toolCallId: string): { options: CommandTrustOption[]; approve: (d: CommandDecision) => void; danger?: string } | null {
   const ctx = useContext(CommandApprovalContext);
   const entry = toolCallId ? ctx.approvals[toolCallId] : undefined;
   if (!entry) {
@@ -53,5 +55,6 @@ export function useCommandApproval(toolCallId: string): { options: CommandTrustO
   return {
     options: entry.options,
     approve: (decision) => ctx.onApprove(toolCallId, decision),
+    danger: entry.danger,
   };
 }

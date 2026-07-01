@@ -37,10 +37,6 @@ import { RelayStore } from "./relay/relayStore.js";
 import { SnapshotManager, SNAPSHOT_TOOLS } from "./snapshot/index.js";
 import type { EditSnapshot } from "./host/scopedHost.js";
 
-/** 工具软失败阈值：软失败隐藏卡片 / 编辑工具连续失败持久化控制共用此阈值。
- *  第 1~SOFT_FAIL_THRESHOLD 次失败静默处理，第 N+1 次才展示/落盘。 */
-const SOFT_FAIL_THRESHOLD = 3;
-
 
 export class AgentSession {
   /** @internal 提示构建/Token 计量等协作者按 @internal 约定只读访问以下会话状态 */
@@ -1110,44 +1106,13 @@ export class AgentSession {
     const softFail = status === "error" && isSoftToolFailure(toolName, result);
     guard.recordToolResult(status !== "error", softFail, { toolName, args: toolArgs });
 
-    // 软失败隐藏卡片：前 2 次 str_replace / apply_patch / read_file 失败不让用户看到，
-    // 后端把错误回给 AI 重试即可。第 3 次还是失败才展示卡片。
-    // 未知工具（AI hallucinated non-existent tool name）同样静默。
-    if (softFail) {
-      const path = typeof (toolArgs as { path?: unknown }).path === "string"
-        ? (toolArgs as { path: string }).path
-        : toolName;
-      const key = `softfail:${toolName}:${path}`;
-      const prev = ((this as any).__softFailCounts ??= new Map<string, number>());
-      prev.set(key, (prev.get(key) || 0) + 1);
-      if (prev.get(key)! < SOFT_FAIL_THRESHOLD) {
-        meta.hidden = true;
-        if (meta.userMessage) delete meta.userMessage;
-      }
-    }
-    // 成功时清除该文件/工具的软失败计数
-    if (status === "success" && softFail === false) {
-      const path = typeof (toolArgs as { path?: unknown }).path === "string"
-        ? (toolArgs as { path: string }).path
-        : toolName;
-      const key = `softfail:${toolName}:${path}`;
-      ((this as any).__softFailCounts ??= new Map<string, number>()).delete(key);
-    }
-
-    // ── 编辑工具连续失败持久化控制 ──
-    // str_replace / create_file / apply_patch 的"硬失败"（非 soft fail）连续失败时，
-    // 前 SOFT_FAIL_THRESHOLD 次不落盘，第 N+1 次起才持久化到磁盘。
-    // 过滤在 sessionHub 的 onMessagesChanged 回调中根据 _transient 标记实现。
-    const isEditError = status === "error" && EDIT_PERSIST_TOOLS.has(toolName) && !softFail;
+    // 编辑工具失败：不展示卡片也不落盘。
+    // str_replace / create_file / apply_patch 的错误信息只是给 AI 的纠错反馈，
+    // 用户不需要看到（前端由 hidden 控制不展示，sessionHub 由 _transient 控制不落盘）。
+    const isEditError = status === "error" && EDIT_PERSIST_TOOLS.has(toolName);
     if (isEditError) {
-      (this as any).__consecutiveEditFailures = ((this as any).__consecutiveEditFailures ?? 0) + 1;
-    } else if (status === "success" && EDIT_PERSIST_TOOLS.has(toolName)) {
-      (this as any).__consecutiveEditFailures = 0;
-    } else if (status === "success" && !EDIT_PERSIST_TOOLS.has(toolName)) {
-      (this as any).__consecutiveEditFailures = 0;
-    }
-    const c = (this as any).__consecutiveEditFailures as number | undefined;
-    if (isEditError && c !== undefined && c <= SOFT_FAIL_THRESHOLD) {
+      meta.hidden = true;
+      if (meta.userMessage) delete meta.userMessage;
       (this as any).__markNextAsTransient = true;
     }
 
@@ -1199,10 +1164,13 @@ export class AgentSession {
     if (meta.screenshotDataUrl) {
       ((this as any).__pendingScreenshots ??= []).push(meta.screenshotDataUrl);
     }
-    // 同步当前待确认列表给前端
+    // 同步当前待确认/可撤销列表给前端
     if (isPending) {
       this.sendEditsUpdated();
       this.onPendingChanged?.();
+    } else if (status === "success" && (toolName === ToolName.StrReplace || toolName === ToolName.CreateFile || toolName === ToolName.ApplyPatch)) {
+      // auto 模式下编辑已落盘并记入 undoable，但前端还不知道 → 补发一次，让工具卡片显示撤销图标
+      this.sendEditsUpdated();
     }
 
     return { mutated, diagnosed };
@@ -1401,7 +1369,6 @@ export class AgentSession {
     this.lastSubAgentTokens = 0; // 新一轮用户输入，重置本轮 subagent 用量统计
     this.lastTurnOutputTokens = 0; // 新一轮用户输入，重置本轮输出 token 累计
     this.turnStartCumulative = this.cumulativeTokens; // 取消时用差值复原本轮消耗
-    (this as any).__softFailCounts = new Map<string, number>(); // 每轮重置软失败计数
     // 记录本轮开始前的消息条数（此刻 messages 仅含 system + 之前会话，尚未 push 本轮用户消息）。
     // 用它在收尾时切出"本轮新增的消息"（用户消息 + 工具结果），据此估算"本次输入"。
     this.turnStartMsgCount = this.messages.length;

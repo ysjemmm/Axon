@@ -473,6 +473,21 @@ body.vscode-high-contrast {
   animation: tool-card-enter 0.18s ease-out;
 }
 
+/* 危险命令红色闪烁警示：边框 + 背景脉动，吸引用户注意潜在破坏性操作 */
+@keyframes danger-pulse {
+  0%, 100% {
+    border-color: rgba(239, 68, 68, 0.8);
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.3);
+  }
+  50% {
+    border-color: rgba(239, 68, 68, 0.4);
+    box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.08);
+  }
+}
+.animate-danger-pulse {
+  animation: danger-pulse 1.2s ease-in-out infinite;
+}
+
 /* HTML 预览 iframe 滚动条：默认隐藏，hover wrapper 时显示 */
 .axon-html-preview {
   overflow: hidden;

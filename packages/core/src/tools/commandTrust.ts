@@ -13,7 +13,7 @@
  *   只允许命中"精确整条"规则；防止前缀信任被命令拼接绕过。
  */
 
-export type TrustScope = "exact" | "prefix" | "all";
+export type TrustScope = "exact" | "partial" | "prefix" | "all";
 
 /** 一条信任规则（结构化，避免字符串编码歧义） */
 export interface TrustRule {
@@ -90,15 +90,7 @@ export class CommandTrustTrie {
       return;
     }
     if (rule.scope === "exact") {
-      const norm = normalizeCommand(rule.pattern);
-      if (hasShellMetacharacters(norm)) {
-        // 检查是否已被某个 prefix 覆盖（含元字符命令的第一段 token 匹配到 wildcard 节点）
-        if (!this.root.wildcard && !this.isPrefixCovered(norm)) {
-          this.exactWithMeta.add(norm);
-        }
-        return;
-      }
-      this.addExact(tokenize(norm));
+      this.addExact(tokenize(normalizeCommand(rule.pattern)));
       return;
     }
     // prefix
@@ -179,9 +171,6 @@ export class CommandTrustTrie {
 
   /** 判断单个命令（不含管道）是否被信任 */
   private isTrustedSingle(norm: string): boolean {
-    if (hasShellMetacharacters(norm)) {
-      return this.exactWithMeta.has(norm);       // 元字符命令只认精确整条
-    }
     let node = this.root;
     for (const t of tokenize(norm)) {
       const child = node.children.get(t);
@@ -240,17 +229,52 @@ export function parsePattern(raw: string): TrustRule {
 /** 由一条命令 + 选择的粒度，构造对应的信任规则（供弹窗"加入白名单"用） */
 export function ruleForChoice(command: string, scope: TrustScope): TrustRule {
   if (scope === "all") return { scope: "all", pattern: "*", source: "approved" };
-  if (scope === "prefix") return { scope: "prefix", pattern: derivePrefix(command), source: "approved" };
+  if (scope === "prefix") {
+    // prefix = 根命令：只取第一个 token（如 "node"），信任该命令的所有调用。
+    const tokens = tokenize(normalizeCommand(command));
+    return { scope: "prefix", pattern: tokens[0] ?? "", source: "approved" };
+  }
+  if (scope === "partial") {
+    // partial = 中间前缀：优先用 derivePrefix（两段工具取前两段），
+    // 否则取前两个 token（如 "1..50 |" 或 "docker build"）。
+    const p = derivePrefix(command);
+    const tokens = tokenize(normalizeCommand(command));
+    const root = tokens[0] ?? "";
+    let partial = p !== root ? p : (tokens.length >= 2 ? `${tokens[0]} ${tokens[1]}` : root);
+    // 管道命令：isTrusted 只匹配管道左侧第一段，所以 partial 也要同步——
+    // 去掉管道符及右侧，只保留左侧前两段作为前缀。
+    partial = partial.split("|")[0].trim();
+    if (!partial) partial = root.split("|")[0].trim();
+    return { scope: "prefix", pattern: partial, source: "approved" };
+  }
   return { scope: "exact", pattern: normalizeCommand(command), source: "approved" };
 }
 
-/** 弹窗三档建议 */
+/** 弹窗四档建议：exact → partial（两段）→ prefix（根命令）→ all */
 export function buildTrustOptions(command: string): { choice: TrustScope; pattern: string; label: string }[] {
   const norm = normalizeCommand(command);
-  const prefix = derivePrefix(command);
-  return [
-    { choice: "exact", pattern: norm, label: `仅允许这条命令：${norm}` },
-    { choice: "prefix", pattern: prefix, label: `允许 ${prefix} *` },
-    { choice: "all", pattern: "*", label: "允许所有命令（不推荐，仅本会话）" },
+  const tokens = tokenize(norm);
+  const prefix = derivePrefix(command);       // 两段工具取前两段，否则取首段
+  const root = tokens[0] ?? "";               // 根命令（仅第一个 token）
+  const opts: { choice: TrustScope; pattern: string; label: string }[] = [
+    { choice: "exact", pattern: norm, label: `仅此命令：${norm}` },
   ];
+  // partial：优先用 derivePrefix（两段工具如 node -e）；
+  // 如果 derivePrefix 只返回了 root（非两段工具），但命令有 3+ token，
+  // 取前两段作为中间档（如 "docker build"）。
+  // 管道命令只取管道左侧第一段做前缀（和 isTrusted 的管道处理一致）。
+  let partialPattern = "";
+  if (prefix && root && prefix !== root) {
+    partialPattern = prefix;
+  } else if (tokens.length >= 3 && root) {
+    partialPattern = `${tokens[0]} ${tokens[1]}`;
+  }
+  partialPattern = partialPattern.split("|")[0].trim();
+  // partial 去重：与 root 相同时不显示（如管道命令截断后 partial == prefix）
+  if (partialPattern && partialPattern !== root) {
+    opts.push({ choice: "partial", pattern: partialPattern, label: `信任 ${partialPattern} *` });
+  }
+  opts.push({ choice: "prefix", pattern: root, label: `信任 ${root} *（根命令）` });
+  opts.push({ choice: "all", pattern: "*", label: "信任所有命令（不推荐）" });
+  return opts;
 }

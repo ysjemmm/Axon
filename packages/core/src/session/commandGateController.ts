@@ -56,7 +56,7 @@ export class CommandGateController {
    */
   gate(command: string, toolCallId?: string): Promise<GateOutcome> {
     return this.commandGate.gate(command, {
-      requestApproval: (cmd, options) => this.requestCommandApproval(cmd, options, toolCallId),
+      requestApproval: (cmd, options, danger) => this.requestCommandApproval(cmd, options, toolCallId, danger),
       requestDangerousApproval: (cmd, reason) => this.requestDangerousCommandApproval(cmd, reason),
       emitBlocked: (cmd, reason) => this.s.send("command_blocked", { command: cmd, reason }),
       persist: (rule, target) => this.onApproved?.(rule, target),
@@ -68,10 +68,12 @@ export class CommandGateController {
     command: string,
     options: { choice: "exact" | "prefix" | "all"; pattern: string; label: string }[],
     toolCallId?: string,
+    danger?: string,
   ): Promise<ApprovalDecision> {
     const requestId = `cmd_${Date.now()}_${this.approvalSeq++}`;
     // 带上 toolCallId：前端据此把审批按钮内联到对应的命令卡片上（无感模式），而非弹独立模态框
-    this.s.send("confirm_command_request", { requestId, command, options, id: toolCallId });
+    // danger 非空时前端卡片闪烁红色警示
+    this.s.send("confirm_command_request", { requestId, command, options, id: toolCallId, danger });
     return new Promise<ApprovalDecision>((resolve) => {
       this.commandApprovalResolvers.set(requestId, resolve);
     });

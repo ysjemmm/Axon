@@ -251,7 +251,7 @@ function OutputBlock({ output }: { output: string }) {
  */
 function InlineCommandApproval({ options, onApprove }: { options: CommandTrustOption[]; onApprove: (d: CommandDecision) => void }) {
   const [showTrust, setShowTrust] = useState(false);
-  const [target, setTarget] = useState<"workspace" | "user">("workspace");
+  const [target, setTarget] = useState<"workspace" | "user">("user");
 
   if (showTrust) {
     return (
@@ -364,7 +364,7 @@ function CommandCardItem({ tool, approval }: { tool: ToolCallData; approval: Ret
   const isEditing = !!approval && editing;
 
   return (
-    <div className={`my-2 rounded-lg border bg-popover overflow-hidden tool-card-enter ${approval ? "border-amber-400/70" : (isWaitingInput && tool.status === "pending") ? "border-primary/50 animate-pulse" : "border-border"}`}>
+    <div className={`my-2 rounded-lg border bg-popover overflow-hidden tool-card-enter ${approval?.danger ? "border-red-500/80 animate-danger-pulse" : approval ? "border-amber-400/70" : (isWaitingInput && tool.status === "pending") ? "border-primary/50 animate-pulse" : "border-border"}`}>
       {/* 标题栏 */}
       <div className="flex items-center gap-2 py-1.5 px-2.5 text-xs border-b border-border/60 bg-foreground/[0.04]">
         {tool.status === "pending" && isWaitingInput && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-primary" />}
@@ -411,6 +411,12 @@ function CommandCardItem({ tool, approval }: { tool: ToolCallData; approval: Ret
       ) : (
         <div className="px-2.5 py-1.5">
           <code className="text-[11px] font-mono font-semibold text-foreground break-all bg-transparent p-0">{tool.command}</code>
+        </div>
+      )}
+      {/* 危险命令警告 */}
+      {approval?.danger && (
+        <div className="px-2.5 py-1 bg-red-500/10 border-y border-red-500/20">
+          <p className="text-[10px] text-red-500 font-medium">⚠ {approval.danger}。此命令具有破坏性，请谨慎确认。</p>
         </div>
       )}
       {/* 内联审批条 */}
@@ -559,7 +565,7 @@ function ProcessStartCard({ tool, approval }: { tool: ToolCallData; approval: Re
   const handleApprove = (d: CommandDecision) => approval!.approve(d);
   const startedId = tool.output?.match(/terminalId:\s*(\S+)/)?.[1] || tool.output?.match(/terminalId=(\S+)/)?.[1];
   return (
-    <div className={`my-2 rounded-lg border bg-popover overflow-hidden ${approval ? "border-amber-400/70" : "border-border"}`}>
+    <div className={`my-2 rounded-lg border bg-popover overflow-hidden ${approval?.danger ? "border-red-500/80 animate-danger-pulse" : approval ? "border-amber-400/70" : "border-border"}`}>
       <CardHeader status={tool.status} Icon={Server} label="启动后台进程" right={
         <div className="flex items-center gap-1">
           {tool.cwd && <span className="text-[10px] text-muted-foreground/70 font-mono truncate max-w-[160px]">{tool.cwd}</span>}
@@ -576,6 +582,12 @@ function ProcessStartCard({ tool, approval }: { tool: ToolCallData; approval: Re
       <div className="px-2.5 py-1.5 border-b border-border/40">
         <code className="text-[11px] font-mono font-semibold text-foreground break-all">{tool.command}</code>
       </div>
+      {/* 危险命令警告 */}
+      {approval?.danger && (
+        <div className="px-2.5 py-1 bg-red-500/10 border-y border-red-500/20">
+          <p className="text-[10px] text-red-500 font-medium">⚠ {approval.danger}。此命令具有破坏性，请谨慎确认。</p>
+        </div>
+      )}
       {/* ③ terminalId */}
       {startedId && (
         <div className="px-2.5 py-1 flex items-center gap-1.5 text-[10px] text-muted-foreground">

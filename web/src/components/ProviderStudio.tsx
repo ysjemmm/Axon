@@ -55,6 +55,16 @@ export function ProviderStudio({ workspace }: ProviderStudioProps) {
     setLoading(false);
   }, [workspace]);
 
+  // 增量刷新：只更新数据，不触发 loading 占位，避免组件树卸载导致展开状态丢失。
+  const refresh = useCallback(async () => {
+    try {
+      const { providers: list } = await getProviders(workspace || undefined);
+      setProviders(list);
+    } catch (e) {
+      console.warn("刷新 provider 失败", e);
+    }
+  }, [workspace]);
+
   useEffect(() => { load(); }, [load]);
 
   if (loading) {
@@ -93,7 +103,7 @@ export function ProviderStudio({ workspace }: ProviderStudioProps) {
         <div className="text-xs font-medium text-muted-foreground mb-2">内置 Provider</div>
         <div className="space-y-2">
           {builtins.map((p) => (
-            <BuiltinCard key={p.name} provider={p} level={level} workspace={wsArg} onChanged={load} />
+            <BuiltinCard key={p.name} provider={p} level={level} workspace={wsArg} onChanged={refresh} />
           ))}
         </div>
       </div>
@@ -108,10 +118,10 @@ export function ProviderStudio({ workspace }: ProviderStudioProps) {
             </div>
           )}
           {customs.map((p) => (
-            <CustomCard key={p.name} provider={p} level={level} workspace={wsArg} onChanged={load} />
+            <CustomCard key={p.name} provider={p} level={level} workspace={wsArg} onChanged={refresh} />
           ))}
         </div>
-        <AddCustomForm level={level} workspace={wsArg} onChanged={load} />
+        <AddCustomForm level={level} workspace={wsArg} onChanged={refresh} />
       </div>
     </div>
   );

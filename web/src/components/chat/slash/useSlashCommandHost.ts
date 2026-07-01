@@ -70,7 +70,7 @@ export function useSlashCommandHost(
 
   const addResourceContext = useCallback(
     (item: ResourceItem) => {
-      const cid = editorRef.current?.insertTag({ name: item.relativePath, content: "加载中…", size: 0, kind: item.kind });
+      const cid = editorRef.current?.insertTag({ name: item.path, content: "加载中…", size: 0, kind: item.kind });
       if (cid) getHost()?.postMessage({ type: "add_resource_context", clientId, contextId: cid, path: item.path, kind: item.kind });
     },
     [clientId, editorRef],

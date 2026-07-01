@@ -54,8 +54,8 @@ export interface ApprovalDecision {
 
 /** gate 执行所需的外部能力（由 agentSession 注入闭包） */
 export interface GateDeps {
-  /** 弹出审批请求并等待用户决策 */
-  requestApproval: (command: string, options: ReturnType<typeof buildTrustOptions>) => Promise<ApprovalDecision>;
+  /** 弹出审批请求并等待用户决策。danger 非空时前端会闪烁红色警示。 */
+  requestApproval: (command: string, options: ReturnType<typeof buildTrustOptions>, danger?: string) => Promise<ApprovalDecision>;
   /** 危险命令确认弹窗：返回 true=仍要执行（仅本次，不信任），false=拒绝 */
   requestDangerousApproval?: (command: string, reason: string) => Promise<boolean>;
   /** 灾难命令被拦时，给用户一个可见提示（与给 AI 的错误分开）。
@@ -102,30 +102,21 @@ export class CommandGate {
     return this.trie.isTrusted(command);
   }
 
-  /** 对一条命令执行三层门控，返回是否放行 */
+  /** 对一条命令执行门控，返回是否放行 */
   async gate(command: string, deps: GateDeps): Promise<GateOutcome> {
     const danger = detectDangerousCommand(command);
-    if (danger) {
-      // 优先走确认弹窗（用户可选"仍要执行"）；未提供时退化为硬拦
-      if (deps.requestDangerousApproval) {
-        const accepted = await deps.requestDangerousApproval(command, danger);
-        if (accepted) return { allow: true }; // 仅本次执行，不写入信任
-      }
-      deps.emitBlocked(command, danger);
-      return {
-        allow: false,
-        aiMessage: `命令被安全策略拒绝：${danger}。请改用更精确、可控的方式（指明具体文件而非通配/递归），或由用户在终端手动执行。`,
-        userMessage: `已拦截危险命令：${command}`,
-      };
-    }
-    if (this.trie.isTrusted(command)) return { allow: true };
+    // 危险命令不再硬拦：与普通命令一样走人工确认，
+    // 但把 danger 作为标记透传给前端，让工具卡片闪烁红色警示。
+    if (this.trie.isTrusted(command) && !danger) return { allow: true };
 
-    const decision = await deps.requestApproval(command, buildTrustOptions(command));
+    const decision = await deps.requestApproval(command, buildTrustOptions(command), danger);
     if (decision.choice === "reject") {
       return {
         allow: false,
-        aiMessage: "用户拒绝执行该命令。请不要重试此命令；如确有必要，向用户说明用途后再请求，或改用其他方式完成任务。",
-        userMessage: "用户拒绝执行命令",
+        aiMessage: danger
+          ? `用户拒绝执行危险命令（${danger}）。请改用更精确、可控的方式，或由用户在终端手动执行。`
+          : "用户拒绝执行该命令。请不要重试此命令；如确有必要，向用户说明用途后再请求，或改用其他方式完成任务。",
+        userMessage: danger ? `已拒绝危险命令：${command}` : "用户拒绝执行命令",
       };
     }
     if (decision.choice === "once") return { allow: true, editedCommand: decision.editedCommand }; // 仅本次执行，不写白名单

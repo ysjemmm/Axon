@@ -282,8 +282,21 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
     scope: "file" | "folder",
   ): Promise<Array<{ name: string; relativePath: string; path: string; kind: "file" | "folder" }>> {
     const path = require("path");
-    const exclude = "**/{node_modules,.git,dist,build,out,.next,.turbo,.venv,venv,__pycache__,coverage,.idea,.cache}/**";
-    const uris = await vscode.workspace.findFiles("**/*", exclude, 4000);
+    // 排除所有非源码目录：依赖、版本控制、构建产物、缓存等
+    const exclude = "**/{node_modules,.git,dist,build,out,target,bin,obj,.next,.turbo,.venv,venv,__pycache__,coverage,.idea,.cache,.axon,.DS_Store,*.egg-info,*.class,*.pyc}/**";
+    // 严格限定搜索范围：只在已加入工作区的文件夹内搜索，不搜工作区之外的路径。
+    const wsFolders = vscode.workspace.workspaceFolders ?? [];
+    let uris: vscode.Uri[] = [];
+    if (wsFolders.length > 0) {
+      for (const folder of wsFolders) {
+        const hits = await vscode.workspace.findFiles(
+          new vscode.RelativePattern(folder, "**/*"),
+          exclude,
+          4000,
+        );
+        uris = uris.concat(hits);
+      }
+    }
     const q = query.trim().toLowerCase();
 
     // 排序+截断：优先文件名命中（完全相等 > 前缀 > 包含），其次路径包含；空查询取前 N 条。
@@ -317,7 +330,7 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
     }
 
     // folder：从文件相对路径派生出所有祖先目录，去重
-    const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "";
+    const wsRoots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
     const folderMap = new Map<string, { name: string; relativePath: string; path: string; kind: "folder" }>();
     for (const u of uris) {
       const relFile = vscode.workspace.asRelativePath(u, false);
@@ -326,7 +339,9 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
       for (let i = 0; i < segs.length - 1; i++) {
         acc = acc ? `${acc}/${segs[i]}` : segs[i];
         if (!folderMap.has(acc)) {
-          folderMap.set(acc, { name: segs[i], relativePath: acc, path: path.join(wsRoot, acc), kind: "folder" });
+          // 多根工作区下，找到该文件实际所属的工作区根来拼接绝对路径
+          const root = wsRoots.find((r) => u.fsPath.startsWith(r + path.sep)) || wsRoots[0] || "";
+          folderMap.set(acc, { name: segs[i], relativePath: acc, path: path.join(root, acc), kind: "folder" });
         }
       }
     }

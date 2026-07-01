@@ -74,13 +74,13 @@ export function SlashCommandMenu({
       >
         <span className="shrink-0 text-muted-foreground">{icon}</span>
         <span
-          className="min-w-0 flex-1 truncate font-medium"
+          className="w-1/3 shrink-0 min-w-0 truncate font-medium"
           title={title}
         >
           {title}
         </span>
         <span
-          className="ml-2 max-w-[45%] min-w-0 shrink truncate text-right text-[10px] text-muted-foreground/70"
+          className="ml-2 w-2/3 min-w-0 shrink truncate text-left text-[10px] text-muted-foreground/70"
           title={subtitle}
         >
           {subtitle}
@@ -95,7 +95,7 @@ export function SlashCommandMenu({
       index,
       item.kind === "folder" ? <Folder className="h-3.5 w-3.5" /> : <FileText className="h-3.5 w-3.5" />,
       item.name,
-      item.relativePath,
+      item.path,
     );
 
   return (

@@ -49,11 +49,11 @@ export interface SubmitPayload {
   };
 }
 
-/** 命令信任授权请求：未信任命令时后端弹出，含三档"加入白名单"选项 */
+/** 命令信任授权请求：未信任命令时后端弹出，含四档"加入白名单"选项 */
 export interface CommandApproval {
   requestId: string;
   command: string;
-  options: { choice: "exact" | "prefix" | "all"; pattern: string; label: string }[];
+  options: { choice: "exact" | "partial" | "prefix" | "all"; pattern: string; label: string }[];
 }
 
 interface UseChatSessionOptions {

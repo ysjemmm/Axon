@@ -70,16 +70,16 @@ function AssistantTurnImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit }: 
                   <TooltipContent side="top" align="start" className="text-xs leading-relaxed">
                     <div className="flex flex-col">
                     <div className="grid grid-cols-[auto_auto] gap-x-3 gap-y-0.5 whitespace-nowrap">
-                      <span className="text-background/60">记忆</span>
+                      <span className="text-white/70">记忆</span>
                       <span className="text-right">{(message.turnStats.creditDetail.memoryTokens ?? 0).toLocaleString()} tokens</span>
-                      <span className="text-background/60">system</span>
+                      <span className="text-white/70">system</span>
                       <span className="text-right">{(message.turnStats.creditDetail.systemTokens ?? 0).toLocaleString()} tokens</span>
-                      <span className="text-background/60">本次提问</span>
+                      <span className="text-white/70">本次提问</span>
                       <span className="text-right">{(message.turnStats.creditDetail.questionTokens ?? message.turnStats.creditDetail.inputTokens).toLocaleString()} tokens</span>
-                      <span className="text-background/60">输出</span>
+                      <span className="text-white/70">输出</span>
                       <span className="text-right">{message.turnStats.creditDetail.outputTokens.toLocaleString()} tokens</span>
                     </div>
-                    <div className="text-center text-[9px] text-background/40 mt-1">拆分为近似，总输入精确</div>
+                    <div className="text-center text-[9px] text-white/50 mt-1">拆分为近似，总输入精确</div>
                     </div>
                   </TooltipContent>
                 </Tooltip>

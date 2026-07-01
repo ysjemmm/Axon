@@ -155,12 +155,14 @@ export function handleToolWaitingInput(msg: WsMessage, ctx: EventHandlerCtx): vo
 
 export function handleConfirmCommandRequest(msg: WsMessage, ctx: EventHandlerCtx): void {
   const toolCallId = ((msg as any).id as string) || ((msg as any).requestId as string);
+  const danger = (msg as any).danger as string | undefined;
   ctx.setCommandApprovals((m) => ({
     ...m,
     [toolCallId]: {
       requestId: (msg as any).requestId as string,
       command: (msg as any).command as string,
       options: ((msg as any).options as CommandApproval["options"]) || [],
+      danger,
     },
   }));
 }
