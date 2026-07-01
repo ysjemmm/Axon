@@ -7,7 +7,7 @@
  * 渲染子 agent 内部流程，故几者放在同一文件内以解循环依赖。
  */
 
-import { useState, type ReactNode } from "react";
+import { useState, useRef, useEffect, type ReactNode } from "react";
 import { Loader2, Boxes, ListChecks, ChevronRight, ChevronDown, Check, X, Bot } from "lucide-react";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import {
@@ -121,6 +121,15 @@ export function RelayProgressCard({ steps, pending }: { steps: { name: string; d
  */
 export function SubAgentCard({ seg }: { seg: SubAgentSegment }) {
   const [expanded, setExpanded] = useState(false);
+  // 折叠态摘要区自动触底
+  const summaryRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = summaryRef.current;
+    if (el && !expanded) {
+      el.scrollTop = el.scrollHeight;
+    }
+  });
+
   const running = seg.status === "running";
   const verb = running ? "Invoking" : "Invoked";
 
@@ -147,10 +156,41 @@ export function SubAgentCard({ seg }: { seg: SubAgentSegment }) {
         )}
         <span className="text-muted-foreground truncate">{seg.intent}</span>
       </button>
-      {/* 折叠态结论摘要：done + 未展开时，显示最终结论（限高可滚动） */}
-      {!expanded && conclusion && (
-        <div className="border-t border-border/50 px-2.5 py-1.5 max-h-40 overflow-y-auto [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-transparent [&::-webkit-scrollbar-track]:bg-transparent [&:hover::-webkit-scrollbar-thumb]:bg-muted-foreground/30">
-          <MarkdownRenderer content={conclusion} />
+      {/* 折叠态动态摘要：执行中展示最新工具/文字，收尾展示过渡提示，完成展示结论 */}
+      {!expanded && (
+        <div ref={summaryRef} className="border-t border-border/50 px-2.5 py-1.5 max-h-40 overflow-y-auto [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-transparent [&::-webkit-scrollbar-track]:bg-transparent [&:hover::-webkit-scrollbar-thumb]:bg-muted-foreground/30">
+          {conclusion ? (
+            <MarkdownRenderer content={conclusion} />
+          ) : running ? (
+            (() => {
+              const visible = seg.inner.filter((s) => !(s.type === "tool" && (s as ToolSegment).hidden));
+              const last = visible[visible.length - 1];
+              if (last?.type === "tool") {
+                // 执行中：展示最近一次工具卡片
+                return renderSegments([last]);
+              }
+              if (last?.type === "text" && seg.innerStreaming) {
+                // 子 agent 正在输出文字（如分析过程）
+                return <MarkdownRenderer content={last.content} />;
+              }
+              if (visible.length > 0) {
+                // 收尾过渡态：工具已执行完，子 agent 正在整理结论准备返回
+                return (
+                  <div className="flex items-center gap-1.5">
+                    <Loader2 className="w-3 h-3 animate-spin shrink-0 text-muted-foreground" />
+                    <span className="text-xs text-muted-foreground">正在汇总分析结论，准备返回结果...</span>
+                  </div>
+                );
+              }
+              // 刚开始，还没有任何输出
+              return (
+                <div className="flex items-center gap-1.5">
+                  <Loader2 className="w-3 h-3 animate-spin shrink-0 text-muted-foreground" />
+                  <span className="text-xs text-muted-foreground">正在分析任务...</span>
+                </div>
+              );
+            })()
+          ) : null}
         </div>
       )}
       {/* 展开区 */}

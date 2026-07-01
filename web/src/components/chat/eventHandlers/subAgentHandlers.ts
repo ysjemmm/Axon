@@ -14,13 +14,13 @@ export function handleSubAgentStart(msg: WsMessage, ctx: EventHandlerCtx): void 
     const last = updated[updated.length - 1];
     const curGen = ctx.turnGeneration.current;
     if (last && last.role === "assistant" && last.turnGen !== curGen) return prev;
-    const args = (msg as any).args as Record<string, unknown> || {};
+    const delegateId = (msg as any).delegateId as string || `sub-${Date.now()}`;
     const seg = {
       type: "subagent" as const,
-      id: (msg as any).id || `sub-${Date.now()}`,
-      intent: (args.intent as string) || "委托子 Agent 执行任务",
-      skill: (args.skill as string) || null,
-      prompt: (args.prompt as string) || "",
+      id: delegateId,
+      intent: ((msg as any).intent as string) || "委托子 Agent 执行任务",
+      skill: ((msg as any).skill as string) || null,
+      prompt: ((msg as any).prompt as string) || "",
       status: "running" as const,
       innerStreaming: true,
       inner: [],
