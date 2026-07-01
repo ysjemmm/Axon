@@ -225,7 +225,7 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
           diffContents.set(leftUri.toString(), oldContent);
           diffContents.set(rightUri.toString(), newContent);
           const title = `${fileName} ↔ ${fileName} (Axon)`;
-          await vscode.commands.executeCommand("vscode.diff", leftUri, rightUri, title, { preview: true });
+          await vscode.commands.executeCommand("vscode.diff", leftUri, rightUri, title, { preview: false });
         } catch {
           // 文件可能不存在（已被拒绝/删除），静默忽略
         }

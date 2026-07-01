@@ -243,9 +243,8 @@ export class SessionHub {
     });
     s.setOnMessagesChanged(async () => {
       const total = s.getLastTotalTokens();
-      // 过滤编辑工具软失败 transient 消息：不落盘，但保留在内存中供前端实时渲染
       const allMessages = s.getMessages();
-      const persistable = allMessages.filter((m: any) => !m._transient);
+      const persistable = this.filterPersistable(allMessages);
       await this.storage.updateSession(sid, {
         messages: persistable,
         // 仅在有有效值时写入 totalTokens：避免尚未拿到真实 usage 时用 0 覆盖磁盘已有统计。
@@ -363,21 +362,21 @@ export class SessionHub {
         const sid = this.resolveSessionId(cmd);
         const s = this.getActiveSession(sid);
         await s?.acceptEdits(typeof cmd.path === "string" ? cmd.path : undefined);
-        if (sid && s) await this.storage.updateSession(sid, { messages: s.getMessages() });
+        if (sid && s) await this.storage.updateSession(sid, { messages: this.filterPersistable(s.getMessages()) });
         return;
       }
       case "reject_edits": {
         const sid = this.resolveSessionId(cmd);
         const s = this.getActiveSession(sid);
         await s?.rejectEdits(typeof cmd.path === "string" ? cmd.path : undefined);
-        if (sid && s) await this.storage.updateSession(sid, { messages: s.getMessages() });
+        if (sid && s) await this.storage.updateSession(sid, { messages: this.filterPersistable(s.getMessages()) });
         return;
       }
       case "undo_edits": {
         const sid = this.resolveSessionId(cmd);
         const s = this.getActiveSession(sid);
         if (typeof cmd.path === "string" && cmd.path) await s?.undoEdits(cmd.path);
-        if (sid && s) await this.storage.updateSession(sid, { messages: s.getMessages() });
+        if (sid && s) await this.storage.updateSession(sid, { messages: this.filterPersistable(s.getMessages()) });
         return;
       }
       case "undo_parallel_file": {
@@ -435,7 +434,7 @@ export class SessionHub {
       workspace: ws_dir,
       workspaces: ws_dirs,
       workspaceGroupId: savedSession?.workspaceGroupId || null,
-      messages: session.getMessages().length > 0 ? session.getMessages() : (savedSession?.messages || []),
+      messages: session.getMessages().length > 0 ? this.filterPersistable(session.getMessages()) : (savedSession?.messages || []),
       totalTokens: session.getLastTotalTokens() || savedSession?.totalTokens || 0,
       pendingPaths: session.getPendingPaths(),
       pendingDiffs: session.getPendingDiffs(),
@@ -634,7 +633,7 @@ export class SessionHub {
     }
 
     // 持久化新会话
-    const messages = session.getMessages();
+    const messages = this.filterPersistable(session.getMessages());
     await this.storage.updateSession(created.id, {
       messages,
       title,
@@ -660,8 +659,13 @@ export class SessionHub {
       this.emitResult(sid, clientId, { type: "relay_deleted", relayId } as AgentEvent);
     }
     if (sid && s) {
-      await this.storage.updateSession(sid, { messages: s.getMessages() });
+      await this.storage.updateSession(sid, { messages: this.filterPersistable(s.getMessages()) });
     }
+  }
+
+  /** 过滤掉 _transient 消息（编辑工具失败等不落盘） */
+  private filterPersistable(messages: any[]): any[] {
+    return messages.filter((m: any) => !m._transient);
   }
 
   /** 设置编辑模式 */
@@ -768,7 +772,7 @@ export class SessionHub {
     // 收尾持久化
     const turnSid = execSession.getSessionId();
     if (turnSid) {
-      const messages = execSession.getMessages();
+      const messages = this.filterPersistable(execSession.getMessages());
       const savedSession = await this.storage.getSession(turnSid);
 
       let title = savedSession?.title;
@@ -804,7 +808,7 @@ export class SessionHub {
     this.emitResult(sid, clientId, { type: "stream_end", elapsed: 0, tokens } as AgentEvent);
 
     if (sid && session) {
-      const messages = session.getMessages();
+      const messages = this.filterPersistable(session.getMessages());
       const savedSession = await this.storage.getSession(sid);
       let title = savedSession?.title;
       const titleSource = cmd.displayText || cmd.content;

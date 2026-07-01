@@ -270,8 +270,9 @@ export function buildTrustOptions(command: string): { choice: TrustScope; patter
     partialPattern = `${tokens[0]} ${tokens[1]}`;
   }
   partialPattern = partialPattern.split("|")[0].trim();
-  // partial 去重：与 root 相同时不显示（如管道命令截断后 partial == prefix）
-  if (partialPattern && partialPattern !== root) {
+  // partial 去重：与 root 相同或与完整命令相同时不显示
+  // （如 "git push" 只有 2 个 token，partial "git push" 和 exact 完全等价）
+  if (partialPattern && partialPattern !== root && partialPattern !== norm) {
     opts.push({ choice: "partial", pattern: partialPattern, label: `信任 ${partialPattern} *` });
   }
   opts.push({ choice: "prefix", pattern: root, label: `信任 ${root} *（根命令）` });

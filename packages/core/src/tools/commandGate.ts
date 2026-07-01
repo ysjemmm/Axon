@@ -85,7 +85,17 @@ export class CommandGate {
 
   /** 用一组模式重置白名单（host 从设置/存储读出后注入）。始终合并内置只读默认集 */
   setTrustedPatterns(patterns: string[]): void {
-    this.trie = CommandTrustTrie.fromStrings([...BUILTIN_TRUSTED_PATTERNS, ...patterns]);
+    // 合并而非替换：先读当前 trie 已有的持久化规则，与新 patterns 取并集后重建。
+    // 这样 save() 触发的 onDidChangeConfiguration → reloadTrustedCommands 回环
+    // 不会覆盖 gate() 里刚通过 trie.add() 写入内存但尚未 flush 到磁盘的新规则。
+    const currentRules = this.trie.list().map((r) => {
+      // 序列化回 pattern 字符串
+      if (r.scope === "all") return "*";
+      if (r.scope === "prefix") return r.pattern + " *";
+      return r.pattern;
+    });
+    const merged = [...new Set([...currentRules, ...patterns])];
+    this.trie = CommandTrustTrie.fromStrings([...BUILTIN_TRUSTED_PATTERNS, ...merged]);
   }
 
   /** 当前最简白名单（供管理面板展示） */
