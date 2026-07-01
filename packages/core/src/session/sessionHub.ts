@@ -395,6 +395,8 @@ export class SessionHub {
           console.log(`[hub] list_snapshots via session: sid=${sid} count=${snapshots?.length}`);
         } else {
           // session 未就绪（reload 时序竞态）：直接用 workspace 级 SnapshotManager 列 git ref
+          // 注：问答模式的 session 在 listSnapshots() 中已返回空数组；
+          //     这里是 session 对象不存在（时序竞态）的兜底路径，仍列出可用快照。
           const tmpMgr = new SnapshotManager(this.deps.createHost(), this.deps.defaultWorkspace);
           snapshots = await tmpMgr.list().catch(() => []);
           console.log(`[hub] list_snapshots via fallback: defaultWs=${this.deps.defaultWorkspace} count=${snapshots?.length}`);

@@ -2,247 +2,23 @@
 /**
  * 工具的搜索/路径解析/列目录逻辑（迁移自 server/src/tools.ts）
  *
- * 与执行端解耦：所有文件系统访问（readdir/stat/read）都走注入的 AgentHost.fs，
- * 不再直接 import node:fs/promises。路径计算仍用 node:path（纯计算，与形态无关）。
+ * 与执行端解耦：
+ *   - 所有文件系统访问（readdir/stat/read）都走注入的 AgentHost.fs。
+ *   - 高效搜索（ripgrep）走注入的 AgentHost.search（argv 数组，不经过任何 shell）。
+ *     host.search 不存在的形态自动退化为纯 fs 遍历（walk），保证功能可用。
+ *   路径计算用 node:path（纯计算，与形态无关）。
  *
- * 逐字符保留原有业务逻辑与模型可见的输出文本，只把 fs 访问换成 host.fs：
- *   - entry.isDirectory() → child.isDir
- *   - entry.isFile()      → child.isFile
- *   - readdir(dir, {withFileTypes:true}) → host.fs.readdir(dir)（返回 DirChild[]）
- *   - stat(path)          → host.fs.stat(path)（不存在返回 null）
- *   - readFile(path)      → host.fs.read(path)（不存在返回 null）
+ * 设计取舍：
+ *   旧实现曾在 core 内把 rg 命令拼成 shell 字符串再交给 host.commands.exec 执行。
+ *   该做法隐式假设 POSIX shell，但实际跑在 PowerShell 上，导致 rg 几乎必然失败、
+ *   频繁回退到 walk。现已把"怎么跑 rg"下沉到 host.search：core 只描述"搜什么"
+ *   （结构化入参），host 用 argv 数组直接 spawn ripgrep，从根上规避 shell 引号/
+ *   转义与跨操作系统差异。core 这里只负责把结构化命中格式化成模型可见文本。
  */
 
 import { join, relative, resolve, sep } from "node:path";
 import { IGNORED_DIRS } from "./safety.js";
-import type { AgentHost } from "../host/index.js";
-
-// ─── ripgrep 加速路径 ─────────────────────────────────────────────
-// 底层用 ripgrep 替代手写 walk：C 级速度，内置 gitignore/IGNORED_DIRS 排除。
-// 通过 host.commands.exec 调 rg，失败（未安装/不可用）时优雅回退到 walk。
-// 用 Symbol-ish 缓存 rg 路径探测结果，避免每次搜索都探测。
-
-/** rg 可执行文件路径（探测一次后缓存） */
-let rgPath: string | null | undefined = undefined;
-
-/**
- * 探测系统可用的 rg 可执行文件路径。
- * 直接使用 @vscode/ripgrep npm 包（Axon IDE 基于 VS Code，一定内置此包），
- * 避免在终端执行 PATH 探测命令产生噪音输出。
- */
-async function resolveRgPath(host: AgentHost): Promise<string | null> {
-  if (rgPath !== undefined) return rgPath;
-  try {
-    const req = typeof require === "function"
-      ? require
-      : (await import("node:module")).default.createRequire(import.meta.url);
-    const rgBinPath = req("@vscode/ripgrep/package.json") && req("@vscode/ripgrep").rgPath;
-    if (typeof rgBinPath === "string") {
-      const st = await host.fs.stat(rgBinPath);
-      if (st) {
-        rgPath = `"${rgBinPath}"`;
-        return rgPath;
-      }
-    }
-  } catch { /* fallthrough */ }
-  rgPath = null;
-  return null;
-}
-
-/**
- * 把 IGNORED_DIRS 集合转成 rg 的 `-g '!xxx'` 参数（排除这些目录）。
- */
-function rgIgnoreGlobs(): string {
-  const globs = Array.from(IGNORED_DIRS).map((d) => `-g '!${d}'`);
-  return globs.join(" ");
-}
-
-/**
- * 用 ripgrep 做内容搜索（grep 模式），输出格式对齐 walk 版 searchContent。
- * 返回 null 表示 rg 不可用或执行失败，调用方应回退到 walk。
- */
-async function rgSearchContent(
-  dir: string,
-  regexPattern: string,
-  rootCwd: string,
-  host: AgentHost,
-  includePattern: string | undefined,
-  maxMatches: number,
-): Promise<string | null> {
-  const rgBin = await resolveRgPath(host);
-  if (!rgBin) return null;
-  // rg 参数：
-  //   -i             忽略大小写
-  //   -n             显示行号
-  //   -C1            前后各1行上下文（对齐 walk 版）
-  //   -m 1           每文件最多输出1个匹配就停（控制噪音；如需全部可去掉）
-  //   --no-heading   不按文件分块输出（简化解析）
-  //   --max-filesize 1M   跳过大文件
-  //   -g '!xxx'      排除 IGNORED_DIRS
-  //   -g '*.ts'      includePattern（仅含 glob 时直接用）
-  const ignoreArgs = rgIgnoreGlobs();
-  const includeArg = includePattern
-    ? buildRgIncludeArg(includePattern)
-    : "";
-  // 注意：rgBin 可能是带空格的路径（已含引号），pattern 用 regex.source（已转义）
-  // --encoding utf-8 防止中文内容输出乱码
-  const cmd = [
-    rgBin,
-    "-i",
-    "-n",
-    "-C1",
-    `-m ${Math.ceil(maxMatches / 5)}`, // 每文件限制，留余量给最终截断
-    "--no-heading",
-    "--encoding",
-    "utf-8",
-    "--max-filesize",
-    "1M",
-    ignoreArgs,
-    includeArg,
-    "-e",            // 用 -e 传 pattern，避免 -- 分隔符在 shell 解析歧义
-    regexPattern,
-    dir,             // 搜索目录（不加额外引号，交给 shell 解析）
-  ].filter(Boolean).join(" ");
-
-  try {
-    const r = await host.commands!.exec(cmd, {
-      cwd: rootCwd,
-      timeoutMs: 15000,
-    });
-    if (r.exitCode !== 0 && r.exitCode !== 1) return null; // 1=无匹配；其他=出错
-    if (!r.stdout.trim()) {
-      return `未找到匹配 "${regexPattern}" 的内容`;
-    }
-    // 解析 rg 输出，转成对齐 walk 版的格式
-    return parseRgContentOutput(r.stdout, rootCwd, maxMatches);
-  } catch {
-    return null;
-  }
-}
-
-/** 把 includePattern（后缀或 glob）转成 rg 的 -g/--type 参数 */
-function buildRgIncludeArg(pattern: string): string {
-  const p = pattern.trim();
-  if (!p) return "";
-  // 纯后缀（.ts / .test.ts）→ 用 -g '*xxx'
-  if (!/[*?]/.test(p)) {
-    return `-g '*${p}'`;
-  }
-  // glob 模式 → 直接透传给 -g
-  return `-g '${p}'`;
-}
-
-/** 解析 ripgrep --no-heading + -C1 的输出为对齐 walk 版的格式 */
-function parseRgContentOutput(stdout: string, rootCwd: string, maxMatches: number): string {
-  const matches: string[] = [];
-  const lines = stdout.split("\n");
-  // 待写入的上下文行（出现在匹配行之前的 CTX 行）
-  let pendingCtx: string[] = [];
-
-  for (const line of lines) {
-    if (matches.length >= maxMatches) break;
-    if (!line.trim()) continue;
-    // rg 块分隔符 "--"
-    if (line.trim() === "--") {
-      pendingCtx = [];
-      continue;
-    }
-    // rg --no-heading 输出格式：path:linenum:content（匹配行）或 path-linenum-content（上下文行）
-    const match = line.match(/^(.+?)([:-])(\d+)\2(.*)$/);
-    if (!match) continue;
-    const [, fPath, sep, lineStr, content] = match;
-    const ln = parseInt(lineStr, 10);
-    const rel = relative(rootCwd, fPath.replace(/\\/g, "/")).split(sep).join("/");
-
-    if (sep === ":") {
-      // 匹配行：把前面累积的上下文 + 本行组合成一个完整结果
-      const parts: string[] = [...pendingCtx, `  > ${ln}: ${content.trim().slice(0, 180)}`];
-      matches.push(`${rel}:${ln}\n${parts.join("\n")}`);
-      pendingCtx = [];
-    } else {
-      // 上下文行：先累积，等遇到匹配行时一起输出
-      pendingCtx.push(`    ${ln}: ${content.trim().slice(0, 180)}`);
-    }
-  }
-
-  if (matches.length === 0) return `未找到匹配的内容`;
-  return `找到 ${matches.length} 处匹配:\n${matches.join("\n")}`;
-}
-
-/**
- * 用 ripgrep 做文件名搜索（--files），输出格式对齐 walk 版 searchEntries。
- * 返回 null 表示 rg 不可用或执行失败，调用方应回退到 walk。
- */
-async function rgSearchEntries(
-  dir: string,
-  query: string,
-  rootCwd: string,
-  kind: "file" | "dir",
-  host: AgentHost,
-  maxResults: number,
-): Promise<string | null> {
-  const rgBin = await resolveRgPath(host);
-  if (!rgBin) return null;
-  const lowerQuery = query.toLowerCase();
-  const ignoreArgs = rgIgnoreGlobs();
-  // rg --files 列出所有文件（不含目录），用 -g 过滤
-  // 文件名搜索：直接列文件再按 query 过滤
-  const cmd = [
-    rgBin,
-    "--files",
-    "--encoding",
-    "utf-8",
-    ignoreArgs,
-    dir,
-  ].filter(Boolean).join(" ");
-
-  try {
-    const r = await host.commands!.exec(cmd, {
-      cwd: rootCwd,
-      timeoutMs: 15000,
-    });
-    if (r.exitCode !== 0 && r.exitCode !== 1) return null;
-    if (!r.stdout.trim()) return null;
-
-    const allFiles = r.stdout.split("\n").filter(Boolean).map((l) => l.trim());
-    const results: string[] = [];
-
-    for (const f of allFiles) {
-      if (results.length >= maxResults) break;
-      const name = f.split(/[\\/]/).pop() || "";
-      if (kind === "file" && name.toLowerCase().includes(lowerQuery)) {
-        results.push(f.replace(/\\/g, "/"));
-      }
-    }
-
-    // 目录搜索：rg --files 只列文件，需从中提取目录名匹配
-    if (kind === "dir") {
-      const dirSet = new Set<string>();
-      for (const f of allFiles) {
-        const parts = f.replace(/\\/g, "/").split("/");
-        // 去掉末尾文件名，遍历目录段
-        for (let i = 0; i < parts.length - 1; i++) {
-          const seg = parts[i].toLowerCase();
-          if (seg.includes(lowerQuery)) {
-            const dirPath = parts.slice(0, i + 1).join("/") + "/";
-            dirSet.add(dirPath);
-          }
-        }
-      }
-      for (const d of Array.from(dirSet).sort()) {
-        if (results.length >= maxResults) break;
-        results.push(d);
-      }
-    }
-
-    const label = kind === "dir" ? "目录" : "文件";
-    if (results.length === 0) return `未找到匹配 "${query}" 的${label}`;
-    const capped = results.length >= maxResults ? `\n（已截断，仅显示前 ${maxResults} 条）` : "";
-    return `找到 ${results.length} 个${label}:\n${results.join("\n")}${capped}`;
-  } catch {
-    return null;
-  }
-}
+import type { AgentHost, ContentMatch } from "../host/index.js";
 
 /**
  * 多工作区路径解析：尝试在 cwd 下 resolve，如果文件不存在则遍历其他 workspaces 找到它。
@@ -326,6 +102,46 @@ export function owningWorkspace(absPath: string, workspaces: string[]): string {
   return best || absPath;
 }
 
+/** 把绝对路径列表格式化为 search（file/dir 模式）的模型可见文本 */
+function formatEntryResults(
+  absPaths: string[],
+  rootCwd: string,
+  query: string,
+  kind: "file" | "dir",
+  maxResults: number,
+): string {
+  const label = kind === "dir" ? "目录" : "文件";
+  if (absPaths.length === 0) return `未找到匹配 "${query}" 的${label}`;
+  const results = absPaths.slice(0, maxResults).map((abs) => {
+    const rel = relative(rootCwd, abs).split(sep).join("/");
+    return kind === "dir" ? rel + "/" : rel;
+  });
+  const capped = absPaths.length >= maxResults ? `\n（已截断，仅显示前 ${maxResults} 条）` : "";
+  return `找到 ${results.length} 个${label}:\n${results.join("\n")}${capped}`;
+}
+
+/** 把内容命中列表格式化为 search（content 模式）的模型可见文本 */
+function formatContentMatches(
+  found: ContentMatch[],
+  rootCwd: string,
+  query: string,
+  maxMatches: number,
+): string {
+  if (found.length === 0) return `未找到匹配 "${query}" 的内容`;
+  const blocks = found.slice(0, maxMatches).map((m) => {
+    const rel = relative(rootCwd, m.file).split(sep).join("/");
+    const lines = [`${rel}:${m.line}`];
+    if (m.before !== undefined) lines.push(`    ${m.line - 1}: ${m.before.trimEnd().slice(0, 180)}`);
+    lines.push(`  > ${m.line}: ${m.text.trimEnd().slice(0, 180)}`);
+    if (m.after !== undefined) lines.push(`    ${m.line + 1}: ${m.after.trimEnd().slice(0, 180)}`);
+    return lines.join("\n");
+  });
+  const capped = found.length >= maxMatches
+    ? `\n（已截断，仅显示前 ${maxMatches} 条。建议用 includePattern 或更精确的 query 缩小范围）`
+    : "";
+  return `找到 ${blocks.length} 处匹配:\n${blocks.join("\n")}${capped}`;
+}
+
 /** 按名称搜索文件或目录（kind=file 搜文件，kind=dir 搜目录） */
 export async function searchEntries(
   dir: string,
@@ -335,12 +151,22 @@ export async function searchEntries(
   host: AgentHost,
 ): Promise<string> {
   const MAX_RESULTS = 50;
+
+  // ── 优先用 host.search（execFile 调 ripgrep，argv 数组，不经过 shell）──
+  if (host.search) {
+    const found = await host.search.searchFiles({
+      dir,
+      query,
+      kind,
+      maxResults: MAX_RESULTS,
+      ignoredDirs: Array.from(IGNORED_DIRS),
+    });
+    return formatEntryResults(found, rootCwd, query, kind, MAX_RESULTS);
+  }
+
+  // ── 无 search 能力的形态：退化为纯 fs 遍历 ──
   const lowerQuery = query.toLowerCase();
   const results: string[] = [];
-
-  // ── ripgrep 快速路径 ──
-  const rgResult = await rgSearchEntries(dir, query, rootCwd, kind, host, MAX_RESULTS);
-  if (rgResult !== null) return rgResult;
 
   async function walk(current: string): Promise<void> {
     if (results.length >= MAX_RESULTS) return;
@@ -520,7 +346,6 @@ export async function searchContent(
 ): Promise<string> {
   const MAX_MATCHES = 50;
   const MAX_FILE_SIZE = 1024 * 1024; // 1MB，跳过过大文件
-  const matches: string[] = [];
 
   let regex: RegExp;
   try {
@@ -538,10 +363,21 @@ export async function searchContent(
     }
   }
 
-  // ── ripgrep 快速路径 ──
-  // 把处理后的 regex source 作为 rg 的 pattern（确保无效正则已转义）。
-  const rgResult = await rgSearchContent(dir, regex.source, rootCwd, host, includePattern, MAX_MATCHES);
-  if (rgResult !== null) return rgResult;
+  // ── 优先用 host.search（execFile 调 ripgrep，argv 数组，不经过 shell）──
+  // 把处理后的 regex source 作为 pattern（确保无效正则已转义为合法形式）。
+  if (host.search) {
+    const found = await host.search.searchContent({
+      dir,
+      pattern: regex.source,
+      includePattern,
+      maxMatches: MAX_MATCHES,
+      ignoredDirs: Array.from(IGNORED_DIRS),
+    });
+    return formatContentMatches(found, rootCwd, query, MAX_MATCHES);
+  }
+
+  // ── 无 search 能力的形态：退化为纯 fs 遍历 ──
+  const matches: string[] = [];
 
   async function walk(current: string): Promise<void> {
     if (matches.length >= MAX_MATCHES) return;

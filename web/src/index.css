@@ -472,3 +472,48 @@ body.vscode-high-contrast {
 .tool-card-enter {
   animation: tool-card-enter 0.18s ease-out;
 }
+
+/* HTML 预览 iframe 滚动条：默认隐藏，hover wrapper 时显示 */
+.axon-html-preview {
+  overflow: hidden;
+}
+.axon-html-preview iframe {
+  scrollbar-width: none; /* Firefox */
+}
+.axon-html-preview iframe::-webkit-scrollbar {
+  width: 6px;
+}
+.axon-html-preview iframe::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 9999px;
+}
+.axon-html-preview:hover iframe {
+  scrollbar-width: thin; /* Firefox */
+}
+.axon-html-preview:hover iframe::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+}
+.dark .axon-html-preview:hover iframe::-webkit-scrollbar-thumb {
+  background: #4b5563;
+}
+
+/* 虚拟列表消息入场动画：避免向上滚动时内容突然出现的闪烁感 */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+
+/* 增强渲染块（SVG/Mermaid/HTML）hydrate 后移除代码块的边框和背景，让图形跟随面板底色 */
+.axon-codeblock[data-hydrated="1"] {
+  background: transparent !important;
+  border: none !important;
+}
+
+/* 增强渲染块 hydrate 后移除代码块边框和背景，让图形跟随面板底色 */
+.axon-codeblock[data-hydrated="1"] {
+  background: transparent !important;
+  border: none !important;
+}

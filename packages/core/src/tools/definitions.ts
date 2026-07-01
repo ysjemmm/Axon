@@ -594,20 +594,14 @@ export function getToolDefinitions() {
 
 /**
  * 只读工具白名单：不改文件、不执行命令，可安全地多个子 Agent 并行调用。
+ * 单一来源在 catalog.ts（按 readOnly 标记派生），这里别名导出以兼容既有引用。
  */
-export const READ_ONLY_TOOL_NAMES = new Set([
-  "read_file",
-  "search",
-  "list_dir",
-  "web_search",
-  "web_fetch",
-  "use_skill",
-  "activate_power",
-]);
+export { READ_ONLY_TOOLS as READ_ONLY_TOOL_NAMES } from "./catalog.js";
+import { READ_ONLY_TOOLS, contentLimitForTool } from "./catalog.js";
 
 /** 返回只读工具定义子集，供并行调研子 Agent 使用（不写盘、不跑命令）。 */
 export function getReadOnlyToolDefinitions() {
-  return getToolDefinitions().filter((t) => READ_ONLY_TOOL_NAMES.has(t.function.name));
+  return getToolDefinitions().filter((t) => READ_ONLY_TOOLS.has(t.function.name));
 }
 
 /** check_diagnostics 的结构化结果：每个文件一条，供前端折叠展示 */
@@ -664,21 +658,9 @@ export interface ToolMeta {
   terminalCwd?: string;
 }
 
-/** 按工具类型返回“存入对话历史的内容上限（字符）” */
+/** 按工具类型返回“存入对话历史的内容上限（字符）”。单一来源在 catalog.ts。 */
 export function toolContentLimit(toolName: string): number {
-  switch (toolName) {
-    case "read_file":
-      return 12_000;
-    case "web_fetch":
-      return 10_000;
-    case "check_diagnostics":
-      return 8_000;
-    case "search":
-    case "list_dir":
-      return 4_000;
-    default:
-      return 3_000;
-  }
+  return contentLimitForTool(toolName);
 }
 
 /** Skill 加载器：按名称返回 skill 正文（用于 use_skill 工具）。由上层注入。 */

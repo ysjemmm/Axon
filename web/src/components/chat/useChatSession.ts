@@ -179,8 +179,17 @@ export function useChatSession(opts: UseChatSessionOptions) {
    */
   const hasEverConnected = useRef(false);
 
-  /** 结束当前加载态 */
-  const finishLoading = useCallback(() => { setIsLoading(false); }, []);
+  /** 结束当前加载态（至少展示 MIN_LOADING_MS，避免极短响应让 spin 闪烁即消失） */
+  const MIN_LOADING_MS = 400;
+  const finishLoading = useCallback(() => {
+    const elapsed = Date.now() - (turnStartTime.current || Date.now());
+    const remaining = Math.max(0, MIN_LOADING_MS - elapsed);
+    if (remaining > 0) {
+      setTimeout(() => setIsLoading(false), remaining);
+    } else {
+      setIsLoading(false);
+    }
+  }, []);
 
   /** 带本面板 clientId 的发送 */
   const send = useCallback((cmd: Record<string, unknown>) => {
@@ -210,6 +219,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     cancelled, cancelledTurnMsgId, turnGeneration,
     modelRef, statusPhaseRef, toolResultResetTimer,
     compactionMigratedRef, onSessionCreatedRef, onCompactionMigratedRef,
+    ownedSessionId,
     typewriter: {
       buffer: typewriter.buffer,
       raf: typewriter.raf,

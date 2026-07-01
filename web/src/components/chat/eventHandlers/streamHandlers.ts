@@ -14,15 +14,23 @@ export function handleStreamStart(_msg: WsMessage, ctx: EventHandlerCtx): void {
   ctx.setChatHistory((prev) => {
     const updated = [...prev];
     const last = updated[updated.length - 1];
-    if (last?.role === "assistant") {
+    // 复用最后一个 assistant 消息，但仅当它仍在 streaming 状态（同轮续写）。
+    // 如果已结束（streaming=false，可能是上一轮截断续写或新一轮），则新建 assistant 消息，
+    // 避免把不同轮次/续写的内容错误拼接在一起。
+    if (last?.role === "assistant" && last.streaming) {
       const segs = [...(last.segments || [])];
       const lastSeg = segs[segs.length - 1];
-      if (!lastSeg || lastSeg.type !== "text") {
+      // 自动续写（finish_reason=length）时，现有 text segment 已有内容，
+      // 新建一个 text segment 以区分两段内容，避免前后拼接导致时序混乱。
+      if (lastSeg?.type === "text" && (lastSeg as any).content?.length > 0) {
+        segs.push({ type: "text", content: "" });
+      } else if (!lastSeg || lastSeg.type !== "text") {
         segs.push({ type: "text", content: "" });
       }
       updated[updated.length - 1] = { ...last, segments: segs, streaming: true, turnStatus: "running", turnGen: ctx.turnGeneration.current };
       return updated;
     }
+    // 无符合条件的 assistant 消息 → 新建
     return [...prev, { id: `assistant-${Date.now()}`, role: "assistant", segments: [{ type: "text", content: "" }], streaming: true, turnStatus: "running", turnGen: ctx.turnGeneration.current }];
   });
   tw.start(ctx);

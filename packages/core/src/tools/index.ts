@@ -9,6 +9,7 @@
  */
 
 export * from "./definitions.js";
+export * from "./catalog.js";
 export * from "./safety.js";
 export * from "./commandTrust.js";
 export * from "./commandGate.js";

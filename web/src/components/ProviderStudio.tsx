@@ -191,6 +191,11 @@ function CustomCard({ provider, level, workspace, onChanged }: { provider: Resol
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [moving, setMoving] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editLabel, setEditLabel] = useState(provider.label || "");
+  const [editBaseUrl, setEditBaseUrl] = useState(provider.baseUrl || "");
+  const [editApiKey, setEditApiKey] = useState("");
+  const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
   const remove = async () => {
@@ -213,6 +218,43 @@ function CustomCard({ provider, level, workspace, onChanged }: { provider: Resol
       return;
     }
     remove();
+  };
+
+  const startEditing = () => {
+    setEditLabel(provider.label || "");
+    setEditBaseUrl(provider.baseUrl || "");
+    setEditApiKey("");
+    setEditing(true);
+    setErrorMessage("");
+  };
+
+  const cancelEditing = () => {
+    setEditing(false);
+    setErrorMessage("");
+  };
+
+  const saveEdit = async () => {
+    if (!editBaseUrl.trim()) {
+      setErrorMessage("Base URL 必填");
+      return;
+    }
+    setSaving(true);
+    setErrorMessage("");
+    try {
+      // addCustomProvider 是 upsert：同名 key 直接覆盖整个 entry
+      await addCustomProvider(level, provider.name, {
+        label: editLabel.trim() || provider.name,
+        baseUrl: editBaseUrl.trim(),
+        // API Key 为空时不传（保留原值由后端 merge 处理）
+        ...(editApiKey.trim() ? { apiKey: editApiKey.trim() } : {}),
+        models: provider.models,
+      }, workspace);
+      setEditing(false);
+      onChanged();
+    } catch (e) {
+      setErrorMessage(`保存失败: ${(e as Error).message}`);
+    }
+    setSaving(false);
   };
 
   const saveModels = async (models: ProviderModelInfo[]) => {
@@ -255,6 +297,13 @@ function CustomCard({ provider, level, workspace, onChanged }: { provider: Resol
         </div>
         {!provider.configured && <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">未配置</span>}
         <button
+          onClick={() => { setExpanded(true); startEditing(); }}
+          className="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
+          title="编辑 provider"
+        >
+          <Pencil className="w-3.5 h-3.5" />
+        </button>
+        <button
           onClick={handleDeleteClick}
           className={`shrink-0 p-1 rounded transition-all flex items-center whitespace-nowrap ${confirmDelete ? "bg-red-100 dark:bg-red-900/30 text-red-600 opacity-100 px-1.5" : "opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 hover:bg-muted"}`}
           title={confirmDelete ? "再次点击确认删除" : "删除 provider"}
@@ -266,16 +315,37 @@ function CustomCard({ provider, level, workspace, onChanged }: { provider: Resol
       </div>
       {expanded && (
         <div className="px-3 pb-3 pt-1 border-t border-border/60">
-          <div className="flex items-center justify-between gap-2 mb-3">
-            <div className="text-[11px] text-muted-foreground">
-              当前层级：{level === "user" ? "用户级（全局）" : "工作区级"}
+          {editing ? (
+            <div className="space-y-2 mb-3">
+              <div className="text-xs font-medium text-muted-foreground mb-1">编辑 Provider 信息</div>
+              <Input placeholder="展示名" value={editLabel} onChange={(e) => setEditLabel(e.target.value)} className="h-8 text-sm" />
+              <Input placeholder="Base URL" value={editBaseUrl} onChange={(e) => setEditBaseUrl(e.target.value)} className="h-8 text-sm" />
+              <Input type="password" placeholder="API Key（留空保持不变）" value={editApiKey} onChange={(e) => setEditApiKey(e.target.value)} className="h-8 text-sm" />
+              {errorMessage && <div className="text-xs text-red-600 dark:text-red-400">{errorMessage}</div>}
+              <div className="flex gap-2">
+                <Button size="sm" onClick={saveEdit} disabled={saving || !editBaseUrl.trim()}>
+                  {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Save className="w-3.5 h-3.5 mr-1" />}保存
+                </Button>
+                <Button size="sm" variant="ghost" onClick={cancelEditing}>取消</Button>
+              </div>
             </div>
-            <Button size="sm" variant="outline" onClick={move} disabled={moving || !canMove}>
-              {moving ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : level === "workspace" ? <ArrowUpToLine className="w-3.5 h-3.5 mr-1" /> : <ArrowDownToLine className="w-3.5 h-3.5 mr-1" />}
-              {moveLabel}
-            </Button>
-          </div>
-          {errorMessage && <div className="mb-3 text-xs text-red-600 dark:text-red-400">{errorMessage}</div>}
+          ) : (
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <div className="text-[11px] text-muted-foreground">
+                当前层级：{level === "user" ? "用户级（全局）" : "工作区级"}
+              </div>
+              <div className="flex gap-1">
+                <Button size="sm" variant="outline" onClick={startEditing}>
+                  <Pencil className="w-3.5 h-3.5 mr-1" />编辑
+                </Button>
+                <Button size="sm" variant="outline" onClick={move} disabled={moving || !canMove}>
+                  {moving ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : level === "workspace" ? <ArrowUpToLine className="w-3.5 h-3.5 mr-1" /> : <ArrowDownToLine className="w-3.5 h-3.5 mr-1" />}
+                  {moveLabel}
+                </Button>
+              </div>
+            </div>
+          )}
+          {!editing && errorMessage && <div className="mb-3 text-xs text-red-600 dark:text-red-400">{errorMessage}</div>}
           <ModelManager models={provider.models} editable onSave={saveModels} providerName={provider.name} level={level} workspace={workspace} />
         </div>
       )}

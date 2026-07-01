@@ -811,7 +811,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
       {/* 输入区域 */}
       <div className="px-3 py-4">
-        {/* 改动总览 + 闪电回滚（统一面板） */}
+        {/* 改动总览 + 闪电回滚（统一面板）—— 问答模式（quest）无文件编辑，不展示 */}
+        {mode !== "quest" && (
         <AppliedChangesBar
             chatHistory={session.chatHistory}
             pendingPaths={session.pendingPaths}
@@ -822,6 +823,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             onListSnapshots={session.listSnapshots}
             onRestoreSnapshot={session.restoreSnapshot}
           />
+        )}
         <div className="relative">
           {/* 斜杠命令菜单（贴输入框上方，置于 overflow-hidden 容器之外避免被裁剪） */}
           {slash.open && (

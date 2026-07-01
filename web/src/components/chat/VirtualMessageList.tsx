@@ -55,7 +55,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
       messages,
       renderMessage,
       estimateHeight = 200,
-      overscan = 300,
+      overscan = 600,
       footer,
       header,
       onScroll,
@@ -128,12 +128,12 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
       return followOutput ? "smooth" : false;
     }, [followOutput]);
 
-    // 渲染单条消息
+    // 渲染单条消息（带 fade-in 入场动画，避免虚拟列表卸载/重挂载时闪烁）
     const itemContent = useCallback((index: number) => {
       const msg = messages[index];
       if (!msg) return null;
       return (
-        <div className="py-1" data-msg-id={msg.id} data-msg-role={msg.role}>
+        <div className="py-1 animate-fade-in" data-msg-id={msg.id} data-msg-role={msg.role}>
           {renderMessage(msg, index)}
         </div>
       );

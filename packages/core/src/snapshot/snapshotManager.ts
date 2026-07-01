@@ -19,8 +19,8 @@ import { FsSnapshotter } from "./fsSnapshot.js";
 import type { Snapshot, Snapshotter } from "./types.js";
 import type { AgentHost } from "../host/index.js";
 
-/** 会触发快照的工具名称 */
-export const SNAPSHOT_TOOLS = new Set(["str_replace", "create_file", "apply_patch"]);
+/** 会触发快照的工具名称（单一来源在 tools/catalog.ts，这里转出以兼容既有引用） */
+export { SNAPSHOT_TOOLS } from "../tools/catalog.js";
 
 /** FIFO 保留上限：超过此值的快照会被自动删除（最旧的先删） */
 const MAX_SNAPSHOTS = 30;

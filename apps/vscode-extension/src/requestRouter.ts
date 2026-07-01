@@ -45,7 +45,7 @@ async function cleanupSnapshotRefs(workspace: string): Promise<void> {
 }
 
 export class RequestRouter {
-  constructor(private deps: RouterDeps) {}
+  constructor(private deps: RouterDeps) { }
 
   /**
    * 处理一个 REST 请求，返回响应数据；抛错表示请求失败（由调用方转 ok:false）。
@@ -87,7 +87,7 @@ export class RequestRouter {
           const wsList = s.workspaces?.length ? s.workspaces : (s.workspace ? [s.workspace] : []);
           for (const ws of wsList) {
             await cleanupSnapshotRefs(ws);
-            RelayStore.open(ws).remove(id).catch(() => {});
+            RelayStore.open(ws).remove(id).catch(() => { });
           }
         }
         await d.storage.deleteSession(id);
@@ -564,7 +564,16 @@ async function addCustomProvider(level: "user" | "workspace", name: string, entr
   if (!entry.baseUrl?.trim()) throw new Error("baseUrl 必填");
   const config = await readProviderConfig(level, workspace);
   config.providers = config.providers || {};
-  config.providers[key] = entry;
+  const existing = config.providers[key];
+  if (existing && typeof existing === "object") {
+    // merge：已存在的字段只在新值非空时覆盖，apiKey 为空/未传则保留原值
+    config.providers[key] = {
+      ...existing,
+      ...Object.fromEntries(Object.entries(entry).filter(([, v]) => v !== undefined && v !== "")),
+    };
+  } else {
+    config.providers[key] = entry;
+  }
   await writeProviderConfig(level, config, workspace);
 }
 

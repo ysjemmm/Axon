@@ -52,10 +52,14 @@ md.renderer.rules.link_open = function (tokens, idx, options, env, self) {
   return defaultRender(tokens, idx, options, env, self);
 };
 
-// 代码块：带高亮 + 复制按钮
+// 代码块：带高亮 + 复制按钮。SVG / Mermaid 等标记为可增强渲染。
+const ENHANCED_LANGS = new Set(["svg", "mermaid", "html", "chart", "markmap"]);
+
 md.renderer.rules.fence = function (tokens, idx) {
   const token = tokens[idx];
-  const lang = token.info.trim() || "code";
+  const lang = token.info.trim().split(/\s+/)[0] || "code";
+  const enableEnhance = ENHANCED_LANGS.has(lang);
+
   let highlightedCode: string;
   if (lang && hljs.getLanguage(lang)) {
     try {
@@ -66,6 +70,17 @@ md.renderer.rules.fence = function (tokens, idx) {
   } else {
     highlightedCode = md.utils.escapeHtml(token.content);
   }
+
+  const enhanceAttr = enableEnhance ? ` data-enhanced-lang="${lang}"` : "";
+
+  // 增强渲染块（svg/mermaid/html）：不渲染标题栏（"svg" + 复制按钮），hydrate 后会注入悬浮三点菜单。
+  // 普通代码块：保留标题栏 + 复制按钮。
+  if (enableEnhance) {
+    return `<div class="axon-codeblock my-1.5 rounded-md overflow-hidden" style="border:1px solid var(--axon-code-border,rgba(128,128,128,0.3));background:var(--axon-code-bg,rgba(0,0,0,0.04))"${enhanceAttr}>
+    <pre class="px-2.5 py-1.5 overflow-auto max-h-96 m-0" style="background:transparent"><code class="text-[12px] leading-snug font-mono hljs" style="color:var(--vscode-editor-foreground,var(--hl-text,#c9d1d9))">${highlightedCode}</code></pre>
+  </div>\n`;
+  }
+
   return `<div class="axon-codeblock my-1.5 rounded-md overflow-hidden" style="border:1px solid var(--axon-code-border,rgba(128,128,128,0.3));background:var(--axon-code-bg,rgba(0,0,0,0.04))">
     <div class="flex items-center justify-between px-3 py-1 text-[11px] text-muted-foreground" style="border-bottom:1px solid var(--axon-code-border,rgba(128,128,128,0.2));background:var(--axon-code-header,rgba(0,0,0,0.03))">
       <span>${lang}</span>

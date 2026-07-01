@@ -38,7 +38,7 @@ export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
     const eventId = (msg as any).id as string || "";
 
     if (msgStatus === "success") {
-      // 软失败工具延迟展示：tool_result 紧随其后，这里不创建 pending 段
+      // 软失败工具延迟展示：tool_result 紧随其后，这里不创建段
       return prev;
     }
 

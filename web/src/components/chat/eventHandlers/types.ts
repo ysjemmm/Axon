@@ -51,6 +51,12 @@ export interface EventHandlerCtx {
   statusPhaseRef: MutableRefObject<string>;
   toolResultResetTimer: MutableRefObject<ReturnType<typeof setTimeout> | null>;
   compactionMigratedRef: MutableRefObject<{ newSessionId: string; parentSessionId?: string } | null>;
+  /**
+   * 本面板已"拥有"的会话 id（与 useChatSession 内同一个 ref）。
+   * session_created 时需在此认领新会话，使随后 sessionId prop 变化触发的加载 effect
+   * 命中"自己创建、非重连"的跳过分支，避免误把正在流式输出的首条消息 reset 掉。
+   */
+  ownedSessionId: MutableRefObject<string | null>;
   onSessionCreatedRef: MutableRefObject<(id: string) => void>;
   onCompactionMigratedRef: MutableRefObject<((id: string) => void) | undefined>;
 

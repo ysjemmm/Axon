@@ -16,6 +16,7 @@ export * from "./webBrowser.js";
 export * from "./diagnostics.js";
 export * from "./edits.js";
 export * from "./browser.js";
+export * from "./search.js";
 export * from "./ideContext.js";
 export * from "./derive.js";
 export * from "./scopedHost.js";
@@ -27,6 +28,7 @@ import type { HostWebBrowser } from "./webBrowser.js";
 import type { HostDiagnostics } from "./diagnostics.js";
 import type { EditPresenter } from "./edits.js";
 import type { DirectoryBrowser } from "./browser.js";
+import type { HostSearch } from "./search.js";
 import type { IdeContextProvider } from "./ideContext.js";
 
 /**
@@ -48,6 +50,8 @@ export interface AgentHost {
   readonly diagnostics: HostDiagnostics;
   /** 目录浏览（目录选择器逐层下钻） */
   readonly browser: DirectoryBrowser;
+  /** 高效全文/文件名搜索（execFile 调 ripgrep）；不提供的形态为 undefined，core 退化为纯 fs 遍历 */
+  readonly search?: HostSearch;
   /** 改动呈现/落盘（auto 直接写盘 / manual 暂存 / 原生 diff） */
   readonly edits: EditPresenter;
   /** IDE 上下文感知（活动文件/选区/git diff）；非 IDE 形态为 undefined */

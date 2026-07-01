@@ -19,6 +19,7 @@ import { VSCodeDiagnostics } from "./diagnostics.js";
 import { VSCodeDirectoryBrowser } from "./browser.js";
 import { VSCodeEditPresenter } from "./edits.js";
 import { VSCodeIdeContext } from "./ideContext.js";
+import { VSCodeRipgrepSearch } from "./search.js";
 
 export { VSCodeFileSystem } from "./fs.js";
 export { VSCodeCommandRunner } from "./commands.js";
@@ -27,6 +28,7 @@ export { VSCodeDiagnostics } from "./diagnostics.js";
 export { VSCodeDirectoryBrowser } from "./browser.js";
 export { VSCodeEditPresenter } from "./edits.js";
 export { VSCodeIdeContext } from "./ideContext.js";
+export { VSCodeRipgrepSearch } from "./search.js";
 export { VSCodeCommandTrustStore } from "./commandTrustStore.js";
 export { PendingDiffPresenter, PENDING_SCHEME, pendingUri } from "./pendingDiff.js";
 export { focusTerminal } from "./terminalDisplay.js";
@@ -43,6 +45,7 @@ export function createVSCodeAgentHost(): AgentHost {
     webBrowser: new PlaywrightBrowser(),
     diagnostics: new VSCodeDiagnostics(),
     browser: new VSCodeDirectoryBrowser(),
+    search: new VSCodeRipgrepSearch(),
     edits: new VSCodeEditPresenter(),
     ideContext: new VSCodeIdeContext(),
   };

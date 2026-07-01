@@ -55,7 +55,7 @@ export function ClickableFileName({ fileName, absPath, startLine, endLine, class
   );
 }
 
-export type ToolStatus = "pending" | "success" | "error";
+export type ToolStatus = "pending" | "success" | "error" | "cancelled";
 
 /** check_diagnostics 单文件结果 */
 export interface DiagnosticFileResult {
