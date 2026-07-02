@@ -218,6 +218,19 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
           const path = require("path");
           const fileName = path.basename(filePath);
           const diffContents = (this as any)._diffContents as Map<string, string>;
+
+          // 关闭已有的 Axon diff tab：遍历所有 tab group，找到 axon-diff 的 tab 先关闭，
+          // 这样新 diff 会覆盖旧 diff 的位置，而不是不断新开 tab。
+          for (const group of vscode.window.tabGroups.all) {
+            for (const tab of group.tabs) {
+              const input = tab.input as any;
+              const uriStr = input?.original?.toString() || input?.modified?.toString() || "";
+              if (uriStr.startsWith("axon-diff-")) {
+                await vscode.window.tabGroups.close(tab);
+              }
+            }
+          }
+
           // 用唯一 key 存内容到 Map，URI 只携带 key（避免 URI malformed）
           const ts = Date.now();
           const leftUri = vscode.Uri.parse(`axon-diff-old:${fileName}?id=${ts}`);
