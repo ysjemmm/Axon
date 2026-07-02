@@ -324,6 +324,11 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
   const handleSend = () => {
     if (session.isCompacting) return;
+    // 无工作区时不允许发送——引导用户先添加工作区
+    if (mode !== "quest" && !session.workspace && session.workspaces.length === 0) {
+      setPickerOpen(true);
+      return;
+    }
     const { text, tags, segments } = editorRef.current?.read() ?? { text: "", tags: [], segments: [] };
     if (!text && images.length === 0 && tags.length === 0) return;
     pushHistory(text);
@@ -688,7 +693,22 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               <div className="flex-1 flex items-center justify-center">
                 <div className="text-center max-w-md px-6">
                   <AxonLogo size={64} className="mx-auto mb-4" />
-                  {mode === "quest" ? (
+                  {mode !== "quest" && !session.workspace && session.workspaces.length === 0 ? (
+                    <>
+                      <p className="text-lg font-medium text-foreground">欢迎使用 Axon</p>
+                      <p className="text-sm text-muted-foreground mt-1 mb-4">AI 编程助手 · 读写代码、执行命令、搜索项目</p>
+                      <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-5 py-4 text-left mb-4">
+                        <p className="text-sm font-medium text-amber-600 dark:text-amber-400 mb-2">⚠ 尚未添加工作区</p>
+                        <p className="text-xs text-muted-foreground leading-relaxed mb-3">Axon Agent 需要至少一个工作区文件夹才能读写代码、执行命令。请先添加工作区。</p>
+                        <button
+                          onClick={() => setPickerOpen(true)}
+                          className="text-xs font-medium text-primary hover:text-primary/80 transition-colors"
+                        >
+                          → 点击添加工作区
+                        </button>
+                      </div>
+                    </>
+                  ) : mode === "quest" ? (
                     <>
                       <p className="text-lg font-medium text-foreground">Axon · 问答</p>
                       <p className="text-sm text-muted-foreground mt-1 mb-6">概念、方案、答疑。我不会改你的代码。</p>
