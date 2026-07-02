@@ -26,64 +26,29 @@ d:\projects\Axon\                ← monorepo 根目录
 
 > 以下所有命令均以 `d:\projects\Axon` 为根目录描述路径。
 
-### 全量打包（turbo 并行）
+### ⚡ 速查：改了什么，要跑什么
 
-```bash
-# 在 d:\projects\Axon 根目录执行
-pnpm build
-```
+| 改了哪个目录的代码 | 必须执行的命令（按顺序） | Reload? |
+|---|---|---|
+| `web/src/` | `node scripts/copy-web.mjs`（在 `apps/vscode-extension/`） | ✅ |
+| `apps/vscode-extension/src/` | `node esbuild.mjs`（在 `apps/vscode-extension/`） | ✅ |
+| `packages/core/src/` | ① `npx tsc`（在 `packages/core/`）→ ② `node esbuild.mjs`（在 `apps/vscode-extension/`） | ✅ |
+| `packages/host-vscode/src/` | ① `npx tsc`（在 `packages/host-vscode/`）→ ② `node esbuild.mjs`（在 `apps/vscode-extension/`） | ✅ |
+| `packages/host-node/src/` | ① `npx tsc`（在 `packages/host-node/`）→ ② `node esbuild.mjs`（在 `apps/vscode-extension/`） | ✅ |
+| 同时改了 core + web | ① 编 core → ② 编 host-vscode（如改了）→ ③ `node scripts/copy-web.mjs` → ④ `node esbuild.mjs` | ✅ |
+| 只改了 `*.json` / `*.css` 等资源 | 不需要构建，直接 Reload | ✅ |
 
-turbo 会按依赖顺序构建所有包：`packages/*` → `web` → `apps/vscode-extension`。
+> **最省事的一键全量构建**（不关心改了哪里时用）：在根目录执行 `pnpm build`，
+> turbo 会按依赖顺序编译所有 packages → web → extension。但速度较慢（~30s）。
 
-### 单独打包各模块
+### 为什么改了 packages/* 必须先 tsc？
 
-#### 1. Web 前端（React + Vite）
+esbuild 打包 `apps/vscode-extension` 时，`@axon/core` 和 `@axon/host-vscode` 通过 pnpm
+workspace symlink 解析到 `packages/core` 和 `packages/host-vscode`。这两个包的
+`package.json` 的 `main` 指向 `./dist/index.js`（编译产物），不是 `src/*.ts` 源码。
 
-```bash
-# 在 d:\projects\Axon\web 目录执行
-npm run build
-```
-
-执行 `tsc -b && vite build`，输出到 `web/dist/`。
-
-#### 2. VS Code 扩展（esbuild）
-
-```bash
-# 在 d:\projects\Axon\apps\vscode-extension 目录执行
-node esbuild.mjs
-```
-
-将 `@axon/core` + `@axon/host-vscode` + 扩展入口打包为单文件 CJS `dist/extension.js`。
-
-打 vsix 安装包：
-
-```bash
-# 在 d:\projects\Axon\apps\vscode-extension 目录执行
-npx @vscode/vsce package --no-dependencies
-```
-
-产出 `axon-ide.vsix`，可直接安装到 VS Code 或 axon-ide-shell。
-
-#### 3. Server 后端
-
-```bash
-# 在 d:\projects\Axon\server 目录执行
-npm run build
-```
-
-TypeScript 编译到 `server/dist/`。
-
-#### 4. Core 包
-
-```bash
-# 在 d:\projects\Axon\packages\core 目录执行
-npx tsc
-```
-
-输出到 `packages/core/dist/`。
-
-> **重要**：修改 `packages/core/src/` 下的任何文件后，必须先执行 `npx tsc` 编译 core，
-> 再执行 `node esbuild.mjs` 打包扩展——因为扩展打包读的是 `core/dist/`（编译产物）而非源码。
+所以 esbuild 打进 `dist/extension.js` 的是 `packages/*/dist/*.js` 的内容。
+如果只改了 `src/*.ts` 没跑 `tsc`，esbuild 打的仍然是旧 dist——改了等于没改。
 
 ### 常用开发命令
 
