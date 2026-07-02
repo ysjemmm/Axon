@@ -18,12 +18,15 @@ export class ChatCompletionsStrategy implements LLMStrategy {
     const { model, messages, tools, signal, callbacks, temperature } = params;
 
     // 🔍 调试：检查最后一条 user 消息的 content 格式（排查图片是否到达 LLM）
-    const lastUser = [...messages].reverse().find(m => m.role === "user");
-    if (lastUser) {
-      const contentPreview = typeof lastUser.content === "string"
-        ? `string(${lastUser.content.length} chars)`
-        : `array(${Array.isArray(lastUser.content) ? lastUser.content.length : 0} parts: ${JSON.stringify((lastUser.content as any[])?.map((p: any) => ({ type: p.type, hasUrl: !!p.image_url?.url })))})`;
-      console.log(`[llm-debug] model=${model}, lastUser.content=${contentPreview}`);
+    // 仅在设置 AXON_LLM_DEBUG 环境变量时输出，避免污染 Extension Host 控制台。
+    if (process.env["AXON_LLM_DEBUG"]) {
+      const lastUser = [...messages].reverse().find(m => m.role === "user");
+      if (lastUser) {
+        const contentPreview = typeof lastUser.content === "string"
+          ? `string(${lastUser.content.length} chars)`
+          : `array(${Array.isArray(lastUser.content) ? lastUser.content.length : 0} parts)`;
+        console.log(`[llm-debug] model=${model}, lastUser.content=${contentPreview}`);
+      }
     }
 
     // 多模态降级：如果消息中含 image_url 但模型可能不支持（非 GPT/Claude/Qwen），

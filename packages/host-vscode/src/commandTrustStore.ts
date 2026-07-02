@@ -30,11 +30,9 @@ export class VSCodeCommandTrustStore implements CommandTrustStore {
   save(_workspace: string, rule: TrustRule, target?: "user" | "workspace"): void {
     const cfg = vscode.workspace.getConfiguration(CONFIG_SECTION);
     const hasFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 0;
-    // target 明确指定时按指定走；未指定（兼容旧逻辑）时有工作区→Workspace，无工作区→Global
     const useGlobal = target === "user" || (!target && !hasFolder);
     const configTarget = useGlobal ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace;
 
-    // 只读取目标作用域已有值（而非合并生效值），避免把另一层的规则拷进来
     const inspected = cfg.inspect<string[]>(CONFIG_KEY);
     const scopeValue = useGlobal ? inspected?.globalValue : inspected?.workspaceValue;
     const current = Array.isArray(scopeValue) ? scopeValue.filter((p): p is string => typeof p === "string") : [];
@@ -42,9 +40,10 @@ export class VSCodeCommandTrustStore implements CommandTrustStore {
     const trie = CommandTrustTrie.fromStrings(current);
     trie.add(rule);
     const serialized = trie.serialize();
-    console.log(`[axon-trust:save] target=${target} useGlobal=${useGlobal} current=${JSON.stringify(current)} serialized=${JSON.stringify(serialized)}`);
+    // 诊断：确保 save 被调。DevTools 里搜 [axon-trust:save]
+    vscode.window.showInformationMessage(`[axon-trust:save] target=${target} add=${rule.pattern} useGlobal=${useGlobal} before=${current.length} after=${serialized.length}`);
     void cfg.update(CONFIG_KEY, serialized, configTarget).then(undefined, (err: unknown) => {
-      console.warn("[trust] 写回 axon.trustedCommands 失败:", (err as Error).message);
+      vscode.window.showErrorMessage(`[trust] 写回失败: ${(err as Error).message}`);
     });
   }
 }

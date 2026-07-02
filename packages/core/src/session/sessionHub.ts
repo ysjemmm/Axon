@@ -232,6 +232,7 @@ export class SessionHub {
         console.warn("[trust] 载入命令白名单失败（用内置默认）:", (err as Error).message);
       }
     }
+    // 每个 session 都注册持久化回调（确保即使不是第一个 session 也能写回）
     session.setOnCommandTrustApproved((rule, target) => {
       try {
         store.save(workspace, rule, target);

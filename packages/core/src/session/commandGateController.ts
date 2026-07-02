@@ -9,7 +9,7 @@
  * 不依赖 session 的 @internal 字段；仅通过 session.send 向前端发审批/拦截事件。
  */
 
-import { CommandGate, type ApprovalDecision, type TrustRule, type GateOutcome } from "../tools/index.js";
+import { CommandGate, type ApprovalDecision, type TrustRule, type GateOutcome, type TrustScope } from "../tools/index.js";
 import type { AgentSession } from "../agentSession.js";
 
 export class CommandGateController {
@@ -68,7 +68,7 @@ export class CommandGateController {
   /** 弹出命令审批请求并阻塞，等待用户三档决策（exact/prefix/all/once/reject） */
   private requestCommandApproval(
     command: string,
-    options: { choice: "exact" | "prefix" | "all"; pattern: string; label: string }[],
+    options: { choice: TrustScope; pattern: string; label: string }[],
     toolCallId?: string,
     danger?: string,
   ): Promise<ApprovalDecision> {
