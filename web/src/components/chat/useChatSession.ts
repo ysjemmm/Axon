@@ -11,7 +11,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { MODELS, findModel, useModels } from "@/components/ModelSelector";
+import { MODELS, findModel, getModels, useModels } from "@/components/ModelSelector";
 import type { ToolStatus } from "@/components/ToolCallItem";
 import { listRelays, type RelayData } from "@/lib/apiClient";
 import { useSessionEvents } from "@/hooks/useSessionEvents";
@@ -85,7 +85,12 @@ export function useChatSession(opts: UseChatSessionOptions) {
     try { return localStorage.getItem("axon-last-model") || DEFAULT_MODEL_ID; } catch { return DEFAULT_MODEL_ID; }
   });
   const [workspace, setWorkspace] = useState<string>("");
-  const [workspaces, setWorkspaces] = useState<string[]>([]);
+  const [workspaces, setWorkspacesState] = useState<string[]>([]);
+  const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
+  const setWorkspaces = useCallback((ws: string[]) => {
+    setWorkspacesState(ws);
+    setWorkspacesLoaded(true);
+  }, []);
   const [currentGroupId, setCurrentGroupId] = useState<string | null>(null);
   // Relay 呈现（仅 hasRelay 用于顶栏呼吸灯；其余保留以承接事件）
   const [, setLiveRelay] = useState<RelayData | null>(null);
@@ -283,6 +288,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
       setIsLoadingSession(true);
       setChatHistory([]);
       setIsLoading(false);
+      setWorkspacesLoaded(false);  // 加载历史会话期间也重置，等后端返回工作区后再判断
       typewriter.cancel();
       send({ type: "load_session", sessionId });
     } else {
@@ -290,6 +296,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
       lastLoadedSessionId.current = null;
       setChatHistory([]);
       setIsLoadingSession(false);
+      setWorkspacesLoaded(false);  // 新开 session 时重置加载标志，等后端返回工作区列表后再判断
       send({ type: "reset_session" });
     }
     send({ type: "set_edit_mode", mode: editModeRef.current });
@@ -591,7 +598,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     messageQueue, toolConfirm,
     waitingInputIds,
     commandApprovals, commandBlocked,
-    editMode, workspace, workspaces, currentGroupId, hasRelay, model, provider: providerState,
+    editMode, workspace, workspaces, workspacesLoaded, currentGroupId, hasRelay, model, provider: providerState,
     // 撤销轻提示
     undoNotice, setUndoNotice,
     // Quest

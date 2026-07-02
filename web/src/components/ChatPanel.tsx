@@ -325,7 +325,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   const handleSend = () => {
     if (session.isCompacting) return;
     // 无工作区时不允许发送——引导用户先添加工作区
-    if (mode !== "quest" && !session.workspace && session.workspaces.length === 0) {
+    if (mode !== "quest" && session.workspacesLoaded && !session.workspace && session.workspaces.length === 0) {
       setPickerOpen(true);
       return;
     }
@@ -693,7 +693,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               <div className="flex-1 flex items-center justify-center">
                 <div className="text-center max-w-md px-6">
                   <AxonLogo size={64} className="mx-auto mb-4" />
-                  {mode !== "quest" && !session.workspace && session.workspaces.length === 0 ? (
+                  {mode !== "quest" && session.workspacesLoaded && !session.workspace && session.workspaces.length === 0 ? (
                     <>
                       <p className="text-lg font-medium text-foreground">欢迎使用 Axon</p>
                       <p className="text-sm text-muted-foreground mt-1 mb-4">AI 编程助手 · 读写代码、执行命令、搜索项目</p>
