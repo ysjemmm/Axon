@@ -45,10 +45,9 @@ export class VSCodeCommandTrustStore implements CommandTrustStore {
     const trie = CommandTrustTrie.fromStrings(current);
     trie.add(rule);
     const serialized = trie.serialize();
-    // 诊断：确保 save 被调。DevTools 里搜 [axon-trust:save]
-    vscode.window.showInformationMessage(`[axon-trust:save] target=${target} add=${rule.pattern} useGlobal=${useGlobal} before=${current.length} after=${serialized.length}`);
+    console.log(`[axon-trust:save] target=${target} add=${rule.pattern} useGlobal=${useGlobal} before=${current.length} after=${serialized.length}`);
     void cfg.update(CONFIG_KEY, serialized, configTarget).then(undefined, (err: unknown) => {
-      vscode.window.showErrorMessage(`[trust] 写回失败: ${(err as Error).message}`);
+      console.warn("[trust] 写回失败:", (err as Error).message);
     });
   }
 }

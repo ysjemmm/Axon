@@ -83,20 +83,27 @@ export class CommandGate {
     this.trie = CommandTrustTrie.fromStrings(patterns);
   }
 
+  /** 内部标志：save() 刚写入磁盘后会触发 onDidChangeConfiguration，
+   * 但此时内存 trie 已经通过 gate() 的 trie.add() 更新了，
+   * 不需要 reload。设此标志跳过下一次 setTrustedPatterns 调用。 */
+  private skipNextReload = false;
+
+  /** 标记：下一次 setTrustedPatterns 调用应跳过（由 save 触发，内存已是最新） */
+  markSkipNextReload(): void {
+    this.skipNextReload = true;
+  }
+
   /** 用一组模式重置白名单（host 从设置/存储读出后注入）。始终合并内置只读默认集 */
   setTrustedPatterns(patterns: string[]): void {
-    // 合并而非替换：先读当前 trie 已有的持久化规则，与新 patterns 取并集后重建。
-    // 这样 save() 触发的 onDidChangeConfiguration → reloadTrustedCommands 回环
-    // 不会覆盖 gate() 里刚通过 trie.add() 写入内存但尚未 flush 到磁盘的新规则。
-    const currentRules = this.trie.list().map((r) => {
-      // 序列化回 pattern 字符串
-      if (r.scope === "all") return "*";
-      if (r.scope === "prefix") return r.pattern + " *";
-      return r.pattern;
-    });
-    const merged = [...new Set([...currentRules, ...patterns])];
-    console.log(`[axon-trust:reload] setTrustedPatterns load=${patterns.length} current=${currentRules.length} merged=${merged.length}`);
-    this.trie = CommandTrustTrie.fromStrings([...BUILTIN_TRUSTED_PATTERNS, ...merged]);
+    // 如果是 save() 刚写入触发的 reload，跳过——内存 trie 已经是最新的
+    if (this.skipNextReload) {
+      this.skipNextReload = false;
+      console.log(`[axon-trust:reload] skipped (save-triggered, trie already current)`);
+      return;
+    }
+    // 全量替换：确保用户在 Settings UI 里的删除操作能反映到内存 trie
+    console.log(`[axon-trust:reload] setTrustedPatterns load=${patterns.length}`);
+    this.trie = CommandTrustTrie.fromStrings([...BUILTIN_TRUSTED_PATTERNS, ...patterns]);
   }
 
   /** 当前最简白名单（供管理面板展示） */
@@ -143,7 +150,12 @@ export class CommandGate {
     this.trie.add(rule);
     const verify = this.trie.isTrusted(command);
     console.log(`[axon-trust:${tid}] -> after-add isTrusted("${command}")=${verify} rules=${JSON.stringify(this.trie.list().map((r: TrustRule) => r.scope+':'+r.pattern))}`);
-    if (decision.choice !== "all") deps.persist?.(rule, decision.target);
+    // 标记跳过下一次 reload：persist 写磁盘后会触发 onDidChangeConfiguration → reload，
+    // 但内存 trie 已经通过上面的 add 更新了，reload 会用磁盘旧值覆盖。
+    if (decision.choice !== "all") {
+      this.markSkipNextReload();
+      deps.persist?.(rule, decision.target);
+    }
     return { allow: true, editedCommand: decision.editedCommand };
   }
 }
