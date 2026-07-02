@@ -1189,6 +1189,17 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   console.log("[axon] 扩展已激活（进程内 Agent 内核）");
+
+  // Axon: 首次启动自动打开 Axon 侧边栏，引导用户发现 Axon Agent
+  const firstStartKey = "axon.firstStartDone";
+  if (!context.globalState.get<boolean>(firstStartKey)) {
+    context.globalState.update(firstStartKey, true);
+    // 延迟执行，等 workbench 完全就绪后再聚焦
+    setTimeout(() => {
+      vscode.commands.executeCommand("workbench.action.focusAuxiliaryBar");
+      vscode.commands.executeCommand("axon.chat.focus");
+    }, 1500);
+  }
 }
 
 export function deactivate(): void {
