@@ -602,6 +602,8 @@ export class AgentSession {
   /** 设置当前会话 id（relay 关联用，由 index.ts 在加载/创建会话时调用） */
   setSessionId(id: string): void {
     this.currentRelaySessionId = id;
+    // 同步设置快照管理器的 sessionId，实现快照的 session 隔离
+    this.snapshotMgr.setSessionId(id);
   }
 
   /** 获取当前会话 id（持久化时绑定到正确的会话文件，避免切换会话后串写） */
@@ -1066,8 +1068,6 @@ export class AgentSession {
     const creditDetail = buildCreditDetail(this.model, breakdown);
     this.messages.push({ role: "assistant", content: contentBuffer, turnStats: { elapsed, tokens: turnTokens, model: this.model, credits, creditDetail } } as any);
     this.persistMessages(); // 最终回复落盘，切走也保留
-    console.debug("[stream] Turn 结束，总耗时:", elapsed, "ms");
-    console.debug(`[agent-loop] round=${rounds} 分支=正常收尾（stream_end，本轮结束对话）`);
     // 本轮真实 token（拿不到 usage 时回退到字符数估算）
     this.send("stream_end", { elapsed, tokens: turnTokens, model: this.model, credits, creditDetail });
     // 本轮结束：裁剪旧 tool 结果，控制上下文体积增长（每轮都做，用户无感）
@@ -1242,11 +1242,10 @@ export class AgentSession {
     // 这通常是 API 侧偶发的 SSE 异常（output item 未产出）。不要给用户显示空白——
     // 注入引导让模型重新生成一次回复。最多重试 1 次，防无限循环。
     if (!contentBuffer && !ts.emptyRetried) {
-      console.debug(`[agent-loop] round=${rounds} 空回复兜底：content 为空但 finish=stop，注入重说引导`);
       ts.emptyRetried = true;
       this.messages.push({
         role: "system",
-        content: "你上一轮的回复内容为空（可能是网络波动）。请直接给出你的中文回答，不要调工具。",
+        content: "你上一轮的回复内容为空。请直接给出你的中文回答，如有必要再重新调工具。",
         _injected: true,
       } as any);
       return "continue";
@@ -1267,7 +1266,6 @@ export class AgentSession {
             .filter((r) => !r.ok)
             .map((r) => `${r.path}: ${r.details || `${r.errorCount} 个错误`}`)
             .join("\n");
-          console.debug(`[agent-loop] 自动 diagnostics 发现错误，注入修复引导`);
           this.messages.push({ role: "assistant", content: contentBuffer });
           const okFiles = diagResults.filter((r) => r.ok).map((r) => r.path);
           const okNote = okFiles.length > 0 ? `\n（已检查通过：${okFiles.join("、")}）` : "";
@@ -1491,7 +1489,6 @@ export class AgentSession {
           this.send("stream_delta", { content: text });
         },
         onToolCallDetected: (name, id) => {
-          console.log(`[stream] tool detected: ${name} id=${id}`);
           // ⚠️ 不在这里发 tool_call(pending)！
           // onToolCallDetected 在流式输出阶段被调用，此时 LLM 可能一次返回多个 tool_calls，
           // 每个都会触发此回调。如果在这里全发 pending 卡片，用户会同时看到 N 张"准备执行"卡片，
@@ -1514,16 +1511,6 @@ export class AgentSession {
       let contentBuffer = turn.content;
       const toolCalls = turn.toolCalls;
       const finishReason = turn.finishReason;
-
-      // ── 循环诊断日志 ──（排查"不收尾/空转"：每轮打印一行摘要，复现一次即可看清卡在哪）
-      console.debug(
-        `[agent-loop] round=${rounds}/${MAX_ROUNDS} model=${this.model} ` +
-        `toolCalls=${toolCalls.length}${toolCalls.length ? "(" + toolCalls.map((t) => t.name).join(",") + ")" : ""} ` +
-        `finish=${finishReason} contentLen=${(contentBuffer || "").length} ` +
-        `didMutate=${ts.didMutate} didSelfCheck=${ts.didSelfCheck} didDiagnose=${ts.didDiagnose} ` +
-        `failures=${guard.failures} pendingManual=${this.host.edits.getMode() === "manual" && this.host.edits.hasPending()}` +
-        ((contentBuffer || "").length ? ` head=${JSON.stringify((contentBuffer || "").slice(0, 60))}` : ""),
-      );
 
       // 记录本回合 API 返回的真实 token 用量（用于精确驱动压缩与进度条）
       this.recordTurnUsage(turn.usage);

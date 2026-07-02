@@ -29,6 +29,8 @@ export class SnapshotManager {
   private strategy: Snapshotter | null = null;
   /** 已初始化（策略已选定） */
   private initialized = false;
+  /** 当前会话 id，用于快照存储的 session 隔离。由 AgentSession.setSessionId() 同步设置。 */
+  sessionId = "";
 
   constructor(
     private host: AgentHost,
@@ -42,24 +44,39 @@ export class SnapshotManager {
    */
   async init(): Promise<void> {
     // ① 尝试 Git 策略
-    const git = new GitSnapshotter(this.host, this.cwd);
+    const git = new GitSnapshotter(this.host, this.cwd, this.sessionId);
     if (await git.init()) {
       this.strategy = git;
       this.initialized = true;
-      console.debug("[snapshot] strategy: git (refs/axon/snapshots/)");
+      console.debug(`[snapshot] strategy: git (refs/axon/snapshots/${this.sessionId}/)`);
       return;
     }
     // ② 退化：文件系统策略
-    const fs = new FsSnapshotter(this.host, this.cwd);
+    const fs = new FsSnapshotter(this.host, this.cwd, this.sessionId);
     if (await fs.init()) {
       this.strategy = fs;
       this.initialized = true;
-      console.debug("[snapshot] strategy: filesystem (.axon/snapshots/)");
+      console.debug(`[snapshot] strategy: filesystem (.axon/snapshots/${this.sessionId}/)`);
       return;
     }
     // ③ 都不可用：静默降级（不报错，仅打日志）
     console.warn("[snapshot] no strategy available, snapshots disabled");
     this.initialized = true;
+  }
+
+  /**
+   * 设置当前会话 id，用于快照存储的 session 隔离。
+   * 如果策略已初始化且 sessionId 发生变化，会重新创建策略实例。
+   */
+  setSessionId(sessionId: string): void {
+    const changed = this.sessionId !== sessionId;
+    this.sessionId = sessionId;
+    // 如果策略已初始化且 sessionId 变化，需要重新创建策略（存储路径包含 sessionId）
+    if (changed && this.initialized) {
+      this.strategy = null;
+      this.initialized = false;
+      this._snapshotdTurns.clear();
+    }
   }
 
   /**

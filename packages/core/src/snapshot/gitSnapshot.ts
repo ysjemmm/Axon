@@ -18,7 +18,7 @@ import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 
-const REF_PREFIX = "refs/axon/snapshots/";
+const REF_PREFIX_BASE = "refs/axon/snapshots/";
 
 /** 从 "turn-10" 中提取数字 10，无法解析返回 0 */
 function turnNum(id: string): number {
@@ -46,10 +46,14 @@ async function gitDirect(cwd: string, args: string[], timeoutMs = 8000): Promise
 export class GitSnapshotter implements Snapshotter {
   readonly name = "git";
   private cwd: string;
+  private sessionId: string;
   private available = false;
+  private refPrefix: string;
 
-  constructor(_host: AgentHost, cwd: string) {
+  constructor(_host: AgentHost, cwd: string, sessionId = "") {
     this.cwd = cwd;
+    this.sessionId = sessionId || "default";
+    this.refPrefix = `${REF_PREFIX_BASE}${this.sessionId}/`;
   }
 
   async init(): Promise<boolean> {
@@ -82,10 +86,10 @@ export class GitSnapshotter implements Snapshotter {
 
       const [, updateCode] = await gitDirect(
         this.cwd,
-        ["update-ref", `${REF_PREFIX}${id}`, commitHash],
+        ["update-ref", `${this.refPrefix}${id}`, commitHash],
         3000,
       );
-      console.log(`[snapshot] create ${id}: cwd=${this.cwd} hash=${commitHash} ok=${updateCode === 0}`);
+      console.log(`[snapshot] create ${id}: cwd=${this.cwd} session=${this.sessionId} hash=${commitHash} ok=${updateCode === 0}`);
       return updateCode === 0;
     } catch {
       return false;
@@ -95,11 +99,11 @@ export class GitSnapshotter implements Snapshotter {
   async restore(id: string): Promise<boolean> {
     if (!this.available) return false;
     try {
-      const refName = `${REF_PREFIX}${id}`;
+      const refName = `${this.refPrefix}${id}`;
       const [, verifyCode] = await gitDirect(this.cwd, ["rev-parse", "--verify", refName], 3000);
       if (verifyCode !== 0) return false;
       const [, checkoutCode] = await gitDirect(this.cwd, ["checkout", refName, "--", "."], 15000);
-      console.log(`[snapshot] restore ${id}: ok=${checkoutCode === 0}`);
+      console.log(`[snapshot] restore ${id}: session=${this.sessionId} ok=${checkoutCode === 0}`);
       return checkoutCode === 0;
     } catch {
       return false;
@@ -111,14 +115,14 @@ export class GitSnapshotter implements Snapshotter {
     try {
       const [out, code] = await gitDirect(
         this.cwd,
-        ["for-each-ref", "--format=%(refname:short) %(creatordate:unix)", REF_PREFIX],
+        ["for-each-ref", "--format=%(refname:short) %(creatordate:unix)", this.refPrefix],
         3000,
       );
       if (code !== 0) return [];
       const snapshots: Snapshot[] = [];
       for (const line of out.split("\n").filter(Boolean)) {
         const [refPath, timestamp] = line.trim().split(/\s+/);
-        const id = refPath.replace("axon/snapshots/", "");
+        const id = refPath.replace(`axon/snapshots/${this.sessionId}/`, "");
         const createdAt = parseInt(timestamp, 10) || 0;
         snapshots.push({ id, createdAt, label: `Git 快照 ${id}`, files: [] });
       }
@@ -126,7 +130,7 @@ export class GitSnapshotter implements Snapshotter {
         if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
         return turnNum(b.id) - turnNum(a.id);
       });
-      console.log(`[snapshot] list: cwd=${this.cwd} count=${snapshots.length}`);
+      console.log(`[snapshot] list: cwd=${this.cwd} session=${this.sessionId} count=${snapshots.length}`);
       return snapshots;
     } catch {
       return [];
@@ -136,7 +140,7 @@ export class GitSnapshotter implements Snapshotter {
   async remove(id: string): Promise<boolean> {
     if (!this.available) return false;
     try {
-      const [, code] = await gitDirect(this.cwd, ["update-ref", "-d", `${REF_PREFIX}${id}`], 3000);
+      const [, code] = await gitDirect(this.cwd, ["update-ref", "-d", `${this.refPrefix}${id}`], 3000);
       return code === 0;
     } catch {
       return false;

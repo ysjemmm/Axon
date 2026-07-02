@@ -16,12 +16,14 @@ export class FsSnapshotter implements Snapshotter {
   readonly name = "fs";
   private host: AgentHost;
   private cwd: string;
+  private sessionId: string;
   private snapshotsDir: string;
 
-  constructor(host: AgentHost, cwd: string) {
+  constructor(host: AgentHost, cwd: string, sessionId = "") {
     this.host = host;
     this.cwd = cwd;
-    this.snapshotsDir = join(cwd, SNAPSHOTS_DIR);
+    this.sessionId = sessionId || "default";
+    this.snapshotsDir = join(cwd, SNAPSHOTS_DIR, this.sessionId);
   }
 
   async init(): Promise<boolean> {

@@ -160,6 +160,7 @@ interface MarkdownRendererProps { content: string; }
 export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: MarkdownRendererProps) {
   const ref = useRef<HTMLDivElement>(null);
   const lastContentRef = useRef<string>("");
+  const lastHtmlRef = useRef<string>("");
   const rafRef = useRef<number | null>(null);
   const pendingContentRef = useRef<string>(content);
 
@@ -227,25 +228,29 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: Mark
         block.style.border = "none";
         return;
       }
-      // 同步渲染类型
-      if (lang === "svg") { hydrateSvg(block, codeContent, (r) => writeHydrateCache(cacheKey, r)); }
-      else if (lang === "html") { hydrateHtml(block, codeContent, (r) => writeHydrateCache(cacheKey, r)); }
+      // 首次 hydrate 延迟到防抖 useEffect，避免流式输出时反复 hydrate 闪烁
     });
   }, [html, themeTick]);
 
-  // useEffect: mermaid 异步首次渲染
+  // 防抖首次 hydration：流式输出时 html 每 80ms 变化，频繁 hydrate 导致闪烁。
+  // 等 content 稳定 300ms 后再执行首次 SVG/HTML/Mermaid 渲染。
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    el.querySelectorAll<HTMLElement>(".axon-codeblock[data-enhanced-lang]").forEach((block) => {
-      if (block.dataset.hydrated === "1") return;
-      if (block.dataset.enhancedLang !== "mermaid") return;
-      const codeEl = block.querySelector("code");
-      const codeContent = (codeEl?.textContent || "").trim();
-      if (!codeContent) return;
-      const cacheKey = `${themeTick}::mermaid::${codeContent}`;
-      hydrateMermaid(block, codeContent, (r) => writeHydrateCache(cacheKey, r));
-    });
+    const timer = setTimeout(() => {
+      el.querySelectorAll<HTMLElement>(".axon-codeblock[data-enhanced-lang]").forEach((block) => {
+        if (block.dataset.hydrated === "1") return;
+        const lang = block.dataset.enhancedLang || "";
+        const codeEl = block.querySelector("code");
+        const codeContent = (codeEl?.textContent || "").trim();
+        if (!codeContent) return;
+        const cacheKey = `${themeTick}::${lang}::${codeContent}`;
+        if (lang === "svg") { hydrateSvg(block, codeContent, (r) => writeHydrateCache(cacheKey, r)); }
+        else if (lang === "html") { hydrateHtml(block, codeContent, (r) => writeHydrateCache(cacheKey, r)); }
+        else if (lang === "mermaid") { hydrateMermaid(block, codeContent, (r) => writeHydrateCache(cacheKey, r)); }
+      });
+    }, 300);
+    return () => clearTimeout(timer);
   }, [html, themeTick]);
 
   return (
@@ -253,13 +258,23 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: Mark
       ref={ref}
       onClick={handleContentClick}
       className="text-[13px] leading-relaxed prose prose-sm dark:prose-invert prose-neutral max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-1.5 [&_h1]:mt-4 [&_h1]:mb-1.5 [&_h2]:mt-4 [&_h2]:mb-1.5 [&_h3]:mt-3 [&_h3]:mb-1 [&_h4]:mt-2 [&_h4]:mb-1 [&_h5]:mt-2 [&_h5]:mb-1 [&_h6]:mt-1.5 [&_h6]:mb-0.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0 [&_li]:py-[2px] [&_li>p]:my-0 [&_ul_ul]:my-1 [&_ol_ol]:my-1 [&_blockquote]:my-2 [&_blockquote]:border-l-[3px] [&_blockquote]:border-blue-400/60 [&_blockquote]:dark:border-blue-500/40 [&_blockquote]:bg-blue-50/50 [&_blockquote]:dark:bg-blue-950/20 [&_blockquote]:rounded-r-md [&_blockquote]:pl-3.5 [&_blockquote]:pr-3 [&_blockquote]:py-2 [&_blockquote]:not-italic [&_blockquote]:text-foreground/85 [&_blockquote]:text-[12.5px] [&_blockquote_p]:my-0.5 [&_pre]:!my-2 [&_hr]:!my-3 [&_:not(pre)>code]:font-mono [&_:not(pre)>code]:bg-[rgba(200,200,200,0.15)] [&_:not(pre)>code]:dark:bg-[rgba(200,200,200,0.13)] [&_:not(pre)>code]:text-[#ab5726] [&_:not(pre)>code]:dark:text-[#e8ab6a] [&_:not(pre)>code]:px-1.5 [&_:not(pre)>code]:py-0.5 [&_:not(pre)>code]:rounded [&_:not(pre)>code]:text-[0.85em] [&_:not(pre)>code]:font-medium [&_:not(pre)>code]:border [&_:not(pre)>code]:border-[rgba(150,150,150,0.25)] [&_:not(pre)>code]:dark:border-[rgba(200,200,200,0.25)] [&_code]:before:content-none [&_code]:after:content-none [&_.axon-path-link]:text-[var(--vscode-textLink-foreground,#3794ff)] [&_.axon-path-link]:cursor-pointer [&_.axon-path-link]:hover:underline [&_.axon-path-link]:bg-transparent"
-      dangerouslySetInnerHTML={{ __html: html }}
     />
   );
 });
 
 
 // ── Hydrate 函数 ──
+
+// 离屏测量层：overflow:hidden + width:0 + height:0 彻底隔离。
+// 无论内部内容多大（mermaid SVG 可能几千像素宽），都不会扩展 body 滚动区域。
+let measureLayer: HTMLDivElement | null = null;
+function getMeasureLayer(): HTMLDivElement {
+  if (measureLayer && measureLayer.isConnected) return measureLayer;
+  measureLayer = document.createElement("div");
+  measureLayer.style.cssText = "position:absolute;overflow:hidden;width:0;height:0;top:0;left:0;pointer-events:none;z-index:-1";
+  document.body.appendChild(measureLayer);
+  return measureLayer;
+}
 
 function isSafeSvg(content: string): boolean {
   const dangerous = /<script|<iframe|<object|<embed|on\w+\s*=|javascript:/i;
@@ -270,7 +285,7 @@ function hydrateSvg(block: HTMLElement, content: string, onRendered?: (el: HTMLE
   if (!isSafeSvg(content)) return;
   block.dataset.hydrated = "1";
   const wrapper = document.createElement("div");
-  wrapper.className = "group/enhanced relative my-2 p-1 flex justify-center rounded-md";
+  wrapper.className = "group/enhanced relative my-2 p-1 flex justify-center rounded-md overflow-hidden min-w-0";
   wrapper.style.color = "var(--foreground, currentColor)";
   wrapper.dataset.axonKind = "svg";
   wrapper.dataset.axonSource = encodeURIComponent(content);
@@ -278,6 +293,8 @@ function hydrateSvg(block: HTMLElement, content: string, onRendered?: (el: HTMLE
   const svg = wrapper.querySelector("svg");
   if (svg) {
     svg.style.background = "transparent";
+    svg.style.maxWidth = "100%";
+    svg.style.height = "auto";
     // 移除 AI 生成的大背景矩形（浅色硬编码 fill，在深色主题下太亮）
     const firstRect = svg.querySelector("rect");
     if (firstRect) {
@@ -304,7 +321,7 @@ function hydrateSvg(block: HTMLElement, content: string, onRendered?: (el: HTMLE
 function hydrateHtml(block: HTMLElement, content: string, onRendered?: (el: HTMLElement) => void): void {
   block.dataset.hydrated = "1";
   const wrapper = document.createElement("div");
-  wrapper.className = "group/enhanced relative my-2 rounded-md axon-html-preview";
+  wrapper.className = "group/enhanced relative my-2 rounded-md axon-html-preview overflow-hidden min-w-0";
   wrapper.dataset.axonKind = "html";
   wrapper.dataset.axonSource = encodeURIComponent(content);
   const iframe = document.createElement("iframe");
@@ -335,17 +352,18 @@ function loadMermaid() {
 
 async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: (el: HTMLElement) => void): Promise<void> {
   block.dataset.hydrated = "1";
+  // 提到 try 外面，确保 catch 能访问到并清理
+  const wrapper = document.createElement("div");
   try {
     const mermaid = await loadMermaid();
     // 用 neutral 主题（文字深色），背景由 CSS 控制为 transparent
     mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "strict" });
-    const wrapper = document.createElement("div");
     wrapper.className = "group/enhanced relative my-2 p-2 w-full rounded-md overflow-hidden";
     wrapper.style.background = "transparent";
     wrapper.style.position = "absolute";
     wrapper.style.visibility = "hidden";
     wrapper.innerHTML = `<pre class="mermaid not-prose" style="display:block;width:100%;background:transparent">${content}</pre>`;
-    document.body.appendChild(wrapper);
+    getMeasureLayer().appendChild(wrapper);
     await mermaid.run({ nodes: [wrapper.querySelector<HTMLElement>(".mermaid")!] });
     const svg = wrapper.querySelector("svg");
     if (!svg) throw new Error("mermaid rendered but no SVG produced");
@@ -382,7 +400,7 @@ async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: 
     wrapper.style.position = "";
     wrapper.style.visibility = "";
     wrapper.style.background = "transparent";
-    document.body.removeChild(wrapper);
+    wrapper.remove();
     wrapper.dataset.axonKind = "mermaid";
     wrapper.dataset.axonSource = encodeURIComponent(content);
     wrapper.appendChild(createEnhancedMenu("mermaid", "right-1"));
@@ -395,6 +413,9 @@ async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: 
     requestAnimationFrame(() => { wrapper.style.opacity = "1"; });
     onRendered?.(wrapper);
   } catch {
+    // 清理离屏 wrapper：失败时 wrapper 已 appendChild 到 body 但没被移除，
+    // absolute 元素仍会撑大 body 滚动区域，导致 IDE 最外层出现滚动条
+    if (wrapper.parentNode) wrapper.parentNode.removeChild(wrapper);
     block.dataset.hydrated = "0";
   }
 }

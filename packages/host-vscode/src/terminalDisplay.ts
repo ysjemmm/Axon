@@ -76,7 +76,20 @@ const terminalCwds = new Map<string, string>();
 
 function getOrCreateTerminal(terminalKey: string, cwd?: string): vscode.Terminal {
   const existing = terminals.get(terminalKey);
-  if (existing && !existing.exitStatus) return existing;
+  const trackedCwd = terminalCwds.get(terminalKey);
+
+  // 复用条件：终端存在 + 未退出 + cwd 匹配（或没指定 cwd）
+  if (existing && !existing.exitStatus && (!cwd || !trackedCwd || cwd === trackedCwd)) {
+    return existing;
+  }
+
+  // cwd 变了或终端不存在：关闭旧的，创建新的（createTerminal 的 cwd 参数静默指定初始目录，
+  // 不需要在终端里拼接 Set-Location 前缀，用户看到的命令和工具卡片一致）
+  if (existing) {
+    try { existing.dispose(); } catch { /* ignore */ }
+    terminals.delete(terminalKey);
+    terminalCwds.delete(terminalKey);
+  }
 
   const t = vscode.window.createTerminal({
     name: "Axon",
@@ -85,7 +98,7 @@ function getOrCreateTerminal(terminalKey: string, cwd?: string): vscode.Terminal
     env: { GIT_PAGER: "cat", AXON_AI_TERMINAL: "1" },
   });
   terminals.set(terminalKey, t);
-  terminalCwds.delete(terminalKey);
+  if (cwd) terminalCwds.set(terminalKey, cwd);
   return t;
 }
 
@@ -583,7 +596,9 @@ export async function runCommand(opts: TerminalRunOptions): Promise<TerminalRunR
   const t = getOrCreateTerminal(terminalKey, opts.cwd);
   t.show(true);
 
-  const effectiveCommand = opts.cwd ? cdCommand(opts.cwd!) + opts.command : opts.command;
+  // 不再拼接 cdCommand 前缀：getOrCreateTerminal 已经通过 createTerminal({cwd}) 确保终端在正确目录。
+  // 这样终端里显示的命令和工具卡片一致（不会出现 Set-Location 前缀）。
+  const effectiveCommand = opts.command;
 
   // Mark AI command start for proactive awareness filtering
   const aiCmdStartTime = Date.now();

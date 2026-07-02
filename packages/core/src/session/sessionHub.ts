@@ -90,6 +90,15 @@ export class SessionHub {
     this.deps = deps;
     this.storage = deps.storage;
     this.channel = deps.channel;
+    // 注入同步磁盘重载回调：gate() 在 isTrusted=false 时会调一次它再检查，
+    // 解决 reload 后 VS Code 配置未就绪、wireCommandTrust 加载到空数组的时序竞态。
+    this.sharedCommandGate.setReloadFn(() => {
+      try {
+        return this.deps.commandTrust?.load(this.deps.defaultWorkspace) ?? [];
+      } catch {
+        return [];
+      }
+    });
   }
 
   // ---- 内部工具 ----
@@ -416,8 +425,10 @@ export class SessionHub {
           // 注：问答模式的 session 在 listSnapshots() 中已返回空数组；
           //     这里是 session 对象不存在（时序竞态）的兜底路径，仍列出可用快照。
           const tmpMgr = new SnapshotManager(this.deps.createHost(), this.deps.defaultWorkspace);
+          // 兜底路径也要按 session 隔离，避免跨会话看到彼此的快照
+          if (sid) tmpMgr.setSessionId(sid);
           snapshots = await tmpMgr.list().catch(() => []);
-          console.log(`[hub] list_snapshots via fallback: defaultWs=${this.deps.defaultWorkspace} count=${snapshots?.length}`);
+          console.log(`[hub] list_snapshots via fallback: sid=${sid} defaultWs=${this.deps.defaultWorkspace} count=${snapshots?.length}`);
         }
         if (clientId) this.sendToClient(clientId, { type: "snapshots_listed", snapshots: snapshots || [] });
         else console.warn(`[hub] list_snapshots: no clientId!`);

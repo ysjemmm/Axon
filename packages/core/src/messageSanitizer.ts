@@ -2,7 +2,8 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 
 const DEFAULT_TOOL_ERROR =
   "[系统提示：该工具调用的结果已丢失（可能是会话历史损坏或消息链断裂导致）。" +
-  "请重新尝试该操作，不要假设它已成功执行。]";
+  "不要重新调用同一个工具——这通常是基础设施层面的瞬时问题，重试只会再次失败。" +
+  "请直接基于当前对话中已有的信息回复用户，如果确实需要该结果才能继续，用文字向用户说明情况。]";
 
 export function sanitizeToolPairing(
   messages: ChatCompletionMessageParam[]

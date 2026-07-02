@@ -78,9 +78,17 @@ export interface GateOutcome {
 
 export class CommandGate {
   private trie: CommandTrustTrie;
+  /** 同步重新从磁盘加载信任规则的回调（由 sessionHub 注入）。
+   * gate() 在 isTrusted=false 时会调一次它再检查，解决 reload 后配置未就绪的时序竞态。 */
+  private reloadFromDisk?: () => string[];
 
   constructor(patterns: string[] = BUILTIN_TRUSTED_PATTERNS) {
     this.trie = CommandTrustTrie.fromStrings(patterns);
+  }
+
+  /** 注入同步磁盘重载函数（sessionHub 创建 sharedCommandGate 后调用） */
+  setReloadFn(fn: () => string[]): void {
+    this.reloadFromDisk = fn;
   }
 
   /** 内部标志：save() 刚写入磁盘后会触发 onDidChangeConfiguration，
@@ -123,7 +131,15 @@ export class CommandGate {
     const danger = detectDangerousCommand(command);
     // 危险命令不再硬拦：与普通命令一样走人工确认，
     // 但把 danger 作为标记透传给前端，让工具卡片闪烁红色警示。
-    const alreadyTrusted = this.trie.isTrusted(command);
+    let alreadyTrusted = this.trie.isTrusted(command);
+    // reload 后配置未就绪时，trie 可能是空的——从磁盘重新加载一次再检查
+    if (!alreadyTrusted && this.reloadFromDisk) {
+      const patterns = this.reloadFromDisk();
+      if (patterns.length > 0) {
+        this.trie = CommandTrustTrie.fromStrings([...BUILTIN_TRUSTED_PATTERNS, ...patterns]);
+        alreadyTrusted = this.trie.isTrusted(command);
+      }
+    }
     if (alreadyTrusted && !danger) return { allow: true };
 
     const decision = await deps.requestApproval(command, buildTrustOptions(command), danger);
