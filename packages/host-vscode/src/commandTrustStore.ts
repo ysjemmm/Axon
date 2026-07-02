@@ -20,10 +20,15 @@ export class VSCodeCommandTrustStore implements CommandTrustStore {
   /** 读出已信任的模式串（合并 User/Workspace 生效值；内置默认集由 CommandGate 自带，不在此） */
   load(_workspace: string): string[] {
     const cfg = vscode.workspace.getConfiguration(CONFIG_SECTION);
-    const patterns = cfg.get<string[]>(CONFIG_KEY, []);
+    // ⚠️ VS Code 对数组类型配置的合并规则：workspace 层有值时直接覆盖 global 层，
+    // 不是拼接。所以不能用 cfg.get()（返回 effective=workspace 覆盖后的值），
+    // 必须分别读 globalValue 和 workspaceValue 再手动 union。
     const inspected = cfg.inspect<string[]>(CONFIG_KEY);
-    console.log(`[axon-trust:load] effective=${JSON.stringify(patterns)} global=${JSON.stringify(inspected?.globalValue)} workspace=${JSON.stringify(inspected?.workspaceValue)}`);
-    return Array.isArray(patterns) ? patterns.filter((p): p is string => typeof p === "string") : [];
+    const globalPatterns = Array.isArray(inspected?.globalValue) ? inspected!.globalValue! : [];
+    const workspacePatterns = Array.isArray(inspected?.workspaceValue) ? inspected!.workspaceValue! : [];
+    const merged = [...new Set([...globalPatterns, ...workspacePatterns])].filter((p): p is string => typeof p === "string");
+    console.log(`[axon-trust:load] global=${globalPatterns.length} workspace=${workspacePatterns.length} merged=${merged.length} => ${JSON.stringify(merged)}`);
+    return merged;
   }
 
   /** 持久化一条新批准的规则：在目标作用域内去重合并后写回 */
