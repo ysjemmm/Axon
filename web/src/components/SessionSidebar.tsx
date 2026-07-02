@@ -29,6 +29,7 @@ interface SessionSidebarProps {
 
 export function SessionSidebar({ currentSessionId, connected: _connected, filterMode, onSelectSession, onNewSession, onSessionDeleted }: SessionSidebarProps) {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
+  const [loading, setLoading] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
   const [search, setSearch] = useState("");
 
@@ -40,6 +41,7 @@ export function SessionSidebar({ currentSessionId, connected: _connected, filter
     } catch {
       // 后端未连接
     }
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -108,13 +110,15 @@ export function SessionSidebar({ currentSessionId, connected: _connected, filter
       </div>
       {/* 会话列表 */}
       <div className="flex-1 overflow-y-auto py-1">
-        {sessions.length === 0 && (
+        {loading ? (
+          <div className="text-xs text-muted-foreground text-center py-8">加载中...</div>
+        ) : sessions.length === 0 ? (
           <div className="text-xs text-muted-foreground text-center py-8">暂无会话</div>
-        )}
-        {sessions
-          .filter((s) => (filterMode ? (s.mode ?? "agent") === filterMode : true))
-          .filter((s) => !search || s.title.toLowerCase().includes(search.toLowerCase()))
-          .map((s) => (
+        ) : (
+          sessions
+            .filter((s) => (filterMode ? (s.mode ?? "agent") === filterMode : true))
+            .filter((s) => !search || s.title.toLowerCase().includes(search.toLowerCase()))
+            .map((s) => (
           <div
             key={s.id}
             onClick={() => onSelectSession(s.id)}
@@ -134,7 +138,7 @@ export function SessionSidebar({ currentSessionId, connected: _connected, filter
               <Trash2 className="w-3.5 h-3.5" />
             </button>
           </div>
-        ))}
+        )))}
       </div>
     </div>
   );

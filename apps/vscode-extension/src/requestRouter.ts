@@ -87,7 +87,9 @@ export class RequestRouter {
           const wsList = s.workspaces?.length ? s.workspaces : (s.workspace ? [s.workspace] : []);
           for (const ws of wsList) {
             await cleanupSnapshotRefs(ws);
-            RelayStore.open(ws).remove(id).catch(() => { });
+            // 直接删除 relay 目录，不再依赖 RelayStore.open 静态方法（RelayStore 构造函数需要 AgentHost）
+            const relayDir = require("path").join(ws, ".axon", "relays", id);
+            await vscode.workspace.fs.delete(vscode.Uri.file(relayDir), { recursive: true, useTrash: false }).then(undefined, () => {});
           }
         }
         await d.storage.deleteSession(id);
