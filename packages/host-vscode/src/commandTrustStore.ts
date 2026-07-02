@@ -19,7 +19,10 @@ const CONFIG_KEY = "trustedCommands";
 export class VSCodeCommandTrustStore implements CommandTrustStore {
   /** 读出已信任的模式串（合并 User/Workspace 生效值；内置默认集由 CommandGate 自带，不在此） */
   load(_workspace: string): string[] {
-    const patterns = vscode.workspace.getConfiguration(CONFIG_SECTION).get<string[]>(CONFIG_KEY, []);
+    const cfg = vscode.workspace.getConfiguration(CONFIG_SECTION);
+    const patterns = cfg.get<string[]>(CONFIG_KEY, []);
+    const inspected = cfg.inspect<string[]>(CONFIG_KEY);
+    console.log(`[axon-trust:load] effective=${JSON.stringify(patterns)} global=${JSON.stringify(inspected?.globalValue)} workspace=${JSON.stringify(inspected?.workspaceValue)}`);
     return Array.isArray(patterns) ? patterns.filter((p): p is string => typeof p === "string") : [];
   }
 

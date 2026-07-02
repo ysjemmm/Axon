@@ -31,6 +31,7 @@ import { DelegateRunner } from "./session/delegateRunner.js";
 import { ParallelRunner } from "./session/parallelRunner.js";
 import { RelayToolRunner } from "./session/relayToolRunner.js";
 import { CommandGateController } from "./session/commandGateController.js";
+import { CommandGate } from "./tools/index.js";
 import { EditController } from "./session/editController.js";
 import { CompactionController } from "./session/compactionController.js";
 import { RelayStore } from "./relay/relayStore.js";
@@ -163,7 +164,7 @@ export class AgentSession {
   private questThink = false;
   /** @internal */ questWebSearch = false;
 
-  constructor(cwd: string, channel: AgentChannel, host: AgentHost, existingMessages?: ChatCompletionMessageParam[], workspaces?: string[], homeDir?: string, web?: WebCapability, mode: "agent" | "quest" = "agent", mcp?: McpCapability) {
+  constructor(cwd: string, channel: AgentChannel, host: AgentHost, existingMessages?: ChatCompletionMessageParam[], workspaces?: string[], homeDir?: string, web?: WebCapability, mode: "agent" | "quest" = "agent", mcp?: McpCapability, commandGate?: CommandGate) {
     this.mode = mode;
     this.model = process.env.DEFAULT_MODEL || "gpt-5.5";
     this.provider = process.env.DEFAULT_PROVIDER || ZHIPU_PROVIDER;
@@ -190,7 +191,7 @@ export class AgentSession {
     this.delegateRunner = new DelegateRunner(this);
     this.parallelRunner = new ParallelRunner(this);
     this.relayToolRunner = new RelayToolRunner(this);
-    this.commandGateController = new CommandGateController(this);
+    this.commandGateController = new CommandGateController(this, commandGate ?? new CommandGate());
     this.editController = new EditController(this);
     this.compactionController = new CompactionController(this);
     // 延迟初始化快照：等第一次实际需要时才 init（不在构造函数里跑 git 命令，
@@ -1154,7 +1155,7 @@ export class AgentSession {
     const storedResult = contentForAI.length > maxToolContent
       ? contentForAI.slice(0, maxToolContent) + `\n\n[内容已截断，原始长度 ${result.length} 字符。如需更多内容，请用更大的行范围一次性读取，不要分多次零碎读取]`
       : contentForAI;
-    this.messages.push({ role: "tool", tool_call_id: toolCallId, _toolName: toolName, content: storedResult, displayContent: commandWasEdited ? result : undefined, displayCommand: commandWasEdited || undefined, status, fileDiff: meta.fileDiff, fileDiffs: meta.fileDiffs, readRange: meta.readRange, diagnostics: meta.diagnostics, searchResults: (meta as any).searchResults, fetchResult: (meta as any).fetchResult, powerActivated: (meta as any).powerActivated, pending: isPending, userMessage: meta.userMessage, ...this.mcpMetaFor(toolName) } as any);
+    this.messages.push({ role: "tool", tool_call_id: toolCallId, _toolName: toolName, content: storedResult, displayContent: commandWasEdited ? result : undefined, displayCommand: commandWasEdited || undefined, status, fileDiff: meta.fileDiff, fileDiffs: meta.fileDiffs, readRange: meta.readRange, diagnostics: meta.diagnostics, searchResults: (meta as any).searchResults, fetchResult: (meta as any).fetchResult, powerActivated: (meta as any).powerActivated, pending: isPending, userMessage: meta.userMessage, hidden: meta.hidden, ...this.mcpMetaFor(toolName) } as any);
     // 标记编辑工具连续软失败（在阈值内）为 transient，不落盘
     if ((this as any).__markNextAsTransient) {
       (this as any).__markNextAsTransient = false;

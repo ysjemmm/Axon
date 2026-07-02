@@ -15,6 +15,7 @@
 
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { AgentSession } from "../agentSession.js";
+import { CommandGate } from "../tools/index.js";
 import { ZHIPU_PROVIDER } from "../providers.js";
 import { RelayStore } from "../relay/relayStore.js";
 import { SnapshotManager } from "../snapshot/snapshotManager.js";
@@ -82,6 +83,9 @@ export class SessionHub {
   /** 面板在会话创建前收到 set_workspace_group 时，按 clientId 暂存的 workspaces */
   private readonly pendingWorkspaces = new Map<string, string[]>();
 
+  /** 全局唯一的命令信任 trie：所有会话共享同一份白名单（并发读安全，写仅在审批时串行发生） */
+  private readonly sharedCommandGate = new CommandGate();
+
   constructor(deps: SessionHubDeps) {
     this.deps = deps;
     this.storage = deps.storage;
@@ -134,9 +138,8 @@ export class SessionHub {
   }
 
   /**
-   * 重载命令信任白名单到所有活跃会话。
-   * 在设置变化时由 host 调用，保证 settings 里增删的规则实时生效到正在运行的 Agent——
-   * 而不是等到下次创建会话才加载。
+   * 重载命令信任白名单。直接更新全局唯一的 CommandGate trie，
+   * 所有会话自动生效——不需要遍历 activeSessions 逐个同步。
    */
   reloadTrustedCommands(): void {
     const store = this.deps.commandTrust;
@@ -144,9 +147,8 @@ export class SessionHub {
     const workspace = this.deps.defaultWorkspace;
     try {
       const patterns = store.load(workspace);
-      for (const session of this.activeSessions.values()) {
-        session.setTrustedCommands(patterns);
-      }
+      console.log(`[axon-trust:reload] patterns from store=${JSON.stringify(patterns)}`);
+      this.sharedCommandGate.setTrustedPatterns(patterns);
     } catch (err) {
       console.warn("[trust] 实时同步命令白名单失败:", (err as Error).message);
     }
@@ -201,6 +203,7 @@ export class SessionHub {
       this.deps.web,
       mode,
       this.deps.mcp,
+      this.sharedCommandGate,
     );
     this.wireCommandTrust(session, workspaces?.[0] ?? cwd);
     // 回填该面板期望的编辑模式（auto/manual）：解决 reload 后 set_edit_mode 与会话创建的时序竞态
@@ -215,14 +218,19 @@ export class SessionHub {
     return session;
   }
 
-  /** 接线命令信任白名单：从存储载入 + 注册新批准规则的持久化回调 */
+  /** 接线命令信任白名单：首次加载到共享 gate + 注册持久化回调 */
   private wireCommandTrust(session: AgentSession, workspace: string): void {
     const store = this.deps.commandTrust;
     if (!store) return;
-    try {
-      session.setTrustedCommands(store.load(workspace));
-    } catch (err) {
-      console.warn("[trust] 载入命令白名单失败（用内置默认）:", (err as Error).message);
+    // 只在第一个 session 创建时加载一次到共享 gate；后续 session 复用同一份 trie。
+    if (this.activeSessions.size === 1) {
+      try {
+        const patterns = store.load(workspace);
+        console.log(`[axon-trust:wire] first session, loading patterns=${JSON.stringify(patterns)}`);
+        this.sharedCommandGate.setTrustedPatterns(patterns);
+      } catch (err) {
+        console.warn("[trust] 载入命令白名单失败（用内置默认）:", (err as Error).message);
+      }
     }
     session.setOnCommandTrustApproved((rule, target) => {
       try {

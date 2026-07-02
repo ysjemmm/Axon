@@ -13,8 +13,6 @@ import { CommandGate, type ApprovalDecision, type TrustRule, type GateOutcome } 
 import type { AgentSession } from "../agentSession.js";
 
 export class CommandGateController {
-  // 命令信任门：execute_command 的"灾难硬拦 + 白名单 + 人工授权"
-  private readonly commandGate = new CommandGate();
   // 审批门：按 requestId 多路挂起 resolver。并发安全——parallel_research / 多个子 Agent
   // 可能同时请求授权，各自的等待用独立 requestId 路由，互不覆盖。
   private readonly commandApprovalResolvers = new Map<string, (d: ApprovalDecision) => void>();
@@ -23,7 +21,11 @@ export class CommandGateController {
   // 新批准信任规则的持久化回调（host 注入：写 VS Code 设置 / JSON 存储）
   private onApproved?: (rule: TrustRule, target?: "user" | "workspace") => void;
 
-  constructor(private readonly s: AgentSession) {}
+  constructor(
+    private readonly s: AgentSession,
+    /** 共享的全局命令信任 trie（sessionHub 持有，所有会话共用一份） */
+    private readonly commandGate: CommandGate,
+  ) {}
 
   /** 注入持久化的命令信任白名单（host 从 VS Code 设置/JSON 存储读出后调用） */
   setTrustedPatterns(patterns: string[]): void {
