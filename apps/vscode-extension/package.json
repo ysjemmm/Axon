@@ -36,7 +36,7 @@
             "type": "string"
           },
           "default": [],
-          "scope": "resource",
+          "scope": "window",
           "markdownDescription": "命令信任白名单：Agent 执行 `execute_command` 时，命中这里的命令将免人工授权直接放行（灾难性命令如 `rm -rf` 始终被拦截，不受此影响）。\n\n约定：\n- 精确整条：如 `npm run build`（只信任这一条）\n- 前缀（以 ` *` 结尾）：如 `git status *`（信任 `git status` 开头的所有命令）\n- 全部：`*`（信任所有命令，强烈不推荐）\n\n在审批弹窗里选择「加入白名单」会自动写入此项。内置只读命令（`git status`、`pwd` 等）已默认信任，无需在此列出。"
         },
         "axon.proactiveAwareness.enabled": {
