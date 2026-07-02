@@ -797,7 +797,7 @@ export class AgentSession {
   private async injectReflection(stuck: StuckTarget | null, guard: LoopGuard): Promise<void> {
     this.send("status", { content: "重新理清思路...", phase: "thinking" });
     const freshState = await this.readStuckTargetState(stuck);
-    this.messages.push({ role: "system", content: buildReflectionPrompt(stuck) + freshState } as ChatCompletionMessageParam);
+    this.messages.push({ role: "system", content: buildReflectionPrompt(stuck) + freshState, _injected: true } as ChatCompletionMessageParam);
     guard.noteReflected();
     this.persistMessages();
   }
@@ -810,7 +810,7 @@ export class AgentSession {
     this.send("status", { content: "整理思路，换个方式重来...", phase: "thinking" });
     this.messages = await reflectiveCompact(this.messages, client, this.model);
     const freshState = await this.readStuckTargetState(stuck);
-    this.messages.push({ role: "system", content: buildSummaryRestartPrompt(stuck) + freshState } as ChatCompletionMessageParam);
+    this.messages.push({ role: "system", content: buildSummaryRestartPrompt(stuck) + freshState, _injected: true } as ChatCompletionMessageParam);
     guard.noteSummaryRestart();
     this.persistMessages();
   }
@@ -1203,7 +1203,8 @@ export class AgentSession {
       this.messages.push({
         role: "system",
         content: "你上一段输出因长度限制被截断了。请直接接着把剩余内容补完，不要重复已经说过的部分，也不要重新开头。",
-      });
+        _injected: true,
+      } as any);
       return "continue";
     }
 
@@ -1216,7 +1217,8 @@ export class AgentSession {
         this.messages.push({
           role: "system",
           content: "你已多次输出未完成的内心 OS。现在必须基于已有信息，要么调用一个具体工具继续推进，要么给出完整的中文最终回答。二选一，不要再输出任何英文思考片段。",
-        });
+          _injected: true,
+        } as any);
         return "continue";
       }
       // 把这次半成品记入历史，注入引导，让下一轮纠正
@@ -1230,7 +1232,8 @@ export class AgentSession {
           `1. 如果还需要信息 → 直接调用对应工具（read_file/search 等），不要用文字描述"我需要看 X"\n` +
           `2. 如果信息已够 → 给出完整、结构化的中文最终回答\n` +
           `不要再输出任何英文思考片段或过渡句。`,
-      });
+        _injected: true,
+      } as any);
       return "continue";
     }
     // 完成前自检：已关闭（速度优先，避免 DeepSeek 等模型多跑一轮验证）。
@@ -1244,7 +1247,8 @@ export class AgentSession {
       this.messages.push({
         role: "system",
         content: "你上一轮的回复内容为空（可能是网络波动）。请直接给出你的中文回答，不要调工具。",
-      });
+        _injected: true,
+      } as any);
       return "continue";
     }
     // 自动语法检查：改了文件且模型没主动调过 check_diagnostics → 代码层自动跑一次。
@@ -1272,7 +1276,8 @@ export class AgentSession {
             content:
               `⚠️ 自动语法检查：你改动的文件中有错误。你必须修复它们。\n${errSummary}${okNote}\n\n` +
               `用 str_replace 逐个修复后，再次调 check_diagnostics 确认全部无错。全部通过后再给用户最终回答。`,
-          });
+            _injected: true,
+          } as any);
           return "continue";
         }
       } catch {

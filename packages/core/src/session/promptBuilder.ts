@@ -110,37 +110,53 @@ export class PromptBuilder {
     }
   }
 
-  /** 构造发给 LLM 的消息：在 system prompt 之后插入风格指令和工作区信息（不污染持久化的 messages） */
+  /** 构造发给 LLM 的消息：保证 [system_prompt + 历史] 前缀稳定，注入消息放尾部
+   *
+   * 缓存策略：
+   * - DeepSeek/GLM 等：自动前缀缓存，要求消息前缀精确稳定。所有动态注入（IDE上下文、skill、
+   *   风格指令等）和 agent loop 的中间注入 system 消息（反思/续写/diagnostics）全部移到末尾，
+   *   保证 [system_prompt + user/assistant/tool 历史] 这段前缀在多轮间完全不变。
+   * - GPT/Claude 等：注入放前面（靠近 system prompt 时遵守度更高），不走前缀缓存。
+   */
   buildRequestMessages(): ChatCompletionMessageParam[] {
     const injections = this.buildInjections();
     const isDeepSeek = /deepseek/i.test(this.s.model);
+    const isCacheFriendly = isDeepSeek || /glm|qwen|moonshot|kimi|yi-/i.test(this.s.model);
+
     const transientSet = isDeepSeek ? TRANSIENT_TOOLS_AGGRESSIVE : TRANSIENT_TOOLS;
+
+    // ── 前缀缓存优化：提取 agent loop 注入的中间 system 消息 ──
+    // _injected: true 的 system 消息（反思/续写/diagnostics/空回复引导）在 history 中间，
+    // 对 DeepSeek/GLM 等自动前缀缓存模型来说会破坏前缀稳定性。
+    // 把它们提取出来，放到消息数组末尾（紧跟在 injections 前），保持 [system_prompt + 稳定历史] 前缀。
+    const extractedInjections: ChatCompletionMessageParam[] = [];
+    const stableMessages = this.s.messages.filter((m) => {
+      if ((m as any)._injected && (m as any).role === "system") {
+        extractedInjections.push(m);
+        return false;
+      }
+      return true;
+    });
 
     // 先移除跨轮瞬态工具结果（search/list_dir/web_search/web_fetch/read_file），
     // 必须在 sanitizeToolPairing 之前执行：先删掉不需要的工具结果，
     // 再让 sanitizer 把关联的孤儿 tool_calls 一并清理，避免产生
     // "assistant(tool_calls) 后缺少 tool 结果" 的消息序列导致 API 400。
-    const preFiltered = this.s.messages.filter((m) => {
+    const preFiltered = stableMessages.filter((m) => {
       if ((m as any).role !== "tool") return true;
       const toolName = (m as any)._toolName as string | undefined;
       if (!toolName || !transientSet.has(toolName)) return true;
-      // 只保留当前轮次的瞬态结果（在原始数组上的下标与 turnStartMsgCount 对齐）
-      const idx = this.s.messages.indexOf(m);
+      const idx = stableMessages.indexOf(m);
       return idx >= this.s.turnStartMsgCount;
     });
 
-    // 发送前清洗：移除孤儿 tool_calls / 孤儿 tool 结果（含上一步因瞬态过滤
-    // 而产生的孤儿），避免历史损坏导致 API 400
+    // 发送前清洗：移除孤儿 tool_calls / 孤儿 tool 结果
     const cleaned = sanitizeToolPairing(preFiltered);
 
     // 滑动窗口截断：对非当前轮的 tool 消息，只保留摘要。
-    // user/assistant 文字全部保留（"记忆"不丢），tool 调用记录保留（知道做过什么），
-    // 只有旧工具的大块正文数据被截短（文件内容、命令输出等）。
-    // DeepSeek 类模型更激进截断（长 context 下 TTFT 急剧上升）。
     const SUMMARY_LIMIT = isDeepSeek ? 80 : 200;
     const truncated = cleaned.map((m, idx) => {
       if ((m as any).role !== "tool") return m;
-      // 当前轮次的工具结果保留完整
       if (idx >= this.s.turnStartMsgCount) return m;
       const content = (m as any).content as string;
       if (!content || content.length <= SUMMARY_LIMIT) return m;
@@ -150,15 +166,22 @@ export class PromptBuilder {
       return { ...m, content: truncatedContent };
     });
 
-    if (injections.length === 0) return truncated;
-    if (truncated.length === 0) return injections;
+    // 合并所有尾部注入：agent loop 提取出来的 + buildInjections 产生的
+    const allTailInjections = isCacheFriendly
+      ? [...extractedInjections, ...injections]
+      : injections;
+
+    if (allTailInjections.length === 0) return truncated;
+    if (truncated.length === 0) return allTailInjections;
+
     const [systemMsg, ...rest] = truncated;
-    // Prompt caching 优化：DeepSeek 支持前缀缓存，注入放尾部保证 [system + 历史] 前缀稳定。
-    // 其他模型（GPT/Claude）注入放前面（靠近 system prompt 时遵守度更高）。
-    if (isDeepSeek) {
-      return [systemMsg, ...rest, ...injections];
+
+    if (isCacheFriendly) {
+      // 前缀缓存模型：[system_prompt + 稳定历史] 作为前缀，所有注入放末尾
+      return [systemMsg, ...rest, ...allTailInjections];
     }
-    return [systemMsg, ...injections, ...rest];
+    // GPT/Claude 等：注入放前面（靠近 system prompt 时遵守度更高）
+    return [systemMsg, ...allTailInjections, ...rest];
   }
 
   /** 构建本轮要注入的 system 消息（风格/验证/多工作区/IDE/skill/power），供请求组装与 token 估算复用 */
