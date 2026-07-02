@@ -1400,8 +1400,10 @@ export class AgentSession {
       this.messages.push({ role: "user", content: input, timestamp: Date.now(), ...userExtra } as any);
     }
 
-    // 用户消息立即落盘：即便随后切走会话/连接断开，这条提问也不会丢
-    this.persistMessages();
+    // 用户消息立即落盘：即便随后切走会话/连接断开，这条提问也不会丢。
+    // 不 await：序列化 260K+ tokens 的消息数组 + 写磁盘可能耗时 1-2s，
+    // fire-and-forget 让主流程不等磁盘 IO 直接进入 LLM 请求阶段。
+    void this.persistMessages();
 
     // 自动压缩（溢出强制无感 / 达 75% 阈值询问用户）；用户选择迁移到新会话时本轮中止
     if (await this.maybeAutoCompactBeforeTurn(client)) return;
@@ -1413,13 +1415,11 @@ export class AgentSession {
       this.promptBuilder.buildIdeContextPrompt().catch((e) => { console.warn("[ide-ctx] 预取失败（忽略）:", (e as Error).message); return null; }),
       this.skillRegistry.buildSkillsPrompt().catch((e) => { console.warn("[skill] 发现 skill 失败（忽略）:", (e as Error).message); return null; }),
       this.powerRegistry ? this.powerRegistry.buildPowersPrompt().catch((e) => { console.warn("[power] 发现 power 失败（忽略）:", (e as Error).message); return null; }) : Promise.resolve(null),
+      this.prefetchMcpTools(),  // ← 之前串行 await，现在并入并行
     ]);
     this.ideContextCache = ideCtx;
     this.skillsPromptCache = skillsPrompt;
     this.powersPromptCache = powersPrompt;
-
-    // 预取 MCP 工具：解析配置 → 连接 server → 拉工具清单，并入本轮工具集（失败不阻塞）
-    await this.prefetchMcpTools();
 
     // Agent 循环：总轮数上限只作极端兜底（正常任务很难碰到），真正防死循环靠"相同调用重复检测"
     let rounds = 0;

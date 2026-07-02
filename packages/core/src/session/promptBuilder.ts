@@ -125,30 +125,27 @@ export class PromptBuilder {
 
     const transientSet = isDeepSeek ? TRANSIENT_TOOLS_AGGRESSIVE : TRANSIENT_TOOLS;
 
-    // ── 前缀缓存优化：提取 agent loop 注入的中间 system 消息 ──
-    // _injected: true 的 system 消息（反思/续写/diagnostics/空回复引导）在 history 中间，
-    // 对 DeepSeek/GLM 等自动前缀缓存模型来说会破坏前缀稳定性。
-    // 把它们提取出来，放到消息数组末尾（紧跟在 injections 前），保持 [system_prompt + 稳定历史] 前缀。
+    // ── 前缀缓存优化 + 瞬态过滤：单次遍历完成 ──
+    // 提取 _injected system 消息（反思/续写/diagnostics）到末尾不破坏前缀稳定性，
+    // 同时过滤非当前轮的瞬态工具结果（search/list_dir/read_file 等）。
+    // 必须在 sanitizeToolPairing 之前：先删不需要的，sanitizer 再清理关联孤儿 tool_calls。
+    // ⚠️ 单次遍历避免 O(n²)：260K tokens 上下文可能有几千条消息。
     const extractedInjections: ChatCompletionMessageParam[] = [];
-    const stableMessages = this.s.messages.filter((m) => {
+    const preFiltered: ChatCompletionMessageParam[] = [];
+    for (let i = 0; i < this.s.messages.length; i++) {
+      const m = this.s.messages[i];
       if ((m as any)._injected && (m as any).role === "system") {
         extractedInjections.push(m);
-        return false;
+        continue;
       }
-      return true;
-    });
-
-    // 先移除跨轮瞬态工具结果（search/list_dir/web_search/web_fetch/read_file），
-    // 必须在 sanitizeToolPairing 之前执行：先删掉不需要的工具结果，
-    // 再让 sanitizer 把关联的孤儿 tool_calls 一并清理，避免产生
-    // "assistant(tool_calls) 后缺少 tool 结果" 的消息序列导致 API 400。
-    const preFiltered = stableMessages.filter((m) => {
-      if ((m as any).role !== "tool") return true;
-      const toolName = (m as any)._toolName as string | undefined;
-      if (!toolName || !transientSet.has(toolName)) return true;
-      const idx = stableMessages.indexOf(m);
-      return idx >= this.s.turnStartMsgCount;
-    });
+      if ((m as any).role === "tool") {
+        const toolName = (m as any)._toolName as string | undefined;
+        if (toolName && transientSet.has(toolName) && i < this.s.turnStartMsgCount) {
+          continue;
+        }
+      }
+      preFiltered.push(m);
+    }
 
     // 发送前清洗：移除孤儿 tool_calls / 孤儿 tool 结果
     const cleaned = sanitizeToolPairing(preFiltered);
