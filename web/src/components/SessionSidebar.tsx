@@ -3,7 +3,7 @@
  */
 
 import { useState, useEffect } from "react";
-import { Plus, MessageSquare, Trash2, PanelLeft, Search } from "lucide-react";
+import { Plus, MessageSquare, Trash2, PanelLeft, Search, Loader2 } from "lucide-react";
 import { listSessions, deleteSession } from "@/lib/apiClient";
 
 interface SessionMeta {
@@ -30,6 +30,7 @@ interface SessionSidebarProps {
 export function SessionSidebar({ currentSessionId, connected: _connected, filterMode, onSelectSession, onNewSession, onSessionDeleted }: SessionSidebarProps) {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [search, setSearch] = useState("");
 
@@ -54,18 +55,24 @@ export function SessionSidebar({ currentSessionId, connected: _connected, filter
   // 删除会话
   const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    await deleteSession(id);
-    const remaining = sessions.filter((s) => s.id !== id);
-    setSessions(remaining);
-    // 通知上层关闭对应 tab
-    onSessionDeleted?.(id);
-    // 如果删除的是当前正在显示的会话：切到剩余列表的第一个，没有则新建
-    if (id === currentSessionId) {
-      if (remaining.length > 0) {
-        onSelectSession(remaining[0].id);
-      } else {
-        onNewSession();
+    if (deletingId) return; // 正在删除中，防重复点击
+    setDeletingId(id);
+    try {
+      await deleteSession(id);
+      const remaining = sessions.filter((s) => s.id !== id);
+      setSessions(remaining);
+      // 通知上层关闭对应 tab
+      onSessionDeleted?.(id);
+      // 如果删除的是当前正在显示的会话：切到剩余列表的第一个，没有则新建
+      if (id === currentSessionId) {
+        if (remaining.length > 0) {
+          onSelectSession(remaining[0].id);
+        } else {
+          onNewSession();
+        }
       }
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -133,9 +140,14 @@ export function SessionSidebar({ currentSessionId, connected: _connected, filter
             </div>
             <button
               onClick={(e) => handleDelete(s.id, e)}
-              className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-destructive/10 hover:text-destructive transition-all cursor-pointer"
+              disabled={deletingId !== null}
+              className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-destructive/10 hover:text-destructive transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              {deletingId === s.id ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="w-3.5 h-3.5" />
+              )}
             </button>
           </div>
         )))}
