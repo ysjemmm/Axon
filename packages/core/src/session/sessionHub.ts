@@ -223,12 +223,24 @@ export class SessionHub {
     if (!store) return;
     // 只在第一个 session 创建时加载一次到共享 gate；后续 session 复用同一份 trie。
     if (this.activeSessions.size === 1) {
-      try {
-        const patterns = store.load(workspace);
-        this.sharedCommandGate.setTrustedPatterns(patterns);
-      } catch (err) {
-        console.warn("[trust] 载入命令白名单失败（用内置默认）:", (err as Error).message);
-      }
+      const loadAndSet = () => {
+        try {
+          const patterns = store.load(workspace);
+          this.sharedCommandGate.setTrustedPatterns(patterns);
+          // 如果加载结果为空，可能是 VS Code 配置还没完全就绪，延迟重试一次
+          if (patterns.length === 0) {
+            setTimeout(() => {
+              const retryPatterns = store.load(workspace);
+              if (retryPatterns.length > 0) {
+                this.sharedCommandGate.setTrustedPatterns(retryPatterns);
+              }
+            }, 2000);
+          }
+        } catch (err) {
+          console.warn("[trust] 载入命令白名单失败（用内置默认）:", (err as Error).message);
+        }
+      };
+      loadAndSet();
     }
     // 每个 session 都注册持久化回调（确保即使不是第一个 session 也能写回）
     session.setOnCommandTrustApproved((rule, target) => {
