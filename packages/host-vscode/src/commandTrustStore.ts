@@ -27,7 +27,6 @@ export class VSCodeCommandTrustStore implements CommandTrustStore {
     const globalPatterns = Array.isArray(inspected?.globalValue) ? inspected!.globalValue! : [];
     const workspacePatterns = Array.isArray(inspected?.workspaceValue) ? inspected!.workspaceValue! : [];
     const merged = [...new Set([...globalPatterns, ...workspacePatterns])].filter((p): p is string => typeof p === "string");
-    console.log(`[axon-trust:load] global=${globalPatterns.length} workspace=${workspacePatterns.length} merged=${merged.length} => ${JSON.stringify(merged)}`);
     return merged;
   }
 
@@ -44,9 +43,7 @@ export class VSCodeCommandTrustStore implements CommandTrustStore {
 
     const trie = CommandTrustTrie.fromStrings(current);
     trie.add(rule);
-    const serialized = trie.serialize();
-    console.log(`[axon-trust:save] target=${target} add=${rule.pattern} useGlobal=${useGlobal} before=${current.length} after=${serialized.length}`);
-    void cfg.update(CONFIG_KEY, serialized, configTarget).then(undefined, (err: unknown) => {
+    void cfg.update(CONFIG_KEY, trie.serialize(), configTarget).then(undefined, (err: unknown) => {
       console.warn("[trust] 写回失败:", (err as Error).message);
     });
   }

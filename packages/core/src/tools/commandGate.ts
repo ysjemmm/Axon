@@ -98,11 +98,9 @@ export class CommandGate {
     // 如果是 save() 刚写入触发的 reload，跳过——内存 trie 已经是最新的
     if (this.skipNextReload) {
       this.skipNextReload = false;
-      console.log(`[axon-trust:reload] skipped (save-triggered, trie already current)`);
       return;
     }
-    // 全量替换：确保用户在 Settings UI 里的删除操作能反映到内存 trie
-    console.log(`[axon-trust:reload] setTrustedPatterns load=${patterns.length}`);
+    // 全量替换：用户在 Settings UI 里的增删改都会反映到内存 trie
     this.trie = CommandTrustTrie.fromStrings([...BUILTIN_TRUSTED_PATTERNS, ...patterns]);
   }
 
@@ -128,12 +126,8 @@ export class CommandGate {
     const alreadyTrusted = this.trie.isTrusted(command);
     if (alreadyTrusted && !danger) return { allow: true };
 
-    const tid = Date.now().toString(36).slice(-4);
-    console.log(`[axon-trust:${tid}] gate("${command}") isTrusted=${alreadyTrusted} danger=${danger ? String(danger) : 'none'} rules=${JSON.stringify(this.trie.list().map((r: TrustRule) => r.scope+':'+r.pattern))}`);
-
     const decision = await deps.requestApproval(command, buildTrustOptions(command), danger);
     if (decision.choice === "reject") {
-      console.log(`[axon-trust:${tid}] -> REJECTED`);
       return {
         allow: false,
         aiMessage: danger
@@ -146,10 +140,7 @@ export class CommandGate {
 
     // exact / prefix / all → 写入信任；all 仅本会话不持久化
     const rule = ruleForChoice(command, decision.choice);
-    console.log(`[axon-trust:${tid}] -> choice=${decision.choice} rule={${rule.scope}:${rule.pattern}} target=${decision.target}`);
     this.trie.add(rule);
-    const verify = this.trie.isTrusted(command);
-    console.log(`[axon-trust:${tid}] -> after-add isTrusted("${command}")=${verify} rules=${JSON.stringify(this.trie.list().map((r: TrustRule) => r.scope+':'+r.pattern))}`);
     // 标记跳过下一次 reload：persist 写磁盘后会触发 onDidChangeConfiguration → reload，
     // 但内存 trie 已经通过上面的 add 更新了，reload 会用磁盘旧值覆盖。
     if (decision.choice !== "all") {

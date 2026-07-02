@@ -147,7 +147,6 @@ export class SessionHub {
     const workspace = this.deps.defaultWorkspace;
     try {
       const patterns = store.load(workspace);
-      console.log(`[axon-trust:reload] patterns from store=${JSON.stringify(patterns)}`);
       this.sharedCommandGate.setTrustedPatterns(patterns);
     } catch (err) {
       console.warn("[trust] 实时同步命令白名单失败:", (err as Error).message);
@@ -226,7 +225,6 @@ export class SessionHub {
     if (this.activeSessions.size === 1) {
       try {
         const patterns = store.load(workspace);
-        console.log(`[axon-trust:wire] first session, loading patterns=${JSON.stringify(patterns)}`);
         this.sharedCommandGate.setTrustedPatterns(patterns);
       } catch (err) {
         console.warn("[trust] 载入命令白名单失败（用内置默认）:", (err as Error).message);
