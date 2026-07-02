@@ -1198,6 +1198,10 @@ export function activate(context: vscode.ExtensionContext): void {
     setTimeout(() => {
       vscode.commands.executeCommand("workbench.action.focusAuxiliaryBar");
       vscode.commands.executeCommand("axon.chat.focus");
+      // 首次启动启用跟随系统主题（新用户体验更好，已有用户不受影响）
+      try {
+        vscode.workspace.getConfiguration().update("window.autoDetectColorScheme", true, vscode.ConfigurationTarget.Global);
+      } catch { /* ignore */ }
     }, 1500);
   }
 }

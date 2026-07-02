@@ -54,7 +54,11 @@ export class ChatCompletionsStrategy implements LLMStrategy {
     // 策略：倒数第 3 条消息打一个 cache breakpoint（覆盖 system + 绝大部分历史），
     // 倒数第 1 条（最新 user 消息）不打（每轮都变）。
     // 仅在消息数 > 6 时生效（太短的消息不值得打缓存标记）。
-    const cachedMessages = safeMessages.length > 6
+    //
+    // 注意：Qwen 只自动缓存 system prompt，不支持对历史消息打 breakpoint，
+    // 所以对 Qwen 模型跳过 applyCacheBreakpoints，让它自动缓存 system prompt。
+    const isQwen = /qwen/i.test(model);
+    const cachedMessages = safeMessages.length > 6 && !isQwen
       ? applyCacheBreakpoints(safeMessages)
       : safeMessages;
 
