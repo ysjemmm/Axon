@@ -1,0 +1,91 @@
+web/src/components/chat/MessageBubble.tsx
+  s_a78f8a5b229a1d::t_2ccd1c92a3a481 17-22,24-25,41-45,55
+  s_a78f8a5b229a1d::t_55bad43336ef75 14-16
+  s_a78f8a5b229a1d::t_357ff79e2ae8f7 6-7,13,90-97,113-118,121-130
+web/src/components/chat/eventHandlers/sessionHandlers.ts
+  s_a78f8a5b229a1d::t_76176a152f890f 9,123,143
+  s_a78f8a5b229a1d::t_d71eec9980c197 286-293
+web/src/components/chat/subAgentEvents.ts
+  s_a78f8a5b229a1d::t_28c5f696a21e15 6
+  s_a78f8a5b229a1d::t_060c1d73aa125b 71,89,130
+apps/vscode-extension/scripts/copy-web.mjs
+  s_a78f8a5b229a1d::t_22ca841305aa9f 11
+  s_a78f8a5b229a1d::t_4a8410c913eab1 45-62
+web/src/lib/markdown.ts
+  s_a78f8a5b229a1d::t_7fa449619c6fe8 14
+  s_a78f8a5b229a1d::t_6972a617fe0478 55-58,62-66,80-81,91-96,98-105,170,178
+packages/core/src/systemPrompt.ts
+  s_a78f8a5b229a1d::t_96426a1b0dbaeb 243,273
+  s_a78f8a5b229a1d::t_5f9b2f8f99ef22 242
+  s_a78f8a5b229a1d::t_7fc0fd0b9bb8ee 15,17-21,26,35,44-45,51,53,58,62-75,90,92,95-99,142-150,152,160-173,179-180,185,189,192-198,207-231,238
+web/src/components/chat/utils.ts
+  s_a78f8a5b229a1d::t_91593e02e25918 7,49
+packages/core/src/agentSession.ts
+  s_a78f8a5b229a1d::t_770f7185045f4b 161
+  s_a78f8a5b229a1d::t_4eb48b5f995f38 156
+  s_a78f8a5b229a1d::t_07199be993a1d2 157
+  s_a78f8a5b229a1d::t_864ae086bdeb9d 158-160
+  s_a78f8a5b229a1d::t_5498d71c9cb7b5 162-163
+  s_a78f8a5b229a1d::t_e954cd086a78f8 11,16-17,223-232,938-1013,1299,1301-1302,1345-1348,1353-1356,1363,1370-1371,1379,1425-1427,1606-1609,1834,1928
+web/src/components/chat/eventHandlers/toolHandlers.ts
+  s_a78f8a5b229a1d::t_2aed5d77a67234 9,15,19,72-75,102-105,122,140,149,154-155,157-161,171-172,175,212,220,230,232-233,235,240,242,245,252-254,271,291-292,294-298,308-309
+  s_a78f8a5b229a1d::t_70103a26f57a74 312
+web/src/components/MarkdownRenderer.tsx
+  s_a78f8a5b229a1d::t_c7f0b18f9b6204 112,114
+  s_a78f8a5b229a1d::t_66f88d0445624e 207
+  s_a78f8a5b229a1d::t_2297e6411f8d1e 111,113
+  s_a78f8a5b229a1d::t_f59932348ad214 204,251-252
+  s_a78f8a5b229a1d::t_ce62828bb2858f 205-206
+  s_a78f8a5b229a1d::t_a9c4fd94750d97 43,66,72,104,208-214,265,271,289,301,307,509
+  s_a78f8a5b229a1d::t_6374ace2437d42 40-42
+  s_a78f8a5b229a1d::t_0b5071992253a5 44-46,63-65
+  s_a78f8a5b229a1d::t_7d328a490a46f9 67-71
+  s_a78f8a5b229a1d::t_90958f53a24699 73-75,101-103
+  s_a78f8a5b229a1d::t_9f03fe93b3304a 253-255,262-264
+  s_a78f8a5b229a1d::t_2b0618dba846b9 266-270
+  s_a78f8a5b229a1d::t_79b8e0d59f2f54 272-274,286-288
+  s_a78f8a5b229a1d::t_93934b508eef03 290-292,298-300
+  s_a78f8a5b229a1d::t_bbdd8d1656eae0 302-306
+  s_a78f8a5b229a1d::t_8589cd019e406e 308
+  s_a78f8a5b229a1d::t_75c7ba463cef25 506-508
+  s_a78f8a5b229a1d::t_fcd8b94cc03dd2 510
+  s_a78f8a5b229a1d::t_776af09164477f 14-39,47-62,76-100,106,256-261,275-285,293-297,362-363,365,419-420,493,503-505,513-514,518-533,536-537,544,580,583-584
+apps/vscode-extension/media/web/index.html
+  s_a78f8a5b229a1d::t_13d003216ed4d3 8-9
+packages/core/src/session/sessionHub.ts
+  s_d8b31d3908c02c::t_72effed93ced9c 182-198,243-246,392-396
+apps/vscode-extension/src/requestRouter.ts
+  s_a78f8a5b229a1d::t_b999cc2c7e926b 36
+packages/core/src/session/promptBuilder.ts
+  s_a78f8a5b229a1d::t_2588de9fac8dfa 19-22,41,192-194
+web/src/components/ChatPanel.tsx
+  s_a78f8a5b229a1d::t_7a693115f141f3 39,583,978-1005,1190,1207
+web/src/components/ToolCallItem.tsx
+  s_a78f8a5b229a1d::t_aefa5f39ae2d83 128-129,145-146,196,201-249,1157,1166-1170,1184,1192
+web/src/components/chat/renderSegments.tsx
+  s_a78f8a5b229a1d::t_729c7c3187811e 16,325,330
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "bd99daf61e6664c21c17a10a31bb2ba05c8b6f38",
+  "prompts": {},
+  "sessions": {
+    "s_a78f8a5b229a1d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f26d7-6235-7c80-a666-48030977f4d8",
+        "model": "gpt-5.5"
+      },
+      "human_author": "码扬 <mayang@tsign.cn>"
+    },
+    "s_d8b31d3908c02c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f26ca-5226-7ef0-bb84-03e24e0d2b68",
+        "model": "gpt-5.5"
+      },
+      "human_author": "码扬 <mayang@tsign.cn>"
+    }
+  }
+}
