@@ -1,13 +1,13 @@
-/**
- * useChatSession —— 会话控制器 hook（多会话版）
+﻿/**
+ * useChatSession 鈥斺€?浼氳瘽鎺у埗鍣?hook锛堝浼氳瘽鐗堬級
  *
- * 从原 ChatPanel.tsx 拆出：收纳一个面板（ChatPanel）的「会话与传输」全部状态与逻辑：
- * - 聊天历史、流式打字机、token 用量、思考过程、状态文案、待确认改动、消息队列、工具确认门、
- *   编辑模式、工作区、模型、Relay 呈现等会话状态。
- * - Agent 事件处理（handleEvent）：经 useSessionEvents 按 clientId 订阅本面板的事件流。
- * - 入站指令封装（submit / cancel / acceptEdits 等）：发送时自动带上本面板 clientId。
+ * 浠庡師 ChatPanel.tsx 鎷嗗嚭锛氭敹绾充竴涓潰鏉匡紙ChatPanel锛夌殑銆屼細璇濅笌浼犺緭銆嶅叏閮ㄧ姸鎬佷笌閫昏緫锛?
+ * - 鑱婂ぉ鍘嗗彶銆佹祦寮忔墦瀛楁満銆乼oken 鐢ㄩ噺銆佹€濊€冭繃绋嬨€佺姸鎬佹枃妗堛€佸緟纭鏀瑰姩銆佹秷鎭槦鍒椼€佸伐鍏风‘璁ら棬銆?
+ *   缂栬緫妯″紡銆佸伐浣滃尯銆佹ā鍨嬨€丷elay 鍛堢幇绛変細璇濈姸鎬併€?
+ * - Agent 浜嬩欢澶勭悊锛坔andleEvent锛夛細缁?useSessionEvents 鎸?clientId 璁㈤槄鏈潰鏉跨殑浜嬩欢娴併€?
+ * - 鍏ョ珯鎸囦护灏佽锛坰ubmit / cancel / acceptEdits 绛夛級锛氬彂閫佹椂鑷姩甯︿笂鏈潰鏉?clientId銆?
  *
- * ChatPanel 壳层只保留「输入区编排 + 视图 + 滚动/文件/图片/弹窗」，状态全部来自本 hook。
+ * ChatPanel 澹冲眰鍙繚鐣欍€岃緭鍏ュ尯缂栨帓 + 瑙嗗浘 + 婊氬姩/鏂囦欢/鍥剧墖/寮圭獥銆嶏紝鐘舵€佸叏閮ㄦ潵鑷湰 hook銆?
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
@@ -17,8 +17,9 @@ import { listRelays, type RelayData } from "@/lib/apiClient";
 import { useSessionEvents } from "@/hooks/useSessionEvents";
 import type { AttachedFile, ChatMessage, CreditDetail, TextSegment, UserSegment } from "./types";
 import type { CommandDecision } from "./commandApprovalContext";
+import { STORAGE, TIMEOUT, CONTROL_CMD } from "@/lib/constants";
 
-// 拆分后的模块
+// 鎷嗗垎鍚庣殑妯″潡
 import { createEventHandler } from "./eventHandlers";
 import type { EventHandlerCtx } from "./eventHandlers/types";
 import { useTypewriter } from "./useTypewriter";
@@ -26,11 +27,11 @@ import { useToolCallQueue } from "./useToolCallQueue";
 
 const DEFAULT_MODEL_ID = "glm-4-flash";
 
-/** 发送用户消息的载荷（由壳层根据输入/模型/附件计算后交给 hook） */
+/** 鍙戦€佺敤鎴锋秷鎭殑杞借嵎锛堢敱澹冲眰鏍规嵁杈撳叆/妯″瀷/闄勪欢璁＄畻鍚庝氦缁?hook锛?*/
 export interface SubmitPayload {
-  /** 加入聊天时间线的用户气泡 */
+  /** 鍔犲叆鑱婂ぉ鏃堕棿绾跨殑鐢ㄦ埛姘旀场 */
   userBubble: { content: string; images?: string[]; attachedFiles?: AttachedFile[]; segments?: UserSegment[] };
-  /** user_message 指令字段（type/clientId 由 hook 注入） */
+  /** user_message 鎸囦护瀛楁锛坱ype/clientId 鐢?hook 娉ㄥ叆锛?*/
   send: {
     content: string;
     displayText: string;
@@ -42,14 +43,14 @@ export interface SubmitPayload {
     workspace?: string;
     workspaces?: string[];
     replyStyle: string;
-    /** 会话模式 */
+    /** 浼氳瘽妯″紡 */
     mode?: "agent" | "quest";
-    /** Quest 模式选项 */
+    /** Quest 妯″紡閫夐」 */
     quest?: { think?: boolean; webSearch?: boolean };
   };
 }
 
-/** 命令信任授权请求：未信任命令时后端弹出，含四档"加入白名单"选项 */
+/** 鍛戒护淇′换鎺堟潈璇锋眰锛氭湭淇′换鍛戒护鏃跺悗绔脊鍑猴紝鍚洓妗?鍔犲叆鐧藉悕鍗?閫夐」 */
 export interface CommandApproval {
   requestId: string;
   command: string;
@@ -71,18 +72,18 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const { clientId, sessionId, mode, connected, send: baseSend, onSessionCreated, onCompactionMigrated, onStreamingChange } = opts;
   const models = useModels();
 
-  // ── 会话状态 ──────────────────────────────────────────────────────────────
+  // 鈹€鈹€ 浼氳瘽鐘舵€?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingSession, setIsLoadingSession] = useState(!!sessionId);
   const [tokenUsage, setTokenUsage] = useState<{ used: number; max: number; cumulative: number }>(() => {
     let savedModel = DEFAULT_MODEL_ID;
-    try { savedModel = localStorage.getItem("axon-last-model") || DEFAULT_MODEL_ID; } catch { /* ignore */ }
+    try { savedModel = localStorage.getItem(STORAGE.LAST_MODEL) || DEFAULT_MODEL_ID; } catch { /* ignore */ }
     const currentModel = findModel(savedModel) || MODELS.find((m) => m.id === savedModel);
-    return { used: 0, max: currentModel?.contextWindow || 128000, cumulative: 0 };
+    return { used: 0, max: currentModel?.contextWindow || TIMEOUT.DEFAULT_CONTEXT_WINDOW, cumulative: 0 };
   });
   const [model, setModelState] = useState(() => {
-    try { return localStorage.getItem("axon-last-model") || DEFAULT_MODEL_ID; } catch { return DEFAULT_MODEL_ID; }
+    try { return localStorage.getItem(STORAGE.LAST_MODEL) || DEFAULT_MODEL_ID; } catch { return DEFAULT_MODEL_ID; }
   });
   const [workspace, setWorkspace] = useState<string>("");
   const [workspaces, setWorkspacesState] = useState<string[]>([]);
@@ -92,99 +93,101 @@ export function useChatSession(opts: UseChatSessionOptions) {
     setWorkspacesLoaded(true);
   }, []);
   const [currentGroupId, setCurrentGroupId] = useState<string | null>(null);
-  // Relay 呈现（仅 hasRelay 用于顶栏呼吸灯；其余保留以承接事件）
+  // Relay 鍛堢幇锛堜粎 hasRelay 鐢ㄤ簬椤舵爮鍛煎惛鐏紱鍏朵綑淇濈暀浠ユ壙鎺ヤ簨浠讹級
   const [, setLiveRelay] = useState<RelayData | null>(null);
   const [, setFocusRelayId] = useState<string | null>(null);
   const [, setDeletedRelayId] = useState<string | null>(null);
   const [hasRelay, setHasRelay] = useState(false);
   const [editMode, setEditMode] = useState<"auto" | "manual">(() => {
-    try { return (localStorage.getItem("axon-edit-mode") as "auto" | "manual") || "manual"; } catch { return "manual"; }
+    try { return (localStorage.getItem(STORAGE.EDIT_MODE) as "auto" | "manual") || "manual"; } catch { return "manual"; }
   });
-  // Quest 模式开关：思考过程 / 联网搜索（持久化）
+  // Quest 妯″紡寮€鍏筹細鎬濊€冭繃绋?/ 鑱旂綉鎼滅储锛堟寔涔呭寲锛?
   const [questThink, setQuestThinkState] = useState<boolean>(() => {
-    try { return localStorage.getItem("axon-quest-think") === "1"; } catch { return false; }
+    try { return localStorage.getItem(STORAGE.QUEST_THINK) === "1"; } catch { return false; }
   });
   const [questWebSearch, setQuestWebSearchState] = useState<boolean>(() => {
-    try { return localStorage.getItem("axon-quest-websearch") === "1"; } catch { return false; }
+    try { return localStorage.getItem(STORAGE.QUEST_WEBSEARCH) === "1"; } catch { return false; }
   });
   const setQuestThink = useCallback((v: boolean) => {
     setQuestThinkState(v);
-    try { localStorage.setItem("axon-quest-think", v ? "1" : "0"); } catch { /* ignore */ }
+    try { localStorage.setItem(STORAGE.QUEST_THINK, v ? "1" : "0"); } catch { /* ignore */ }
   }, []);
   const setQuestWebSearch = useCallback((v: boolean) => {
     setQuestWebSearchState(v);
-    try { localStorage.setItem("axon-quest-websearch", v ? "1" : "0"); } catch { /* ignore */ }
+    try { localStorage.setItem(STORAGE.QUEST_WEBSEARCH, v ? "1" : "0"); } catch { /* ignore */ }
   }, []);
   const [reasoning, setReasoning] = useState<string>("");
-  const [statusText, setStatusText] = useState("思考中...");
+  const [statusText, setStatusText] = useState("鎬濊€冧腑...");
   const [statusPhase, setStatusPhase] = useState<string>("thinking");
   const [isCompacting, setIsCompacting] = useState(false);
-  /** 自动压缩触发时后端暂停等待用户选择（>=75% 阈值） */
+  /** 鑷姩鍘嬬缉瑙﹀彂鏃跺悗绔殏鍋滅瓑寰呯敤鎴烽€夋嫨锛?=75% 闃堝€硷級 */
   const [compactionNeeded, setCompactionNeeded] = useState<{ currentTokens: number; maxTokens: number; percent: number } | null>(null);
-  /** 当前会话已被迁移到新会话（输入框禁用，展示跳转链接） */
+  /** 褰撳墠浼氳瘽宸茶杩佺Щ鍒版柊浼氳瘽锛堣緭鍏ユ绂佺敤锛屽睍绀鸿烦杞摼鎺ワ級 */
   const [compactionMigrated, setCompactionMigrated] = useState<{ newSessionId: string; parentSessionId?: string } | null>(null);
   const compactionMigratedRef = useRef<{ newSessionId: string; parentSessionId?: string } | null>(null);
   compactionMigratedRef.current = compactionMigrated;
+  /** Credits 预算门硬暂停触发时后端暂停等待用户选择（继续/停止） */
+  const [creditBudgetPaused, setCreditBudgetPaused] = useState<{ spent: number; threshold: number } | null>(null);
   const [pendingPaths, setPendingPaths] = useState<string[]>([]);
   const [pendingDiffs, setPendingDiffs] = useState<Record<string, { oldContent: string; newContent: string }>>({});
   const [pendingExpanded, setPendingExpanded] = useState(false);
-  /** 撤销失败的轻提示（自动消失） */
+  /** 鎾ら攢澶辫触鐨勮交鎻愮ず锛堣嚜鍔ㄦ秷澶憋級 */
   const [undoNotice, setUndoNotice] = useState<{ id: number; text: string } | null>(null);
   const [toolConfirm, setToolConfirm] = useState<{ toolName: string; title: string; kind?: string } | null>(null);
-  // execute_command 卡片的"等待用户输入"呼吸灯：按 toolCallId 索引
+  // execute_command 鍗＄墖鐨?绛夊緟鐢ㄦ埛杈撳叆"鍛煎惛鐏細鎸?toolCallId 绱㈠紩
   const [waitingInputIds, setWaitingInputIds] = useState<Set<string>>(new Set());
-  // 命令信任授权门：未信任命令的审批改为内联在对应命令卡片上（无感模式），按 toolCallId 索引。
-  // 并发安全——parallel_research / 多个子 Agent 可能同时请求，各自挂在自己的命令卡片上。
+  // 鍛戒护淇′换鎺堟潈闂細鏈俊浠诲懡浠ょ殑瀹℃壒鏀逛负鍐呰仈鍦ㄥ搴斿懡浠ゅ崱鐗囦笂锛堟棤鎰熸ā寮忥級锛屾寜 toolCallId 绱㈠紩銆?
+  // 骞跺彂瀹夊叏鈥斺€攑arallel_research / 澶氫釜瀛?Agent 鍙兘鍚屾椂璇锋眰锛屽悇鑷寕鍦ㄨ嚜宸辩殑鍛戒护鍗＄墖涓娿€?
   const [commandApprovals, setCommandApprovals] = useState<Record<string, CommandApproval>>({});
-  // 危险命令被硬拦时给用户的可见提示（与给 AI 的错误分开）
+  // 鍗遍櫓鍛戒护琚‖鎷︽椂缁欑敤鎴风殑鍙鎻愮ず锛堜笌缁?AI 鐨勯敊璇垎寮€锛?
   const [commandBlocked, setCommandBlocked] = useState<{ requestId?: string; command: string; reason: string; dangerous?: boolean } | null>(null);
   const [messageQueue, setMessageQueue] = useState<Array<{ id: string; payload: SubmitPayload }>>([]);
 
-  // ── refs ────────────────────────────────────────────────────────────────
+  // 鈹€鈹€ refs 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
   const cancelled = useRef(false);
-  /** 被取消那轮 assistant 消息的 id——turn_cancelled 事件用此精确定位，
-   *  避免竞态误将新启动的轮次标为 cancelled */
+  /** 琚彇娑堥偅杞?assistant 娑堟伅鐨?id鈥斺€攖urn_cancelled 浜嬩欢鐢ㄦ绮剧‘瀹氫綅锛?
+   *  閬垮厤绔炴€佽灏嗘柊鍚姩鐨勮疆娆℃爣涓?cancelled */
   const cancelledTurnMsgId = useRef<string | null>(null);
   const turnStartTime = useRef<number>(0);
-  /** turn 代数计数器——每次 $sendNow$ 启动新轮时递增。所有 assistant 消息打上 turnGen，
-   * 工具结果等异步事件只作用于同代 assistant，防止取消 A 后陈旧结果穿到 B。 */
+  /** turn 浠ｆ暟璁℃暟鍣ㄢ€斺€旀瘡娆?$sendNow$ 鍚姩鏂拌疆鏃堕€掑銆傛墍鏈?assistant 娑堟伅鎵撲笂 turnGen锛?
+   * 宸ュ叿缁撴灉绛夊紓姝ヤ簨浠跺彧浣滅敤浜庡悓浠?assistant锛岄槻姝㈠彇娑?A 鍚庨檲鏃х粨鏋滅┛鍒?B銆?*/
   const turnGeneration = useRef(0);
-  // 在稳定 handler 内读取最新值，避免把 handler 依赖这些 state（保持订阅稳定）
+  // 鍦ㄧǔ瀹?handler 鍐呰鍙栨渶鏂板€硷紝閬垮厤鎶?handler 渚濊禆杩欎簺 state锛堜繚鎸佽闃呯ǔ瀹氾級
   const modelRef = useRef(model); modelRef.current = model;
   const statusPhaseRef = useRef(statusPhase); statusPhaseRef.current = statusPhase;
   const editModeRef = useRef(editMode); editModeRef.current = editMode;
-  // tool_result 后延迟重置状态的定时器（防止连续工具调用时 "思考中" 闪烁）
+  // tool_result 鍚庡欢杩熼噸缃姸鎬佺殑瀹氭椂鍣紙闃叉杩炵画宸ュ叿璋冪敤鏃?"鎬濊€冧腑" 闂儊锛?
   const toolResultResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // ── 打字机 hook（buffer/RAF/flush 逻辑封装） ──
+  // 鈹€鈹€ 鎵撳瓧鏈?hook锛坆uffer/RAF/flush 閫昏緫灏佽锛?鈹€鈹€
   const typewriter = useTypewriter();
-  // ── tool_call 渲染队列 hook（卡片按序逐个入场） ──
+  // 鈹€鈹€ tool_call 娓叉煋闃熷垪 hook锛堝崱鐗囨寜搴忛€愪釜鍏ュ満锛?鈹€鈹€
   const toolCallQueueApi = useToolCallQueue();
-  // 命令授权门请求用 ref 持有，供取消/回传时读取最新映射，避免回调依赖 state
+  // 鍛戒护鎺堟潈闂ㄨ姹傜敤 ref 鎸佹湁锛屼緵鍙栨秷/鍥炰紶鏃惰鍙栨渶鏂版槧灏勶紝閬垮厤鍥炶皟渚濊禆 state
   const commandApprovalsRef = useRef<Record<string, CommandApproval>>({}); commandApprovalsRef.current = commandApprovals;
   const onSessionCreatedRef = useRef(onSessionCreated); onSessionCreatedRef.current = onSessionCreated;
   const onCompactionMigratedRef = useRef(onCompactionMigrated); onCompactionMigratedRef.current = onCompactionMigrated;
   /**
-   * 本面板已"拥有"（已加载或自己创建）的会话 id。
-   * 用于区分 sessionId prop 变化的两种来源：
-   * - 切到一个不同的既有会话（需要 load_session 拉历史）
-   * - 自己刚创建的会话（session_created 把 tab.id 从 null 改成新 id）——此时本面板已持有实时状态，
-   *   绝不能重新 load_session，否则会清空正在流式输出的对话。
-   * 初始为 null：首次挂载若已有 sessionId（刷新/历史打开）仍会正常加载。
+   * 鏈潰鏉垮凡"鎷ユ湁"锛堝凡鍔犺浇鎴栬嚜宸卞垱寤猴級鐨勪細璇?id銆?
+   * 鐢ㄤ簬鍖哄垎 sessionId prop 鍙樺寲鐨勪袱绉嶆潵婧愶細
+   * - 鍒囧埌涓€涓笉鍚岀殑鏃㈡湁浼氳瘽锛堥渶瑕?load_session 鎷夊巻鍙诧級
+   * - 鑷繁鍒氬垱寤虹殑浼氳瘽锛坰ession_created 鎶?tab.id 浠?null 鏀规垚鏂?id锛夆€斺€旀鏃舵湰闈㈡澘宸叉寔鏈夊疄鏃剁姸鎬侊紝
+   *   缁濅笉鑳介噸鏂?load_session锛屽惁鍒欎細娓呯┖姝ｅ湪娴佸紡杈撳嚭鐨勫璇濄€?
+   * 鍒濆涓?null锛氶娆℃寕杞借嫢宸叉湁 sessionId锛堝埛鏂?鍘嗗彶鎵撳紑锛変粛浼氭甯稿姞杞姐€?
    */
   const ownedSessionId = useRef<string | null>(null);
   /**
-   * 最近一次已请求 load_session 的会话 id。
-   * 用来避免同一个 session 在前端重渲染/局部重挂载时重复触发 load_session，
-   * 导致实时流式状态被 session_loaded 快照覆盖。
+   * 鏈€杩戜竴娆″凡璇锋眰 load_session 鐨勪細璇?id銆?
+   * 鐢ㄦ潵閬垮厤鍚屼竴涓?session 鍦ㄥ墠绔噸娓叉煋/灞€閮ㄩ噸鎸傝浇鏃堕噸澶嶈Е鍙?load_session锛?
+   * 瀵艰嚧瀹炴椂娴佸紡鐘舵€佽 session_loaded 蹇収瑕嗙洊銆?
    */
   const lastLoadedSessionId = useRef<string | null>(null);
   /**
-   * 标记当前这次 connected=true 是否真的是"断线后重连"。
-   * 首次挂载不是重连；只有经历过 connected=false 之后再次变为 true 才算重连。
+   * 鏍囪褰撳墠杩欐 connected=true 鏄惁鐪熺殑鏄?鏂嚎鍚庨噸杩?銆?
+   * 棣栨鎸傝浇涓嶆槸閲嶈繛锛涘彧鏈夌粡鍘嗚繃 connected=false 涔嬪悗鍐嶆鍙樹负 true 鎵嶇畻閲嶈繛銆?
    */
   const hasEverConnected = useRef(false);
 
-  /** 结束当前加载态（至少展示 MIN_LOADING_MS，避免极短响应让 spin 闪烁即消失） */
+  /** 缁撴潫褰撳墠鍔犺浇鎬侊紙鑷冲皯灞曠ず MIN_LOADING_MS锛岄伩鍏嶆瀬鐭搷搴旇 spin 闂儊鍗虫秷澶憋級 */
   const MIN_LOADING_MS = 400;
   const finishLoading = useCallback(() => {
     const elapsed = Date.now() - (turnStartTime.current || Date.now());
@@ -196,29 +199,30 @@ export function useChatSession(opts: UseChatSessionOptions) {
     }
   }, []);
 
-  /** 带本面板 clientId 的发送 */
+  /** 甯︽湰闈㈡澘 clientId 鐨勫彂閫?*/
   const send = useCallback((cmd: Record<string, unknown>) => {
     baseSend({ ...cmd, clientId });
   }, [baseSend, clientId]);
 
-  // Provider/模型目录异步加载完成后，同步修正当前模型的最大上下文，
-  // 避免重启初期先按静态兜底 MODELS（128K）显示，待用户再次手点模型才变正确。
+  // Provider/妯″瀷鐩綍寮傛鍔犺浇瀹屾垚鍚庯紝鍚屾淇褰撳墠妯″瀷鐨勬渶澶т笂涓嬫枃锛?
+  // 閬垮厤閲嶅惎鍒濇湡鍏堟寜闈欐€佸厹搴?MODELS锛?28K锛夋樉绀猴紝寰呯敤鎴峰啀娆℃墜鐐规ā鍨嬫墠鍙樻纭€?
   useEffect(() => {
     const currentModel = models.find((m) => m.id === model);
     if (!currentModel?.contextWindow) return;
     setTokenUsage((prev) => (prev.max === currentModel.contextWindow ? prev : { ...prev, max: currentModel.contextWindow }));
   }, [model, models]);
 
-  // ── 通知上层流式状态变化（供 SessionContainer 决定保活/卸载） ──
+  // 鈹€鈹€ 閫氱煡涓婂眰娴佸紡鐘舵€佸彉鍖栵紙渚?SessionContainer 鍐冲畾淇濇椿/鍗歌浇锛?鈹€鈹€
   useEffect(() => { onStreamingChange?.(isLoading); }, [isLoading, onStreamingChange]);
 
-  // ── Agent 事件处理（稳定 handler，按 clientId 订阅） ──────────────────────
-  // ── 构建 EventHandlerCtx ──
+  // 鈹€鈹€ Agent 浜嬩欢澶勭悊锛堢ǔ瀹?handler锛屾寜 clientId 璁㈤槄锛?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+  // 鈹€鈹€ 鏋勫缓 EventHandlerCtx 鈹€鈹€
   const ctx: EventHandlerCtx = {
     setChatHistory, setStatusText, setStatusPhase, setIsLoading,
     setIsLoadingSession, setTokenUsage, setReasoning, setWorkspace, setWorkspaces,
     setCurrentGroupId, setLiveRelay, setFocusRelayId, setDeletedRelayId, setHasRelay,
     setEditMode, setIsCompacting, setCompactionNeeded, setCompactionMigrated,
+    setCreditBudgetPaused,
     setPendingPaths, setPendingDiffs, setPendingExpanded, setUndoNotice,
     setToolConfirm, setWaitingInputIds, setCommandApprovals, setCommandBlocked,
     cancelled, cancelledTurnMsgId, turnGeneration,
@@ -238,27 +242,27 @@ export function useChatSession(opts: UseChatSessionOptions) {
     clientId, send, finishLoading,
   };
 
-  // ── 事件处理（稳定 handler，按 msg.type 路由到各 handler 模块） ──────────
+  // 鈹€鈹€ 浜嬩欢澶勭悊锛堢ǔ瀹?handler锛屾寜 msg.type 璺敱鍒板悇 handler 妯″潡锛?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
   const handleEvent = useMemo(
     () => createEventHandler(ctx),
-    // ctx 字段都是稳定引用（useState setter、useRef），不会变
+    // ctx 瀛楁閮芥槸绋冲畾寮曠敤锛坲seState setter銆乽seRef锛夛紝涓嶄細鍙?
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
 
-  // ── tool_call 渲染队列包裹器 ──
+  // 鈹€鈹€ tool_call 娓叉煋闃熷垪鍖呰９鍣?鈹€鈹€
   const queuedHandleEvent = useMemo(
     () => toolCallQueueApi.wrap(handleEvent, ctx),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [handleEvent],
   );
 
-  // 按 clientId 订阅本面板事件流
+  // 鎸?clientId 璁㈤槄鏈潰鏉夸簨浠舵祦
   useSessionEvents(clientId, queuedHandleEvent);
 
-  // ── 连接成功 / sessionId 变化时加载会话 ─────────────────────────────────
-  // reconnected：连接 false→true（含首次）。此时后端是全新 hub（无会话状态），
-  // 即便本面板"拥有"该会话也必须重新 load_session 以重建后端状态。
+  // 鈹€鈹€ 杩炴帴鎴愬姛 / sessionId 鍙樺寲鏃跺姞杞戒細璇?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+  // reconnected锛氳繛鎺?false鈫抰rue锛堝惈棣栨锛夈€傛鏃跺悗绔槸鍏ㄦ柊 hub锛堟棤浼氳瘽鐘舵€侊級锛?
+  // 鍗充究鏈潰鏉?鎷ユ湁"璇ヤ細璇濅篃蹇呴』閲嶆柊 load_session 浠ラ噸寤哄悗绔姸鎬併€?
   const prevConnectedRef = useRef(false);
   useEffect(() => {
     if (!connected) {
@@ -270,25 +274,25 @@ export function useChatSession(opts: UseChatSessionOptions) {
     hasEverConnected.current = true;
 
     if (sessionId) {
-      // 自己刚创建的会话且非重连：已持有实时状态，不重新加载（否则会清空流式输出）
+      // 鑷繁鍒氬垱寤虹殑浼氳瘽涓旈潪閲嶈繛锛氬凡鎸佹湁瀹炴椂鐘舵€侊紝涓嶉噸鏂板姞杞斤紙鍚﹀垯浼氭竻绌烘祦寮忚緭鍑猴級
       if (sessionId === ownedSessionId.current && !reconnected) {
-        send({ type: "set_edit_mode", mode: editModeRef.current });
+        send({ type: CONTROL_CMD.SET_EDIT_MODE, mode: editModeRef.current });
         return;
       }
-      // 同一个会话在未断线重连时，避免因组件重渲染/局部重挂载再次 load_session，
-      // 否则 session_loaded 会用较旧快照覆盖掉正在流式中的实时状态。
+      // 鍚屼竴涓細璇濆湪鏈柇绾块噸杩炴椂锛岄伩鍏嶅洜缁勪欢閲嶆覆鏌?灞€閮ㄩ噸鎸傝浇鍐嶆 load_session锛?
+      // 鍚﹀垯 session_loaded 浼氱敤杈冩棫蹇収瑕嗙洊鎺夋鍦ㄦ祦寮忎腑鐨勫疄鏃剁姸鎬併€?
       if (sessionId === lastLoadedSessionId.current && !reconnected) {
         ownedSessionId.current = sessionId;
-        send({ type: "set_edit_mode", mode: editModeRef.current });
+        send({ type: CONTROL_CMD.SET_EDIT_MODE, mode: editModeRef.current });
         return;
       }
-      // 切到既有会话 / 重连：清空 UI、进入加载态、拉历史
+      // 鍒囧埌鏃㈡湁浼氳瘽 / 閲嶈繛锛氭竻绌?UI銆佽繘鍏ュ姞杞芥€併€佹媺鍘嗗彶
       ownedSessionId.current = sessionId;
       lastLoadedSessionId.current = sessionId;
       setIsLoadingSession(true);
       setChatHistory([]);
       setIsLoading(false);
-      setWorkspacesLoaded(false);  // 加载历史会话期间也重置，等后端返回工作区后再判断
+      setWorkspacesLoaded(false);  // 鍔犺浇鍘嗗彶浼氳瘽鏈熼棿涔熼噸缃紝绛夊悗绔繑鍥炲伐浣滃尯鍚庡啀鍒ゆ柇
       typewriter.cancel();
       send({ type: "load_session", sessionId });
     } else {
@@ -296,14 +300,14 @@ export function useChatSession(opts: UseChatSessionOptions) {
       lastLoadedSessionId.current = null;
       setChatHistory([]);
       setIsLoadingSession(false);
-      setWorkspacesLoaded(false);  // 新开 session 时重置加载标志，等后端返回工作区列表后再判断
+      setWorkspacesLoaded(false);  // 鏂板紑 session 鏃堕噸缃姞杞芥爣蹇楋紝绛夊悗绔繑鍥炲伐浣滃尯鍒楄〃鍚庡啀鍒ゆ柇
       send({ type: "reset_session" });
     }
-    send({ type: "set_edit_mode", mode: editModeRef.current });
+    send({ type: CONTROL_CMD.SET_EDIT_MODE, mode: editModeRef.current });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected, sessionId]);
 
-  // ── 工作区变化时查询未完成 Relay，点亮顶栏呼吸灯 ─────────────────────────
+  // 鈹€鈹€ 宸ヤ綔鍖哄彉鍖栨椂鏌ヨ鏈畬鎴?Relay锛岀偣浜《鏍忓懠鍚哥伅 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
   useEffect(() => {
     if (!workspace) return;
     let cancelledQuery = false;
@@ -312,12 +316,12 @@ export function useChatSession(opts: UseChatSessionOptions) {
         const { relays } = await listRelays(workspace);
         const hasActive = relays.some((r) => r.phase !== "done");
         if (!cancelledQuery && hasActive) setHasRelay(true);
-      } catch { /* 查询失败忽略 */ }
+      } catch { /* 鏌ヨ澶辫触蹇界暐 */ }
     })();
     return () => { cancelledQuery = true; };
   }, [workspace]);
 
-  // ── 连接断开时收尾 loading ───────────────────────────────────────────────
+  // 鈹€鈹€ 杩炴帴鏂紑鏃舵敹灏?loading 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
   useEffect(() => {
     if (!connected && isLoading) {
       finishLoading();
@@ -333,7 +337,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
 
-  // ── 队列消费：isLoading 变 false 且队列非空时取出第一条自动发送 ──────────
+  // 鈹€鈹€ 闃熷垪娑堣垂锛歩sLoading 鍙?false 涓旈槦鍒楅潪绌烘椂鍙栧嚭绗竴鏉¤嚜鍔ㄥ彂閫?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
   const consumingQueue = useRef(false);
   useEffect(() => {
     if (!isLoading && messageQueue.length > 0 && !consumingQueue.current) {
@@ -348,13 +352,13 @@ export function useChatSession(opts: UseChatSessionOptions) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoading, messageQueue]);
 
-  // ── 发送动作 ──────────────────────────────────────────────────────────────
+  // 鈹€鈹€ 鍙戦€佸姩浣?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
-  /** 真正执行发送：追加用户气泡 + 发 user_message + 进入加载态 */
+  /** 鐪熸鎵ц鍙戦€侊細杩藉姞鐢ㄦ埛姘旀场 + 鍙?user_message + 杩涘叆鍔犺浇鎬?*/
   const sendNow = useCallback((payload: SubmitPayload) => {
-    // 递增代数，新一轮事件只作用于本代的 assistant 消息
+    // 閫掑浠ｆ暟锛屾柊涓€杞簨浠跺彧浣滅敤浜庢湰浠ｇ殑 assistant 娑堟伅
     const gen = ++turnGeneration.current;
-    // 清除取消标记——新一轮开始后，之前取消设的 flag 不应阻止新事件处理
+    // 娓呴櫎鍙栨秷鏍囪鈥斺€旀柊涓€杞紑濮嬪悗锛屼箣鍓嶅彇娑堣鐨?flag 涓嶅簲闃绘鏂颁簨浠跺鐞?
     cancelled.current = false;
     setChatHistory((prev) => [
       ...prev,
@@ -369,24 +373,24 @@ export function useChatSession(opts: UseChatSessionOptions) {
         turnGen: gen,
       },
     ]);
-    // 优先用 payload 里计算好的 provider（来自用户在模型选择器里的选择），
-    // 回退到 session 级的 providerState（来自 setModel）。
+    // 浼樺厛鐢?payload 閲岃绠楀ソ鐨?provider锛堟潵鑷敤鎴峰湪妯″瀷閫夋嫨鍣ㄩ噷鐨勯€夋嫨锛夛紝
+    // 鍥為€€鍒?session 绾х殑 providerState锛堟潵鑷?setModel锛夈€?
     const finalProvider = payload.send.provider ?? providerState;
-    console.log("[axon-send] provider 跟踪", {
+    console.log("[axon-send] provider 璺熻釜", {
       payloadProvider: payload.send.provider,
       sessionProviderState: providerState,
       finalProvider,
       model: payload.send.model,
     });
-    send({ type: "user_message", ...payload.send, provider: finalProvider });
+    send({ type: CONTROL_CMD.USER_MESSAGE, ...payload.send, provider: finalProvider });
     setIsLoading(true);
-    setReasoning(""); // 新一轮开始：清空上一轮残留的思考过程
-    setStatusText("思考中...");
+    setReasoning(""); // 鏂颁竴杞紑濮嬶細娓呯┖涓婁竴杞畫鐣欑殑鎬濊€冭繃绋?
+    setStatusText("鎬濊€冧腑...");
     setStatusPhase("thinking");
     turnStartTime.current = Date.now();
   }, [send]);
 
-  /** 提交一条用户消息：AI 回复中或压缩中则排队，否则立即发送。返回是否已排队。 */
+  /** 鎻愪氦涓€鏉＄敤鎴锋秷鎭細AI 鍥炲涓垨鍘嬬缉涓垯鎺掗槦锛屽惁鍒欑珛鍗冲彂閫併€傝繑鍥炴槸鍚﹀凡鎺掗槦銆?*/
   const submit = useCallback((payload: SubmitPayload): boolean => {
     if (isLoading || isCompacting) {
       setMessageQueue((prev) => [...prev, { id: `q-${Date.now()}`, payload }]);
@@ -396,29 +400,35 @@ export function useChatSession(opts: UseChatSessionOptions) {
     return false;
   }, [isLoading, isCompacting, sendNow]);
 
-  /** 手动压缩上下文 */
+  /** 鎵嬪姩鍘嬬缉涓婁笅鏂?*/
   const compactSession = useCallback(() => {
     send({ type: "compact_session" });
   }, [send]);
 
-  /** 用户对压缩方式做出选择 */
+  /** 鐢ㄦ埛瀵瑰帇缂╂柟寮忓仛鍑洪€夋嫨 */
   const chooseCompaction = useCallback((choice: "continue" | "new_session") => {
     send({ type: "compaction_choice", choice });
     setCompactionNeeded(null);
   }, [send]);
 
-  /** 导航到迁移目标新会话（父组件负责切 tab） */
+  /** 用户对 Credits 预算暂停做出选择（继续本轮任务 / 停止） */
+  const chooseCreditBudget = useCallback((choice: "continue" | "stop") => {
+    send({ type: "credit_budget_choice", choice });
+    setCreditBudgetPaused(null);
+  }, [send]);
+
+  /** 瀵艰埅鍒拌縼绉荤洰鏍囨柊浼氳瘽锛堢埗缁勪欢璐熻矗鍒?tab锛?*/
   const navigateToMigratedSession = useCallback((newSessionId: string) => {
     const vscode = (window as any).__axonVSCode;
     if (vscode) vscode.postMessage({ type: "open_session", sessionId: newSessionId });
   }, []);
 
-  /** 从队列移除指定消息 */
+  /** 浠庨槦鍒楃Щ闄ゆ寚瀹氭秷鎭?*/
   const removeFromQueue = useCallback((id: string) => {
     setMessageQueue((prev) => prev.filter((m) => m.id !== id));
   }, []);
 
-  /** 取消当前轮次（model 用于估算 credits）。压缩进行中时忽略。 */
+  /** 鍙栨秷褰撳墠杞锛坢odel 鐢ㄤ簬浼扮畻 credits锛夈€傚帇缂╄繘琛屼腑鏃跺拷鐣ャ€?*/
   const cancelTurn = useCallback((currentModel: string) => {
     if (isCompacting) return;
     send({ type: "cancel" });
@@ -426,7 +436,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
       send({ type: "confirm_tool", confirmed: false });
       setToolConfirm(null);
     }
-    // 取消时把所有未决命令授权按"拒绝"回传，避免后端 gate（含并发子 Agent）永久阻塞
+    // 鍙栨秷鏃舵妸鎵€鏈夋湭鍐冲懡浠ゆ巿鏉冩寜"鎷掔粷"鍥炰紶锛岄伩鍏嶅悗绔?gate锛堝惈骞跺彂瀛?Agent锛夋案涔呴樆濉?
     const pendingApprovals = commandApprovalsRef.current;
     if (Object.keys(pendingApprovals).length > 0) {
       for (const entry of Object.values(pendingApprovals)) {
@@ -436,8 +446,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
     }
     cancelled.current = true;
     typewriter.cancel();
-    setWaitingInputIds(new Set()); // 取消时清除所有呼吸灯
-    // 记录被取消的 assistant 消息 id，供 turn_cancelled 事件精确匹配
+    setWaitingInputIds(new Set()); // 鍙栨秷鏃舵竻闄ゆ墍鏈夊懠鍚哥伅
+    // 璁板綍琚彇娑堢殑 assistant 娑堟伅 id锛屼緵 turn_cancelled 浜嬩欢绮剧‘鍖归厤
     setChatHistory((prev) => {
       const updated = [...prev];
       const last = updated[updated.length - 1];
@@ -452,9 +462,9 @@ export function useChatSession(opts: UseChatSessionOptions) {
         const cancelCredits = estInputTokens > 0 || estOutputTokens > 0
           ? Math.max(0.5, Math.round(((estInputTokens / 1000) * 0.14 + (estOutputTokens / 1000) * 0.44) * 100) / 100)
           : 0;
-        // 乐观拆分：system/本次提问/记忆都有非零估算，不把全会话 token 全塞进"记忆"。
-        // 真实值会在后端 turn_cancelled 事件到达时覆盖。
-        const estSystemTokens = Math.min(estInputTokens, 10000); // 系统提示 + 工具定义最少也有几千 token
+        // 涔愯鎷嗗垎锛歴ystem/鏈鎻愰棶/璁板繂閮芥湁闈為浂浼扮畻锛屼笉鎶婂叏浼氳瘽 token 鍏ㄥ杩?璁板繂"銆?
+        // 鐪熷疄鍊间細鍦ㄥ悗绔?turn_cancelled 浜嬩欢鍒拌揪鏃惰鐩栥€?
+        const estSystemTokens = Math.min(estInputTokens, 10000); // 绯荤粺鎻愮ず + 宸ュ叿瀹氫箟鏈€灏戜篃鏈夊嚑鍗?token
         const estQuestionTokens = Math.min(estInputTokens - estSystemTokens, last.content ? Math.round(last.content.length * 0.35) : 0);
         const cancelCreditDetail: CreditDetail = {
           inputTokens: estInputTokens,
@@ -462,7 +472,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
           cachedInputTokens: 0,
           inputRate: 0.14,
           outputRate: 0.44,
-          tier: "估算",
+          tier: "浼扮畻",
           memoryTokens: Math.max(0, estInputTokens - estSystemTokens - estQuestionTokens),
           systemTokens: estSystemTokens,
           questionTokens: estQuestionTokens,
@@ -492,12 +502,12 @@ export function useChatSession(opts: UseChatSessionOptions) {
     setReasoning("");
   }, [send, toolConfirm, tokenUsage.used, finishLoading]);
 
-  /** 切换编辑模式 */
+  /** 鍒囨崲缂栬緫妯″紡 */
   const toggleEditMode = useCallback(() => {
     const next = editMode === "manual" ? "auto" : "manual";
     setEditMode(next);
-    send({ type: "set_edit_mode", mode: next });
-    try { localStorage.setItem("axon-edit-mode", next); } catch { /* ignore */ }
+    send({ type: CONTROL_CMD.SET_EDIT_MODE, mode: next });
+    try { localStorage.setItem(STORAGE.EDIT_MODE, next); } catch { /* ignore */ }
     if (next === "auto" && pendingPaths.length > 0) {
       send({ type: "accept_edits" });
     }
@@ -512,7 +522,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     send({ type: "confirm_tool", confirmed });
   }, [send]);
 
-  /** 回应命令授权门：把用户对某条命令的决策回传后端，并从待审批映射中移除 */
+  /** 鍥炲簲鍛戒护鎺堟潈闂細鎶婄敤鎴峰鏌愭潯鍛戒护鐨勫喅绛栧洖浼犲悗绔紝骞朵粠寰呭鎵规槧灏勪腑绉婚櫎 */
   const approveCommand = useCallback((toolCallId: string, decision: CommandDecision) => {
     const entry = commandApprovalsRef.current[toolCallId];
     if (!entry) return;
@@ -522,7 +532,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
       delete next[toolCallId];
       return next;
     });
-    // 用户编辑了命令：乐观更新对应卡片的展示命令，避免执行期间仍显示旧命令（等到 tool_result 才更新会有空窗）
+    // 鐢ㄦ埛缂栬緫浜嗗懡浠わ細涔愯鏇存柊瀵瑰簲鍗＄墖鐨勫睍绀哄懡浠わ紝閬垮厤鎵ц鏈熼棿浠嶆樉绀烘棫鍛戒护锛堢瓑鍒?tool_result 鎵嶆洿鏂颁細鏈夌┖绐楋級
     if (decision.editedCommand) {
       setChatHistory((prev) => prev.map((msg) => {
         if (msg.role !== "assistant" || !msg.segments) return msg;
@@ -539,32 +549,32 @@ export function useChatSession(opts: UseChatSessionOptions) {
     }
   }, [send]);
 
-  /** 关闭"危险命令被拦截"提示（拒绝），或仍要执行 */
+  /** 鍏抽棴"鍗遍櫓鍛戒护琚嫤鎴?鎻愮ず锛堟嫆缁濓級锛屾垨浠嶈鎵ц */
   const respondToDangerousCommand = useCallback((requestId: string, executeAnyway: boolean) => {
     setCommandBlocked(null);
     send({ type: "confirm_command", requestId, choice: executeAnyway ? "once" : "reject" });
   }, [send]);
 
-  /** 单纯关闭危险提示（无 requestId 的旧版硬拦） */
+  /** 鍗曠函鍏抽棴鍗遍櫓鎻愮ず锛堟棤 requestId 鐨勬棫鐗堢‖鎷︼級 */
   const dismissCommandBlocked = useCallback(() => setCommandBlocked(null), []);
 
-  /** 选择模型：持久化 + 更新 token 上下文窗口 */
+  /** 閫夋嫨妯″瀷锛氭寔涔呭寲 + 鏇存柊 token 涓婁笅鏂囩獥鍙?*/
   const [providerState, setProviderState] = useState<string | undefined>(() => {
-    try { return localStorage.getItem("axon-last-provider") || undefined; } catch { return undefined; }
+    try { return localStorage.getItem(STORAGE.LAST_PROVIDER) || undefined; } catch { return undefined; }
   });
   const setModel = useCallback((newModel: string, providerName?: string) => {
     setModelState(newModel);
     setProviderState(providerName);
     try {
-      localStorage.setItem("axon-last-model", newModel);
-      if (providerName) localStorage.setItem("axon-last-provider", providerName);
-      else localStorage.removeItem("axon-last-provider");
+      localStorage.setItem(STORAGE.LAST_MODEL, newModel);
+      if (providerName) localStorage.setItem(STORAGE.LAST_PROVIDER, providerName);
+      else localStorage.removeItem(STORAGE.LAST_PROVIDER);
     } catch { /* ignore */ }
     const targetModel = providerName
       ? getModels().find((m) => m.id === newModel && m.provider === providerName)
       : findModel(newModel);
-    // Auto（contextWindow=0）或自定义未知窗口时不要把 max 写成 0，保留上一次的有效值；
-    // 真实窗口会在收到后端 token_usage 事件后被校正为"实际选用模型"的窗口。
+    // Auto锛坈ontextWindow=0锛夋垨鑷畾涔夋湭鐭ョ獥鍙ｆ椂涓嶈鎶?max 鍐欐垚 0锛屼繚鐣欎笂涓€娆＄殑鏈夋晥鍊硷紱
+    // 鐪熷疄绐楀彛浼氬湪鏀跺埌鍚庣 token_usage 浜嬩欢鍚庤鏍℃涓?瀹為檯閫夌敤妯″瀷"鐨勭獥鍙ｃ€?
     if (targetModel) setTokenUsage((prev) => ({ ...prev, max: targetModel.contextWindow > 0 ? targetModel.contextWindow : prev.max }));
   }, []);
 
@@ -590,25 +600,26 @@ export function useChatSession(opts: UseChatSessionOptions) {
   }, [send, currentGroupId]);
 
   return {
-    // 状态
+    // 鐘舵€?
     chatHistory, isLoading, isLoadingSession,
     tokenUsage, reasoning, statusText,
     isCompacting, compactSession, compactionNeeded, compactionMigrated, chooseCompaction, navigateToMigratedSession,
+    creditBudgetPaused, chooseCreditBudget,
     pendingPaths, pendingDiffs, pendingExpanded, setPendingExpanded,
     messageQueue, toolConfirm,
     waitingInputIds,
     commandApprovals, commandBlocked,
     editMode, workspace, workspaces, workspacesLoaded, currentGroupId, hasRelay, model, provider: providerState,
-    // 撤销轻提示
+    // 鎾ら攢杞绘彁绀?
     undoNotice, setUndoNotice,
     // Quest
     mode, questThink, questWebSearch, setQuestThink, setQuestWebSearch,
-    // 动作
+    // 鍔ㄤ綔
     submit, removeFromQueue, cancelTurn,
     toggleEditMode, acceptEdits, rejectEdits, undoEdits, confirmTool,
     approveCommand, dismissCommandBlocked, respondToDangerousCommand,
     setModel, selectWorkspace, selectGroup, groupUpdated,
-    // 闪电回滚
+    // 闂數鍥炴粴
     listSnapshots: () => send({ type: "list_snapshots" }),
     restoreSnapshot: (id: string) => send({ type: "restore_snapshot", snapshotId: id }),
   };

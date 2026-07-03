@@ -15,6 +15,7 @@ import type { SessionStorage } from "../storage/types.js";
 import type { WebCapability, TrustRule } from "../tools/index.js";
 import type { McpCapability } from "../mcp/types.js";
 import type { CompactionUserConfig } from "../compactor.js";
+import type { CreditBudgetUserConfig } from "../credits.js";
 
 /** 工作区组（迁自 server/config.ts 的纯类型部分） */
 export interface WorkspaceGroup {
@@ -67,4 +68,10 @@ export interface SessionHubDeps {
    * 不注入则使用 DEFAULT_COMPACTION_CONFIG（默认启用）。
    */
   getCompactionConfig?: () => CompactionUserConfig;
+  /**
+   * 可选：Credits 预算门配置提供器。返回当前生效的预算门配置（含开关、软提醒/硬暂停阈值）。
+   * 在会话创建时和配置变更时调用，使配置热更新到所有活跃会话。
+   * 不注入则使用 DEFAULT_CREDIT_BUDGET_CONFIG（默认启用）。
+   */
+  getCreditBudgetConfig?: () => CreditBudgetUserConfig;
 }

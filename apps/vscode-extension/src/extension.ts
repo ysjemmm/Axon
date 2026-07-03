@@ -14,8 +14,8 @@
 import * as vscode from "vscode";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { SessionHub, type ControlCommand, type WorkspaceGroup, type CompactionUserConfig, webSearch, webFetch } from "@axon/core";
-import { DEFAULT_COMPACTION_CONFIG } from "@axon/core";
+import { SessionHub, type ControlCommand, type WorkspaceGroup, type CompactionUserConfig, type CreditBudgetUserConfig, webSearch, webFetch } from "@axon/core";
+import { DEFAULT_COMPACTION_CONFIG, DEFAULT_CREDIT_BUDGET_CONFIG } from "@axon/core";
 import { createVSCodeAgentHost, VSCodeCommandTrustStore } from "@axon/host-vscode";
 import { JsonFileStorage, createNodeMcpCapability } from "@axon/host-node";
 import { loadProviderEnv } from "./loadEnv.js";
@@ -53,6 +53,19 @@ function readCompactionConfig(): CompactionUserConfig {
     keepRecentMessages: cfg.get<number>("keepRecentMessages", DEFAULT_COMPACTION_CONFIG.keepRecentMessages),
     toolResultPruneChars: cfg.get<number>("toolResultPruneChars", DEFAULT_COMPACTION_CONFIG.toolResultPruneChars),
     toolResultKeepTurns: cfg.get<number>("toolResultKeepTurns", DEFAULT_COMPACTION_CONFIG.toolResultKeepTurns),
+  };
+}
+
+/**
+ * 读取 VS Code 设置中的 Credits 预算门配置（axon.creditBudget.*）。
+ * 读取时机：会话创建时（注入初始值）+ 设置变更时（热更新）。
+ */
+function readCreditBudgetConfig(): CreditBudgetUserConfig {
+  const cfg = vscode.workspace.getConfiguration("axon.creditBudget");
+  return {
+    enabled: cfg.get<boolean>("enabled", DEFAULT_CREDIT_BUDGET_CONFIG.enabled),
+    warnAt: cfg.get<number>("warnAt", DEFAULT_CREDIT_BUDGET_CONFIG.warnAt),
+    pauseAt: cfg.get<number>("pauseAt", DEFAULT_CREDIT_BUDGET_CONFIG.pauseAt),
   };
 }
 
@@ -290,6 +303,8 @@ export function activate(context: vscode.ExtensionContext): void {
     commandTrust: new VSCodeCommandTrustStore(),
     // 滚动压缩配置：读取 VS Code 设置（axon.compaction.*），默认关闭
     getCompactionConfig: () => readCompactionConfig(),
+    // Credits 预算门配置：读取 VS Code 设置（axon.creditBudget.*），默认启用
+    getCreditBudgetConfig: () => readCreditBudgetConfig(),
   });
 
   // REST 请求路由（webview 形态下替代 Express）
@@ -346,6 +361,9 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       if (e.affectsConfiguration("axon.compaction")) {
         hub.reloadCompactionConfig();
+      }
+      if (e.affectsConfiguration("axon.creditBudget")) {
+        hub.reloadCreditBudgetConfig();
       }
     })
   );

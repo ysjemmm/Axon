@@ -27,7 +27,6 @@ import {
   type ResolvedProviderInfo,
   type ProviderModelInfo,
   type ProbedModelInfo,
-  type ProviderProtocol,
 } from "@/lib/apiClient";
 
 function isInVSCode(): boolean {
@@ -586,17 +585,6 @@ function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo;
       <div className="text-[10px] text-muted-foreground">上下文窗口与多模态以该 provider 官方文档为准；可用上方"从端点导入"自动带出（若端点返回）。</div>
     </div>
   );
-}
-
-/** 把 "id | 显示名 | 窗口 | 多模态(y/n) | 厂商 | 协议" 多行文本解析为模型列表 */
-function parseModels(text: string): ProviderModelInfo[] {
-  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
-    const [id, name, win, visionFlag, vendor, protocol] = line.split(/[|,]/).map((s) => s.trim());
-    const contextWindow = win && /^\d+$/.test(win) ? parseInt(win, 10) : 128000;
-    const vision = visionFlag ? /^y|yes|true|1$/i.test(visionFlag) : false;
-    const proto: ProviderProtocol | undefined = protocol === "responses" ? "responses" : (protocol === "chat" ? "chat" : undefined);
-    return { id, name: name || id, contextWindow, vision, protocol: proto, vendor: vendor || undefined };
-  }).filter((m) => m.id);
 }
 
 /** 添加自定义 provider 表单 */

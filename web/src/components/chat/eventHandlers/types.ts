@@ -34,6 +34,7 @@ export interface EventHandlerCtx {
   setIsCompacting: (b: boolean) => void;
   setCompactionNeeded: (n: { currentTokens: number; maxTokens: number; percent: number } | null) => void;
   setCompactionMigrated: (m: { newSessionId: string; parentSessionId?: string } | null) => void;
+  setCreditBudgetPaused: (n: { spent: number; threshold: number } | null) => void;
   setPendingPaths: (p: string[]) => void;
   setPendingDiffs: (d: Record<string, { oldContent: string; newContent: string }>) => void;
   setPendingExpanded: (b: boolean) => void;

@@ -34,6 +34,43 @@ export function handleSubAgentStart(msg: WsMessage, ctx: EventHandlerCtx): void 
   });
 }
 
+/**
+ * parallel_research_start / parallel_execute_start：一次性创建多个 subagent 段（并列展示），
+ * 复用 sub_agent_start 的单个卡片渲染逻辑——每个子任务的 delegateId 对应一个卡片，
+ * 后续 sub_agent_event / sub_agent_end 会按 delegateId 路由进各自的卡片。
+ *
+ * 这两个事件此前完全没有前端处理（掉进事件路由的 default 分支），导致 parallel_research
+ * 执行期间用户只能看到外层一张"执行中"的卡片，看不到 N 路子 Agent 各自在做什么、进度如何——
+ * 长调研任务体验上等同于卡死无反馈。
+ */
+export function handleParallelBatchStart(msg: WsMessage, ctx: EventHandlerCtx): void {
+  if (ctx.cancelled.current) return;
+  const tasks = ((msg as any).tasks as { delegateId: string; intent: string; prompt: string }[]) || [];
+  if (tasks.length === 0) return;
+  ctx.setChatHistory((prev) => {
+    const updated = [...prev];
+    const last = updated[updated.length - 1];
+    const curGen = ctx.turnGeneration.current;
+    if (last && last.role === "assistant" && last.turnGen !== curGen) return prev;
+    const newSegs = tasks.map((t) => ({
+      type: "subagent" as const,
+      id: t.delegateId,
+      intent: t.intent || "并行子任务",
+      skill: null,
+      prompt: t.prompt || "",
+      status: "running" as const,
+      innerStreaming: true,
+      inner: [],
+    }));
+    if (!last || last.role !== "assistant") {
+      updated.push({ id: `assistant-${Date.now()}`, role: "assistant", segments: newSegs, streaming: true, turnGen: curGen });
+    } else {
+      updated[updated.length - 1] = { ...last, segments: [...(last.segments || []), ...newSegs] };
+    }
+    return updated;
+  });
+}
+
 export function handleSubAgentEvent(msg: WsMessage, ctx: EventHandlerCtx): void {
   if (ctx.cancelled.current) return;
   const delegateId = (msg as any).delegateId as string;

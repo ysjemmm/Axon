@@ -3,14 +3,26 @@
  * 从原 ChatPanel.tsx 拆出。
  */
 
-import { memo } from "react";
-import { Copy, Feather, FileText } from "lucide-react";
+import { memo, useState } from "react";
+import { ChevronDown, Copy, Feather, FileText } from "lucide-react";
 import type { ChatMessage } from "./types";
 import { formatFileSize } from "./format";
 import { AssistantTurn } from "./AssistantTurn";
 import { FileTag } from "./FileTag";
 
+const USER_MESSAGE_COLLAPSE_CHARS = 700;
+const USER_MESSAGE_COLLAPSE_LINES = 10;
+
+function userMessageText(message: ChatMessage): string {
+  if (message.userSegments && message.userSegments.length > 0) {
+    return message.userSegments.map((seg) => seg.type === "text" ? seg.text : seg.tag.name).join("");
+  }
+  return message.content || "";
+}
+
 function MessageBubbleImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit, onQuoteToInput, onImagePreview }: { message: ChatMessage; onAcceptEdit?: (path: string) => void; onRejectEdit?: (path: string) => void; onUndoEdit?: (path: string) => void; onQuoteToInput?: (message: ChatMessage) => void; onImagePreview?: (src: string) => void }) {
+  const [userExpanded, setUserExpanded] = useState(false);
+
   // 系统消息（压缩提示等）：居中浅色文本行
   if ((message as any).role === "system") {
     return (
@@ -26,6 +38,11 @@ function MessageBubbleImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit, on
   if (message.role === "user") {
     const hasFiles = message.attachedFiles && message.attachedFiles.length > 0;
     const hasSegments = !!message.userSegments && message.userSegments.length > 0;
+    const plainText = userMessageText(message);
+    const shouldCollapse =
+      plainText.length > USER_MESSAGE_COLLAPSE_CHARS ||
+      plainText.split(/\r\n|\r|\n/).length > USER_MESSAGE_COLLAPSE_LINES;
+    const collapsed = shouldCollapse && !userExpanded;
     if (!message.content && (!message.images || message.images.length === 0) && !hasFiles && !hasSegments) return null;
     return (
       <div className="group/user flex items-start flex-row-reverse">
@@ -35,7 +52,7 @@ function MessageBubbleImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit, on
             <div className="absolute -left-16 bottom-0 flex items-center gap-0.5 opacity-0 group-hover/user:opacity-100 transition-opacity">
               <button
                 onClick={(e) => {
-                  navigator.clipboard.writeText(message.content || "");
+                  navigator.clipboard.writeText(plainText);
                   const btn = e.currentTarget;
                   btn.setAttribute("data-copied", "true");
                   setTimeout(() => btn.removeAttribute("data-copied"), 1500);
@@ -70,11 +87,14 @@ function MessageBubbleImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit, on
           )}
           {hasSegments ? (
             // 富文本：文本 + 内联 tag pill（与输入时一致）
-            <p className="text-[13px] whitespace-pre-wrap leading-[1.5]">
-              {message.userSegments!.map((seg, i) =>
-                seg.type === "text" ? <span key={i}>{seg.text}</span> : <FileTag key={i} data={{ name: seg.tag.name, path: seg.tag.name, content: seg.tag.content, kind: seg.tag.kind }} />,
-              )}
-            </p>
+            <div className="relative">
+              <p className={`text-[13px] whitespace-pre-wrap leading-[1.5] overflow-hidden ${collapsed ? "max-h-40" : ""}`}>
+                {message.userSegments!.map((seg, i) =>
+                  seg.type === "text" ? <span key={i}>{seg.text}</span> : <FileTag key={i} data={{ name: seg.tag.name, path: seg.tag.name, content: seg.tag.content, kind: seg.tag.kind }} />,
+                )}
+              </p>
+              {collapsed && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-muted to-transparent" />}
+            </div>
           ) : (
             <>
               {hasFiles && (
@@ -90,8 +110,23 @@ function MessageBubbleImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit, on
                   ))}
                 </div>
               )}
-              {message.content && <p className="text-[13px] whitespace-pre-wrap leading-relaxed">{message.content}</p>}
+              {message.content && (
+                <div className="relative">
+                  <p className={`text-[13px] whitespace-pre-wrap leading-relaxed overflow-hidden ${collapsed ? "max-h-40" : ""}`}>{message.content}</p>
+                  {collapsed && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-muted to-transparent" />}
+                </div>
+              )}
             </>
+          )}
+          {shouldCollapse && (
+            <button
+              type="button"
+              onClick={() => setUserExpanded((v) => !v)}
+              className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <ChevronDown className={`w-3 h-3 transition-transform ${userExpanded ? "rotate-180" : ""}`} />
+              {userExpanded ? "收起" : "展开完整消息"}
+            </button>
           )}
         </div>
       </div>

@@ -58,6 +58,8 @@ export type ControlCommandPayload =
   // 上下文压缩
   | { type: "compact_session" }
   | { type: "compaction_choice"; choice: "continue" | "new_session" }
+  // Credits 预算门：硬暂停触发时用户的继续/停止决策
+  | { type: "credit_budget_choice"; choice: "continue" | "stop" }
   // 浏览器：把 open_browser 打开的页面带到前台（前端点击卡片输出触发）
   | { type: "focus_browser" }
   // 编辑模式 / 待确认改动

@@ -85,6 +85,11 @@ export class ChatCompletionsStrategy implements LLMStrategy {
             }
           : {}),
         ...(temperature !== undefined ? { temperature } : {}),
+        // Qwen 模型抑制重复退化：frequency_penalty 是 OpenAI 标准参数，所有兼容网关都支持。
+        // ⚠️ 不要加 repetition_penalty——它是 HuggingFace/vLLM 专有参数，中转网关收到会直接断流。
+        ...(isQwen
+          ? { frequency_penalty: 0.3 }
+          : {}),
         stream: true,
         // 让流式响应在末尾附带真实 token 用量（精确值，替代上层字符数估算）。
         // 仅对 OpenAI 原生模型下发；中转网关模型（glm/deepseek）不兼容该参数，会断流。

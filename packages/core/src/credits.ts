@@ -108,6 +108,32 @@ export function formatCredits(credits: number): string {
   return credits.toFixed(2);
 }
 
+/**
+ * 单轮 Credits 预算门配置（成本护栏，商业化用）——从 AgentSession 的 agent 循环里
+ * 实时读取本轮已消耗 credits，分两级响应：
+ *   · warnAt（软提醒）：不打断，只注入一条系统提示引导模型尽快收尾。
+ *   · pauseAt（硬暂停）：暂停循环，弹窗把真实花费展示给用户，由用户选择「继续」或「停止」。
+ *     选择继续后暂停阈值翻倍，避免同一个长任务反复打断用户——这是"对用户友好、不误伤正常长任务"的关键设计：
+ *     从不静默掐断，只是在花费显著时确认一次；一旦确认，护栏退到更高的下一档，不会同一个任务反复弹窗。
+ *
+ * 由呈现端（VS Code 设置 / CLI flag）注入，AgentSession 在每轮工具调用前检查。
+ */
+export interface CreditBudgetUserConfig {
+  /** 总开关。关闭后不再做软提醒/硬暂停（stream_end 的计费展示不受影响） */
+  enabled: boolean;
+  /** 软提醒阈值（credits）：达到后注入引导，不打断当前任务 */
+  warnAt: number;
+  /** 硬暂停阈值（credits）：达到后暂停等待用户选择「继续」/「停止」 */
+  pauseAt: number;
+}
+
+/** 默认预算门配置：默认启用，阈值设得足够宽松以覆盖正常复杂任务，只拦截真正异常的高消耗场景 */
+export const DEFAULT_CREDIT_BUDGET_CONFIG: CreditBudgetUserConfig = {
+  enabled: true,
+  warnAt: 30,
+  pauseAt: 80,
+};
+
 /** Credits 明细（前端 hover 展示） */
 export interface CreditDetail {
   inputTokens: number;

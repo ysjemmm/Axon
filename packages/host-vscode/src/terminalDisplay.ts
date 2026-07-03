@@ -28,7 +28,7 @@ import { spawn } from "node:child_process";
 //  常量
 // ═══════════════════════════════════════════════════════════════
 
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 240_000; // 硬超时：长命令（tsc / npm install）可能需要较长时间
 const SI_READY_TIMEOUT_MS = 5_000;
 const SI_STREAM_END_GRACE_MS = 3_000;
 const SI_IDLE_MS = 1_000;   // SI 层空输出/静默超时
@@ -50,7 +50,7 @@ export interface TerminalRunResult {
   closed?: boolean;
   cwd?: string;
   /** 终端层主动取消原因（如 PowerShell 续行/等待输入导致自动 Ctrl+C） */
-  cancelReason?: "terminal_stuck_waiting_input" | "aborted";
+  cancelReason?: "terminal_stuck_waiting_input" | "aborted" | "terminal_closed" | "command_hijacked";
   /** 终端执行结束原因 */
   reason?: "completed" | "timeout" | "aborted" | "terminal_stuck_waiting_input" | "unknown_exit";
 }
@@ -124,9 +124,6 @@ async function waitForShellIntegration(t: vscode.Terminal): Promise<boolean> {
 // ═══════════════════════════════════════════════════════════════
 
 function cdCommand(cwd: string): string {
-  if (process.platform === "win32") {
-    return `Set-Location -LiteralPath '${cwd.replace(/'/g, "''")}'; `;
-  }
   return `cd '${cwd.replace(/'/g, "'\\''")}'; `;
 }
 
@@ -146,8 +143,18 @@ function stripAnsi(text: string): string {
     .replace(/\x1b[=>]/g, "");
 }
 
+/** Braille 盲文字符区间 U+2800~U+28FF（npm/npx/esbuild 等工具的 spinner 动画帧） */
+const SPINNER_CHARS = /[\u2800-\u28ff]+/g;
+
 function normalizeOutput(text: string): string {
-  return stripAnsi(text).replace(/\r\n/g, "\n").replace(/\r/g, "");
+  return stripAnsi(text)
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "")
+    // 清除 npm/npx 等工具残留的 Braille spinner 帧（如 ⠙⠙），stripAnsi 对它们无效
+    .replace(SPINNER_CHARS, "")
+    // spinner 清除后可能留下空行，折叠连续空行为单个
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function escapeRegex(s: string): string {
@@ -227,12 +234,45 @@ async function runWithShellIntegration(
   })();
 
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+  // 终端存活状态：用户可能手动删除终端
+  let terminalAlive = true;
+  const closeChecker = vscode.window.onDidCloseTerminal((c) => {
+    if (c === t) terminalAlive = false;
+  });
+
+  // 命令篡改检测：同终端上有新命令启动（非我们的 execution）→ 命令被篡改/覆盖
+  let commandHijacked = false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = vscode.window as any;
+  const startChecker: vscode.Disposable | undefined =
+    typeof w.onDidStartTerminalShellExecution === "function"
+      ? w.onDidStartTerminalShellExecution(
+          (e: { terminal: vscode.Terminal; execution: vscode.TerminalShellExecution }) => {
+            if (e.terminal === t && e.execution !== execution) {
+              console.debug("[terminal] command hijacked: new execution started on same terminal");
+              commandHijacked = true;
+            }
+          },
+        )
+      : undefined;
+
   const completion = await waitForCompletion({
     timeoutMs,
     signal: opts.signal,
+    isTerminalAlive: () => terminalAlive,
+    commandHijacked: () => commandHijacked,
     onEnd: (cb) => {
+      let matched = false;
       const d = vscode.window.onDidEndTerminalShellExecution((e) => {
-        if (e.execution === execution) cb(e.exitCode ?? null);
+        // 精确匹配优先：SI 追踪正常时，execution 引用相等
+        if (e.execution === execution) { matched = true; cb(e.exitCode ?? null); return; }
+        // 终端级 fallback：精确匹配已失败（命令被篡改等），同一个终端上任意命令结束 → 判定完成
+        // 前提：精确匹配还未命中过（matched=false），且事件来自同一个终端
+        if (!matched && e.terminal === t) {
+          console.debug("[terminal] SI end: execution mismatch, falling back to terminal-level match");
+          cb(e.exitCode ?? null);
+        }
       });
       return d;
     },
@@ -251,6 +291,10 @@ async function runWithShellIntegration(
     cancelTerminal: () => t.sendText("\u0003", false),
     command: effectiveCommand,
   });
+
+  // 释放终端存活检测和命令篡改检测的 disposable
+  closeChecker.dispose();
+  startChecker?.dispose();
 
   // read() 在 PowerShell 续行 + Ctrl+C 等场景可能永不结束。
   // waitForCompletion 已经通过 onEnd / idle / abort 判定本次 run 结束后，
@@ -465,18 +509,26 @@ interface WaitForCompletionConfig {
   onWaitingInput?: () => void;
   showTerminal: () => void;
   cancelTerminal?: () => void;
+  /** 终端是否仍然存活（未被用户手动删除） */
+  isTerminalAlive?: () => boolean;
+  /** 命令是否被篡改/覆盖（同终端上有新命令启动，非我们的 execution） */
+  commandHijacked?: () => boolean;
 }
 
 /** 检查命令字符串是否语法不完整（引号/括号未闭合），用于判断 >> 续行 */
 function isCommandIncomplete(command: string): boolean {
   if (!command) return false;
-  // 不检查单引号——反引号转义太复杂，而且续行绝大多数是双引号问题
-  let dq = false;
+  // PowerShell 单引号和双引号都可以触发 >> 续行
+  let dq = false, sq = false;
   for (let i = 0; i < command.length; i++) {
-    if (command[i] === '"') dq = !dq;
+    const ch = command[i];
+    if (ch === '"' && !sq) dq = !dq;            // 双引号（不在单引号内时切换）
+    else if (ch === "'" && !dq) sq = !sq;       // 单引号（不在双引号内时切换）
+    // 反引号 ` 转义下一个字符（跳过，避免下一字符被误判）
+    else if (ch === "`") { i++; }
   }
-  if (dq) return true;
-  // 括号配对（粗略）
+  if (dq || sq) return true;
+  // 括号/花括号配对（粗略）
   let paren = 0, brace = 0;
   for (const ch of command) {
     if (ch === '(') paren++; else if (ch === ')') paren--;
@@ -549,6 +601,23 @@ function waitForCompletion(cfg: WaitForCompletionConfig): Promise<{ code: number
             vscode.window.showInformationMessage("Axon 终端正在等待你的输入。", { modal: true }, "打开终端")
               .then((c) => c === "打开终端" && cfg.showTerminal());
           }
+          // C：普通命令的健康检查（非续行、非手动输入）
+          // 只在分支 A（续行）和 B（手动输入）都不满足时执行
+          else {
+            // 1) 终端是否被用户手动删除？
+            if (cfg.isTerminalAlive && !cfg.isTerminalAlive()) {
+              console.debug("[terminal] idle: terminal closed → complete");
+              finish(null, "terminal_closed");
+              return;
+            }
+            // 2) 命令是否被篡改/覆盖？（同终端上有新命令启动，非我们的 execution）
+            if (cfg.commandHijacked?.()) {
+              console.debug("[terminal] idle: command hijacked → complete");
+              finish(0, "command_hijacked");
+              return;
+            }
+            // 3) 终端存在 + 命令未被篡改 → 继续等待 SI end event / stream done / 硬超时 240s
+          }
           // 普通命令不能仅凭 idle 判定完成：git commit / build / test 等可能长时间静默。
           // 必须等待 SI end event / stream done / terminal close / timeout / abort。
         }
@@ -594,7 +663,15 @@ function waitForCompletion(cfg: WaitForCompletionConfig): Promise<{ code: number
 export async function runCommand(opts: TerminalRunOptions): Promise<TerminalRunResult> {
   const terminalKey = opts.terminalKey ?? "default";
   const t = getOrCreateTerminal(terminalKey, opts.cwd);
-  t.show(true);
+
+  // 智能聚焦：避免抢占用户正在操作的终端
+  // - 用户没有聚焦任何终端（在编辑器等区域）→ show，让用户看到 AI 的终端输出
+  // - 用户聚焦的就是 AI 终端 → show（无副作用，已经在看了）
+  // - 用户聚焦了其他终端 → 不 show，避免终端面板切换抢走用户焦点
+  const activeTerminal = vscode.window.activeTerminal;
+  if (!activeTerminal || activeTerminal === t) {
+    t.show(true);
+  }
 
   // 不再拼接 cdCommand 前缀：getOrCreateTerminal 已经通过 createTerminal({cwd}) 确保终端在正确目录。
   // 这样终端里显示的命令和工具卡片一致（不会出现 Set-Location 前缀）。

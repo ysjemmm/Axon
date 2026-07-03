@@ -8,11 +8,13 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 import type OpenAI from "openai";
 import { resolve } from "node:path";
 import { executeToolCall, toolContentLimit, ToolError, ToolName, ToolCallStatus, statusForTool, SOFT_FAIL_TOOLS, EDIT_PERSIST_TOOLS, REQUIRED_ARGS_TOOLS, type ToolMeta, type WebCapability, type ApprovalDecision, type TrustRule, type GateOutcome } from "./tools/index.js";
-import { calculateCredits, buildCreditDetail } from "./credits.js";
+import { calculateCredits, buildCreditDetail, formatCredits } from "./credits.js";
 import type { AgentHost } from "./host/index.js";
 import type { AgentChannel, AgentEvent } from "./channel/index.js";
 import { needsCompaction, compactMessages, reflectiveCompact, pruneOldToolResults, DEFAULT_COMPACTION_CONFIG, setPruneKeepChars } from "./compactor.js";
 import type { CompactionUserConfig } from "./compactor.js";
+import { DEFAULT_CREDIT_BUDGET_CONFIG } from "./credits.js";
+import type { CreditBudgetUserConfig } from "./credits.js";
 import type { SerializedPendingEdit } from "./storage/types.js";
 import type { LLMStreamCallbacks, ToolDef } from "./llm/types.js";
 import { SkillRegistry } from "./skills/skillLoader.js";
@@ -151,6 +153,14 @@ export class AgentSession {
   /** @internal */ rollingSummaryInProgress = false;
   /** 滚动压缩配置（运行时可更新）。来自呈现端注入，默认启用。 */
   /** @internal */ compactionConfig: CompactionUserConfig = { ...DEFAULT_COMPACTION_CONFIG };
+  /** Credits 预算门配置（运行时可更新）。来自呈现端注入，默认启用。 */
+  /** @internal */ creditBudgetConfig: CreditBudgetUserConfig = { ...DEFAULT_CREDIT_BUDGET_CONFIG };
+  /** 本轮已发过一次软提醒（warnAt），避免同一轮反复注入 */
+  private budgetWarnedThisTurn = false;
+  /** 本轮硬暂停阈值的运行时快照：用户选择"继续"后翻倍，避免同一个长任务反复打断 */
+  private budgetPauseThreshold = 0;
+  /** 预算选择门：硬暂停触发时，await 此 Promise 阻塞直到用户在"继续/停止"中选择 */
+  private budgetChoiceResolve: ((choice: "continue" | "stop") => void) | null = null;
   // 执行中的 relay 任务上下文：记录当前正在执行哪个 relay/任务，及该任务改动过的文件（供评审定位）
   /** @internal */ activeRelayTask: { relayId: string; taskId: string; changedFiles: Set<string> } | null = null;
   // 本轮用户输入内是否已推进过一次 Relay 阶段。确认门铁律：一条用户消息最多推进一个文档阶段，
@@ -208,6 +218,16 @@ export class AgentSession {
   /** 获取当前压缩配置（诊断 / UI 展示用） */
   getCompactionConfig(): CompactionUserConfig {
     return this.compactionConfig;
+  }
+
+  /** 设置 Credits 预算门配置（由呈现端在启动时 / 配置变更时调用） */
+  setCreditBudgetConfig(cfg: Partial<CreditBudgetUserConfig>): void {
+    this.creditBudgetConfig = { ...this.creditBudgetConfig, ...cfg };
+  }
+
+  /** 获取当前 Credits 预算门配置（诊断 / UI 展示用） */
+  getCreditBudgetConfig(): CreditBudgetUserConfig {
+    return this.creditBudgetConfig;
   }
 
   /** 获取当前完整消息列表（持久化用） */
@@ -916,6 +936,82 @@ export class AgentSession {
   }
 
   /**
+   * 本轮 Credits 预算门：每轮工具调用前检查本轮累计花费，分两级响应。
+   * 设计目标——对用户友好、不误伤正常长任务：
+   *   · 软提醒（warnAt）：只注入一条系统提示引导模型尽快收尾，不打断，每轮最多提醒一次。
+   *   · 硬暂停（pauseAt）：暂停循环，把真实花费展示给用户，由用户选择「继续」或「停止」。
+   *     选择继续后暂停阈值翻倍（this.budgetPauseThreshold *= 2）——同一个长任务后续
+   *     不会因为跨过同一条线反复弹窗，只在花费再翻一倍时才二次确认。
+   * @returns true 表示用户选择停止、本轮应立即中止；false 表示可继续本轮。
+   */
+  private async maybeCreditBudgetGate(turnStartTime: number, streamedContentThisRound: string): Promise<boolean> {
+    if (!this.creditBudgetConfig.enabled) return false;
+    const breakdown = this.buildTokenBreakdown();
+    // 用当前已知的输出 token 做实时估算（本回合尚未产出的输出忽略，下一回合会覆盖到更准的值）
+    const estimatedOutput = this.lastTurnOutputTokens || this.lastCompletionTokens || 0;
+    const spent = calculateCredits(this.model, { ...breakdown, outputTokens: estimatedOutput });
+
+    if (spent >= this.budgetPauseThreshold) {
+      const choice = await this.waitForBudgetChoice(spent, this.budgetPauseThreshold);
+      if (choice === "stop") {
+        this.messages.push({
+          role: "assistant",
+          content: `本轮任务已消耗 ${formatCredits(spent)} credits，用户选择在此暂停。已完成的部分保留，需要继续时请告诉我下一步。`,
+        } as ChatCompletionMessageParam);
+        this.stampCancelledTurnStats(turnStartTime, streamedContentThisRound);
+        return true;
+      }
+      // 用户选择继续：阈值翻倍，避免同一任务后续反复打断
+      this.budgetPauseThreshold = spent * 2;
+      return false;
+    }
+
+    if (!this.budgetWarnedThisTurn && spent >= this.creditBudgetConfig.warnAt) {
+      this.budgetWarnedThisTurn = true;
+      this.messages.push({
+        role: "system",
+        content:
+          `⚠️ 本轮任务已消耗 ${formatCredits(spent)} credits，成本较高。如果当前目标已经基本达成或还差不多的收尾工作，` +
+          `请尽快用文字给用户一个结论性回复，不要为了"更完美"继续做非必要的额外探索/验证。` +
+          `如果任务确实还没做完（用户明确要求的核心工作尚未完成），仍应继续把它做完，不要半途而废。`,
+        _injected: true,
+      } as ChatCompletionMessageParam);
+    }
+    return false;
+  }
+
+  /**
+   * 等待用户对预算暂停做出选择。发送 credit_budget_paused 事件给前端，
+   * 阻塞直到用户选择"继续"或"停止"。120 秒超时自动选"继续"（与压缩选择门的兜底策略一致，防死锁）。
+   */
+  private waitForBudgetChoice(spent: number, threshold: number): Promise<"continue" | "stop"> {
+    this.send("credit_budget_paused", { spent, threshold, model: this.model });
+    return new Promise<"continue" | "stop">((resolve) => {
+      this.budgetChoiceResolve = resolve;
+      const cancelCheck = setInterval(() => {
+        if (this.cancelled && this.budgetChoiceResolve === resolve) {
+          this.budgetChoiceResolve = null;
+          clearInterval(cancelCheck);
+          resolve("stop");
+        }
+      }, 500);
+      setTimeout(() => {
+        clearInterval(cancelCheck);
+        if (this.budgetChoiceResolve === resolve) {
+          this.budgetChoiceResolve = null;
+          resolve("continue");
+        }
+      }, 120_000);
+    });
+  }
+
+  /** 处理用户对预算暂停的选择（由 sessionHub 的 credit_budget_choice 调用） */
+  handleCreditBudgetChoice(choice: "continue" | "stop"): void {
+    this.budgetChoiceResolve?.(choice);
+    this.budgetChoiceResolve = null;
+  }
+
+  /**
    * 按工具类型分发单次工具执行。重复调用拦截 / 子 Agent 委托 / 并行编排 / Relay 工具 /
    * 命令信任门 / MCP / 通用工具，各分支统一产出 result + status；meta 按引用填充（userMessage 等）。
    * @returns result/status/commandWasEdited，以及实际执行所用的 toolArgs（命令可能被用户编辑）。
@@ -1200,9 +1296,10 @@ export class AgentSession {
     if (finishReason === "length" && contentBuffer) {
       console.log("[agent] 输出被截断（length），注入续写引导");
       this.messages.push({ role: "assistant", content: contentBuffer });
+      // 用正向指令引导续写，避免负面措辞（"不要重复"）反而把"重复"植入模型注意力焦点
       this.messages.push({
-        role: "system",
-        content: "你上一段输出因长度限制被截断了。请直接接着把剩余内容补完，不要重复已经说过的部分，也不要重新开头。",
+        role: "user",
+        content: "系统提示：你的上一段输出到达了长度上限。请从中断处继续，输出剩余内容。直接输出下一段，保持前后衔接。",
         _injected: true,
       } as any);
       return "continue";
@@ -1245,58 +1342,33 @@ export class AgentSession {
       ts.emptyRetried = true;
       this.messages.push({
         role: "system",
-        content: "你上一轮的回复内容为空。请直接给出你的中文回答，如有必要再重新调工具。",
+        content:
+          "你上一轮的回复内容为空（API 侧偶发的 SSE 异常，不是你的问题）。" +
+          "请直接重新给出你的中文回答。不要在回复中提及<网络波动>或<回复为空>——用户看不到这些注入消息，" +
+          "提到只会让用户困惑。如有必要可以重新调工具。",
         _injected: true,
       } as any);
       return "continue";
     }
-    // 自动语法检查：改了文件且模型没主动调过 check_diagnostics → 代码层自动跑一次。
-    // 有错误时注入系统消息让模型修复（不收尾），无错误则正常收尾。
-    // 这样不靠模型"记得调 check"，代码确保每次改文件后都有语法检查。
-    if (ts.didMutate && !ts.didDiagnose && mutatedFiles.size > 0) {
-      ts.didDiagnose = true; // 只跑一次
-      const { resolve: resolvePath } = require("node:path");
-      const absPaths = [...mutatedFiles].map((p) => resolvePath(this.cwd, p));
-      try {
-        const diagResults = await this.host.diagnostics.check(this.cwd, absPaths);
-        const hasErrors = diagResults.some((r) => !r.ok);
-        if (hasErrors) {
-          // 有语法/类型错误：把结果告诉模型，让它修复后再给最终回复
-          const errSummary = diagResults
-            .filter((r) => !r.ok)
-            .map((r) => `${r.path}: ${r.details || `${r.errorCount} 个错误`}`)
-            .join("\n");
-          this.messages.push({ role: "assistant", content: contentBuffer });
-          const okFiles = diagResults.filter((r) => r.ok).map((r) => r.path);
-          const okNote = okFiles.length > 0 ? `\n（已检查通过：${okFiles.join("、")}）` : "";
-          this.messages.push({
-            role: "system",
-            content:
-              `⚠️ 自动语法检查：你改动的文件中有错误。你必须修复它们。\n${errSummary}${okNote}\n\n` +
-              `用 str_replace 逐个修复后，再次调 check_diagnostics 确认全部无错。全部通过后再给用户最终回答。`,
-            _injected: true,
-          } as any);
-          return "continue";
-        }
-      } catch {
-        // diagnostics 执行失败（如文件已删除），不阻塞正常收尾
-      }
-    }
+    // 自动语法检查注入：已移除。
+    // 原因：diagnostics.check() 返回全量诊断（包括 @types/node 缺失、lib 配置不全等环境噪音），
+    // 这些是 tsconfig 配置问题，模型永远无法通过改代码修复，注入给模型只会导致死循环。
+    // 模型有 check_diagnostics 工具可以主动调用做验证，代码层不需要强制注入。
     this.finalizeAssistantReply(contentBuffer, turnStartTime, streamedContentThisRound, rounds);
     return "done";
   }
 
   /**
    * 增强渲染代码块输出时的动态进度提示。根据已输出的流式内容判断：
-   * - 检测到代码块开始标记 → "正在绘制 X..."（X=流程图/序列图/SVG 图形/页面原型）
+   * - 检测到显式增强代码块开始标记 → "正在绘制 X..."（X=流程图/序列图/SVG 图形/页面原型）
    * - 内容增长到一定量 → "正在添加细节..."
    * - 接近结束（检测到闭合标记） → 回到"正在回复..."
    * 避免每个 chunk 都发状态（节流：只在阶段切换时发一次）。
    */
   private _drawingPhase: "none" | "started" | "detail" = "none";
   private updateDrawingStatus(content: string): void {
-    // 检测是否在增强代码块内（已开始但未闭合）
-    const openMatch = content.match(/```(svg|mermaid|html)\s*\n/);
+    // 检测是否在显式 opt-in 的增强代码块内（已开始但未闭合）
+    const openMatch = content.match(/```(svg|mermaid|html)(?:[^\n`]*\s)?axon-render[^\n`]*\n/i);
     if (!openMatch) {
       if (this._drawingPhase !== "none") {
         this._drawingPhase = "none";
@@ -1304,7 +1376,7 @@ export class AgentSession {
       }
       return;
     }
-    const lang = openMatch[1];
+    const lang = openMatch[1].toLowerCase();
     const afterOpen = content.slice(content.indexOf(openMatch[0]) + openMatch[0].length);
     // 已闭合（出现独立行的 ```）→ 图形完成，恢复"正在回复..."
     if (/\n```\s*(\n|$)/.test(afterOpen)) {
@@ -1350,6 +1422,9 @@ export class AgentSession {
     userMeta?: { displayText?: string; attachedFiles?: { name: string; size: number }[]; replyStyle?: string; userSegments?: unknown[] },
   ): Promise<void> {
     this.turnCount++;
+    // 新一轮：重置本轮 Credits 预算门状态（软提醒标记 + 硬暂停阈值回到配置基线）
+    this.budgetWarnedThisTurn = false;
+    this.budgetPauseThreshold = this.creditBudgetConfig.pauseAt;
     // 动态切换模型和 provider
     if (model && model !== this.model) {
       this.model = model;
@@ -1527,6 +1602,10 @@ export class AgentSession {
         if (outcome === "done") return;
         continue;
       }
+
+      // Credits 预算门：即将进入下一轮工具调用前检查本轮花费（成本护栏，商业化用）。
+      // 放在"有工具调用"分支：无工具调用已经在收尾，不需要在此拦截。
+      if (await this.maybeCreditBudgetGate(turnStartTime, streamedContentThisRound)) return;
 
       // 有工具调用 → 如果之前有流式文字，先发 stream_pause 告知前端文字暂停
       if (turnStreamStarted && contentBuffer) {
@@ -1752,6 +1831,7 @@ export class AgentSession {
               this.send("stream_start", {});
               started = true;
             }
+            contentBuffer += text;
             this.send("stream_delta", { content: text });
           },
           onToolCallDetected: () => { /* 无工具 */ },
@@ -1844,4 +1924,5 @@ async function extractTargetFiles(
       return [];
   }
 }
+
 

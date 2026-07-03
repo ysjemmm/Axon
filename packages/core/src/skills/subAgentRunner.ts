@@ -216,8 +216,8 @@ export class SubAgentRunner {
         if (finishReason === "length" && content) {
           messages.push({ role: "assistant", content });
           messages.push({
-            role: "system",
-            content: "你上一段输出因长度限制被截断了。请直接接着把剩余内容补完，不要重复已经说过的部分，也不要重新开头。",
+            role: "user",
+            content: "（系统提示：你的上一段输出到达了长度上限。请从中断处继续，输出剩余内容。直接输出下一段，保持前后衔接。）",
           });
           continue;
         }

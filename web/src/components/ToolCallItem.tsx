@@ -109,7 +109,6 @@ export function formatToolDescription(name: string, result?: string, args?: Reco
 
   const fileName = args?.path as string || "";
   const shortName = fileName ? fileName.split("/").pop()?.split("\\").pop() || fileName : "";
-  const intent = (args?.intent as string) || "";
   // read_file 行号后缀，无指定时为空
   const lineSuffix = (name === "read_file") ? formatLineSuffix(args?.startLine, args?.endLine) : "";
   const fileWithLines = shortName + (lineSuffix ? ` ${lineSuffix}` : "");
@@ -126,8 +125,8 @@ export function formatToolDescription(name: string, result?: string, args?: Reco
       case "str_replace": return shortName ? `编辑 ${shortName}` : "修改文件中...";
       case "apply_patch": return "应用补丁中...";
       case "execute_command": return "执行命令中...";
-      case "search": return intent || fallbackIntent("search");
-      case "list_dir": return intent || fallbackIntent("list_dir");
+      case "search": return exploreDisplayText("search", args);
+      case "list_dir": return exploreDisplayText("list_dir", args);
       case "check_diagnostics": return "检查中...";
       default: return `${name}...`;
     }
@@ -143,8 +142,8 @@ export function formatToolDescription(name: string, result?: string, args?: Reco
     case "str_replace": return shortName ? `已编辑 ${shortName}` : result;
     case "apply_patch": return "已应用补丁";
     case "execute_command": return "命令已执行";
-    case "search": return intent || fallbackIntent("search");
-    case "list_dir": return intent || fallbackIntent("list_dir");
+    case "search": return exploreDisplayText("search", args);
+    case "list_dir": return exploreDisplayText("list_dir", args);
     case "check_diagnostics": return result.includes("无错误") ? "无错误" : "发现错误";
     default: return result;
   }
@@ -194,9 +193,58 @@ export function parseMcpToolName(encoded: string): { serverName: string; toolNam
 export function fallbackIntent(name: string): string {
   switch (name) {
     case "list_dir": return "浏览目录";
-    case "search": return "搜索代码";
+    case "search": return "查找相关代码";
     default: return "搜索工作区";
   }
+}
+
+function searchQueryLabel(query: string): string | null {
+  const terms = query
+    .replace(/\\([/.()[\]{}^$+*?|])/g, "$1")
+    .split(/[|,\s]+/)
+    .map((part) => part
+      .replace(/\\[bBdDsSwW]/g, "")
+      .replace(/[()[\]{}^$+*?.]/g, "")
+      .replace(/^[^A-Za-z0-9_$\u4e00-\u9fa5]+|[^A-Za-z0-9_$\u4e00-\u9fa5]+$/g, "")
+      .trim())
+    .filter((part) => part.length >= 2 && !/^\d+$/.test(part));
+
+  const unique = Array.from(new Set(terms)).slice(0, 3);
+  if (unique.length === 0) return null;
+  return `查找 ${unique.join(" / ")} 相关代码`;
+}
+
+function looksLikeRawSearchQuery(text: string): boolean {
+  return /[|^$*+?()[\]{}\\]/.test(text);
+}
+
+const NON_REUSABLE_EXPLORE_LABELS = new Set([
+  "搜索代码",
+  "搜索工作区",
+  "查找相关代码",
+  "浏览目录",
+]);
+
+function canReuseExploreLabel(text: string): boolean {
+  return !!text && !NON_REUSABLE_EXPLORE_LABELS.has(text) && !looksLikeRawSearchQuery(text);
+}
+
+/** search/list_dir 的展示文案：intent 优先；没有 intent 时从 query 合成可读文案，不直接暴露正则。 */
+export function exploreDisplayText(name: string, args?: Record<string, unknown>, previous?: string): string {
+  const intent = typeof args?.intent === "string" ? args.intent.trim() : "";
+  if (intent) return intent;
+
+  const query = typeof args?.query === "string" ? args.query.trim() : "";
+  if (name === "search" && query) {
+    const label = searchQueryLabel(query);
+    if (label) return label;
+  }
+
+  const fallback = fallbackIntent(name);
+  const prev = typeof previous === "string" ? previous.trim() : "";
+  if (prev && prev !== fallback && canReuseExploreLabel(prev)) return prev;
+
+  return fallback;
 }
 
 /**
@@ -1106,7 +1154,7 @@ export function EditGroupItem({
 export interface SearchGroupData {
   id: string;          // 用第一个调用的 id
   pending: boolean;    // 组内是否还有进行中的调用
-  queries: string[];   // 每次调用展示的意图文案（intent）
+  queries: (string | { name: string; args?: Record<string, unknown>; label?: string })[];   // 每次调用展示的意图文案（intent）
 }
 
 /**
@@ -1115,7 +1163,11 @@ export interface SearchGroupData {
  * - 多条连续：第二层用 · 列表逐条展示
  */
 export function SearchGroupItem({ group }: { group: SearchGroupData }) {
-  const isMulti = group.queries.length > 1;
+  const labels = group.queries.map((item) => {
+    if (typeof item === "string") return item;
+    return exploreDisplayText(item.name, item.args, item.label);
+  });
+  const isMulti = labels.length > 1;
   return (
     <div className="my-2 rounded-lg border border-border bg-popover overflow-hidden">
       {/* 第一层：图标 + 标题（前景色叠加 + 底分隔线，跨主题与下层分明） */}
@@ -1129,7 +1181,7 @@ export function SearchGroupItem({ group }: { group: SearchGroupData }) {
       <div className="px-3 py-1.5">
         {isMulti ? (
           <ul className="space-y-1">
-            {group.queries.map((q, i) => (
+            {labels.map((q, i) => (
               <li key={i} className="flex items-start gap-2 text-xs font-mono text-foreground/80">
                 <span className="text-muted-foreground/60 select-none">·</span>
                 <span className="break-all">{q}</span>
@@ -1137,7 +1189,7 @@ export function SearchGroupItem({ group }: { group: SearchGroupData }) {
             ))}
           </ul>
         ) : (
-          <code className="text-xs font-mono text-foreground/80 break-all">{group.queries[0]}</code>
+          <code className="text-xs font-mono text-foreground/80 break-all">{labels[0]}</code>
         )}
       </div>
     </div>

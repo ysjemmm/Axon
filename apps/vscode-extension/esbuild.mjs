@@ -29,6 +29,9 @@ const options = {
 	// logic that breaks when bundled - mark as external, resolve from
 	// node_modules at runtime (must be shipped as a dependency).
 	external: ["vscode", "playwright-core"],
+	banner: {
+		js: `// Suppress punycode deprecation warning (openai SDK -> node-fetch@2 -> whatwg-url@5 -> punycode)\n(function(){var e=process.emit;process.emit=function(t,w){if(t==='warning'&&w&&w.message&&String(w.message).includes('punycode'))return!1;return e.apply(process,arguments)}})();`,
+	},
 	sourcemap: true,
 	// ESM dependencies (@axon/core etc.) are bundled together
 	mainFields: ["module", "main"],

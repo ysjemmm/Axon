@@ -4,7 +4,7 @@
 
 import type { AttachedFile, ChatMessage, TextSegment, ToolSegment, UserSegment } from "./types";
 import type { ToolStatus } from "@/components/ToolCallItem";
-import { formatToolDescription, fallbackIntent, formatLineSuffix } from "@/components/ToolCallItem";
+import { formatToolDescription, fallbackIntent, exploreDisplayText, formatLineSuffix } from "@/components/ToolCallItem";
 import { isRelayTool, relayToolLabel, firstLine } from "./relayUtils";
 
 /** 取一个工具段的编辑单元列表 {path, editId}（editId 由后端随 diff 下发，前端不推导） */
@@ -46,6 +46,7 @@ export function extractBasename(p: unknown): string | null {
 export {
   formatToolDescription,
   fallbackIntent,
+  exploreDisplayText,
   formatLineSuffix,
   isRelayTool,
   relayToolLabel,

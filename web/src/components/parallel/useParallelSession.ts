@@ -13,12 +13,13 @@ import { sessionEventBus } from "@/hooks/useSessionEvents";
 import { applyEventToSubAgent } from "../chat/subAgentEvents";
 import type { ParallelBatch, ParallelAgent, ParallelState } from "./types";
 import type { WsMessage } from "@/hooks/useWebSocket";
+import { STORAGE, PARALLEL, CONTROL_CMD } from "@/lib/constants";
 
 /** 并行面板使用的固定 clientId（所有并行事件路由到此） */
-export const PARALLEL_CLIENT_ID = "parallel-panel";
+export const PARALLEL_CLIENT_ID = PARALLEL.CLIENT_ID;
 
 /** localStorage key */
-const STORAGE_KEY = "axon_parallel_batches";
+const STORAGE_KEY = STORAGE.PARALLEL_BATCHES;
 
 /** 从 localStorage 恢复历史批次（仅已完成的） */
 function loadPersistedBatches(): ParallelBatch[] {
@@ -62,7 +63,7 @@ function trimInnerForStorage(inner: ParallelAgent["inner"]): ParallelAgent["inne
 /** 持久化批次到 localStorage（只保留最近 20 条，裁剪 inner 大字段） */
 function persistBatches(batches: ParallelBatch[]): void {
   try {
-    const toSave = batches.slice(0, 20).map((b) => ({
+    const toSave = batches.slice(0, PARALLEL.MAX_PERSIST_BATCHES).map((b) => ({
       ...b,
       agents: b.agents.map((a) => ({
         ...a,
@@ -114,7 +115,7 @@ export function useParallelSession({ connected, send }: UseParallelSessionOption
     streamingText.current = "";
     parallelTriggered.current = false;
     send({
-      type: "user_message",
+      type: CONTROL_CMD.USER_MESSAGE,
       clientId: PARALLEL_CLIENT_ID,
       content,
       mode: "parallel",

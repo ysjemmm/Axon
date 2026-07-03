@@ -8,7 +8,7 @@
  *       node scripts/copy-web.mjs --no-build （仅拷贝已有 web/dist）
  */
 
-import { cp, rm, access } from "node:fs/promises";
+import { cp, rm, access, readFile, writeFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -42,6 +42,24 @@ try {
   process.exit(1);
 }
 
+async function normalizeAssetBase(dir) {
+  const entries = await readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const p = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      await normalizeAssetBase(p);
+      continue;
+    }
+    if (!/\.(html|css|js|mjs)$/.test(entry.name)) continue;
+    const text = await readFile(p, "utf8");
+    const next = text
+      .replace(/(["'(=])\/assets\//g, "$1./assets/")
+      .replace(/(["'(=])\/favicon\./g, "$1./favicon.");
+    if (next !== text) await writeFile(p, next, "utf8");
+  }
+}
+
+await normalizeAssetBase(webDist);
 await rm(target, { recursive: true, force: true });
 await cp(webDist, target, { recursive: true });
 console.log(`[copy-web] 已拷贝 ${webDist} -> ${target}`);

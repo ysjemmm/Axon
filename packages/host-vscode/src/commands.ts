@@ -12,24 +12,20 @@
 import type { HostCommandRunner, ExecOptions, ExecResult } from "@axon/core";
 import { runInTerminalCaptured } from "./terminalDisplay.js";
 
+let cmdSeq = 0;
+
 export class VSCodeCommandRunner implements HostCommandRunner {
   // 命令队列：同一终端的命令必须串行执行，防止并发中断
   private queue: Promise<unknown> = Promise.resolve();
 
-  /**
-   * 基于 cwd 生成稳定的 terminalKey：
-   * - 同一工作区的不同 session → 同一个 key → 复用终端（保留历史输出）
-   * - 不同工作区 → 不同 key → 各自独立终端（cwd 正确、互不干扰）
-   */
-  private terminalKeyFor(cwd?: string): string {
-    if (!cwd) return "axon-shared";
-    return `axon-${cwd.replace(/[:\\\/]/g, "_")}`;
-  }
+  // 每个 session（即每个 VSCodeCommandRunner 实例）独享一个终端。
+  // 同一 session 内的所有 turn 复用同一个终端，不同 session 各自独立互不干扰。
+  private terminalKey = `axon-${++cmdSeq}-${Date.now().toString(36)}`;
 
   async exec(command: string, opts: ExecOptions): Promise<ExecResult> {
     // 串行化：每条命令排队等待前一条完成后再执行
     const task = this.queue.then(async () => {
-      const result = await runInTerminalCaptured(command, opts.cwd, opts.timeoutMs, opts.signal, this.terminalKeyFor(opts.cwd), opts.onWaitingInput);
+      const result = await runInTerminalCaptured(command, opts.cwd, opts.timeoutMs, opts.signal, this.terminalKey, opts.onWaitingInput);
 
       // Shell Integration 不可用：命令已在终端执行，但拿不到输出
       if (!result.captured) {

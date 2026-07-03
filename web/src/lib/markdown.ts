@@ -11,7 +11,7 @@ import hljs from "highlight.js";
 import katex from "katex";
 
 const md = new MarkdownIt({
-  html: true, // 允许 HTML（我们注入了 KaTeX 预渲染的 HTML）
+  html: false, // 禁止历史/普通回复里的裸 HTML 进入 dangerouslySetInnerHTML；KaTeX 通过占位符在渲染后恢复
   linkify: true,
   typographer: false, // 关闭：防止 typographer 对占位符周围的引号做智能替换
   breaks: true,
@@ -52,13 +52,18 @@ md.renderer.rules.link_open = function (tokens, idx, options, env, self) {
   return defaultRender(tokens, idx, options, env, self);
 };
 
-// 代码块：带高亮 + 复制按钮。SVG / Mermaid 等标记为可增强渲染。
-const ENHANCED_LANGS = new Set(["svg", "mermaid", "html", "chart", "markmap"]);
+// 代码块：带高亮 + 复制按钮。只有显式 opt-in 的 SVG / Mermaid / HTML 才增强渲染。
+const ENHANCED_LANGS = new Set(["svg", "mermaid", "html"]);
+const ENHANCED_RENDER_MARKER = "axon-render";
+const MATH_PLACEHOLDER_PREFIX = "AXON_MATH_PLACEHOLDER_";
 
 md.renderer.rules.fence = function (tokens, idx) {
   const token = tokens[idx];
-  const lang = token.info.trim().split(/\s+/)[0] || "code";
-  const enableEnhance = ENHANCED_LANGS.has(lang);
+  const infoParts = token.info.trim().split(/\s+/).filter(Boolean);
+  const lang = (infoParts[0] || "code").toLowerCase();
+  const meta = infoParts.slice(1).map((part) => part.toLowerCase());
+  const enableEnhance = ENHANCED_LANGS.has(lang) && meta.includes(ENHANCED_RENDER_MARKER);
+  const canPreview = ENHANCED_LANGS.has(lang) && !enableEnhance;
 
   let highlightedCode: string;
   if (lang && hljs.getLanguage(lang)) {
@@ -72,6 +77,8 @@ md.renderer.rules.fence = function (tokens, idx) {
   }
 
   const enhanceAttr = enableEnhance ? ` data-enhanced-lang="${lang}"` : "";
+  const previewAttr = canPreview ? ` data-preview-lang="${lang}"` : "";
+  const displayLang = md.utils.escapeHtml(lang);
 
   // 增强渲染块（svg/mermaid/html）：不渲染标题栏（"svg" + 复制按钮），hydrate 后会注入悬浮三点菜单。
   // 普通代码块：保留标题栏 + 复制按钮。
@@ -81,13 +88,21 @@ md.renderer.rules.fence = function (tokens, idx) {
   </div>\n`;
   }
 
-  return `<div class="axon-codeblock my-1.5 rounded-md overflow-hidden" style="border:1px solid var(--axon-code-border,rgba(128,128,128,0.3));background:var(--axon-code-bg,rgba(0,0,0,0.04))">
+  const previewButton = canPreview ? `<button data-preview-code class="flex items-center gap-1 hover:text-foreground transition-colors cursor-pointer">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        <span>预览</span>
+      </button>` : "";
+
+  return `<div class="axon-codeblock my-1.5 rounded-md overflow-hidden" style="border:1px solid var(--axon-code-border,rgba(128,128,128,0.3));background:var(--axon-code-bg,rgba(0,0,0,0.04))"${previewAttr}>
     <div class="flex items-center justify-between px-3 py-1 text-[11px] text-muted-foreground" style="border-bottom:1px solid var(--axon-code-border,rgba(128,128,128,0.2));background:var(--axon-code-header,rgba(0,0,0,0.03))">
-      <span>${lang}</span>
-      <button data-copy-code class="flex items-center gap-1 hover:text-foreground transition-colors cursor-pointer">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-        <span>复制</span>
-      </button>
+      <span>${displayLang}</span>
+      <div class="flex items-center gap-2">
+        ${previewButton}
+        <button data-copy-code class="flex items-center gap-1 hover:text-foreground transition-colors cursor-pointer">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          <span>复制</span>
+        </button>
+      </div>
     </div>
     <pre class="px-2.5 py-1.5 overflow-auto max-h-96 m-0" style="background:transparent"><code class="text-[12px] leading-snug font-mono hljs" style="color:var(--vscode-editor-foreground,var(--hl-text,#c9d1d9))">${highlightedCode}</code></pre>
   </div>\n`;
@@ -152,7 +167,7 @@ function extractAndRenderMath(text: string): { cleaned: string; placeholders: Ma
 
   // 行间 $$...$$（支持跨行，贪心最短匹配）
   guarded = guarded.replace(/\$\$([\s\S]*?)\$\$/g, (_m, inner) => {
-    const id = `<!--MATH${seq++}-->`;
+    const id = `@@${MATH_PLACEHOLDER_PREFIX}${seq++}@@`;
     const html = renderKatex(inner.trim(), true);
     placeholders.set(id, html);
     return id;
@@ -160,7 +175,7 @@ function extractAndRenderMath(text: string): { cleaned: string; placeholders: Ma
 
   // 行内 $...$（不跨行，内部不含 $）
   guarded = guarded.replace(/\$([^\n$]+?)\$/g, (_m, inner) => {
-    const id = `<!--MATH${seq++}-->`;
+    const id = `@@${MATH_PLACEHOLDER_PREFIX}${seq++}@@`;
     const html = renderKatex(inner.trim(), false);
     placeholders.set(id, html);
     return id;

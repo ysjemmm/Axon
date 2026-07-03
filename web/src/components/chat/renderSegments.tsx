@@ -13,7 +13,7 @@ import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import {
   ToolCallItem, SearchGroupItem, ReadFileGroupItem, EditGroupItem,
   BrowserSessionGroup, BROWSER_TOOL_NAMES,
-  fallbackIntent, disambiguatePaths, toLineNumber,
+  exploreDisplayText, disambiguatePaths, toLineNumber,
   type ToolStatus, type SearchGroupData, type ReadFileGroupData, type EditGroupData,
 } from "@/components/ToolCallItem";
 import type { Segment, ToolSegment, SubAgentSegment } from "./types";
@@ -322,12 +322,12 @@ export function renderSegments(
     // 连续探索段（search / list_dir）：向后收集所有相邻的探索调用，合并成一个卡片
     if (seg.type === "tool" && (seg.name === "search" || seg.name === "list_dir")) {
       const groupStart = i;
-      const queries: string[] = [];
+      const queries: SearchGroupData["queries"] = [];
       let pending = false;
       while (i < segments.length) {
         const s = segments[i];
         if (s.type === "tool" && (s.name === "search" || s.name === "list_dir")) {
-          queries.push(s.query || fallbackIntent(s.name));
+          queries.push({ name: s.name, args: s.args, label: exploreDisplayText(s.name, s.args, s.query) });
           if (s.status === "pending") pending = true;
           i++;
         } else {

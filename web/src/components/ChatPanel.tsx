@@ -36,6 +36,7 @@ import { DEFAULT_SLASH_COMMANDS } from "./chat/slash/commands";
 import { CommandApprovalContext } from "./chat/commandApprovalContext";
 import { QuestionListPanel } from "./chat/QuestionListPanel";
 import { VirtualMessageList, type VirtualMessageListHandle } from "./chat/VirtualMessageList";
+import { CONTROL_CMD } from "@/lib/constants";
 
 export function ChatPanel({ clientId, sessionId, mode, connected, active, send, onSessionCreated, onCompactionMigrated, onStreamingChange }: ChatPanelProps) {
   const session = useChatSession({ clientId, sessionId, mode, connected, send, onSessionCreated, onCompactionMigrated, onStreamingChange });
@@ -579,7 +580,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   // 接收外部注入的上下文 → 作为内联 tag 插入编辑器。
   // 带 contextId（斜杠命令触发，已先插入占位 tag）→ 补全该 tag；否则（终端/编辑器选区）→ 在光标处插入新 tag。
   useSessionEvents(clientId, useCallback((msg) => {
-    if (msg.type !== "add_context") return;
+    if (msg.type !== CONTROL_CMD.ADD_CONTEXT) return;
     const text = (msg as { text?: string }).text;
     if (text === undefined) return;
     const rawSource = (msg as { source?: string }).source;
@@ -974,6 +975,34 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               </div>
             </div>
           )}
+          {/* Credits 预算暂停弹窗：单轮花费达到硬暂停阈值时，给用户选择继续或停止 */}
+          {session.creditBudgetPaused && (
+            <div className="flex flex-col gap-2 px-3 py-3 bg-amber-500/10 border border-amber-500/30 rounded-lg mb-2">
+              <div className="flex items-start gap-2">
+                <span className="text-sm">💰</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-foreground">本轮任务已花费 {session.creditBudgetPaused.spent.toFixed(2)} credits</p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    花费已超过 {session.creditBudgetPaused.threshold.toFixed(0)} credits，是否继续当前任务？
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 justify-end">
+                <button
+                  onClick={() => session.chooseCreditBudget("stop")}
+                  className="px-3 py-1.5 rounded-md text-xs border border-border hover:bg-muted/60 transition-colors"
+                >
+                  停止
+                </button>
+                <button
+                  onClick={() => session.chooseCreditBudget("continue")}
+                  className="px-3 py-1.5 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                >
+                  继续
+                </button>
+              </div>
+            </div>
+          )}
           {/* 会话已迁移提示：输入框不可用，引导跳转到新会话 */}
           {session.compactionMigrated && (
             <div className="flex flex-col gap-2 px-3 py-3 bg-muted/30 border border-border rounded-lg mb-2">
@@ -1158,7 +1187,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                         </button>
                       </TooltipTrigger>
                       <TooltipContent side="top" align="end" className="max-w-[220px]">
-                        <p className="text-xs text-muted-foreground">开启后展示模型的思考过程（reasoning）。</p>
+                        <p className="text-xs text-white">开启后展示模型的思考过程（reasoning）。</p>
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
@@ -1175,7 +1204,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                         </button>
                       </TooltipTrigger>
                       <TooltipContent side="top" align="end" className="max-w-[220px]">
-                        <p className="text-xs text-muted-foreground">开启后允许联网搜索与抓取网页；关闭时仅基于模型知识作答。</p>
+                        <p className="text-xs text-white">开启后允许联网搜索与抓取网页；关闭时仅基于模型知识作答。</p>
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>

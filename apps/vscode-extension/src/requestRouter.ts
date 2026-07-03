@@ -33,7 +33,7 @@ function parsePath(rawPath: string): { path: string; query: URLSearchParams } {
 /** 清理指定工作区中 axios 创建的 git 快照 ref */
 async function cleanupSnapshotRefs(workspace: string): Promise<void> {
   try {
-    const [out] = await execFileAsync("git", ["for-each-ref", "--format=%(refname:short)", "refs/axon/snapshots/"], { cwd: workspace, timeout: 5000, maxBuffer: 256 * 1024 });
+    const { stdout: out } = await execFileAsync("git", ["for-each-ref", "--format=%(refname:short)", "refs/axon/snapshots/"], { cwd: workspace, timeout: 5000, maxBuffer: 256 * 1024 });
     const refs = out.trim().split("\n").filter(Boolean);
     if (refs.length === 0) return;
     // 批量删除：git update-ref -d ref1 ref2 ...

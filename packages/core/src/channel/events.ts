@@ -43,6 +43,9 @@ export type AgentEventPayload =
   | { type: "compaction_migrated"; newSessionId?: string; parentSessionId?: string; migratedToNewSession?: boolean }
   | { type: "error"; content: string }
 
+  // ── Credits 预算门（成本护栏：本轮花费达到硬暂停阈值，等待用户选择继续/停止） ──
+  | { type: "credit_budget_paused"; spent: number; threshold: number; model?: string }
+
   // ── 工具调用 ──
   | {
       type: "tool_call";

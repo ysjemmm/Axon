@@ -150,7 +150,7 @@ export const TOOL_CATALOG: Record<ToolName, ToolSpec> = {
   [ToolName.RelayAdvance]: { requiresArgs: true },
   [ToolName.RelayUpdateTask]: { requiresArgs: true },
   [ToolName.RelayReviewTask]: { requiresArgs: true },
-  [ToolName.ParallelResearch]: { requiresArgs: true },
+  [ToolName.ParallelResearch]: { status: S("正在并行调研...", "delegating"), requiresArgs: true },
   [ToolName.ParallelExecute]: { status: S("正在并行执行...", "delegating"), requiresArgs: true },
 };
 

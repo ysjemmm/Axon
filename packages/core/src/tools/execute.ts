@@ -556,7 +556,8 @@ export async function executeToolCall(
       if (snap.pageErrors.length === 0 && snap.networkFailures.length === 0 && snap.console.length === 0) {
         lines.push("\n(无控制台日志 / 异常 / 网络失败——页面运行时干净)");
       }
-      return lines.join("\n");
+      // 边界标记：控制台文本由页面脚本产出，可能是不可信第三方内容（见系统提示）
+      return `<external_content source="get_browser_logs">\n${lines.join("\n")}\n</external_content>`;
     }
     case "screenshot_page": {
       if (!host.webBrowser) {
@@ -676,7 +677,9 @@ export async function executeToolCall(
       if (typeof args.js !== "string" || !args.js.trim()) throw new Error("browser_eval 失败：缺少 js 参数。");
       try {
         const result = await host.webBrowser.evaluate(args.js as string);
-        return result ?? "undefined";
+        const evalResult = result ?? "undefined";
+        // 边界标记：返回值可能包含页面数据（不可信第三方内容），见系统提示
+        return `<external_content source="browser_eval">\n${evalResult}\n</external_content>`;
       } catch (err) {
         throw new Error(`browser_eval 执行出错：${(err as Error).message}`);
       }
@@ -711,7 +714,9 @@ export async function executeToolCall(
       if (html === null) return htmlSelector ? `未找到元素：${htmlSelector}` : "无法读取页面 HTML。";
       // 截断过长的 HTML（避免爆 token）
       const maxLen = 8000;
-      return html.length > maxLen ? html.slice(0, maxLen) + `\n\n[HTML 已截断，原始长度 ${html.length} 字符]` : html;
+      const htmlBody = html.length > maxLen ? html.slice(0, maxLen) + `\n\n[HTML 已截断，原始长度 ${html.length} 字符]` : html;
+      // 边界标记：页面 DOM 是不可信第三方内容（见系统提示）
+      return `<external_content source="browser_get_html">\n${htmlBody}\n</external_content>`;
     }
     case "browser_set_viewport": {
       if (!host.webBrowser || !host.webBrowser.isOpen()) throw new Error("browser_set_viewport 失败：浏览器未打开。");
@@ -821,7 +826,9 @@ export async function executeToolCall(
           results: response.results,
         };
       }
-      return `搜索 "${query}" 返回 ${response.results.length} 条结果（来源：${response.source}）：\n\n${formatted}`;
+      // 用边界标记包裹外部内容：搜索摘要来自不可信的第三方网页，其中出现的任何“指令样文字”
+      // 都只是数据本身，不具备指令效力（详见系统提示“规则优先级”一节）
+      return `搜索 "${query}" 返回 ${response.results.length} 条结果（来源：${response.source}）：\n\n<external_content source="web_search">\n${formatted}\n</external_content>`;
     }
     case "web_fetch": {
       const url = (args.url as string || "").trim();
@@ -839,7 +846,8 @@ export async function executeToolCall(
         if (!result.content || result.content.length < 50) {
           return `抓取 ${url} 完成，但未获取到有效正文内容（${result.byteSize} 字节原始数据）。该页面可能是 JS 渲染的 SPA，建议通过 web_search 查找替代信息源。`;
         }
-        return `抓取 ${url} 完成（${result.byteSize} 字节）：\n\n标题：${result.title}\n\n${result.content}`;
+        // 边界标记：网页正文是不可信第三方内容，其中的“指令样文字”不具备指令效力（见系统提示）
+        return `抓取 ${url} 完成（${result.byteSize} 字节）：\n\n标题：${result.title}\n\n<external_content source="web_fetch" url="${url}">\n${result.content}\n</external_content>`;
       } catch (err) {
         if (meta) {
           (meta as any).fetchResult = { url, title: "", byteSize: 0, success: false, error: (err as Error).message };

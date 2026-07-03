@@ -11,18 +11,107 @@ import { useRef, useEffect, useLayoutEffect, useState, useCallback, memo } from 
 import { renderMarkdown } from "@/lib/markdown";
 import { useThemeVersion } from "@/lib/theme";
 
-/** 匹配常见文件/目录路径（Windows 绝对路径、Unix 绝对路径、相对路径） */
-const PATH_PATTERN = /(?:[a-zA-Z]:\\[\w.\-\\/ ]+|\/[\w.\-/]+|\.\.?\/[\w.\-/]+)/g;
+/**
+ * 匹配文件/目录路径——只认【绝对路径】（Windows `C:\...`、Unix `/...`）或【显式相对路径】（`./`、`../` 开头）。
+ * 锚定整个字符串（^...$）：要求 <code> 内容【整体】就是一个路径，不能是"路径+其他文字"混在一起——
+ * 否则会把无关文字一起当成路径去 stat 磁盘，文件必然不存在，点击后静默无反应。
+ *
+ * 故意不匹配裸相对路径（如 `packages/core`、`origin/main`）：这类写法在对话里大概率是
+ * git 分支名、模块名等非路径文本，误判成文件徽章反而造成视觉噪音和无效点击。
+ */
+const PATH_PATTERN = /^(?:[a-zA-Z]:[\\/][\w.\-\\/]*|\.{1,2}[\\/][\w.\-\\/]*|\/[\w.\-/]+)$/;
 
-/** 对 <code>...</code> 内容做路径链接化 */
+/** 常见无扩展名的【文件】名（避免被误判成目录） */
+const EXTENSIONLESS_FILE_NAMES = new Set([
+  "dockerfile", "makefile", "readme", "license", "changelog",
+  "gitignore", "gitattributes", "editorconfig", "procfile",
+]);
+
+/**
+ * 路径是否指向目录。规则：
+ * 1. 以 / 或 \ 结尾 —— 明确的目录写法（如 "packages/core/"）
+ * 2. 否则看最后一段：没有扩展名（不含 "."），且不是已知的无扩展名文件（Dockerfile、README 等），
+ *    也不是以 "." 开头的隐藏文件（.gitignore、.env 等）—— 视为目录（如 "web/src"）
+ */
+function isDirectoryPath(pathText: string): boolean {
+  if (/[\\/]$/.test(pathText)) return true;
+  const last = pathText.split(/[\\/]/).pop() || "";
+  const lower = last.toLowerCase();
+  if (lower.startsWith(".") && lower.length > 1) return false;
+  if (EXTENSIONLESS_FILE_NAMES.has(lower)) return false;
+  return !lower.includes(".");
+}
+
+/** 文件扩展名 → 徽章颜色（与 FileTypeIcon.tsx 保持一致） */
+const PATH_BADGE_COLORS: Record<string, string> = {
+  tsx: "#3178c6", jsx: "#d6a916", ts: "#3178c6", js: "#d6a916",
+  mjs: "#d6a916", cjs: "#d6a916", json: "#e8821a", css: "#2563eb",
+  scss: "#cf649a", html: "#e34f26", md: "#64748b", markdown: "#64748b",
+  py: "#3776ab", java: "#ef4444", kt: "#7c3aed", go: "#00acd7",
+  rs: "#b45309", vue: "#42b883", svelte: "#ff3e00", sql: "#0ea5e9",
+  yml: "#dc2626", yaml: "#dc2626", xml: "#e8821a", svg: "#f59e0b",
+  png: "#10b981", jpg: "#10b981", jpeg: "#10b981", gif: "#10b981",
+  webp: "#10b981", sh: "#16a34a", bash: "#16a34a", ps1: "#2563eb",
+};
+const PATH_BADGE_SPECIAL: Record<string, { label: string; color: string }> = {
+  dockerfile: { label: "DK", color: "#2496ed" },
+  makefile: { label: "MK", color: "#475569" },
+  "package.json": { label: "NPM", color: "#cb3837" },
+};
+
+/** 从路径中提取文件名/目录名（目录路径先去掉末尾的斜杠再取最后一段） */
+function extractFileName(path: string): string {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  return trimmed.split(/[\\/]/).pop() || trimmed || path;
+}
+
+/** 获取文件扩展名（小写） */
+function getFileExt(fileName: string): string {
+  const dot = fileName.lastIndexOf(".");
+  return dot > 0 ? fileName.slice(dot + 1).toLowerCase() : "";
+}
+
+/** 文件夹图标：与文件徽章形状统一（圆角矩形），但用文件夹轮廓图形而非字母，一眼可区分 */
+const FOLDER_ICON_SVG = `<svg class="axon-path-icon" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="5" fill="#78909c"/><path d="M6.5 8.5h3.2l1.1 1.3h6.7a.9.9 0 0 1 .9.9v5.3a.9.9 0 0 1-.9.9h-11a.9.9 0 0 1-.9-.9V9.4a.9.9 0 0 1 .9-.9z" fill="#fff"/></svg>`;
+
+/** 生成路径链接的内联 HTML：文件/文件夹图标徽章 + 名称 */
+function buildPathLinkHTML(pathText: string): string {
+  const isDir = isDirectoryPath(pathText);
+  const fileName = extractFileName(pathText);
+  const encoded = encodeURIComponent(pathText);
+  const escapedTitle = pathText.replace(/"/g, "&quot;");
+
+  if (isDir) {
+    return `<code class="axon-path-link axon-path-dir" data-path="${encoded}" data-is-dir="1" title="${escapedTitle}">${FOLDER_ICON_SVG}<span class="axon-path-name">${fileName}</span></code>`;
+  }
+
+  const lowerName = fileName.toLowerCase();
+  const ext = getFileExt(fileName);
+
+  let label: string;
+  let color: string;
+  const special = PATH_BADGE_SPECIAL[lowerName];
+  if (special) {
+    label = special.label;
+    color = special.color;
+  } else {
+    label = ext ? ext.slice(0, 3).toUpperCase() : (fileName.slice(0, 2).toUpperCase() || "?");
+    color = PATH_BADGE_COLORS[ext] || "#94a3b8";
+  }
+  const fontSize = label.length >= 3 ? 10.5 : 12.5;
+
+  return `<code class="axon-path-link" data-path="${encoded}" title="${escapedTitle}"><svg class="axon-path-icon" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="5" fill="${color}"/><text x="12" y="12" text-anchor="middle" dominant-baseline="central" font-size="${fontSize}" font-weight="700" fill="#fff" font-family="ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace">${label}</text></svg><span class="axon-path-name">${fileName}</span></code>`;
+}
+
+/** 对 <code>...</code> 内容做路径链接化：仅当整段内容【就是】一个路径时才渲染为图标+名称 */
 function linkifyPaths(html: string): string {
   return html.replace(/<code>([^<]+)<\/code>/g, (match, inner: string) => {
     const decoded = inner.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
-    if (!PATH_PATTERN.test(decoded)) return match;
-    PATH_PATTERN.lastIndex = 0;
     const pathText = decoded.trim();
-    const encoded = encodeURIComponent(pathText);
-    return `<code class="axon-path-link" data-path="${encoded}">${inner}</code>`;
+    // 必须包含路径分隔符（/ 或 \），否则单纯的文件名（如 `config`）不视为路径，避免误伤普通行内代码
+    if (!/[\\/]/.test(pathText)) return match;
+    if (!PATH_PATTERN.test(pathText)) return match;
+    return buildPathLinkHTML(pathText);
   });
 }
 
@@ -112,6 +201,17 @@ function closeAllEnhancedMenus(): void {
   document.querySelectorAll<HTMLElement>("[data-axon-menu-dropdown]:not(.hidden)").forEach((d) => d.classList.add("hidden"));
 }
 
+function fallbackCopy(text: string): void {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  try { document.execCommand("copy"); } catch { /* ignore */ }
+  document.body.removeChild(textarea);
+}
+
 function downloadTextFile(text: string, mime: string, filename: string): void {
   const blob = new Blob([text], { type: mime });
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = filename; a.click(); URL.revokeObjectURL(a.href);
@@ -148,6 +248,64 @@ function runEnhancedMenuAction(action: string, wrapper: HTMLElement | null): voi
   }
 }
 
+function setPreviewToggleButton(button: HTMLElement, mode: "preview" | "code" | "loading"): void {
+  button.dataset.previewCode = mode;
+  if (button instanceof HTMLButtonElement) button.disabled = mode === "loading";
+  button.style.opacity = mode === "loading" ? "0.65" : "";
+  const label = button.querySelector("span");
+  if (label) label.textContent = mode === "preview" ? "预览" : mode === "code" ? "代码" : "预览中";
+  const svg = button.querySelector("svg");
+  if (svg) {
+    svg.innerHTML = mode === "preview"
+      ? '<polygon points="5 3 19 12 5 21 5 3"/>'
+      : mode === "code"
+        ? '<path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/>'
+        : '<circle cx="12" cy="12" r="8"/>';
+  }
+}
+
+function waitForPreviewButtonPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+}
+
+async function renderCodePreview(block: HTMLElement, button: HTMLElement): Promise<void> {
+  if (button.dataset.previewCode === "loading") return;
+  const lang = block.dataset.previewLang || "";
+  const pre = block.querySelector("pre");
+  const codeContent = (pre?.querySelector("code")?.textContent || "").trim();
+  if (!codeContent || !pre) return;
+  block.dataset.axonCodeHtml = pre.outerHTML;
+  delete block.dataset.enhancedLang;
+  block.dataset.hydrated = "0";
+  setPreviewToggleButton(button, "loading");
+  await waitForPreviewButtonPaint();
+  if (lang === "svg") hydrateSvg(block, codeContent);
+  else if (lang === "html") hydrateHtml(block, codeContent);
+  else if (lang === "mermaid") await hydrateMermaid(block, codeContent);
+  const rendered = Boolean(block.querySelector("[data-axon-kind]"));
+  setPreviewToggleButton(button, rendered ? "code" : "preview");
+}
+
+function restoreCodePreview(block: HTMLElement): void {
+  const sourceHtml = block.dataset.axonCodeHtml;
+  if (!sourceHtml) return;
+  const live = block.querySelector<HTMLElement>("[data-axon-kind]");
+  if (live) live.replaceWith(htmlToElement(sourceHtml));
+  block.dataset.hydrated = "0";
+  block.style.background = "var(--axon-code-bg,rgba(0,0,0,0.04))";
+  block.style.border = "1px solid var(--axon-code-border,rgba(128,128,128,0.3))";
+  const button = block.querySelector<HTMLElement>("[data-preview-code]");
+  if (button) setPreviewToggleButton(button, "preview");
+}
+
+function htmlToElement(html: string): HTMLElement {
+  const template = document.createElement("template");
+  template.innerHTML = html.trim();
+  return template.content.firstElementChild as HTMLElement;
+}
+
 if (typeof document !== "undefined") {
   document.addEventListener("click", (e) => {
     if (!(e.target as HTMLElement).closest?.("[data-axon-menu]")) closeAllEnhancedMenus();
@@ -160,7 +318,6 @@ interface MarkdownRendererProps { content: string; }
 export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: MarkdownRendererProps) {
   const ref = useRef<HTMLDivElement>(null);
   const lastContentRef = useRef<string>("");
-  const lastHtmlRef = useRef<string>("");
   const rafRef = useRef<number | null>(null);
   const pendingContentRef = useRef<string>(content);
 
@@ -202,8 +359,10 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: Mark
     if (extLink) { e.preventDefault(); const url = extLink.dataset.externalLink || extLink.getAttribute("href") || ""; if (!url) return; const vscode = (window as any).__axonVSCode || (typeof (window as any).acquireVsCodeApi === "function" ? (window as any).acquireVsCodeApi() : null); if (vscode) { vscode.postMessage({ type: "open_external", url }); } else { window.open(url, "_blank", "noopener,noreferrer"); } return; }
     const pathTarget = target.closest<HTMLElement>(".axon-path-link");
     if (pathTarget) { e.preventDefault(); const path = decodeURIComponent(pathTarget.dataset.path || ""); if (!path) return; const vscode = (window as any).__axonVSCode || (typeof (window as any).acquireVsCodeApi === "function" ? (window as any).acquireVsCodeApi() : null); if (vscode) { vscode.postMessage({ type: "open_file", path }); } else { console.log("[axon] open file:", path); } return; }
+    const previewBtn = target.closest<HTMLElement>("[data-preview-code]");
+    if (previewBtn) { e.preventDefault(); const block = previewBtn.closest<HTMLElement>(".axon-codeblock[data-preview-lang]"); if (!block) return; if (previewBtn.dataset.previewCode === "loading") return; if (previewBtn.dataset.previewCode === "code") { restoreCodePreview(block); return; } void renderCodePreview(block, previewBtn); return; }
     const copyBtn = target.closest<HTMLElement>("[data-copy-code]");
-    if (copyBtn) { e.preventDefault(); const codeBlock = copyBtn.closest(".axon-codeblock")?.querySelector("code"); if (codeBlock) { navigator.clipboard.writeText(codeBlock.textContent || "").then(() => { const label = copyBtn.querySelector("span"); if (label) { label.textContent = "已复制"; setTimeout(() => { label.textContent = "复制"; }, 1500); } }); } return; }
+    if (copyBtn) { e.preventDefault(); const codeBlock = copyBtn.closest(".axon-codeblock")?.querySelector("code"); if (codeBlock) { const text = codeBlock.textContent || ""; const doFeedback = () => { const label = copyBtn.querySelector("span"); if (label) { label.textContent = "已复制"; setTimeout(() => { label.textContent = "复制"; }, 1500); } }; if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(doFeedback).catch(() => { fallbackCopy(text); doFeedback(); }); } else { fallbackCopy(text); doFeedback(); } } return; }
   }, []);
 
   // ── 增强渲染 hydration ──
@@ -257,24 +416,14 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: Mark
     <div
       ref={ref}
       onClick={handleContentClick}
-      className="text-[13px] leading-relaxed prose prose-sm dark:prose-invert prose-neutral max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-1.5 [&_h1]:mt-4 [&_h1]:mb-1.5 [&_h2]:mt-4 [&_h2]:mb-1.5 [&_h3]:mt-3 [&_h3]:mb-1 [&_h4]:mt-2 [&_h4]:mb-1 [&_h5]:mt-2 [&_h5]:mb-1 [&_h6]:mt-1.5 [&_h6]:mb-0.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0 [&_li]:py-[2px] [&_li>p]:my-0 [&_ul_ul]:my-1 [&_ol_ol]:my-1 [&_blockquote]:my-2 [&_blockquote]:border-l-[3px] [&_blockquote]:border-blue-400/60 [&_blockquote]:dark:border-blue-500/40 [&_blockquote]:bg-blue-50/50 [&_blockquote]:dark:bg-blue-950/20 [&_blockquote]:rounded-r-md [&_blockquote]:pl-3.5 [&_blockquote]:pr-3 [&_blockquote]:py-2 [&_blockquote]:not-italic [&_blockquote]:text-foreground/85 [&_blockquote]:text-[12.5px] [&_blockquote_p]:my-0.5 [&_pre]:!my-2 [&_hr]:!my-3 [&_:not(pre)>code]:font-mono [&_:not(pre)>code]:bg-[rgba(200,200,200,0.15)] [&_:not(pre)>code]:dark:bg-[rgba(200,200,200,0.13)] [&_:not(pre)>code]:text-[#ab5726] [&_:not(pre)>code]:dark:text-[#e8ab6a] [&_:not(pre)>code]:px-1.5 [&_:not(pre)>code]:py-0.5 [&_:not(pre)>code]:rounded [&_:not(pre)>code]:text-[0.85em] [&_:not(pre)>code]:font-medium [&_:not(pre)>code]:border [&_:not(pre)>code]:border-[rgba(150,150,150,0.25)] [&_:not(pre)>code]:dark:border-[rgba(200,200,200,0.25)] [&_code]:before:content-none [&_code]:after:content-none [&_.axon-path-link]:text-[var(--vscode-textLink-foreground,#3794ff)] [&_.axon-path-link]:cursor-pointer [&_.axon-path-link]:hover:underline [&_.axon-path-link]:bg-transparent"
+      className="text-[13px] leading-relaxed prose prose-sm dark:prose-invert prose-neutral max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-1.5 [&_h1]:mt-4 [&_h1]:mb-1.5 [&_h2]:mt-4 [&_h2]:mb-1.5 [&_h3]:mt-3 [&_h3]:mb-1 [&_h4]:mt-2 [&_h4]:mb-1 [&_h5]:mt-2 [&_h5]:mb-1 [&_h6]:mt-1.5 [&_h6]:mb-0.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0 [&_li]:py-[2px] [&_li>p]:my-0 [&_ul_ul]:my-1 [&_ol_ol]:my-1 [&_blockquote]:my-2 [&_blockquote]:border-l-[3px] [&_blockquote]:border-blue-400/60 [&_blockquote]:dark:border-blue-500/40 [&_blockquote]:bg-blue-50/50 [&_blockquote]:dark:bg-blue-950/20 [&_blockquote]:rounded-r-md [&_blockquote]:pl-3.5 [&_blockquote]:pr-3 [&_blockquote]:py-2 [&_blockquote]:not-italic [&_blockquote]:text-foreground/85 [&_blockquote]:text-[12.5px] [&_blockquote_p]:my-0.5 [&_pre]:!my-2 [&_hr]:!my-3 [&_:not(pre)>code:not(.axon-path-link)]:font-mono [&_:not(pre)>code:not(.axon-path-link)]:bg-[rgba(200,200,200,0.15)] [&_:not(pre)>code:not(.axon-path-link)]:dark:bg-[rgba(200,200,200,0.13)] [&_:not(pre)>code:not(.axon-path-link)]:text-[#ab5726] [&_:not(pre)>code:not(.axon-path-link)]:dark:text-[#e8ab6a] [&_:not(pre)>code:not(.axon-path-link)]:px-1.5 [&_:not(pre)>code:not(.axon-path-link)]:py-0.5 [&_:not(pre)>code:not(.axon-path-link)]:rounded [&_:not(pre)>code:not(.axon-path-link)]:text-[0.85em] [&_:not(pre)>code:not(.axon-path-link)]:font-medium [&_:not(pre)>code:not(.axon-path-link)]:border [&_:not(pre)>code:not(.axon-path-link)]:border-[rgba(150,150,150,0.25)] [&_:not(pre)>code:not(.axon-path-link)]:dark:border-[rgba(200,200,200,0.25)] [&_code]:before:content-none [&_code]:after:content-none [&_.axon-path-link]:text-[var(--vscode-textLink-foreground,#3794ff)] [&_.axon-path-link]:cursor-pointer [&_.axon-path-link]:hover:underline [&_.axon-path-link]:bg-transparent"
+      dangerouslySetInnerHTML={{ __html: html }}
     />
   );
 });
 
 
 // ── Hydrate 函数 ──
-
-// 离屏测量层：overflow:hidden + width:0 + height:0 彻底隔离。
-// 无论内部内容多大（mermaid SVG 可能几千像素宽），都不会扩展 body 滚动区域。
-let measureLayer: HTMLDivElement | null = null;
-function getMeasureLayer(): HTMLDivElement {
-  if (measureLayer && measureLayer.isConnected) return measureLayer;
-  measureLayer = document.createElement("div");
-  measureLayer.style.cssText = "position:absolute;overflow:hidden;width:0;height:0;top:0;left:0;pointer-events:none;z-index:-1";
-  document.body.appendChild(measureLayer);
-  return measureLayer;
-}
 
 function isSafeSvg(content: string): boolean {
   const dangerous = /<script|<iframe|<object|<embed|on\w+\s*=|javascript:/i;
@@ -341,6 +490,7 @@ function hydrateHtml(block: HTMLElement, content: string, onRendered?: (el: HTML
 
 /** Mermaid 单例加载 */
 let _mermaidPromise: Promise<(typeof import("mermaid"))["default"]> | null = null;
+let mermaidRenderSeq = 0;
 function loadMermaid() {
   if (_mermaidPromise) return _mermaidPromise;
   _mermaidPromise = (async () => {
@@ -350,27 +500,48 @@ function loadMermaid() {
   return _mermaidPromise;
 }
 
+function cleanupMermaidRenderArtifacts(renderId: string): void {
+  const escapeCss = typeof CSS !== "undefined" && CSS.escape ? CSS.escape : (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+  document.getElementById(`d${renderId}`)?.remove();
+  document.getElementById(`i${renderId}`)?.remove();
+  document.getElementById(renderId)?.remove();
+  document.querySelectorAll(`#${escapeCss(`d${renderId}`)}, #${escapeCss(`i${renderId}`)}, #${escapeCss(renderId)}`).forEach((el) => el.remove());
+}
+
 async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: (el: HTMLElement) => void): Promise<void> {
   block.dataset.hydrated = "1";
-  // 提到 try 外面，确保 catch 能访问到并清理
-  const wrapper = document.createElement("div");
+  let renderId = "";
+  let renderHost: HTMLDivElement | null = null;
   try {
     const mermaid = await loadMermaid();
     // 用 neutral 主题（文字深色），背景由 CSS 控制为 transparent
-    mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "strict" });
+    mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "strict", suppressErrorRendering: true });
+    mermaid.setParseErrorHandler(() => { /* Mermaid syntax errors are intentionally silent in chat previews. */ });
+    renderId = `axon-mmd-${Date.now()}-${mermaidRenderSeq++}`;
+
+    renderHost = document.createElement("div");
+    renderHost.dataset.axonMermaidRenderHost = renderId;
+    renderHost.style.cssText = "position:absolute;overflow:hidden;width:0;height:0;top:0;left:0;pointer-events:none;z-index:-1";
+    document.body.appendChild(renderHost);
+
+    const { svg: svgText, bindFunctions } = await mermaid.render(renderId, content, renderHost);
+    renderHost.remove();
+    renderHost = null;
+    cleanupMermaidRenderArtifacts(renderId);
+    if (!svgText) throw new Error("mermaid rendered but no SVG produced");
+
+    const wrapper = document.createElement("div");
     wrapper.className = "group/enhanced relative my-2 p-2 w-full rounded-md overflow-hidden";
     wrapper.style.background = "transparent";
-    wrapper.style.position = "absolute";
-    wrapper.style.visibility = "hidden";
-    wrapper.innerHTML = `<pre class="mermaid not-prose" style="display:block;width:100%;background:transparent">${content}</pre>`;
-    getMeasureLayer().appendChild(wrapper);
-    await mermaid.run({ nodes: [wrapper.querySelector<HTMLElement>(".mermaid")!] });
+    wrapper.style.lineHeight = "0";  // 消除 wrapper 内残余行盒间隙（pre.mermaid 的 line-height 撑高 3-5px）
+    wrapper.innerHTML = svgText;
     const svg = wrapper.querySelector("svg");
     if (!svg) throw new Error("mermaid rendered but no SVG produced");
     svg.style.maxWidth = "100%";
     svg.style.width = "100%";
     svg.style.height = "auto";
     svg.style.background = "transparent";
+    svg.style.display = "block";
     // 注入 style 覆盖文字/线条颜色，用 CSS 变量跟随主题
     // 用 SVG id 做作用域前缀，确保只影响该 mermaid 图，不泄漏到页面其他 SVG
     const svgId = svg.id || `axon-mmd-${Date.now()}`;
@@ -396,11 +567,6 @@ async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: 
       }
     `;
     svg.appendChild(overrideStyle);
-    // 移入正确位置
-    wrapper.style.position = "";
-    wrapper.style.visibility = "";
-    wrapper.style.background = "transparent";
-    wrapper.remove();
     wrapper.dataset.axonKind = "mermaid";
     wrapper.dataset.axonSource = encodeURIComponent(content);
     wrapper.appendChild(createEnhancedMenu("mermaid", "right-1"));
@@ -411,11 +577,11 @@ async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: 
     block.style.background = "transparent";
     block.style.border = "none";
     requestAnimationFrame(() => { wrapper.style.opacity = "1"; });
+    bindFunctions?.(wrapper);
     onRendered?.(wrapper);
   } catch {
-    // 清理离屏 wrapper：失败时 wrapper 已 appendChild 到 body 但没被移除，
-    // absolute 元素仍会撑大 body 滚动区域，导致 IDE 最外层出现滚动条
-    if (wrapper.parentNode) wrapper.parentNode.removeChild(wrapper);
+    renderHost?.remove();
+    if (renderId) cleanupMermaidRenderArtifacts(renderId);
     block.dataset.hydrated = "0";
   }
 }

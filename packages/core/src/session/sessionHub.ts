@@ -179,6 +179,23 @@ export class SessionHub {
     }
   }
 
+  /**
+   * 热更新 Credits 预算门配置到所有活跃会话。
+   * 在 VS Code 设置变化时由 host 调用，保证配置实时生效——无需重载窗口。
+   */
+  reloadCreditBudgetConfig(): void {
+    if (!this.deps.getCreditBudgetConfig) return;
+    try {
+      const cfg = this.deps.getCreditBudgetConfig();
+      for (const session of this.activeSessions.values()) {
+        session.setCreditBudgetConfig(cfg);
+      }
+      console.debug("[credit-budget] 预算门配置已热更新到所有活跃会话");
+    } catch (err) {
+      console.warn("[credit-budget] 同步预算门配置失败:", (err as Error).message);
+    }
+  }
+
   /** 获取或创建一个 session 的代理 channel；传入 clientId 时更新其归属面板 */
   private getOrCreateSessionChannel(sessionId: string, clientId?: string): SessionChannel {
     let ch = this.sessionChannels.get(sessionId);
@@ -222,6 +239,10 @@ export class SessionHub {
     // 注入滚动压缩配置
     if (this.deps.getCompactionConfig) {
       session.setCompactionConfig(this.deps.getCompactionConfig());
+    }
+    // 注入 Credits 预算门配置
+    if (this.deps.getCreditBudgetConfig) {
+      session.setCreditBudgetConfig(this.deps.getCreditBudgetConfig());
     }
     return session;
   }
@@ -366,6 +387,11 @@ export class SessionHub {
             await this.handleCompactionMigration(sid, migrateData, cmd.clientId);
           }
         }
+        return;
+      }
+      case "credit_budget_choice": {
+        const session = this.getActiveSession(this.resolveSessionId(cmd));
+        session?.handleCreditBudgetChoice(cmd.choice);
         return;
       }
       case "focus_browser": {

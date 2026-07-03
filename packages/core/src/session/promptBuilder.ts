@@ -16,6 +16,10 @@ import { sanitizeToolPairing } from "../messageSanitizer.js";
 import { TRANSIENT_TOOLS, TRANSIENT_TOOLS_AGGRESSIVE } from "../tools/catalog.js";
 import type { AgentSession } from "../agentSession.js";
 
+const ENHANCED_RENDERING_PROTOCOL =
+  "增强渲染协议（覆盖任何旧规则）：只有在你明确希望前端把代码块渲染成可视化预览时，才使用 ```svg axon-render / ```mermaid axon-render / ```html axon-render。" +
+  "普通代码示例、历史片段、解释 HTML/SVG/Mermaid 源码时，必须使用普通 ```svg / ```mermaid / ```html，不要带 axon-render。";
+
 /** 取一条消息的纯文本内容（兼容 string 与多模态 parts） */
 export function messageText(m: ChatCompletionMessageParam): string {
   if (!m) return "";
@@ -34,7 +38,7 @@ export class PromptBuilder {
       case "concise":
         return "本次回复风格：简洁。直奔结论，能一句说清就别展开，省略非必要的背景和过程描述。";
       case "detailed":
-        return "本次回复风格：详细。可以展开讲解，补充背景、原理和注意事项，但仍要遵守'禁止双总结/禁止分割线/不主动给规划'等格式约束。";
+        return "本次回复风格：详细。可以展开讲解，补充背景、原理和注意事项，但仍要遵守'总结只出现一次/无分割线/不主动给规划'等格式约束。";
       default:
         return null;
     }
@@ -184,6 +188,9 @@ export class PromptBuilder {
   /** 构建本轮要注入的 system 消息（风格/验证/多工作区/IDE/skill/power），供请求组装与 token 估算复用 */
   buildInjections(): ChatCompletionMessageParam[] {
     const injections: ChatCompletionMessageParam[] = [];
+
+    // 旧会话会复用历史 system prompt，未必包含最新的增强渲染协议；每轮短注入一次，确保模型知道何时 opt-in。
+    injections.push({ role: "system", content: ENHANCED_RENDERING_PROTOCOL });
 
     // 模型差异校准：GPT 系（gpt-5.5 等）默认输出明显比 GLM/Claude 更冗长，
     // 同样的格式约束它遵守得更松。这里对 GPT 系额外注入一条"控长"指令，把它拉回与其他模型

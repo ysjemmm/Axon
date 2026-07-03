@@ -6,16 +6,17 @@
  */
 
 import {
-  formatToolDescription, fallbackIntent, formatLineSuffix,
+  formatToolDescription, exploreDisplayText, formatLineSuffix,
   isRelayTool, relayToolLabel, firstLine, OUTPUT_TOOLS, toolPhaseText, extractBasename,
 } from "../utils";
 import type { ToolStatus } from "@/components/ToolCallItem";
 import type { ToolSegment } from "../types";
 import type { EventHandlerCtx, WsMessage } from "./types";
+import { TOOL, TIMEOUT } from "@/lib/constants";
 
 export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
   if (ctx.cancelled.current) return;
-  if (msg.name === "delegate_task") return;
+  if (msg.name === TOOL.DELEGATE_TASK) return;
   // 兜底：如果打字机 buffer 还有残留（后端漏发 stream_pause），先 flush 掉，
   // 否则工具卡片插入后，残留文字会追加到错误的 segment 或丢失。
   const tw = ctx.typewriter;
@@ -68,10 +69,10 @@ export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
           status: "pending",
           description: formatToolDescription(msg.name || "", undefined, args),
           args,
-          command: (msg.name === "execute_command" || msg.name === "start_process") ? (args.command as string) : seg.command,
-          cwd: (msg.name === "execute_command" || msg.name === "start_process") ? ((msg as any).cwd as string) : seg.cwd,
-          query: (msg.name === "search" || msg.name === "list_dir")
-            ? ((args.intent as string) || seg.query || fallbackIntent(msg.name))
+          command: (msg.name === TOOL.EXECUTE_COMMAND || msg.name === TOOL.START_PROCESS) ? (args.command as string) : seg.command,
+          cwd: (msg.name === TOOL.EXECUTE_COMMAND || msg.name === TOOL.START_PROCESS) ? ((msg as any).cwd as string) : seg.cwd,
+          query: (msg.name === TOOL.SEARCH || msg.name === TOOL.LIST_DIR)
+            ? exploreDisplayText(msg.name || "", args, seg.query)
             : seg.query,
         };
         updated[updated.length - 1] = { ...last, segments: segs };
@@ -98,10 +99,10 @@ export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
       status: "pending",
       description: formatToolDescription(msg.name || "", undefined, args),
       args,
-      command: (msg.name === "execute_command" || msg.name === "start_process") ? (args.command as string) : undefined,
-      cwd: (msg.name === "execute_command" || msg.name === "start_process") ? ((msg as any).cwd as string) : undefined,
-      query: (msg.name === "search" || msg.name === "list_dir")
-        ? ((args.intent as string) || fallbackIntent(msg.name))
+      command: (msg.name === TOOL.EXECUTE_COMMAND || msg.name === TOOL.START_PROCESS) ? (args.command as string) : undefined,
+      cwd: (msg.name === TOOL.EXECUTE_COMMAND || msg.name === TOOL.START_PROCESS) ? ((msg as any).cwd as string) : undefined,
+      query: (msg.name === TOOL.SEARCH || msg.name === TOOL.LIST_DIR)
+        ? exploreDisplayText(msg.name || "", args)
         : undefined,
       mcpServer: (msg as any).mcpServer,
       mcpTool: (msg as any).mcpTool,
@@ -118,7 +119,7 @@ export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
 
 export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
   if (ctx.cancelled.current) return;
-  if (msg.name === "delegate_task") return;
+  if (msg.name === TOOL.DELEGATE_TASK) return;
 
   // 清除该卡片的等待输入状态
   const toolCallId = (msg as any).id as string | undefined;
@@ -136,7 +137,7 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
     ctx.setStatusText("思考中...");
     ctx.setStatusPhase("thinking");
     ctx.toolResultResetTimer.current = null;
-  }, 300);
+  }, TIMEOUT.TOOL_RESULT_RESET);
 
   const toolStatus = (msg as any).status as ToolStatus || "success";
   ctx.setChatHistory((prev) => {
@@ -145,19 +146,19 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
     // 修复：tool_result 先于 tool_call_start（150ms 队列）到达，且 assistant 消息尚未创建时，
     // 不要丢弃结果。新建一个 assistant 消息并插入 tool 段。
     if (!last || last.role !== "assistant" || !last.segments) {
-      const toolStatus: ToolStatus = msg.status === "error" ? "error" : (msg.status === "cancelled" ? "cancelled" : "success");
+      const toolStatus: ToolStatus = (msg as any).status === "error" ? "error" : ((msg as any).status === "cancelled" ? "cancelled" : "success");
       const eventId = (msg as any).id as string || "";
       const noMatchName = msg.name || "";
       const noMatchArgs = (msg as any).args as Record<string, unknown> || {};
       const shortName = typeof noMatchArgs.path === "string" ? (noMatchArgs.path as string).split("/").pop()?.split("\\").pop() || "" : "";
-      const isExplore = noMatchName === "search" || noMatchName === "list_dir";
-      const lineSuffix = noMatchName === "read_file" ? formatLineSuffix(noMatchArgs.startLine, noMatchArgs.endLine) : "";
+      const isExplore = noMatchName === TOOL.SEARCH || noMatchName === TOOL.LIST_DIR;
+      const lineSuffix = noMatchName === TOOL.READ_FILE ? formatLineSuffix(noMatchArgs.startLine, noMatchArgs.endLine) : "";
       let desc = `${noMatchName} 完成`;
-      if (noMatchName === "read_file") desc = shortName ? `已读取 ${shortName}${lineSuffix ? ` ${lineSuffix}` : ""}` : "已读取文件";
-      else if (noMatchName === "create_file") desc = shortName ? `${noMatchArgs.overwrite === true ? "已覆盖" : "已创建"} ${shortName}` : "已创建文件";
-      else if (noMatchName === "str_replace") desc = shortName ? `已编辑 ${shortName}` : "已编辑文件";
-      else if (isExplore) desc = (noMatchArgs.intent as string) || fallbackIntent(noMatchName);
-      else if (noMatchName === "execute_command") desc = "命令已执行";
+      if (noMatchName === TOOL.READ_FILE) desc = shortName ? `已读取 ${shortName}${lineSuffix ? ` ${lineSuffix}` : ""}` : "已读取文件";
+      else if (noMatchName === TOOL.CREATE_FILE) desc = shortName ? `${noMatchArgs.overwrite === true ? "已覆盖" : "已创建"} ${shortName}` : "已创建文件";
+      else if (noMatchName === TOOL.STR_REPLACE) desc = shortName ? `已编辑 ${shortName}` : "已编辑文件";
+      else if (isExplore) desc = exploreDisplayText(noMatchName, noMatchArgs);
+      else if (noMatchName === TOOL.EXECUTE_COMMAND) desc = "命令已执行";
       else if (isRelayTool(noMatchName)) desc = relayToolLabel(noMatchName);
       const segment: ToolSegment = {
         type: "tool",
@@ -167,11 +168,11 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
         status: toolStatus,
         description: desc,
         args: noMatchArgs,
-        command: (noMatchName === "execute_command" || noMatchName === "start_process") ? (noMatchArgs.command as string) : undefined,
-        query: isExplore ? ((noMatchArgs.intent as string) || fallbackIntent(noMatchName)) : undefined,
+        command: (noMatchName === TOOL.EXECUTE_COMMAND || noMatchName === TOOL.START_PROCESS) ? (noMatchArgs.command as string) : undefined,
+        query: isExplore ? exploreDisplayText(noMatchName, noMatchArgs) : undefined,
         mcpServer: (msg as any).mcpServer,
         mcpTool: (msg as any).mcpTool,
-        output: (noMatchName === "execute_command" || OUTPUT_TOOLS.has(noMatchName)) ? (toolStatus === "error" && (msg as any).userMessage ? (msg as any).userMessage : (msg.result || "")) : undefined,
+        output: (noMatchName === TOOL.EXECUTE_COMMAND || OUTPUT_TOOLS.has(noMatchName)) ? (toolStatus === "error" && (msg as any).userMessage ? (msg as any).userMessage : (msg.result || "")) : undefined,
         diff: (msg as any).fileDiff,
         diffs: (msg as any).fileDiffs,
         diagnostics: (msg as any).diagnostics,
@@ -208,7 +209,7 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
         const seg = segs[matchIdx] as ToolSegment;
         if (seg.type === "tool") {
           const isError = toolStatus === "error";
-          const isExplore = seg.name === "search" || seg.name === "list_dir";
+          const isExplore = seg.name === TOOL.SEARCH || seg.name === TOOL.LIST_DIR;
           const pendingDesc = seg.description;
           const parts = pendingDesc.match(/^(.+?)\s+(\S+\.\S+)(?:\s+(\d+-(?:\d+|EOF)))?$/);
           const rawFileName = parts ? parts[2] : null;
@@ -216,7 +217,7 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
             || extractBasename(seg.args?.path)
             || extractBasename((msg as any).args?.path);
           let lineSuffix = "";
-          if (msg.name === "read_file" || seg.name === "read_file") {
+          if (msg.name === TOOL.READ_FILE || seg.name === TOOL.READ_FILE) {
             const fromArgs = formatLineSuffix(
               (msg as any).args?.startLine ?? seg.args?.startLine,
               (msg as any).args?.endLine ?? seg.args?.endLine,
@@ -226,32 +227,31 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
           if (!lineSuffix && parts && parts[3]) {
             lineSuffix = ` ${parts[3]}`;
           }
-          const hasOutput = seg.name === "execute_command" || OUTPUT_TOOLS.has(seg.name);
+          const hasOutput = seg.name === TOOL.EXECUTE_COMMAND || OUTPUT_TOOLS.has(seg.name);
           let finalDesc: string;
-          if (isError && !isExplore && seg.name !== "check_diagnostics") {
-            if (seg.name === "str_replace" || seg.name === "create_file") {
+          if (isError && !isExplore && seg.name !== TOOL.CHECK_DIAGNOSTICS) {
+            if (seg.name === TOOL.STR_REPLACE || seg.name === TOOL.CREATE_FILE) {
               finalDesc = (msg as any).userMessage || msg.result?.slice(0, 120) || "操作未成功";
-            } else if (seg.name === "read_file" && typeof seg.args?.path === "string") {
+            } else if (seg.name === TOOL.READ_FILE && typeof seg.args?.path === "string") {
               finalDesc = seg.args.path;
             } else {
               finalDesc = (msg as any).userMessage || msg.result?.slice(0, 100) || "执行失败";
             }
-          } else if (msg.name === "execute_command") {
+          } else if (msg.name === TOOL.EXECUTE_COMMAND) {
             finalDesc = "命令已执行";
-          } else if (msg.name === "check_diagnostics") {
+          } else if (msg.name === TOOL.CHECK_DIAGNOSTICS) {
             finalDesc = (msg.result || "").includes("无错误") ? "无错误" : "error";
           } else if (isExplore) {
-            const latestIntent = (msg as any).args?.intent as string || seg.args?.intent as string || seg.query;
-            finalDesc = latestIntent || fallbackIntent(seg.name);
+            finalDesc = exploreDisplayText(seg.name, ((msg as any).args || seg.args) as Record<string, unknown>, seg.query);
           } else if (isRelayTool(msg.name || "")) {
             finalDesc = msg.result ? firstLine(msg.result) : relayToolLabel(msg.name || "");
           } else if (fileName) {
             const cfResult = msg.result || "";
             const cfVerb = cfResult.includes("已存在") ? "已存在" : cfResult.startsWith("已覆盖") ? "已覆盖" : "已创建";
             const verbMap: Record<string, string> = {
-              read_file: `已读取 ${fileName}${lineSuffix}`,
-              create_file: `${cfVerb === "已存在" ? `${fileName} 已存在` : `${cfVerb} ${fileName}`}`,
-              str_replace: `已编辑 ${fileName}`,
+              [TOOL.READ_FILE]: `已读取 ${fileName}${lineSuffix}`,
+              [TOOL.CREATE_FILE]: `${cfVerb === "已存在" ? `${fileName} 已存在` : `${cfVerb} ${fileName}`}`,
+              [TOOL.STR_REPLACE]: `已编辑 ${fileName}`,
             };
             finalDesc = verbMap[msg.name || ""] || `已完成 ${fileName}`;
           } else {
@@ -268,7 +268,7 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
             args: (msg as any).args || seg.args,
             mcpServer: (msg as any).mcpServer || seg.mcpServer,
             mcpTool: (msg as any).mcpTool || seg.mcpTool,
-            command: seg.name === "execute_command"
+            command: seg.name === TOOL.EXECUTE_COMMAND
               ? (((msg as any).args?.command as string) ?? seg.command)
               : seg.command,
             output: hasOutput ? (isError && (msg as any).userMessage ? (msg as any).userMessage : (msg.result || "")) : undefined,
@@ -288,14 +288,14 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
         const noMatchName = msg.name || "";
         const noMatchArgs = (msg as any).args as Record<string, unknown> || {};
         const shortName = typeof noMatchArgs.path === "string" ? (noMatchArgs.path as string).split("/").pop()?.split("\\").pop() || "" : "";
-        const isExplore = noMatchName === "search" || noMatchName === "list_dir";
-        const lineSuffix = noMatchName === "read_file" ? formatLineSuffix(noMatchArgs.startLine, noMatchArgs.endLine) : "";
+        const isExplore = noMatchName === TOOL.SEARCH || noMatchName === TOOL.LIST_DIR;
+        const lineSuffix = noMatchName === TOOL.READ_FILE ? formatLineSuffix(noMatchArgs.startLine, noMatchArgs.endLine) : "";
         let desc = `${noMatchName} 完成`;
-        if (noMatchName === "read_file") desc = shortName ? `已读取 ${shortName}${lineSuffix ? ` ${lineSuffix}` : ""}` : "已读取文件";
-        else if (noMatchName === "create_file") desc = shortName ? `${noMatchArgs.overwrite === true ? "已覆盖" : "已创建"} ${shortName}` : "已创建文件";
-        else if (noMatchName === "str_replace") desc = shortName ? `已编辑 ${shortName}` : "已编辑文件";
-        else if (isExplore) desc = (noMatchArgs.intent as string) || fallbackIntent(noMatchName);
-        else if (noMatchName === "execute_command") desc = "命令已执行";
+        if (noMatchName === TOOL.READ_FILE) desc = shortName ? `已读取 ${shortName}${lineSuffix ? ` ${lineSuffix}` : ""}` : "已读取文件";
+        else if (noMatchName === TOOL.CREATE_FILE) desc = shortName ? `${noMatchArgs.overwrite === true ? "已覆盖" : "已创建"} ${shortName}` : "已创建文件";
+        else if (noMatchName === TOOL.STR_REPLACE) desc = shortName ? `已编辑 ${shortName}` : "已编辑文件";
+        else if (isExplore) desc = exploreDisplayText(noMatchName, noMatchArgs);
+        else if (noMatchName === TOOL.EXECUTE_COMMAND) desc = "命令已执行";
         else if (isRelayTool(noMatchName)) desc = relayToolLabel(noMatchName);
         segs.push({
           type: "tool",
@@ -305,11 +305,11 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
           status: toolStatus,
           description: desc,
           args: noMatchArgs,
-          command: (noMatchName === "execute_command" || noMatchName === "start_process") ? (noMatchArgs.command as string) : undefined,
-          query: isExplore ? ((noMatchArgs.intent as string) || fallbackIntent(noMatchName)) : undefined,
+          command: (noMatchName === TOOL.EXECUTE_COMMAND || noMatchName === TOOL.START_PROCESS) ? (noMatchArgs.command as string) : undefined,
+          query: isExplore ? exploreDisplayText(noMatchName, noMatchArgs) : undefined,
           mcpServer: (msg as any).mcpServer,
           mcpTool: (msg as any).mcpTool,
-          output: (noMatchName === "execute_command" || OUTPUT_TOOLS.has(noMatchName)) ? (toolStatus === "error" && (msg as any).userMessage ? (msg as any).userMessage : (msg.result || "")) : undefined,
+          output: (noMatchName === TOOL.EXECUTE_COMMAND || OUTPUT_TOOLS.has(noMatchName)) ? (toolStatus === "error" && (msg as any).userMessage ? (msg as any).userMessage : (msg.result || "")) : undefined,
           diff: (msg as any).fileDiff,
           diffs: (msg as any).fileDiffs,
           diagnostics: (msg as any).diagnostics,

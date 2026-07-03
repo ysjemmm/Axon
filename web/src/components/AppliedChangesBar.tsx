@@ -114,7 +114,6 @@ export function AppliedChangesBar({
   const { pendingFiles, appliedFiles } = useMemo(() => {
     const assistantMsgs = chatHistory.filter((m) => m.role === "assistant" && m.segments);
     const pendingSet = new Set(pendingPaths);
-    const applied: ChangeFile[] = [];
     const map = new Map<string, ChangeFile>();
 
     for (const msg of assistantMsgs) {

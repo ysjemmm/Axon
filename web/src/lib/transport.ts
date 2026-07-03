@@ -14,6 +14,7 @@
  */
 
 import { API_BASE, WS_BASE } from "./api";
+import { IPC, API, TIMEOUT, MIME } from "./constants";
 
 /** VS Code webview 注入的 API（仅在 webview 环境存在） */
 interface VSCodeApi {
@@ -61,7 +62,7 @@ function ensureWebviewListener(): void {
     if (!data || typeof data !== "object") return;
 
     // REST 应答
-    if (data.__axonRes === true && typeof data.id === "string") {
+    if (data[IPC.RES] === true && typeof data.id === "string") {
       const pending = pendingRequests.get(data.id);
       if (pending) {
         pendingRequests.delete(data.id);
@@ -94,21 +95,21 @@ export async function apiRequest<T = unknown>(method: HttpMethod, path: string, 
     const id = `req-${++reqSeq}-${Date.now()}`;
     return new Promise<T>((resolve, reject) => {
       pendingRequests.set(id, { resolve: resolve as (v: unknown) => void, reject });
-      vscode.postMessage({ __axonReq: true, id, method, path, body });
-      // 超时保护：30s 未应答则拒绝
+      vscode.postMessage({ [IPC.REQ]: true, id, method, path, body });
+      // 超时保护
       setTimeout(() => {
         if (pendingRequests.has(id)) {
           pendingRequests.delete(id);
           reject(new Error(`请求超时: ${method} ${path}`));
         }
-      }, 30_000);
+      }, TIMEOUT.API_REQUEST);
     });
   }
 
   // 浏览器：fetch
   const resp = await fetch(`${API_BASE}${path}`, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": MIME.JSON },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const data = await resp.json().catch(() => ({}));
@@ -159,14 +160,14 @@ export function createAgentConnection(): AgentConnection {
 
   const connect = (): void => {
     if (ws) ws.close();
-    ws = new WebSocket(`${WS_BASE}/ws`);
+    ws = new WebSocket(`${WS_BASE}${API.WS_PATH}`);
     ws.onopen = () => {
       connectedCb?.(true);
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     };
     ws.onclose = () => {
       connectedCb?.(false);
-      if (!closed) reconnectTimer = setTimeout(connect, 3000);
+      if (!closed) reconnectTimer = setTimeout(connect, TIMEOUT.WS_RECONNECT);
     };
     ws.onerror = () => connectedCb?.(false);
     ws.onmessage = (event) => {

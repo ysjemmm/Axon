@@ -8,7 +8,9 @@
  * - WS 协议跟随 HTTP：https → wss，http → ws
  */
 
-const API_PORT = import.meta.env.VITE_API_PORT || "3001";
+import { API } from "./constants";
+
+const API_PORT = import.meta.env.VITE_API_PORT || API.DEFAULT_PORT;
 
 /** HTTP API 基础地址，如 "http://localhost:3001" */
 export const API_BASE = `${window.location.protocol}//${window.location.hostname}:${API_PORT}`;

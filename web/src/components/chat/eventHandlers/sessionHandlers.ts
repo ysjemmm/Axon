@@ -6,7 +6,7 @@
 
 import { MODELS } from "@/components/ModelSelector";
 import {
-  fallbackIntent, formatLineSuffix,
+  exploreDisplayText, formatLineSuffix,
   isRelayTool, relayToolLabel, firstLine, OUTPUT_TOOLS,
 } from "../utils";
 import type { ToolStatus } from "@/components/ToolCallItem";
@@ -110,7 +110,6 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
           }
           const pathArg = tcArgs.path as string || "";
           const shortName = pathArg ? (pathArg.split("/").pop()?.split("\\").pop() || pathArg) : "";
-          const intentArg = (tcArgs.intent as string) || "";
           const isExplore = toolName === "search" || toolName === "list_dir";
           const lineSuffix = toolName === "read_file" ? formatLineSuffix(tcArgs.startLine, tcArgs.endLine) : "";
           const readNameWithLines = shortName + (lineSuffix ? ` ${lineSuffix}` : "");
@@ -121,7 +120,7 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
             case "str_replace": desc = shortName ? `已编辑 ${shortName}` : "已编辑文件"; break;
             case "execute_command": desc = "命令已执行"; break;
             case "search":
-            case "list_dir": desc = intentArg || fallbackIntent(toolName); break;
+            case "list_dir": desc = exploreDisplayText(toolName, tcArgs); break;
             case "relay_create":
             case "relay_save_doc":
             case "relay_advance":
@@ -141,7 +140,7 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
             description: desc,
             args: tcArgs,
             command: (toolName === "execute_command" || toolName === "start_process") ? (tcArgs.command as string) : undefined,
-            query: isExplore ? (intentArg || fallbackIntent(toolName)) : undefined,
+            query: isExplore ? exploreDisplayText(toolName, tcArgs) : undefined,
           });
         }
       }
@@ -283,4 +282,12 @@ export function handleCompactingEnd(msg: WsMessage, ctx: EventHandlerCtx): void 
     });
   }
   ctx.setStatusText(ok ? "思考中..." : endMsg);
+}
+
+export function handleCreditBudgetPaused(msg: WsMessage, ctx: EventHandlerCtx): void {
+  ctx.setCreditBudgetPaused({
+    spent: (msg as any).spent as number,
+    threshold: (msg as any).threshold as number,
+  });
+  ctx.setStatusText("任务花费较高，等待确认...");
 }

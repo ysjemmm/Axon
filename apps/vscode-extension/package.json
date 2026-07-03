@@ -132,6 +132,26 @@
           "minimum": 0,
           "scope": "resource",
           "markdownDescription": "保留最近几轮对话中的工具结果不被裁剪。设为 0 表示裁剪所有非当前轮的工具结果。\n\n- **值越大**：AI 能回看更多轮的完整工具输出（如之前读过的文件内容、跑过的命令结果）\n- **值越小**：上下文更精简\n\n注意：此裁剪独立于滚动压缩开关——即使关闭滚动压缩，旧工具结果仍会按此设置裁剪。"
+        },
+        "axon.creditBudget.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "**Credits 预算门**：单轮任务花费达到阈值时提醒/暂停，避免因失控循环产生意外高额消耗。\n\n**开启（默认）**：达到软提醒阈值时引导 AI 尽快收尾；达到硬暂停阈值时暂停并询问是否继续——正常的长任务只会在花费显著跃升时确认一次，选择继续后阈值自动翻倍，不会反复打断。\n\n**关闭**：不做任何提醒/暂停，仅保留计费展示。"
+        },
+        "axon.creditBudget.warnAt": {
+          "type": "number",
+          "default": 300,
+          "minimum": 1,
+          "scope": "resource",
+          "markdownDescription": "软提醒阈值（credits）。单轮任务花费达到此值时，向 AI 注入一条引导（尽快收尾），不打断当前任务、不弹窗。"
+        },
+        "axon.creditBudget.pauseAt": {
+          "type": "number",
+          "default": 800,
+          "minimum": 1,
+          "scope": "resource",
+          "markdownDescription": "硬暂停阈值（credits）。单轮任务花费达到此值时暂停，弹窗展示真实花费，由你选择「继续」或「停止」。选择继续后该阈值本轮翻倍，避免同一个长任务反复打断。"
         }
       }
     },

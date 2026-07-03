@@ -28,16 +28,18 @@ interface ParallelPanelProps {
   send: (cmd: Record<string, unknown>) => void;
 }
 
+import { STORAGE } from "@/lib/constants";
+
 export function ParallelPanel({ connected, send }: ParallelPanelProps) {
   const { state, thinking, thinkingStatus, submit, cancelBatch, deleteBatch, undoFile, setActiveBatch } = useParallelSession({ connected, send });
   const [model, setModel] = useState(() => {
-    try { return localStorage.getItem("axon_parallel_model") || "auto"; } catch { return "auto"; }
+    try { return localStorage.getItem(STORAGE.PARALLEL_MODEL) || "auto"; } catch { return "auto"; }
   });
 
   // 模型选择持久化
   const handleModelChange = useCallback((m: string) => {
     setModel(m);
-    try { localStorage.setItem("axon_parallel_model", m); } catch { /* ignore */ }
+    try { localStorage.setItem(STORAGE.PARALLEL_MODEL, m); } catch { /* ignore */ }
   }, []);
   const [composerEmpty, setComposerEmpty] = useState(true);
   const editorRef = useRef<MentionEditorHandle>(null);

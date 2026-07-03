@@ -13,6 +13,7 @@ import { useWebSocket } from "./hooks/useWebSocket";
 import { sessionEventBus } from "./hooks/useSessionEvents";
 import { WS_BASE } from "./lib/api";
 import { AxonLogo } from "./components/AxonLogo";
+import { STORAGE, CONTROL_CMD, TIMEOUT } from "./lib/constants";
 
 /** 生成稳定的 tab key（兼作面板 clientId） */
 function genTabKey(): string {
@@ -104,14 +105,14 @@ function App() {
   type ChatMode = "agent" | "quest" | "parallel";
   // 顶层模式：Axon（智能体）/ 问答（纯问答）/ 并行（多 Agent 并行）
   const [mode, setMode] = useState<ChatMode>(() => {
-    try { const m = localStorage.getItem("axon_mode"); if (m === "quest" || m === "agent" || m === "parallel") return m; } catch { /* ignore */ }
+    try { const m = localStorage.getItem(STORAGE.MODE); if (m === "quest" || m === "agent" || m === "parallel") return m; } catch { /* ignore */ }
     return "agent";
   });
 
   // 打开的 tab 列表（Axon + 问答 并集；从 localStorage 恢复，窗口重载不丢失）
   const [tabs, setTabs] = useState<SessionTab[]>(() => {
     try {
-      const saved = localStorage.getItem("axon_tabs");
+      const saved = localStorage.getItem(STORAGE.TABS);
       if (saved) {
         const parsed = JSON.parse(saved) as SessionTab[];
         if (Array.isArray(parsed) && parsed.length > 0) {
@@ -126,7 +127,7 @@ function App() {
   // 每个模式各自的激活 tab key
   const [activeKeys, setActiveKeys] = useState<{ agent: string | null; quest: string | null; parallel: string | null }>(() => {
     try {
-      const saved = localStorage.getItem("axon_activeKeys");
+      const saved = localStorage.getItem(STORAGE.ACTIVE_KEYS);
       if (saved) { const p = JSON.parse(saved); if (p && typeof p === "object") return { agent: p.agent ?? null, quest: p.quest ?? null, parallel: p.parallel ?? null }; }
     } catch { /* ignore */ }
     return { agent: null, quest: null, parallel: null };
@@ -136,7 +137,7 @@ function App() {
   const { connected, send } = useWebSocket(WS_BASE, (msg) => {
     const m = msg as { type?: string; clientId?: string };
     // 外部注入的上下文（如终端/编辑器选区）无 clientId：定向到当前激活的面板
-    if (m && m.type === "add_context" && !m.clientId) {
+    if (m && m.type === CONTROL_CMD.ADD_CONTEXT && !m.clientId) {
       const key = activeKeys[mode];
       if (key) m.clientId = key;
     }
@@ -144,18 +145,18 @@ function App() {
   });
 
   // 持久化
-  useEffect(() => { try { localStorage.setItem("axon_tabs", JSON.stringify(tabs)); } catch { /* 忽略 */ } }, [tabs]);
-  useEffect(() => { try { localStorage.setItem("axon_activeKeys", JSON.stringify(activeKeys)); } catch { /* 忽略 */ } }, [activeKeys]);
-  useEffect(() => { try { localStorage.setItem("axon_mode", mode); } catch { /* 忽略 */ } }, [mode]);
+  useEffect(() => { try { localStorage.setItem(STORAGE.TABS, JSON.stringify(tabs)); } catch { /* 忽略 */ } }, [tabs]);
+  useEffect(() => { try { localStorage.setItem(STORAGE.ACTIVE_KEYS, JSON.stringify(activeKeys)); } catch { /* 忽略 */ } }, [activeKeys]);
+  useEffect(() => { try { localStorage.setItem(STORAGE.MODE, mode); } catch { /* 忽略 */ } }, [mode]);
 
   // 跨 webview 导航：Relay Tab 点击"查看并行"→ 扩展转发 navigate_parallel → 切到并行 tab
   useEffect(() => {
     const handler = (e: MessageEvent) => {
       const data = e.data;
-      if (!data || typeof data !== "object" || data.type !== "navigate_parallel") return;
+      if (!data || typeof data !== "object" || data.type !== CONTROL_CMD.NAVIGATE_PARALLEL) return;
       setMode("parallel");
       // 通知并行面板定位到指定 batchId（通过 sessionEventBus 广播，并行面板监听）
-      sessionEventBus.dispatch({ type: "navigate_parallel", batchId: data.batchId, relayId: data.relayId } as any);
+      sessionEventBus.dispatch({ type: CONTROL_CMD.NAVIGATE_PARALLEL, batchId: data.batchId, relayId: data.relayId } as any);
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
@@ -229,7 +230,7 @@ function App() {
       } catch { /* 忽略 */ }
     };
     sync();
-    const timer = setInterval(sync, 5000);
+    const timer = setInterval(sync, TIMEOUT.SESSION_SYNC);
     return () => clearInterval(timer);
   }, []);
 
@@ -273,7 +274,7 @@ function App() {
     if (!closing) return;
     // 取消其可能仍在运行的会话
     if (closing.id) {
-      send({ type: "cancel", sessionId: closing.id, clientId: closing.key });
+      send({ type: CONTROL_CMD.CANCEL, sessionId: closing.id, clientId: closing.key });
     }
     const closingMode = closing.mode;
     const remaining = tabs.filter((t) => t.mode === closingMode && t.key !== key);
@@ -300,7 +301,7 @@ function App() {
   const handleSessionDeleted = useCallback((deletedId: string) => {
     const opened = tabs.find((t) => t.id === deletedId);
     if (!opened) return;
-    if (opened.id) send({ type: "cancel", sessionId: opened.id, clientId: opened.key });
+    if (opened.id) send({ type: CONTROL_CMD.CANCEL, sessionId: opened.id, clientId: opened.key });
     const m = opened.mode;
     setTabs((prev) => prev.filter((t) => t.id !== deletedId));
     setActiveKeys((prev) => {
