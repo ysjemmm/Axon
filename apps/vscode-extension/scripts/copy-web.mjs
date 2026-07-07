@@ -10,7 +10,7 @@
 
 import { cp, rm, access, readFile, writeFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -52,8 +52,12 @@ async function normalizeAssetBase(dir) {
     }
     if (!/\.(html|css|js|mjs)$/.test(entry.name)) continue;
     const text = await readFile(p, "utf8");
+    const rel = relative(webDist, p).replace(/\\/g, "/");
+    const inAssetsDir = rel.startsWith("assets/");
+    const assetPrefix = inAssetsDir ? "./" : "./assets/";
     const next = text
-      .replace(/(["'(=])\/assets\//g, "$1./assets/")
+      .replace(/(["'`(=])\/assets\//g, `$1${assetPrefix}`)
+      .replace(/(["'`(=])assets\//g, inAssetsDir ? "$1./" : "$1assets/")
       .replace(/(["'(=])\/favicon\./g, "$1./favicon.");
     if (next !== text) await writeFile(p, next, "utf8");
   }

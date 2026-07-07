@@ -166,6 +166,11 @@
           "id": "axon-powers",
           "title": "Axon Powers",
           "icon": "media/powers.svg"
+        },
+        {
+          "id": "axon-agents",
+          "title": "Agent",
+          "icon": "media/agent.svg"
         }
       ],
       "secondarySidebar": [
@@ -199,6 +204,12 @@
         {
           "id": "axon.powers",
           "name": "Powers"
+        }
+      ],
+      "axon-agents": [
+        {
+          "id": "axon.agents",
+          "name": "Agent"
         }
       ],
       "axon-chat": [
@@ -237,6 +248,24 @@
       {
         "command": "axon.openSkill",
         "title": "Axon: 打开 Skill"
+      },
+      {
+        "command": "axon.openAgent",
+        "title": "Axon: 打开 Agent"
+      },
+      {
+        "command": "axon.agent.create",
+        "title": "新建 Agent",
+        "icon": "$(add)"
+      },
+      {
+        "command": "axon.agent.refresh",
+        "title": "刷新 Agent 列表",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "axon.agent.delete",
+        "title": "删除 Agent"
       },
       {
         "command": "axon.skill.create",
@@ -498,6 +527,16 @@
         {
           "command": "axon.power.import",
           "when": "view == axon.powers",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.agent.create",
+          "when": "view == axon.agents",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.agent.refresh",
+          "when": "view == axon.agents",
           "group": "navigation"
         },
         {

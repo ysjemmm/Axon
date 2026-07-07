@@ -105,6 +105,8 @@ async function presentEdit(
       const diff = { path: relPath, absPath, oldContent: preEditContent, newContent, editId: unitId };
       meta.fileDiff = diff; // 单文件工具向后兼容（apply_patch 多文件时为最后一个）
       (meta.fileDiffs ??= []).push(diff); // apply_patch 等多文件工具：逐文件累计
+    } else {
+      meta.noopEdit = true;
     }
   }
   const edit: FileEdit = {

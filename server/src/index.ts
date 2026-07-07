@@ -15,7 +15,7 @@ import { JsonFileStorage } from "./storage/index.js";
 import { directoryBrowser } from "./fsBrowser.js";
 import { loadConfig, saveConfig, type WorkspaceGroup } from "./config.js";
 import { registerSkillRoutes } from "./skills/skillRoutes.js";
-import { registerPowerRoutes } from "./powers/powerRoutes.js";
+import { registerAgentRoutes } from "./agents/agentRoutes.js";
 import { registerMcpRoutes } from "./mcp/mcpRoutes.js";
 import { registerProviderRoutes } from "./providers/providerRoutes.js";
 import { RelayStore, SessionHub, ZHIPU_PROVIDER, ProviderRegistry, refreshProviders, type AgentEvent, type ControlCommand } from "@axon/core";
@@ -151,6 +151,9 @@ app.delete("/api/workspace-groups/:id", async (req, res) => {
 // ── Skill 管理 API ───────────────────────────────────────────────────────
 // 业务逻辑已抽到 skills/skillService.ts，路由注册见 registerSkillRoutes。
 registerSkillRoutes(app);
+
+// ── 自定义 Agent 管理 API ────────────────────────────────────────────────
+registerAgentRoutes(app);
 
 // ── Power 能力扩展包 API ─────────────────────────────────────────────────
 // 业务逻辑在 powers/powerService.ts，路由注册见 registerPowerRoutes。

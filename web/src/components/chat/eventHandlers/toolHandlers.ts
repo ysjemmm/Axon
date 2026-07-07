@@ -140,6 +140,7 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
   }, TIMEOUT.TOOL_RESULT_RESET);
 
   const toolStatus = (msg as any).status as ToolStatus || "success";
+  const noopEdit = !!(msg as any).noopEdit;
   ctx.setChatHistory((prev) => {
     const updated = [...prev];
     const last = updated[updated.length - 1];
@@ -175,6 +176,7 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
         output: (noMatchName === TOOL.EXECUTE_COMMAND || OUTPUT_TOOLS.has(noMatchName)) ? (toolStatus === "error" && (msg as any).userMessage ? (msg as any).userMessage : (msg.result || "")) : undefined,
         diff: (msg as any).fileDiff,
         diffs: (msg as any).fileDiffs,
+        noopEdit: !!(msg as any).noopEdit,
         diagnostics: (msg as any).diagnostics,
         searchResults: (msg as any).searchResults,
         fetchResult: (msg as any).fetchResult,
@@ -239,6 +241,8 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
             }
           } else if (msg.name === TOOL.EXECUTE_COMMAND) {
             finalDesc = "命令已执行";
+          } else if (noopEdit && (msg.name === TOOL.STR_REPLACE || msg.name === TOOL.CREATE_FILE || msg.name === TOOL.APPLY_PATCH)) {
+            finalDesc = fileName ? `${fileName} 无实际变化` : "无实际内容变化";
           } else if (msg.name === TOOL.CHECK_DIAGNOSTICS) {
             finalDesc = (msg.result || "").includes("无错误") ? "无错误" : "error";
           } else if (isExplore) {
@@ -274,6 +278,7 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
             output: hasOutput ? (isError && (msg as any).userMessage ? (msg as any).userMessage : (msg.result || "")) : undefined,
             diff: (msg as any).fileDiff || seg.diff,
             diffs: (msg as any).fileDiffs || seg.diffs,
+            noopEdit: (msg as any).noopEdit ?? (seg as any).noopEdit,
             diagnostics: (msg as any).diagnostics || seg.diagnostics,
             searchResults: (msg as any).searchResults || seg.searchResults,
             fetchResult: (msg as any).fetchResult || seg.fetchResult,
@@ -312,6 +317,7 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
           output: (noMatchName === TOOL.EXECUTE_COMMAND || OUTPUT_TOOLS.has(noMatchName)) ? (toolStatus === "error" && (msg as any).userMessage ? (msg as any).userMessage : (msg.result || "")) : undefined,
           diff: (msg as any).fileDiff,
           diffs: (msg as any).fileDiffs,
+          noopEdit: !!(msg as any).noopEdit,
           diagnostics: (msg as any).diagnostics,
           searchResults: (msg as any).searchResults,
           fetchResult: (msg as any).fetchResult,

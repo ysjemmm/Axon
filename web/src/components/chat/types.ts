@@ -28,6 +28,7 @@ export interface ToolSegment {
   args?: Record<string, unknown>; // 原始工具参数，用于失败态仍能展示路径等关键信息
   diff?: { path: string; oldContent: string; newContent: string; editId?: string }; // str_replace/create_file 专用：本次修改的完整文件前后快照
   diffs?: { path: string; absPath?: string; oldContent: string; newContent: string; editId?: string }[]; // apply_patch 专用：一次改多个文件
+  noopEdit?: boolean; // 编辑工具执行成功但无实际内容变化（无 diff）
   diagnostics?: { path: string; ok: boolean; errorCount: number }[]; // check_diagnostics 专用：按文件诊断结果
   searchResults?: { query: string; source: string; results: { title: string; url: string; snippet: string; domain: string; date?: string }[] }; // web_search 专用
   fetchResult?: { url: string; title: string; byteSize: number; success: boolean; error?: string }; // web_fetch 专用

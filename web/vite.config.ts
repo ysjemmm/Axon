@@ -11,6 +11,10 @@ export default defineConfig({
   // sourcemap 常开，便于 webview 里出错时定位真实源码（生产可接受的体积代价）
   build: {
     sourcemap: true,
+    // VS Code webview 的本地资源代理会拒绝部分 modulepreload 请求。
+    // Vite preload 失败会阻断首次 dynamic import，但第二次因已标记预加载而成功，
+    // 表现就是 Mermaid 预览要点两次。webview 构建禁用 preload，直接 import chunk。
+    modulePreload: process.env.AXON_WEB_BASE === "./" ? false : undefined,
   },
   plugins: [react(), tailwindcss()],
   resolve: {

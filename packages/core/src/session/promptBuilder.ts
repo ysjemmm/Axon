@@ -25,7 +25,9 @@ export function messageText(m: ChatCompletionMessageParam): string {
   if (!m) return "";
   const c = (m as { content?: unknown }).content;
   if (typeof c === "string") return c;
-  if (Array.isArray(c)) return (c as Array<{ type?: string; text?: string }>).map((p) => (p.type === "text" ? p.text || "" : "")).join("");
+  if (Array.isArray(c)) {
+    return (c as Array<{ type?: string; text?: string }>).map((p) => (p.type === "text" ? p.text || "" : "")).join("");
+  }
   return "";
 }
 
@@ -66,9 +68,10 @@ export class PromptBuilder {
    * 包含活动文件、选区/选中文本、其它打开的文件、git diff 概览——让 Agent 像 IDE 内助手一样
    * 感知用户"正在看什么、改了什么"。非 IDE 形态（host.ideContext 为空）返回 null，不注入。
    */
-  async buildIdeContextPrompt(): Promise<string | null> {
+  async buildIdeContextPrompt(force = false): Promise<string | null> {
     const ide = this.s.host.ideContext;
     if (!ide) return null;
+    if (!force) return null;
     try {
       const parts: string[] = [];
 
@@ -77,7 +80,6 @@ export class PromptBuilder {
         let line = `- 当前活动文件：${active.path}`;
         if (active.selection) {
           const sel = active.selection;
-          // 选区行号转 1-indexed 展示
           line += `（选区：第 ${sel.startLine + 1} 行第 ${sel.startCharacter + 1} 列 ~ 第 ${sel.endLine + 1} 行第 ${sel.endCharacter + 1} 列）`;
         }
         parts.push(line);
@@ -114,74 +116,95 @@ export class PromptBuilder {
     }
   }
 
-  /** 构造发给 LLM 的消息：保证 [system_prompt + 历史] 前缀稳定，注入消息放尾部
-   *
-   * 缓存策略：
-   * - DeepSeek/GLM 等：自动前缀缓存，要求消息前缀精确稳定。所有动态注入（IDE上下文、skill、
-   *   风格指令等）和 agent loop 的中间注入 system 消息（反思/续写/diagnostics）全部移到末尾，
-   *   保证 [system_prompt + user/assistant/tool 历史] 这段前缀在多轮间完全不变。
-   * - GPT/Claude 等：注入放前面（靠近 system prompt 时遵守度更高），不走前缀缓存。
-   */
+  /** 构造发给 LLM 的消息：保证 [system_prompt + 历史] 前缀稳定，注入消息放尾部 */
   buildRequestMessages(): ChatCompletionMessageParam[] {
     const injections = this.buildInjections();
     const isDeepSeek = /deepseek/i.test(this.s.model);
     const isCacheFriendly = isDeepSeek || /glm|qwen|moonshot|kimi|yi-/i.test(this.s.model);
-
     const transientSet = isDeepSeek ? TRANSIENT_TOOLS_AGGRESSIVE : TRANSIENT_TOOLS;
 
-    // ── 前缀缓存优化 + 瞬态过滤：单次遍历完成 ──
-    // 提取 _injected system 消息（反思/续写/diagnostics）到末尾不破坏前缀稳定性，
-    // 同时过滤非当前轮的瞬态工具结果（search/list_dir/read_file 等）。
-    // 必须在 sanitizeToolPairing 之前：先删不需要的，sanitizer 再清理关联孤儿 tool_calls。
-    // ⚠️ 单次遍历避免 O(n²)：260K tokens 上下文可能有几千条消息。
     const extractedInjections: ChatCompletionMessageParam[] = [];
     const preFiltered: ChatCompletionMessageParam[] = [];
-    for (let i = 0; i < this.s.messages.length; i++) {
-      const m = this.s.messages[i];
-      if ((m as any)._injected && (m as any).role === "system") {
-        extractedInjections.push(m);
-        continue;
+
+    const toRuntimeMessage = (m: ChatCompletionMessageParam): ChatCompletionMessageParam => {
+      const anyMsg = m as any;
+      if (anyMsg.role === "assistant" && Array.isArray(anyMsg.tool_calls)) {
+        const { displayContent, runtimeContent, ...rest } = anyMsg;
+        return { ...rest, content: runtimeContent || null } as ChatCompletionMessageParam;
       }
-      if ((m as any).role === "tool") {
+      return m;
+    };
+
+    const compactionEnabled = this.s.compactionConfig.enabled;
+    const SUMMARY_LIMIT = isDeepSeek ? 80 : 200;
+
+    if (compactionEnabled) {
+      const transientToolCallIds = new Set<string>();
+      for (let i = 0; i < this.s.messages.length; i++) {
+        const m = this.s.messages[i];
+        if ((m as any).role !== "tool") continue;
         const toolName = (m as any)._toolName as string | undefined;
         if (toolName && transientSet.has(toolName) && i < this.s.turnStartMsgCount) {
-          continue;
+          const tcId = (m as any).tool_call_id as string | undefined;
+          if (tcId) transientToolCallIds.add(tcId);
         }
       }
-      preFiltered.push(m);
+
+      for (let i = 0; i < this.s.messages.length; i++) {
+        const m = this.s.messages[i];
+        if ((m as any)._tailInjected && (m as any).role === "system") {
+          extractedInjections.push(m);
+          continue;
+        }
+        if ((m as any).role === "tool") {
+          const tcId = (m as any).tool_call_id as string | undefined;
+          if (tcId && transientToolCallIds.has(tcId)) continue;
+        }
+        if ((m as any).role === "assistant" && Array.isArray((m as any).tool_calls)) {
+          const remaining = (m as any).tool_calls.filter((tc: any) => !transientToolCallIds.has(tc.id));
+          if (remaining.length < (m as any).tool_calls.length) {
+            if (remaining.length === 0) {
+              const { tool_calls, ...rest } = m as any;
+              if (rest.content) preFiltered.push(toRuntimeMessage(rest as ChatCompletionMessageParam));
+              continue;
+            }
+            preFiltered.push(toRuntimeMessage({ ...m, tool_calls: remaining } as ChatCompletionMessageParam));
+            continue;
+          }
+        }
+        preFiltered.push(toRuntimeMessage(m));
+      }
+    } else {
+      for (const m of this.s.messages) {
+        if ((m as any)._tailInjected && (m as any).role === "system") {
+          extractedInjections.push(m);
+        } else {
+          preFiltered.push(toRuntimeMessage(m));
+        }
+      }
     }
 
-    // 发送前清洗：移除孤儿 tool_calls / 孤儿 tool 结果
     const cleaned = sanitizeToolPairing(preFiltered);
 
-    // 滑动窗口截断：对非当前轮的 tool 消息，只保留摘要。
-    const SUMMARY_LIMIT = isDeepSeek ? 80 : 200;
-    const truncated = cleaned.map((m, idx) => {
-      if ((m as any).role !== "tool") return m;
-      if (idx >= this.s.turnStartMsgCount) return m;
-      const content = (m as any).content as string;
-      if (!content || content.length <= SUMMARY_LIMIT) return m;
-      const toolName = (m as any)._toolName as string || "";
-      const preview = content.slice(0, SUMMARY_LIMIT);
-      const truncatedContent = `${preview}\n\n[内容已截断（原 ${content.length} 字符）。这是 ${toolName} 的历史结果，如需完整内容请重新调用该工具。]`;
-      return { ...m, content: truncatedContent };
-    });
+    const truncated = compactionEnabled
+      ? cleaned.map((m, idx) => {
+          if ((m as any).role !== "tool") return m;
+          if (idx >= this.s.turnStartMsgCount) return m;
+          const content = (m as any).content as string;
+          if (!content || content.length <= SUMMARY_LIMIT) return m;
+          const toolName = (m as any)._toolName as string || "";
+          const preview = content.slice(0, SUMMARY_LIMIT);
+          const truncatedContent = `${preview}\n\n[内容已截断（原 ${content.length} 字符）。这是 ${toolName} 的历史结果，如需完整内容请重新调用该工具。]`;
+          return { ...m, content: truncatedContent };
+        })
+      : cleaned;
 
-    // 合并所有尾部注入：agent loop 提取出来的 + buildInjections 产生的
-    const allTailInjections = isCacheFriendly
-      ? [...extractedInjections, ...injections]
-      : injections;
-
+    const allTailInjections = isCacheFriendly ? [...extractedInjections, ...injections] : injections;
     if (allTailInjections.length === 0) return truncated;
     if (truncated.length === 0) return allTailInjections;
 
     const [systemMsg, ...rest] = truncated;
-
-    if (isCacheFriendly) {
-      // 前缀缓存模型：[system_prompt + 稳定历史] 作为前缀，所有注入放末尾
-      return [systemMsg, ...rest, ...allTailInjections];
-    }
-    // GPT/Claude 等：注入放前面（靠近 system prompt 时遵守度更高）
+    if (isCacheFriendly) return [systemMsg, ...rest, ...allTailInjections];
     return [systemMsg, ...allTailInjections, ...rest];
   }
 
@@ -189,24 +212,18 @@ export class PromptBuilder {
   buildInjections(): ChatCompletionMessageParam[] {
     const injections: ChatCompletionMessageParam[] = [];
 
-    // 旧会话会复用历史 system prompt，未必包含最新的增强渲染协议；每轮短注入一次，确保模型知道何时 opt-in。
     injections.push({ role: "system", content: ENHANCED_RENDERING_PROTOCOL });
 
-    // 模型差异校准：GPT 系（gpt-5.5 等）默认输出明显比 GLM/Claude 更冗长，
-    // 同样的格式约束它遵守得更松。这里对 GPT 系额外注入一条"控长"指令，把它拉回与其他模型
-    // 接近的颗粒度。仅在用户未显式选择"详细"风格时生效（detailed 时尊重用户意图，不压制）。
     const verbosityCalibration = this.getVerbosityCalibration();
     if (verbosityCalibration) {
       injections.push({ role: "system", content: verbosityCalibration });
     }
 
-    // 风格指令
     const instruction = this.getStyleInstruction();
     if (instruction) {
       injections.push({ role: "system", content: instruction });
     }
 
-    // 多工作区信息（让 AI 感知所有可操作的根路径）
     if (this.s.workspaces.length > 1) {
       const wsInfo = this.s.workspaces.map((p, i) => `  ${i + 1}. ${p}`).join("\n");
       injections.push({
@@ -222,7 +239,6 @@ export class PromptBuilder {
       });
     }
 
-    // 终端工作目录提示：cd 后可能与主工作区不同
     if (this.s.terminalCwd !== this.s.cwd) {
       injections.push({
         role: "system",
@@ -230,22 +246,19 @@ export class PromptBuilder {
       });
     }
 
-    // IDE 上下文（仅 IDE 形态：活动文件/选区/打开文件/git diff，本轮开头预取）
     if (this.s.ideContextCache) {
-      injections.push({ role: "system", content: this.s.ideContextCache });
+      injections.push({ role: "system", content: this.s.ideContextCache, _tailInjected: true } as ChatCompletionMessageParam);
     }
 
-    // Skill 清单（渐进式披露的轻量层，本轮开头预取）
     if (this.s.skillsPromptCache) {
-      injections.push({ role: "system", content: this.s.skillsPromptCache });
+      injections.push({ role: "system", content: this.s.skillsPromptCache, _tailInjected: true } as ChatCompletionMessageParam);
     }
 
-    // Power 清单（轻量层，本轮开头预取）
     if (this.s.powersPromptCache) {
-      injections.push({ role: "system", content: this.s.powersPromptCache });
+      injections.push({ role: "system", content: this.s.powersPromptCache, _tailInjected: true } as ChatCompletionMessageParam);
     }
 
-    // 上下文使用率较高时提醒 AI 告知用户
+    // 上下文使用率提醒是高波动动态信息，避免污染可缓存前缀：只在真的接近上限且作为尾部注入时出现。
     if (this.s.lastPromptTokens > 0 && this.s.getContextWindow() > 0) {
       const usagePercent = this.s.lastPromptTokens / this.s.getContextWindow();
       if (usagePercent >= 0.6) {
@@ -256,7 +269,8 @@ export class PromptBuilder {
             `⚠️ 上下文使用率已达 ${pct}%。如果用户接下来要求做一个较大的功能（需要读写多个文件、多轮工具调用），` +
             `你应该在开始前简要提醒用户：当前会话上下文已较满（${pct}%），复杂任务可能导致上下文溢出或响应变慢，` +
             `建议开一个新会话来做这个功能。如果用户坚持在当前会话做，则正常执行不再重复提醒。`,
-        });
+          _tailInjected: true,
+        } as ChatCompletionMessageParam);
       }
     }
 

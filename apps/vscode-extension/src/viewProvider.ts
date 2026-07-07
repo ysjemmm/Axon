@@ -245,6 +245,14 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
+      // 执行 VS Code 命令（从 AgentSelector 的"创建新 Agent"按钮触发）
+      if (m.type === "executeCommand" && typeof m.command === "string") {
+        try {
+          await vscode.commands.executeCommand(m.command as string);
+        } catch { /* ignore */ }
+        return;
+      }
+
       // REST 请求
       if (m.__axonReq === true && typeof m.id === "string") {
         try {

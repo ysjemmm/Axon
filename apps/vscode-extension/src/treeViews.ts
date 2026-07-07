@@ -194,6 +194,46 @@ export class ProviderTreeProvider implements vscode.TreeDataProvider<ProviderTre
   }
 }
 
+// ─── Agent TreeView ────────────────────────────────────────────────────────
+
+export interface AgentTreeInfo {
+  name: string;
+  description: string;
+  path: string;
+}
+
+export class AgentItem extends vscode.TreeItem {
+  readonly nodeType = "agentItem" as const;
+  constructor(public readonly info: AgentTreeInfo) {
+    super(info.name, vscode.TreeItemCollapsibleState.None);
+    this.description = info.description || "";
+    this.iconPath = new vscode.ThemeIcon("robot");
+    this.contextValue = "agentItem";
+    this.command = { command: "axon.openAgent", title: info.name, arguments: [info] };
+    this.tooltip = `Agent: ${info.name}\n路径: ${info.path}`;
+  }
+}
+
+type AgentTreeNode = AgentItem | SimpleItem;
+
+export class AgentsTreeProvider implements vscode.TreeDataProvider<AgentTreeNode> {
+  private _onDidChange = new vscode.EventEmitter<void>();
+  readonly onDidChangeTreeData = this._onDidChange.event;
+  private agents: AgentTreeInfo[] = [];
+
+  refresh(agents: AgentTreeInfo[]): void {
+    this.agents = agents;
+    this._onDidChange.fire();
+  }
+  getTreeItem(element: AgentTreeNode): vscode.TreeItem { return element; }
+  getChildren(): AgentTreeNode[] {
+    if (this.agents.length === 0) {
+      return [new SimpleItem("暂无自定义 Agent", "点击 + 新建", "add", "axon.agent.create")];
+    }
+    return this.agents.map((a) => new AgentItem(a));
+  }
+}
+
 // ─── Powers TreeView ────────────────────────────────────────────────────────
 
 // ─── Powers TreeView（分组：项目 / 全局）─────────────────────────────────────
@@ -458,6 +498,7 @@ export function registerTreeViews(context: vscode.ExtensionContext) {
   const relayTree = new RelayTreeProvider();
   const skillsTree = new SkillsTreeProvider();
   const providerTree = new ProviderTreeProvider();
+  const agentsTree = new AgentsTreeProvider();
   const powersTree = new PowersTreeProvider();
   const customSkillsTree = new CustomSkillsTreeProvider();
   const mcpTree = new McpTreeProvider();
@@ -467,9 +508,10 @@ export function registerTreeViews(context: vscode.ExtensionContext) {
     vscode.window.createTreeView("axon.skills", { treeDataProvider: skillsTree, showCollapseAll: false }),
     vscode.window.createTreeView("axon.powers", { treeDataProvider: powersTree, showCollapseAll: false }),
     vscode.window.createTreeView("axon.provider", { treeDataProvider: providerTree, showCollapseAll: false }),
+    vscode.window.createTreeView("axon.agents", { treeDataProvider: agentsTree, showCollapseAll: false }),
     vscode.window.createTreeView("axon.mcp", { treeDataProvider: mcpTree, showCollapseAll: false }),
     vscode.window.createTreeView("axon.customSkills", { treeDataProvider: customSkillsTree }),
   );
 
-  return { relayTree, skillsTree, providerTree, powersTree, customSkillsTree, mcpTree };
+  return { relayTree, skillsTree, providerTree, agentsTree, powersTree, customSkillsTree, mcpTree };
 }

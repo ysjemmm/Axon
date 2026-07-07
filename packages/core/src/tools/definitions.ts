@@ -637,6 +637,8 @@ export interface ToolMeta {
   fileDiff?: { path: string; absPath?: string; oldContent: string; newContent: string; editId?: string };
   /** apply_patch 等单次调用改多个文件的工具：按文件累计的 diff 列表（fileDiff 仅保留最后一个，向后兼容单文件工具）。 */
   fileDiffs?: { path: string; absPath?: string; oldContent: string; newContent: string; editId?: string }[];
+  /** 编辑工具执行成功但没有实际内容变化（newContent 与 preEditContent 完全相同）。 */
+  noopEdit?: boolean;
   readRange?: { startLine: number; endLine: number };
   diagnostics?: DiagnosticFileResult[];
   skillUsed?: string;

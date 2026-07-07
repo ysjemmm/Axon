@@ -23,6 +23,7 @@ import { VSCodeChannel } from "./vscodeChannel.js";
 import { AxonViewProvider } from "./viewProvider.js";
 import { RequestRouter, vscodeBrowse } from "./requestRouter.js";
 import { registerTreeViews } from "./treeViews.js";
+import { AgentEditor } from "./agentEditor.js";
 import { registerAxonStatusBar } from "./statusBar.js";
 import { openOrFocusPanel, postToPanel } from "./panelManager.js";
 import { registerGitBlameAnnotation } from "./gitBlameAnnotation.js";
@@ -557,7 +558,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   // 左侧管理面板 TreeView（Relay / Skills / Powers / Provider）
-  const { relayTree, skillsTree, providerTree, powersTree, customSkillsTree, mcpTree } = registerTreeViews(context);
+  const { relayTree, skillsTree, providerTree, agentsTree, powersTree, customSkillsTree, mcpTree } = registerTreeViews(context);
 
   // Skill 树刷新辅助
   const refreshSkillTree = async () => {
@@ -725,6 +726,65 @@ export function activate(context: vscode.ExtensionContext): void {
       reportImportResults("Skill", results);
     }),
   );
+
+  // ── Agent 树刷新辅助 ──────────────────────────────────────────────────────
+  const refreshAgentTree = async () => {
+    try {
+      const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+      const { listCustomAgents } = await import("@axon/core/src/skills/customAgentLoader.js");
+      // 全局目录：~/.axon/agents/
+      const homeDir = require("os").homedir();
+      const agents = await listCustomAgents(homeDir, createHost());
+      agentsTree.refresh(agents.map((a: any) => ({
+        name: a.name,
+        description: a.description || "",
+        path: a.skillFile,
+      })));
+    } catch { /* ignore */ }
+  };
+
+  // Agent 命令：打开 Agent 编辑器（表单模式）
+  context.subscriptions.push(
+    vscode.commands.registerCommand("axon.openAgent", async (arg?: any) => {
+      const info = arg?.info || arg;
+      const filePath = info?.path || arg?.path;
+      if (!filePath) return;
+      try {
+        await vscode.workspace.fs.stat(vscode.Uri.file(filePath));
+        await AgentEditor.open(filePath, false);
+      } catch {
+        vscode.window.showWarningMessage("Agent 文件不存在");
+      }
+    }),
+    // Agent 命令：刷新列表
+    vscode.commands.registerCommand("axon.agent.refresh", async () => {
+      await refreshAgentTree();
+    }),
+  );
+
+  // Agent 命令：创建（草稿存内存，保存时才落盘，不污染 Agent 列表）
+  context.subscriptions.push(
+    vscode.commands.registerCommand("axon.agent.create", async () => {
+      await AgentEditor.createDraft();
+    }),
+  );
+
+  // Agent 命令：删除
+  context.subscriptions.push(
+    vscode.commands.registerCommand("axon.agent.delete", async (arg?: any) => {
+      const info = arg?.info || arg;
+      if (!info?.path || !info?.name) return;
+      const confirmed = await vscode.window.showWarningMessage(`删除 Agent "${info.name}"？`, { modal: true }, "删除");
+      if (confirmed !== "删除") return;
+      try {
+        await vscode.workspace.fs.delete(vscode.Uri.file(info.path));
+        await refreshAgentTree();
+      } catch (err) { vscode.window.showErrorMessage("删除失败：" + String(err)); }
+    }),
+  );
+
+  // 启动时初始化 Agent 列表
+  refreshAgentTree();
 
   // Power 树刷新辅助
   const refreshPowerTree = async () => {

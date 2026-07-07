@@ -249,13 +249,13 @@ export class SubAgentRunner {
         return { ok: true, text: finalText, inputTokens: this.inputTokensUsed, outputTokens: this.outputTokensUsed, tokens: this.inputTokensUsed + this.outputTokensUsed };
       }
 
-      // 有工具调用：过滤掉工具调用间夹带的英文内心 OS
-      const cleanContent = looksLikeIncompleteReply(content) ? "" : content;
-
-      // 记录 assistant 工具调用消息
+      // 记录 assistant 工具调用消息。
+      // displayContent 保留给上层展示；runtimeContent 不带入下一轮模型上下文，避免 reasoning prose 污染。
       messages.push({
         role: "assistant",
-        content: cleanContent || null,
+        content: content || null,
+        displayContent: content || null,
+        runtimeContent: null,
         tool_calls: toolCalls.map((tc) => ({
           id: tc.id,
           type: "function" as const,

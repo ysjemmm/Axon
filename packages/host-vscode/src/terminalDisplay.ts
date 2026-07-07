@@ -32,7 +32,7 @@ const DEFAULT_TIMEOUT_MS = 240_000; // 硬超时：长命令（tsc / npm install
 const SI_READY_TIMEOUT_MS = 5_000;
 const SI_STREAM_END_GRACE_MS = 3_000;
 const SI_IDLE_MS = 1_000;   // SI 层空输出/静默超时
-const TC_IDLE_MS  = 1_500;  // Terminal Content 层静默超时（内容模式噪声多，稍长）
+const TC_IDLE_MS = 1_500;  // Terminal Content 层静默超时（内容模式噪声多，稍长）
 const IDLE_POLL_MS = 500;
 const SHELL_WARMUP_MS = 300;
 const MARKER_PREFIX = "__AXON_END_";
@@ -73,32 +73,35 @@ export interface TerminalRunOptions {
 
 const terminals = new Map<string, vscode.Terminal>();
 const terminalCwds = new Map<string, string>();
+/** 终端忙碌标记：AI 命令运行期间为 true。用于避免复用用户可能正在交互/观察的终端。 */
+const terminalBusy = new Map<string, boolean>();
 
 function getOrCreateTerminal(terminalKey: string, cwd?: string): vscode.Terminal {
   const existing = terminals.get(terminalKey);
   const trackedCwd = terminalCwds.get(terminalKey);
+  const isBusy = terminalBusy.get(terminalKey) === true;
 
-  // 复用条件：终端存在 + 未退出 + cwd 匹配（或没指定 cwd）
-  if (existing && !existing.exitStatus && (!cwd || !trackedCwd || cwd === trackedCwd)) {
+  // 复用条件：终端存在 + 未退出 + 不忙 + cwd 匹配（或没指定 cwd）
+  if (existing && !existing.exitStatus && !isBusy && (!cwd || !trackedCwd || cwd === trackedCwd)) {
     return existing;
   }
 
-  // cwd 变了或终端不存在：关闭旧的，创建新的（createTerminal 的 cwd 参数静默指定初始目录，
-  // 不需要在终端里拼接 Set-Location 前缀，用户看到的命令和工具卡片一致）
-  if (existing) {
+  // cwd 变了、终端忙碌或终端不存在：创建新的（忙碌时不 dispose 旧终端，避免打断用户正在进行的任务）
+  if (existing && !isBusy) {
     try { existing.dispose(); } catch { /* ignore */ }
     terminals.delete(terminalKey);
     terminalCwds.delete(terminalKey);
   }
 
+  const actualKey = (existing && isBusy) ? `${terminalKey}-fork-${Date.now().toString(36)}` : terminalKey;
   const t = vscode.window.createTerminal({
     name: "Axon",
     iconPath: new vscode.ThemeIcon("sparkle"),
     cwd: cwd || undefined,
     env: { GIT_PAGER: "cat", AXON_AI_TERMINAL: "1" },
   });
-  terminals.set(terminalKey, t);
-  if (cwd) terminalCwds.set(terminalKey, cwd);
+  terminals.set(actualKey, t);
+  if (cwd) terminalCwds.set(actualKey, cwd);
   return t;
 }
 
@@ -248,13 +251,13 @@ async function runWithShellIntegration(
   const startChecker: vscode.Disposable | undefined =
     typeof w.onDidStartTerminalShellExecution === "function"
       ? w.onDidStartTerminalShellExecution(
-          (e: { terminal: vscode.Terminal; execution: vscode.TerminalShellExecution }) => {
-            if (e.terminal === t && e.execution !== execution) {
-              console.debug("[terminal] command hijacked: new execution started on same terminal");
-              commandHijacked = true;
-            }
-          },
-        )
+        (e: { terminal: vscode.Terminal; execution: vscode.TerminalShellExecution }) => {
+          if (e.terminal === t && e.execution !== execution) {
+            console.debug("[terminal] command hijacked: new execution started on same terminal");
+            commandHijacked = true;
+          }
+        },
+      )
       : undefined;
 
   const completion = await waitForCompletion({
@@ -661,43 +664,50 @@ function waitForCompletion(cfg: WaitForCompletionConfig): Promise<{ code: number
  * Layer 3: child_process（100% 可靠但用户不可见）
  */
 export async function runCommand(opts: TerminalRunOptions): Promise<TerminalRunResult> {
-  const terminalKey = opts.terminalKey ?? "default";
-  const t = getOrCreateTerminal(terminalKey, opts.cwd);
+  const requestedKey = opts.terminalKey ?? "default";
+  const t = getOrCreateTerminal(requestedKey, opts.cwd);
+  const actualKey = [...terminals.entries()].find(([, term]) => term === t)?.[0] ?? requestedKey;
+  terminalBusy.set(actualKey, true);
 
-  // 智能聚焦：避免抢占用户正在操作的终端
-  // - 用户没有聚焦任何终端（在编辑器等区域）→ show，让用户看到 AI 的终端输出
-  // - 用户聚焦的就是 AI 终端 → show（无副作用，已经在看了）
-  // - 用户聚焦了其他终端 → 不 show，避免终端面板切换抢走用户焦点
-  const activeTerminal = vscode.window.activeTerminal;
-  if (!activeTerminal || activeTerminal === t) {
-    t.show(true);
-  }
+  try {
 
-  // 不再拼接 cdCommand 前缀：getOrCreateTerminal 已经通过 createTerminal({cwd}) 确保终端在正确目录。
-  // 这样终端里显示的命令和工具卡片一致（不会出现 Set-Location 前缀）。
-  const effectiveCommand = opts.command;
-
-  // Mark AI command start for proactive awareness filtering
-  const aiCmdStartTime = Date.now();
-  vscode.commands.executeCommand("axon.internal.markAiCommandStart", aiCmdStartTime);
-
-  // ── Layer 1: Shell Integration ──
-  const siReady = await waitForShellIntegration(t);
-  if (siReady) {
-    const result = await runWithShellIntegration(t, effectiveCommand, opts);
-    if (result) {
-      if (opts.cwd) terminalCwds.set(terminalKey, opts.cwd);
-      vscode.commands.executeCommand("axon.internal.markAiCommandEnd", aiCmdStartTime);
-      return result;
+    // 智能聚焦：避免抢占用户正在操作的终端
+    // - 用户没有聚焦任何终端（在编辑器等区域）→ show，让用户看到 AI 的终端输出
+    // - 用户聚焦的就是 AI 终端 → show（无副作用，已经在看了）
+    // - 用户聚焦了其他终端 → 不 show，避免终端面板切换抢走用户焦点
+    const activeTerminal = vscode.window.activeTerminal;
+    if (!activeTerminal || activeTerminal === t) {
+      t.show(true);
     }
-  }
 
-  // ── Layer 2: Terminal Content Reading ──
-  console.warn("[terminal] SI unavailable, falling back to content layer");
-  const contentResult = await runWithTerminalContent(t, effectiveCommand, opts);
-  if (opts.cwd) terminalCwds.set(terminalKey, opts.cwd);
-  vscode.commands.executeCommand("axon.internal.markAiCommandEnd", aiCmdStartTime);
-  return contentResult;
+    // 不再拼接 cdCommand 前缀：getOrCreateTerminal 已经通过 createTerminal({cwd}) 确保终端在正确目录。
+    // 这样终端里显示的命令和工具卡片一致（不会出现 Set-Location 前缀）。
+    const effectiveCommand = opts.command;
+
+    // Mark AI command start for proactive awareness filtering
+    const aiCmdStartTime = Date.now();
+    vscode.commands.executeCommand("axon.internal.markAiCommandStart", aiCmdStartTime);
+
+    // ── Layer 1: Shell Integration ──
+    const siReady = await waitForShellIntegration(t);
+    if (siReady) {
+      const result = await runWithShellIntegration(t, effectiveCommand, opts);
+      if (result) {
+        if (opts.cwd) terminalCwds.set(actualKey, opts.cwd);
+        vscode.commands.executeCommand("axon.internal.markAiCommandEnd", aiCmdStartTime);
+        return result;
+      }
+    }
+
+    // ── Layer 2: Terminal Content Reading ──
+    console.warn("[terminal] SI unavailable, falling back to content layer");
+    const contentResult = await runWithTerminalContent(t, effectiveCommand, opts);
+    if (opts.cwd) terminalCwds.set(actualKey, opts.cwd);
+    vscode.commands.executeCommand("axon.internal.markAiCommandEnd", aiCmdStartTime);
+    return contentResult;
+  } finally {
+    terminalBusy.set(actualKey, false);
+  }
 }
 
 /**

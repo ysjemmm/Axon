@@ -19,7 +19,7 @@ import type { SerializedPendingEdit } from "./storage/types.js";
 import type { LLMStreamCallbacks, ToolDef } from "./llm/types.js";
 import { SkillRegistry } from "./skills/skillLoader.js";
 import { PowerRegistry } from "./powers/powerLoader.js";
-import { looksLikeIncompleteReply, parseToolArguments, LoopGuard, policyForModel, isSoftToolFailure, buildReflectionPrompt, buildSummaryRestartPrompt, type StuckTarget } from "./agentGuards.js";
+import { looksLikeIncompleteReply, parseToolArguments, LoopGuard, policyForModel, isSoftToolFailure, buildReflectionPrompt, buildSummaryRestartPrompt, type StuckTarget, type LoopGuardSnapshot } from "./agentGuards.js";
 import { McpRegistry } from "./mcp/mcpRegistry.js";
 import { MCP_TOOL_PREFIX, type McpCapability } from "./mcp/types.js";
 import { modelContextWindow } from "./llm/modelContext.js";
@@ -155,6 +155,8 @@ export class AgentSession {
   /** @internal */ compactionConfig: CompactionUserConfig = { ...DEFAULT_COMPACTION_CONFIG };
   /** Credits 预算门配置（运行时可更新）。来自呈现端注入，默认启用。 */
   /** @internal */ creditBudgetConfig: CreditBudgetUserConfig = { ...DEFAULT_CREDIT_BUDGET_CONFIG };
+  /** 跨用户回合的 LoopGuard 快照：避免同一未解决根因每轮重新触发相同反思/摘要话术。 */
+  private loopGuardSnapshot: LoopGuardSnapshot | null = null;
   /** 本轮已发过一次软提醒（warnAt），避免同一轮反复注入 */
   private budgetWarnedThisTurn = false;
   /** 本轮硬暂停阈值的运行时快照：用户选择"继续"后翻倍，避免同一个长任务反复打断 */
@@ -819,8 +821,9 @@ export class AgentSession {
   private async injectReflection(stuck: StuckTarget | null, guard: LoopGuard): Promise<void> {
     this.send("status", { content: "重新理清思路...", phase: "thinking" });
     const freshState = await this.readStuckTargetState(stuck);
-    this.messages.push({ role: "system", content: buildReflectionPrompt(stuck) + freshState, _injected: true } as ChatCompletionMessageParam);
+    this.messages.push({ role: "system", content: buildReflectionPrompt(stuck) + freshState, _tailInjected: true, _ephemeralInjected: true } as ChatCompletionMessageParam);
     guard.noteReflected();
+    this.loopGuardSnapshot = guard.snapshot();
     this.persistMessages();
   }
 
@@ -832,8 +835,9 @@ export class AgentSession {
     this.send("status", { content: "整理思路，换个方式重来...", phase: "thinking" });
     this.messages = await reflectiveCompact(this.messages, client, this.model);
     const freshState = await this.readStuckTargetState(stuck);
-    this.messages.push({ role: "system", content: buildSummaryRestartPrompt(stuck) + freshState, _injected: true } as ChatCompletionMessageParam);
+    this.messages.push({ role: "system", content: buildSummaryRestartPrompt(stuck) + freshState, _tailInjected: true, _ephemeralInjected: true } as ChatCompletionMessageParam);
     guard.noteSummaryRestart();
+    this.loopGuardSnapshot = guard.snapshot();
     this.persistMessages();
   }
 
@@ -974,7 +978,8 @@ export class AgentSession {
           `⚠️ 本轮任务已消耗 ${formatCredits(spent)} credits，成本较高。如果当前目标已经基本达成或还差不多的收尾工作，` +
           `请尽快用文字给用户一个结论性回复，不要为了"更完美"继续做非必要的额外探索/验证。` +
           `如果任务确实还没做完（用户明确要求的核心工作尚未完成），仍应继续把它做完，不要半途而废。`,
-        _injected: true,
+        _tailInjected: true,
+        _ephemeralInjected: true,
       } as ChatCompletionMessageParam);
     }
     return false;
@@ -1167,8 +1172,11 @@ export class AgentSession {
     // 本轮真实 token（拿不到 usage 时回退到字符数估算）
     this.send("stream_end", { elapsed, tokens: turnTokens, model: this.model, credits, creditDetail });
     // 本轮结束：裁剪旧 tool 结果，控制上下文体积增长（每轮都做，用户无感）
-    this.messages = pruneOldToolResults(this.messages, this.compactionConfig.toolResultKeepTurns);
-    this.persistMessages();
+    // 压缩关闭时跳过——用户明确选择保留完整工具结果
+    if (this.compactionConfig.enabled) {
+      this.messages = pruneOldToolResults(this.messages, this.compactionConfig.toolResultKeepTurns);
+      this.persistMessages();
+    }
 
     // 滚动摘要：累计 token 超阈值 → 异步触发（不阻塞用户发下一条）
     this.rollingSummaryAccumulated += turnTokens;
@@ -1239,14 +1247,16 @@ export class AgentSession {
     if (SOFT_FAIL_TOOLS.has(toolName) && !meta.hidden) {
       this.send("tool_call", { id: toolCallId, name: toolName, args: toolArgs, cwd: displayCwd, status: ToolCallStatus.Success, ...this.mcpMetaFor(toolName) });
     }
-    this.send("tool_result", { id: toolCallId, name: toolName, args: toolArgs, result: result.slice(0, 500), status, fileDiff: meta.fileDiff, fileDiffs: meta.fileDiffs, readRange: meta.readRange, diagnostics: meta.diagnostics, searchResults: (meta as any).searchResults, fetchResult: (meta as any).fetchResult, powerActivated: (meta as any).powerActivated, pending: isPending, userMessage: meta.userMessage, hidden: meta.hidden, resolvedPath: (meta as any).resolvedPath, ...this.mcpMetaFor(toolName) });
+    this.send("tool_result", { id: toolCallId, name: toolName, args: toolArgs, result: result.slice(0, 500), status, fileDiff: meta.fileDiff, fileDiffs: meta.fileDiffs, noopEdit: meta.noopEdit, readRange: meta.readRange, diagnostics: meta.diagnostics, searchResults: (meta as any).searchResults, fetchResult: (meta as any).fetchResult, powerActivated: (meta as any).powerActivated, pending: isPending, userMessage: meta.userMessage, hidden: meta.hidden, resolvedPath: (meta as any).resolvedPath, ...this.mcpMetaFor(toolName) });
     // 存入历史时按工具类型截断：read_file/web_fetch 给大预算（避免模型分页重读），
     // search/list_dir 中等，其余较小。模型在本轮已看过完整内容，后续轮次只需够用的记忆。
     const maxToolContent = toolContentLimit(toolName);
     // 用户编辑了命令时，aiHint 仅注入 AI 上下文：明确"你请求的命令被用户改了"，叙事一致不困惑
     const aiHint = commandWasEdited
       ? `[系统提示：用户在审批环节将你请求的命令手动改为 "${commandWasEdited}" 并执行。这是用户的正常操作（不是你的错误），以下输出来自实际执行的 "${commandWasEdited}"。请据此继续，不要重试、不要道歉。]\n`
-      : "";
+      : meta.noopEdit
+        ? "[系统提示：本次编辑工具调用已执行成功，但生成的新内容与当前文件内容完全一致，因此没有产生任何实际修改。请据此继续判断：如果你本来预期文件应被修改，说明这次编辑是 no-op，需要换参数、换工具或重新评估目标；不要把它当成已改成功。]\n"
+        : "";
     const contentForAI = aiHint + result;
     const storedResult = contentForAI.length > maxToolContent
       ? contentForAI.slice(0, maxToolContent) + `\n\n[内容已截断，原始长度 ${result.length} 字符。如需更多内容，请用更大的行范围一次性读取，不要分多次零碎读取]`
@@ -1300,7 +1310,8 @@ export class AgentSession {
       this.messages.push({
         role: "user",
         content: "系统提示：你的上一段输出到达了长度上限。请从中断处继续，输出剩余内容。直接输出下一段，保持前后衔接。",
-        _injected: true,
+        _tailInjected: true,
+        _ephemeralInjected: true,
       } as any);
       return "continue";
     }
@@ -1314,7 +1325,8 @@ export class AgentSession {
         this.messages.push({
           role: "system",
           content: "你已多次输出未完成的内心 OS。现在必须基于已有信息，要么调用一个具体工具继续推进，要么给出完整的中文最终回答。二选一，不要再输出任何英文思考片段。",
-          _injected: true,
+          _tailInjected: true,
+          _ephemeralInjected: true,
         } as any);
         return "continue";
       }
@@ -1329,7 +1341,8 @@ export class AgentSession {
           `1. 如果还需要信息 → 直接调用对应工具（read_file/search 等），不要用文字描述"我需要看 X"\n` +
           `2. 如果信息已够 → 给出完整、结构化的中文最终回答\n` +
           `不要再输出任何英文思考片段或过渡句。`,
-        _injected: true,
+        _tailInjected: true,
+        _ephemeralInjected: true,
       } as any);
       return "continue";
     }
@@ -1346,7 +1359,8 @@ export class AgentSession {
           "你上一轮的回复内容为空（API 侧偶发的 SSE 异常，不是你的问题）。" +
           "请直接重新给出你的中文回答。不要在回复中提及<网络波动>或<回复为空>——用户看不到这些注入消息，" +
           "提到只会让用户困惑。如有必要可以重新调工具。",
-        _injected: true,
+        _tailInjected: true,
+        _ephemeralInjected: true,
       } as any);
       return "continue";
     }
@@ -1437,6 +1451,15 @@ export class AgentSession {
       this.replyStyle = userMeta.replyStyle;
     }
 
+    // 新一轮用户输入开始前，清理上一轮遗留的临时诊断/纠偏注入。
+    // _tailInjected 只表示“为 prompt cache 友好而放到尾部”，不代表必须跨轮删除；
+    // 只有 _ephemeralInjected 才是单轮临时消息（反思、摘要重启、空回复/SSE 纠偏、预算提醒等）。
+    const beforeInjectedCleanup = this.messages.length;
+    this.messages = this.messages.filter((m) => !(m as any)._ephemeralInjected);
+    if (this.messages.length !== beforeInjectedCleanup) {
+      this.persistMessages();
+    }
+
     // 保存本轮用户输入（压缩迁移时需要在新会话中重放）
     this.lastUserInput = { content: input, model, images, provider, userMeta: userMeta as Record<string, unknown> | undefined };
 
@@ -1485,7 +1508,7 @@ export class AgentSession {
 
     // 预取 IDE 上下文 / skill / power / MCP —— 它们之间无依赖，并行拉取以缩短首字延迟
     const [ideCtx, skillsPrompt, powersPrompt] = await Promise.all([
-      this.promptBuilder.buildIdeContextPrompt().catch((e) => { console.warn("[ide-ctx] 预取失败（忽略）:", (e as Error).message); return null; }),
+      this.promptBuilder.buildIdeContextPrompt(false).catch((e) => { console.warn("[ide-ctx] 预取失败（忽略）:", (e as Error).message); return null; }),
       this.skillRegistry.buildSkillsPrompt().catch((e) => { console.warn("[skill] 发现 skill 失败（忽略）:", (e as Error).message); return null; }),
       this.powerRegistry ? this.powerRegistry.buildPowersPrompt().catch((e) => { console.warn("[power] 发现 power 失败（忽略）:", (e as Error).message); return null; }) : Promise.resolve(null),
       this.prefetchMcpTools(),  // ← 之前串行 await，现在并入并行
@@ -1501,6 +1524,7 @@ export class AgentSession {
     // 防失控守卫：重复调用指纹、文件重复读、连续失败计数、reasoning 续写计数统一收敛到 LoopGuard，
     // 与子 agent 共用同一实现，阈值随模型族而定
     const guard = new LoopGuard(policy);
+    guard.restore(this.loopGuardSnapshot);
     // 完成前自检：本轮跨回合可变状态（实质改动/已自检/空回复已重试/已诊断），
     // 收敛到一个对象，便于整体传给"无工具调用收尾处理"方法。
     const ts: TurnState = { didMutate: false, didSelfCheck: false, emptyRetried: false, didDiagnose: false };
@@ -1618,10 +1642,14 @@ export class AgentSession {
         }
       }
 
-      // 记录 assistant 消息并执行工具
+      // 记录 assistant 消息并执行工具。
+      // displayContent 给前端历史展示；runtimeContent 才允许进下一轮模型上下文。
+      // 工具轮里模型夹带的自然语言 prose 容易成为“内心 OS”污染源，因此默认不进入 runtime。
       const assistantMsg = {
         role: "assistant" as const,
         content: contentBuffer || null,
+        displayContent: contentBuffer || null,
+        runtimeContent: null,
         tool_calls: toolCalls.map((tc) => ({
           id: tc.id,
           type: "function" as const,
@@ -1740,6 +1768,8 @@ export class AgentSession {
 
       // 工具执行后更新 token 用量（tools 部分会增加）
       this.updateAndSendTokenUsage();
+      // 保存跨轮 LoopGuard 快照：同一未解决根因在用户下一轮说“继续”时不从零重演
+      this.loopGuardSnapshot = guard.snapshot();
       // 本轮工具结果已并入 messages，增量落盘：即便此刻切走，已完成的工具轮次也不丢
       this.persistMessages();
 

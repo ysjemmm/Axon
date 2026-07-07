@@ -8,6 +8,7 @@
  */
 
 import { useRef, useEffect, useLayoutEffect, useState, useCallback, memo } from "react";
+import mermaid from "mermaid";
 import { renderMarkdown } from "@/lib/markdown";
 import { useThemeVersion } from "@/lib/theme";
 
@@ -276,16 +277,21 @@ async function renderCodePreview(block: HTMLElement, button: HTMLElement): Promi
   const pre = block.querySelector("pre");
   const codeContent = (pre?.querySelector("code")?.textContent || "").trim();
   if (!codeContent || !pre) return;
+  const renderToken = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  block.dataset.previewRenderToken = renderToken;
   block.dataset.axonCodeHtml = pre.outerHTML;
   delete block.dataset.enhancedLang;
   block.dataset.hydrated = "0";
   setPreviewToggleButton(button, "loading");
   await waitForPreviewButtonPaint();
+  if (block.dataset.previewRenderToken !== renderToken) return;
   if (lang === "svg") hydrateSvg(block, codeContent);
   else if (lang === "html") hydrateHtml(block, codeContent);
   else if (lang === "mermaid") await hydrateMermaid(block, codeContent);
+  if (block.dataset.previewRenderToken !== renderToken) return;
   const rendered = Boolean(block.querySelector("[data-axon-kind]"));
   setPreviewToggleButton(button, rendered ? "code" : "preview");
+  delete block.dataset.previewRenderToken;
 }
 
 function restoreCodePreview(block: HTMLElement): void {
@@ -399,6 +405,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: Mark
     const timer = setTimeout(() => {
       el.querySelectorAll<HTMLElement>(".axon-codeblock[data-enhanced-lang]").forEach((block) => {
         if (block.dataset.hydrated === "1") return;
+        if (block.dataset.previewRenderToken) return;
         const lang = block.dataset.enhancedLang || "";
         const codeEl = block.querySelector("code");
         const codeContent = (codeEl?.textContent || "").trim();
@@ -488,17 +495,8 @@ function hydrateHtml(block: HTMLElement, content: string, onRendered?: (el: HTML
   onRendered?.(wrapper);
 }
 
-/** Mermaid 单例加载 */
-let _mermaidPromise: Promise<(typeof import("mermaid"))["default"]> | null = null;
+/** Mermaid 渲染序号 */
 let mermaidRenderSeq = 0;
-function loadMermaid() {
-  if (_mermaidPromise) return _mermaidPromise;
-  _mermaidPromise = (async () => {
-    const mermaid = await import("mermaid");
-    return mermaid.default;
-  })();
-  return _mermaidPromise;
-}
 
 function cleanupMermaidRenderArtifacts(renderId: string): void {
   const escapeCss = typeof CSS !== "undefined" && CSS.escape ? CSS.escape : (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
@@ -508,12 +506,23 @@ function cleanupMermaidRenderArtifacts(renderId: string): void {
   document.querySelectorAll(`#${escapeCss(`d${renderId}`)}, #${escapeCss(`i${renderId}`)}, #${escapeCss(renderId)}`).forEach((el) => el.remove());
 }
 
+function cleanupMermaidErrorArtifacts(root: ParentNode = document): void {
+  root.querySelectorAll("svg .error-icon, svg .error-text").forEach((el) => {
+    const svg = el.closest("svg");
+    const host = svg?.parentElement;
+    if (host?.dataset.axonMermaidRenderHost) host.remove();
+    else svg?.remove();
+  });
+  root.querySelectorAll<HTMLElement>("[data-axon-mermaid-render-host]").forEach((el) => {
+    if (el.textContent?.includes("Syntax error in text") || el.querySelector(".error-icon,.error-text")) el.remove();
+  });
+}
+
 async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: (el: HTMLElement) => void): Promise<void> {
   block.dataset.hydrated = "1";
   let renderId = "";
   let renderHost: HTMLDivElement | null = null;
   try {
-    const mermaid = await loadMermaid();
     // 用 neutral 主题（文字深色），背景由 CSS 控制为 transparent
     mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "strict", suppressErrorRendering: true });
     mermaid.setParseErrorHandler(() => { /* Mermaid syntax errors are intentionally silent in chat previews. */ });
@@ -528,6 +537,7 @@ async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: 
     renderHost.remove();
     renderHost = null;
     cleanupMermaidRenderArtifacts(renderId);
+    cleanupMermaidErrorArtifacts();
     if (!svgText) throw new Error("mermaid rendered but no SVG produced");
 
     const wrapper = document.createElement("div");
@@ -535,6 +545,10 @@ async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: 
     wrapper.style.background = "transparent";
     wrapper.style.lineHeight = "0";  // 消除 wrapper 内残余行盒间隙（pre.mermaid 的 line-height 撑高 3-5px）
     wrapper.innerHTML = svgText;
+    cleanupMermaidErrorArtifacts(wrapper);
+    if (wrapper.querySelector(".error-icon,.error-text") || /Syntax error in text|mermaid version/i.test(wrapper.textContent || "")) {
+      throw new Error("mermaid rendered error output");
+    }
     const svg = wrapper.querySelector("svg");
     if (!svg) throw new Error("mermaid rendered but no SVG produced");
     svg.style.maxWidth = "100%";
@@ -582,6 +596,7 @@ async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: 
   } catch {
     renderHost?.remove();
     if (renderId) cleanupMermaidRenderArtifacts(renderId);
+    cleanupMermaidErrorArtifacts();
     block.dataset.hydrated = "0";
   }
 }

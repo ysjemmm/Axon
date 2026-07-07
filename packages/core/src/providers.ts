@@ -113,6 +113,7 @@ export function getClient(provider: string, model?: string): OpenAI {
       apiKey: apiKeyHeader === "x-api-key" ? "not-used" : conf.apiKey,
       baseURL: conf.baseUrl,
       defaultHeaders: Object.keys(defaultHeaders).length ? defaultHeaders : undefined,
+      fetch: globalThis.fetch as any,
     });
   }
   return clients[cacheKey];

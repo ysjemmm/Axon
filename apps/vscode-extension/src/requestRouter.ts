@@ -385,6 +385,87 @@ export class RequestRouter {
       return { ok: true };
     }
 
+    // ── Agent CRUD（全局 ~/.axon/agents/）──
+    if (path === "/api/agents" && method === "GET") {
+      const { join } = require("path");
+      const { readdir, readFile } = await import("node:fs/promises");
+      const agentsDir = join(homedir(), ".axon", "agents");
+      const entries: { name: string; description: string }[] = [];
+      try {
+        const files = await readdir(agentsDir);
+        for (const f of files) {
+          if (!f.endsWith(".json")) continue;
+          try {
+            const raw = await readFile(join(agentsDir, f), "utf-8");
+            const a = JSON.parse(raw);
+            entries.push({ name: a.name || f.replace(".json", ""), description: a.description || "" });
+          } catch { /* skip broken */ }
+        }
+      } catch { /* no dir */ }
+      return { agents: entries };
+    }
+    const agentNameMatch = path.match(/^\/api\/agents\/([^/]+)$/);
+    if (agentNameMatch) {
+      const { join } = require("path");
+      const name = decodeURIComponent(agentNameMatch[1]);
+      const filePath = join(homedir(), ".axon", "agents", `${name}.json`);
+      if (method === "GET") {
+        const { readFile } = await import("node:fs/promises");
+        try { return JSON.parse(await readFile(filePath, "utf-8")); }
+        catch { throw new Error("Agent 不存在"); }
+      }
+      if (method === "DELETE") {
+        const { unlink } = await import("node:fs/promises");
+        try { await unlink(filePath); vscode.commands.executeCommand("axon.agent.refresh"); return { ok: true }; }
+        catch { throw new Error("Agent 不存在"); }
+      }
+      if (method === "PUT") {
+        // 编辑已有 Agent：支持改名（sanitized 不同时删除旧文件）
+        const { readFile, writeFile, unlink } = await import("node:fs/promises");
+        const { existsSync } = await import("node:fs");
+        if (!existsSync(filePath)) throw new Error("Agent 不存在");
+        const { name: newName, description, systemPrompt, skills, mcpServers, powers } = (body || {}) as {
+          name?: string; description?: string; systemPrompt?: string;
+          skills?: string[]; mcpServers?: string[]; powers?: string[];
+        };
+        if (!newName || !newName.trim()) throw new Error("name 为必填");
+        const sanitized = newName.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 50);
+        const newPath = join(homedir(), ".axon", "agents", `${sanitized}.json`);
+        await writeFile(newPath, JSON.stringify({
+          name: sanitized,
+          description: description ?? "",
+          systemPrompt: systemPrompt ?? "",
+          skills: skills ?? [],
+          mcpServers: mcpServers ?? [],
+          powers: powers ?? [],
+        }, null, 2), "utf-8");
+        // 改名时删除旧文件
+        if (newPath !== filePath && existsSync(filePath)) {
+          await unlink(filePath);
+        }
+        vscode.commands.executeCommand("axon.agent.refresh");
+        return { ok: true, name: sanitized };
+      }
+    }
+    if (path === "/api/agents" && method === "POST") {
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      const { join } = require("path");
+      const { name, description, systemPrompt } = (body || {}) as { name?: string; description?: string; systemPrompt?: string };
+      if (!name) throw new Error("name 为必填");
+      const sanitized = name.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 50);
+      const agentsDir = join(homedir(), ".axon", "agents");
+      await mkdir(agentsDir, { recursive: true });
+      const filePath = join(agentsDir, `${sanitized}.json`);
+      const { existsSync } = await import("node:fs");
+      if (existsSync(filePath)) throw new Error("同名 Agent 已存在");
+      await writeFile(filePath, JSON.stringify({
+        name: sanitized, description: description || "", systemPrompt: systemPrompt || "",
+        skills: [], mcpServers: [], powers: [],
+      }, null, 2), "utf-8");
+      vscode.commands.executeCommand("axon.agent.refresh");
+      return { ok: true, name: sanitized };
+    }
+
     // ── Provider 配置（.axon/settings/providers.json）──
     if (path === "/api/providers" && method === "GET") {
       const ws = query.get("workspace") || d.defaultWorkspace;

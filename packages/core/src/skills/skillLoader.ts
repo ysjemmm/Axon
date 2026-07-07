@@ -14,6 +14,7 @@
 
 import { join } from "node:path";
 import { BUILTIN_SKILLS, getBuiltinSkill } from "./builtinSkills.js";
+import { listCustomAgents, loadCustomAgent } from "./customAgentLoader.js";
 import type { AgentHost } from "../host/index.js";
 
 /** 一个已发现的 skill 的元信息（渐进式披露的"轻量层"） */
@@ -163,14 +164,27 @@ export class SkillRegistry {
     for (const arr of wsMetasArrays) {
       for (const m of arr) byName.set(m.name, m);
     }
+    // 自定义 Agent 作为最低优先级（可被同名 skill 覆盖）
+    for (const ws of this.workspaces) {
+      const agents = await listCustomAgents(ws, this.host);
+      for (const a of agents) byName.set(a.name, a as unknown as SkillMeta);
+    }
     return [...byName.values()];
   }
 
-  /** 按名称加载完整 skill（含正文），找不到或已禁用返回 null。builtin 来源从内存常量取正文。 */
+  /** 按名称加载完整 skill（含正文），找不到或已禁用返回 null。builtin 来源从内存常量取正文。
+   * 内置 skill 找不到时，尝试从工作区 .axon/agents/ 加载自定义 Agent。 */
   async load(name: string): Promise<LoadedSkill | null> {
     const metas = await this.discover();
     const meta = metas.find((m) => m.name === name);
-    if (!meta) return null;
+    // 尝试自定义 Agent fallback（最先试，因为它不产生 discover 入口的磁盘文件扫描，不会和 skill 冲突）
+    if (!meta) {
+      for (const ws of this.workspaces) {
+        const agent = await loadCustomAgent(ws, name, this.host);
+        if (agent) return agent;
+      }
+      return null;
+    }
     // 已禁用的 skill 不可加载（即便 AI 凭记忆调用 use_skill 也挡掉）
     if (meta.disabled) return null;
     // 内置方法论：正文来自内存常量
@@ -178,6 +192,14 @@ export class SkillRegistry {
       const builtin = getBuiltinSkill(name);
       if (!builtin) return null;
       return { ...meta, body: builtin.body };
+    }
+    // 自定义 Agent（source="workspace" 且 skillFile 以 .json 结尾）
+    if (meta.skillFile.endsWith(".json")) {
+      for (const ws of this.workspaces) {
+        const agent = await loadCustomAgent(ws, name, this.host);
+        if (agent) return agent;
+      }
+      return null;
     }
     const raw = await this.host.fs.read(meta.skillFile);
     if (raw === null) return null;

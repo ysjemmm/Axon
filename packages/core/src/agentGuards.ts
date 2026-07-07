@@ -208,10 +208,20 @@ export interface StuckTarget {
   toolName: string;
   /** 归一化目标键（文件路径 / 搜索词 / 命令前缀），用于判重与展示 */
   key: string;
-  /** 若卡在某个文件上，其路径——供"重量版反思"重读真实状态，消除"拿旧状态硬改"的根因 */
+  /** 若卡在某个文件上，其路径——供"重量版反思"重读其真实内容，消除"拿旧状态硬改"的根因 */
   path?: string;
   /** 该目标累计失败次数 */
   count: number;
+}
+
+/** LoopGuard 的跨轮次快照：只保留应跨用户回合继承的状态。 */
+export interface LoopGuardSnapshot {
+  /** 投降前升级阶梯已用的反思次数 */
+  reflectionsUsed: number;
+  /** 投降前升级阶梯已用的摘要重启次数 */
+  summaryRestartsUsed: number;
+  /** 跨轮目标失败累计，避免用户说“继续”后同一根因从零重演。 */
+  targetFailures: Array<{ key: string; count: number; toolName: string; path?: string }>;
 }
 
 /** 以"文件路径"为目标的工具：这些工具反复失败时可重读对应文件的真实内容辅助换路 */
@@ -289,6 +299,27 @@ export class LoopGuard {
   private summaryRestartsUsed = 0;
 
   constructor(private policy: AgentPolicy = DEFAULT_AGENT_POLICY) {}
+
+  /** 从会话级快照恢复跨轮状态。 */
+  restore(snapshot: LoopGuardSnapshot | null | undefined): void {
+    if (!snapshot) return;
+    this.reflectionsUsed = Math.max(0, snapshot.reflectionsUsed || 0);
+    this.summaryRestartsUsed = Math.max(0, snapshot.summaryRestartsUsed || 0);
+    this.targetFailures.clear();
+    for (const item of snapshot.targetFailures || []) {
+      if (!item?.key || !item.toolName || !item.count) continue;
+      this.targetFailures.set(item.key, { count: item.count, toolName: item.toolName, path: item.path });
+    }
+  }
+
+  /** 导出会话级快照。 */
+  snapshot(): LoopGuardSnapshot {
+    return {
+      reflectionsUsed: this.reflectionsUsed,
+      summaryRestartsUsed: this.summaryRestartsUsed,
+      targetFailures: [...this.targetFailures.entries()].map(([key, v]) => ({ key, ...v })),
+    };
+  }
 
   /**
    * 在执行某个工具前检查是否构成"相同参数重复调用"。

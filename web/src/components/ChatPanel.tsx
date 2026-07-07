@@ -8,7 +8,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Send, Loader2, Copy, ImagePlus, X, Paperclip, Plus, Camera, Feather, Check, ChevronDown, ListChecks, Sparkles, Globe, ShieldAlert, Undo2, Minimize2 } from "lucide-react";
+import { Send, Loader2, Copy, ImagePlus, X, Paperclip, Plus, Camera, Feather, Check, ChevronDown, ListChecks, Sparkles, Globe, ShieldAlert, Undo2, Minimize2, Bot } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -36,6 +36,7 @@ import { DEFAULT_SLASH_COMMANDS } from "./chat/slash/commands";
 import { CommandApprovalContext } from "./chat/commandApprovalContext";
 import { QuestionListPanel } from "./chat/QuestionListPanel";
 import { VirtualMessageList, type VirtualMessageListHandle } from "./chat/VirtualMessageList";
+import { AgentSelector } from "./AgentSelector";
 import { CONTROL_CMD } from "@/lib/constants";
 
 export function ChatPanel({ clientId, sessionId, mode, connected, active, send, onSessionCreated, onCompactionMigrated, onStreamingChange }: ChatPanelProps) {
@@ -1170,6 +1171,10 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                   {REPLY_STYLES.find((s) => s.id === replyStyle)?.label}
                 </span>
               )}
+
+              {/* Agent 选择器 */}
+              <AgentSelector editorRef={editorRef} />
+
             </div>
             <div className="flex items-center gap-3">
               {mode === "quest" ? (
