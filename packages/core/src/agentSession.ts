@@ -445,6 +445,30 @@ export class AgentSession {
     });
   }
 
+  /** 判断错误是否来自第三方 provider / 网关 / 基础设施层。
+   * 这类错误应展示给用户，但不该进入长期记忆污染后续轮次。 */
+  private isExternalProviderError(err: Error): boolean {
+    const msg = (err.message || "").toLowerCase();
+    if (!msg) return false;
+    return (
+      /\b429\b/.test(msg) ||
+      /rate limit|quota|too many requests/.test(msg) ||
+      /gateway|upstream|proxy|provider|service unavailable/.test(msg) ||
+      /unexpected eof|connection reset|socket hang up|network error|fetch failed|timeout|timed out/.test(msg) ||
+      /api key|authentication|unauthorized|forbidden/.test(msg)
+    );
+  }
+
+  /** 把第三方错误展示给用户，但不写入长期消息历史。 */
+  private emitTransientError(errMsg: string, turnStartTime: number, streamedContentThisRound: string): void {
+    if (!streamedContentThisRound) {
+      this.send("stream_start", {});
+    }
+    this.send("stream_delta", { content: errMsg });
+    const model = (this as any)._lastSentModel || this.model;
+    this.send("stream_end", { elapsed: Date.now() - turnStartTime, tokens: this.lastTotalTokens, model } as any);
+  }
+
   /** 手动触发上下文压缩（供前端"压缩上下文"按钮调用）。需超过当前模型窗口 35% 才允许。 */
   /** 手动触发上下文压缩（委托 CompactionController）。 */
   async compactSession(): Promise<void> {
@@ -1826,16 +1850,10 @@ export class AgentSession {
         this.stampCancelledTurnStats(turnStartTime, streamedContentThisRound);
         throw err; // 继续上抛让外层 persistOnCancel 处理
       }
-      // 非取消异常（LLM 403/网络错误等）：推送错误到前端——确保 stream_start 先于 stream_delta，
-      // 否则前端会因缺少 stream_start 而丢弃 stream_delta，导致用户看不到错误
+      // 非取消异常：统一只展示给用户，不写入长期消息历史。
+      // 这些内容属于异常态提示，不是任务事实；写入 messages 会污染后续轮次上下文。
       const errMsg = `❌ 出错了: ${error.message}`;
-      this.messages.push({ role: "assistant", content: errMsg } as any);
-      if (!streamedContentThisRound) {
-        this.send("stream_start", {});
-      }
-      this.send("stream_delta", { content: errMsg });
-      const model = (this as any)._lastSentModel || this.model;
-      this.send("stream_end", { elapsed: Date.now() - turnStartTime, tokens: this.lastTotalTokens, model } as any);
+      this.emitTransientError(errMsg, turnStartTime, streamedContentThisRound);
       throw err; // 继续上抛让 sessionHub 做清理（runningSessions.delete 等）
     }
   }
