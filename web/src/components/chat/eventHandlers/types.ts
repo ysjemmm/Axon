@@ -32,6 +32,7 @@ export interface EventHandlerCtx {
   setHasRelay: (b: boolean) => void;
   setEditMode: (m: "auto" | "manual") => void;
   setIsCompacting: (b: boolean) => void;
+  setCompactingMessage: (s: string | null) => void;
   setCompactionNeeded: (n: { currentTokens: number; maxTokens: number; percent: number } | null) => void;
   setCompactionMigrated: (m: { newSessionId: string; parentSessionId?: string } | null) => void;
   setCreditBudgetPaused: (n: { spent: number; threshold: number } | null) => void;

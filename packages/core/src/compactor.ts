@@ -27,7 +27,9 @@ interface CompactConfig {
 
 const DEFAULT_CONFIG: CompactConfig = {
   triggerPercent: 0.35,
-  keepRecentCount: 8,
+  // 手动/溢出压缩：至少保留最近 3 个用户问题对应的完整回合。经验值按消息条数近似取 12 条，
+  // 比原来的 8 条更保守，减少“刚聊完的重要细节被压掉”的体感。
+  keepRecentCount: 12,
   maxTokens: DEFAULT_CONTEXT_WINDOW,
 };
 
@@ -202,7 +204,7 @@ async function generateSummary(
 - 重复的问候和确认
 - 中间过程的冗余信息
 
-输出格式：用简洁的要点列表，控制在 300 字以内。`,
+输出格式：用简洁的要点列表，控制在 1000 字以内。`,
       },
       {
         role: "user",
@@ -383,7 +385,7 @@ ${newHistoryText}
 - 重复的问候和确认
 - 中间过程的冗余信息
 
-输出格式：用简洁的要点列表，控制在 300 字以内。`;
+输出格式：用简洁的要点列表，控制在 1000 字以内。`;
 
   const response = await client.chat.completions.create({
     model,

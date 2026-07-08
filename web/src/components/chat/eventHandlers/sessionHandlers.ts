@@ -244,6 +244,7 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
 
 export function handleCompactingStart(_msg: WsMessage, ctx: EventHandlerCtx): void {
   ctx.setIsCompacting(true);
+  ctx.setCompactingMessage("整理上下文...");
   ctx.setStatusText("正在压缩上下文...");
 }
 
@@ -269,6 +270,7 @@ export function handleCompactionMigrated(msg: WsMessage, ctx: EventHandlerCtx): 
 
 export function handleCompactingEnd(msg: WsMessage, ctx: EventHandlerCtx): void {
   ctx.setIsCompacting(false);
+  ctx.setCompactingMessage(null);
   const ok = (msg as any).success as boolean;
   const endMsg = (msg as any).message as string || (ok ? "上下文已压缩" : "压缩失败");
   if (!ok) {

@@ -41,13 +41,17 @@ export class ResponsesStrategy implements LLMStrategy {
   async runTurn(params: RunTurnParams): Promise<LLMTurnResult> {
     const { model, messages, tools, signal, callbacks, temperature } = params;
 
+    const isGpt = /^gpt/i.test(model);
     const { instructions, input } = this.convertMessages(messages);
     const hasTools = tools.length > 0;
+    const actionReinforcement = isGpt
+      ? "【执行约束】当用户已经明确要求你修改、修复、实现、创建、删除、运行或检查某项内容时，默认直接开始执行，不要先询问‘是否开始’‘是否继续’‘确认后我就做’。只有在以下情况才允许先问用户：1. 会覆盖/删除已有内容，且用户尚未明确授权；2. 需求存在关键歧义，继续执行会走向不同结果；3. 需要用户在多个方案之间做决定。除上述情况外，直接调用工具推进任务。"
+      : null;
 
     const stream: any = await (this.client as any).responses.create(
       {
         model,
-        ...(instructions ? { instructions } : {}),
+        ...(instructions || actionReinforcement ? { instructions: [instructions, actionReinforcement].filter(Boolean).join("\n\n") } : {}),
         input,
         ...(hasTools ? { tools: this.convertTools(tools), tool_choice: "auto", parallel_tool_calls: true } : {}),
         ...(temperature !== undefined ? { temperature } : {}),

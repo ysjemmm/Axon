@@ -1248,11 +1248,11 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                       disabled={session.isCompacting || session.isLoading || session.chatHistory.length < 6 || (session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35)}
                       className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                     >
-                      <Minimize2 className="w-3.5 h-3.5" />
+                      {session.isCompacting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Minimize2 className="w-3.5 h-3.5" />}
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="top" align="end" className="max-w-[200px] border-zinc-700 bg-zinc-900 text-white shadow-xl">
-                    <p className="text-xs text-zinc-200">{session.isCompacting ? "压缩进行中，不可操作" : session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35 ? "上下文未超过 35%，禁止手动压缩" : "压缩上下文"}</p>
+                  <TooltipContent side="top" align="end" className="max-w-[220px] border-zinc-700 bg-zinc-900 text-white shadow-xl">
+                    <p className="text-xs text-zinc-200">{session.isCompacting ? (session.compactingMessage || "压缩进行中，不可操作") : session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35 ? "上下文未超过 35%，禁止手动压缩" : "压缩上下文"}</p>
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>

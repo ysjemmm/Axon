@@ -69,10 +69,15 @@ export class ChatCompletionsStrategy implements LLMStrategy {
     // 对 deepseek 关闭并行工具调用（一次一个），从源头规避。其它网关（如 glm 中转）收到该
     // 专有参数会断流，故仅对 deepseek 下发。
     const isDeepSeek = /deepseek/i.test(model);
+    const isGLM = /glm/i.test(model);
+    const isQwen37Plus = /qwen(?:3\.7|37)/i.test(model);
+    const isDeepSeek4Plus = /deepseek(?:-?v?4|4)/i.test(model);
+    const isGLM52Plus = /glm(?:-?5\.[2-9]|-?[6-9]|52)/i.test(model);
     // stream_options（include_usage）是 OpenAI 专有参数。经中转网关的非 OpenAI 原生模型
     // （deepseek / glm 等）收到后可能断流或返回格式异常的 chunk，故仅对原生 OpenAI（GPT 系）
     // 及确认兼容的 provider 下发。
     const isNativeOpenAI = /^(gpt|o1|o3|o4)/i.test(model);
+    const enableReasoningEffort = isQwen37Plus || isDeepSeek4Plus || isGLM52Plus;
     const stream: any = await this.client.chat.completions.create(
       {
         model,
@@ -90,6 +95,9 @@ export class ChatCompletionsStrategy implements LLMStrategy {
         ...(isQwen
           ? { frequency_penalty: 0.3 }
           : {}),
+        // 部分 thinking 模型支持 reasoning_effort，用于控制隐藏思考强度。
+        // 默认给 high，避免推理模型在简单任务上过度思考；未确认支持的模型绝不猜传。
+        ...(enableReasoningEffort ? { reasoning_effort: "high" } : {}),
         stream: true,
         // 让流式响应在末尾附带真实 token 用量（精确值，替代上层字符数估算）。
         // 仅对 OpenAI 原生模型下发；中转网关模型（glm/deepseek）不兼容该参数，会断流。
