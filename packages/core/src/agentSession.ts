@@ -1460,14 +1460,6 @@ export class AgentSession {
       let reasoningChars = 0;
       const commitPendingText = () => {
         if (!pendingTextBuffer) return;
-        // 剥离尾部弱内容（如模型在工具调用前夹带的 "..." 省略号独立行）
-        const stripped = pendingTextBuffer.replace(/\n[^\n]*$/g, (lastLine) => {
-          const trimmed = lastLine.replace(/^\n/, "").trim();
-          if (!trimmed) return lastLine; // 空行保留
-          if (!/[A-Za-z0-9\u4e00-\u9fff]/.test(trimmed) && trimmed.length <= 5) return ""; // 纯标点短行剥离
-          return lastLine;
-        });
-        if (!stripped.trim()) { pendingTextBuffer = ""; return; }
         if (!turnStreamStarted) {
           console.log("[stream] 首个 chunk 到达，耗时:", Date.now() - turnStartTime, "ms");
           this.send("stream_start", {});
@@ -1475,7 +1467,7 @@ export class AgentSession {
           turnStreamStarted = true;
         }
         this.updateDrawingStatus(streamedContentThisRound);
-        this.send("stream_delta", { content: stripped });
+        this.send("stream_delta", { content: pendingTextBuffer });
         pendingTextBuffer = "";
       };
       const callbacks: LLMStreamCallbacks = {
@@ -1503,11 +1495,9 @@ export class AgentSession {
           this.trace("text.delta", { text: truncateForTrace(text, 2000) }, this.turnCount);
           streamedContentThisRound += text;
           pendingTextBuffer += text;
-          // 注意：这里不再边生成边提交正文。
-          // 原因：同一轮最终可能以 tool_calls 收尾，模型在工具调用前夹带的 prose
-          // （如“你的观察是对的，我先看一下...”）若提前发给前端，就会在多工具任务中每轮重复刷屏。
-          // 统一等 runTurn 返回后再判断：无工具调用 → 作为最终回答提交；有工具调用 → 丢弃这段工具轮叙述。
-        },
+          // 实时流式发送：确保前端打字机有内容可逐帧消化。
+          commitPendingText();
+          },
         onToolCallDetected: (name, id) => {
           this.trace("tool.detected", { name, id }, this.turnCount);
           // ⚠️ 不在这里发 tool_call(pending)！
@@ -1554,27 +1544,23 @@ export class AgentSession {
       // 放在"有工具调用"分支：无工具调用已经在收尾，不需要在此拦截。
       if (await this.maybeCreditBudgetGate(turnStartTime, streamedContentThisRound)) return;
 
-      // 有工具调用 → 本轮 content 语义为工具轮叙述，不是最终回答。
-      // 只有具备独立展示价值的叙述才提交给前端；"..." 这类弱中间态保留在历史 displayContent
-      // 之外，并且 runtimeContent: null 会阻止它进入下一轮模型上下文。
-      if (contentBuffer && !this.isWeakToolNarration(contentBuffer)) {
-        commitPendingText();
-        if (turnStreamStarted) {
-          this.send("stream_pause", {});
-        }
-      } else {
-        pendingTextBuffer = "";
-        contentBuffer = "";
+      // 有工具调用 → 本轮 content 是模型的工具轮叙述（thinking-aloud），不展示给用户。
+      // 原因：模型在每个工具轮开头都会产出"分析性叙述"（重复描述问题/分析），
+      // 展示出来像 AI 在反复说同样的话。Kiro 的做法：用户只看到工具卡片 + 最终回复。
+      // runtimeContent 仍保留给模型看（减少重复倾向），但 displayContent 不展示。
+      pendingTextBuffer = "";
+      if (turnStreamStarted) {
+        this.send("stream_pause", {});
       }
 
       // 记录 assistant 消息并执行工具。
-      // displayContent 给前端历史展示；runtimeContent 才允许进下一轮模型上下文。
-      // 工具轮里模型夹带的自然语言 prose 容易成为“内心 OS”污染源，因此默认不进入 runtime。
+      // displayContent: null → 不展示给用户（工具轮叙述对用户无价值，只会造成重复刷屏）。
+      // runtimeContent: 保留原文 → 让模型下轮能看到自己说过什么，减少重复叙述倾向。
       const assistantMsg = {
         role: "assistant" as const,
         content: contentBuffer || null,
-        displayContent: contentBuffer || null,
-        runtimeContent: null,
+        displayContent: null,
+        runtimeContent: contentBuffer || null,
         tool_calls: toolCalls.map((tc) => ({
           id: tc.id,
           type: "function" as const,

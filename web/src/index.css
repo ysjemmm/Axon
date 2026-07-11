@@ -578,6 +578,43 @@ body.vscode-high-contrast {
   animation: fade-in 0.2s ease-out;
 }
 
+/* 流式打字机渐入效果：容器整体有微妙的透明度脉动，让新内容出现时有"浮现"感 */
+.streaming-text-fade {
+  transition: opacity 0.15s ease-out;
+}
+
+/* ── 列表样式优化 ──
+   Tailwind Typography 默认列表 padding-left 太大、marker 样式粗糙。
+   收紧间距 + 用更精致的 marker 样式，对齐商业 AI 产品体验。 */
+.prose ul {
+  padding-left: 1.25em;
+  list-style: none;
+}
+.prose ul > li {
+  position: relative;
+  padding-left: 0.1em;
+}
+.prose ul > li::before {
+  content: "";
+  position: absolute;
+  left: -1em;
+  top: 0.6em;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--foreground) 35%, transparent);
+}
+.prose ol {
+  padding-left: 1.25em;
+}
+.prose ol > li {
+  padding-left: 0.1em;
+}
+.prose li {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+}
+
 /* 增强渲染块（SVG/Mermaid/HTML）hydrate 后移除代码块边框/背景/间距，让图形紧贴面板 */
 .axon-codeblock[data-hydrated="1"] {
   background: transparent !important;

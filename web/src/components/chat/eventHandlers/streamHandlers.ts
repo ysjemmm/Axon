@@ -52,6 +52,10 @@ export function handleStreamDelta(msg: WsMessage, ctx: EventHandlerCtx): void {
 export function handleStreamPause(_msg: WsMessage, ctx: EventHandlerCtx): void {
   if (ctx.cancelled.current) return;
   const tw = ctx.typewriter;
+  // stream_pause 意味着即将调工具，需要把 buffer 排空后再插入工具卡片。
+  // 但不能瞬间 flush（破坏打字机体验），也不能慢慢排（工具卡片需要尽快出现）。
+  // 策略：停掉 RAF，直接 flush 残余文本。打字机在正常速度下每帧已经在逐步出字，
+  // pause 时 buffer 里残留的通常很少（几十个字符），用户感知不到瞬间出完。
   if (tw.raf.current) {
     cancelAnimationFrame(tw.raf.current);
     tw.raf.current = null;

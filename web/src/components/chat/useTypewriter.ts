@@ -36,9 +36,9 @@ export function useTypewriter(): TypewriterApi {
 
     const typewriterTick = () => {
       if (buffer.current.length > 0) {
-        const len = buffer.current.length;
-        const ratio = streamEnding.current ? 0.3 : 0.15;
-        let batchSize = Math.min(streamEnding.current ? 300 : 150, Math.max(1, Math.ceil(len * ratio)));
+        const ending = !!streamEnding.current;
+        // 每帧出字量：正常 25 字符/帧（约 60fps → 1500 字/秒），ending 80 字符/帧快速排空。
+        let batchSize = ending ? 80 : 25;
         // Unicode 安全切片：避免切断代理对（emoji 等）
         if (batchSize < buffer.current.length) {
           const lastCode = buffer.current.charCodeAt(batchSize - 1);

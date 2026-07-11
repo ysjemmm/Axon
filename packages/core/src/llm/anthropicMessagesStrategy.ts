@@ -131,9 +131,9 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
           if (data.delta?.stop_reason) stopReason = data.delta.stop_reason;
           if (data.usage) {
             usage = {
-              promptTokens: data.usage.input_tokens ?? usage?.promptTokens ?? 0,
+              promptTokens: (data.usage.input_tokens ?? usage?.promptTokens ?? 0) + (data.usage.cache_read_input_tokens ?? 0),
               completionTokens: data.usage.output_tokens ?? 0,
-              totalTokens: (data.usage.input_tokens ?? usage?.promptTokens ?? 0) + (data.usage.output_tokens ?? 0),
+              totalTokens: (data.usage.input_tokens ?? usage?.promptTokens ?? 0) + (data.usage.cache_read_input_tokens ?? 0) + (data.usage.output_tokens ?? 0),
               cachedTokens: data.usage.cache_read_input_tokens ?? 0,
             };
           }
@@ -143,9 +143,9 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
           const msgUsage = data.message?.usage;
           if (msgUsage) {
             usage = {
-              promptTokens: msgUsage.input_tokens ?? 0,
+              promptTokens: (msgUsage.input_tokens ?? 0) + (msgUsage.cache_read_input_tokens ?? 0),
               completionTokens: msgUsage.output_tokens ?? 0,
-              totalTokens: (msgUsage.input_tokens ?? 0) + (msgUsage.output_tokens ?? 0),
+              totalTokens: (msgUsage.input_tokens ?? 0) + (msgUsage.cache_read_input_tokens ?? 0) + (msgUsage.output_tokens ?? 0),
               cachedTokens: msgUsage.cache_read_input_tokens ?? 0,
             };
           }

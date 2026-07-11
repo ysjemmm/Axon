@@ -34,15 +34,11 @@ export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
     updated[updated.length - 1] = { ...last, segments: segs };
     return updated;
   });
-  // 兜底：如果打字机 buffer 还有残留（后端漏发 stream_pause），先 flush 掉，
-  // 否则工具卡片插入后，残留文字会追加到错误的 segment 或丢失。
+  // 兜底：如果打字机 buffer 还有残留（后端漏发 stream_pause），加速排空。
+  // 不瞬间 flush，让打字机以加速模式在几帧内自然排完，保持视觉连贯。
   const tw = ctx.typewriter;
-  if (tw.buffer.current || tw.raf.current) {
-    if (tw.raf.current) {
-      cancelAnimationFrame(tw.raf.current);
-      tw.raf.current = null;
-    }
-    tw.flush(ctx);
+  if (tw.buffer.current) {
+    tw.streamEnding.current = tw.streamEnding.current || { elapsed: 0, tokens: 0 };
   }
   ctx.setStatusText(toolPhaseText(msg.name || ""));
   ctx.setStatusPhase("tool");

@@ -276,7 +276,7 @@ export function renderSegments(
       }
       if (streaming && isLast) {
         nodes.push(
-          <div key={`text-${i}`} className="relative">
+          <div key={`text-${i}`} className="relative streaming-text-fade">
             <MarkdownRenderer content={seg.content} />
             <StreamingCursor />
           </div>
