@@ -118,6 +118,7 @@ export const TOOL = {
   READ_FILE: "read_file",
   CREATE_FILE: "create_file",
   STR_REPLACE: "str_replace",
+  APPLY_PATCH: "apply_patch",
   EXECUTE_COMMAND: "execute_command",
   START_PROCESS: "start_process",
   SEARCH: "search",

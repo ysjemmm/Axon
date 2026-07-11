@@ -27,24 +27,24 @@ function makeDeps(decision: Decision) {
   return { deps, persisted, blocked, requestApproval };
 }
 
-describe("灾难命令硬拦（trust 越不过）", () => {
-  it("即便白名单为 * ，rm -rf / 仍被拦截并触发 emitBlocked", async () => {
+describe("危险命令走人工确认（当前设计：不再硬拦，弹确认并透传 danger 标记）", () => {
+  it("危险命令即便已信任也要弹人工确认；用户选 all 时放行", async () => {
     const gate = new CommandGate(["*"]);
-    const { deps, blocked, requestApproval } = makeDeps({ choice: "all" });
+    const { deps, requestApproval } = makeDeps({ choice: "all" });
     const outcome = await gate.gate("rm -rf /", deps);
-    expect(outcome.allow).toBe(false);
-    expect(outcome.aiMessage).toBeTruthy();
-    expect(blocked).toHaveLength(1);
-    expect(blocked[0].command).toBe("rm -rf /");
-    // 灾难命令在信任检查之前就被拦，不应弹授权
-    expect(requestApproval).not.toHaveBeenCalled();
+    // 当前设计：危险命令不再硬拦，而是把 danger 透传给审批弹窗，由用户决定
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    const dangerArg = requestApproval.mock.calls[0][2];
+    expect(dangerArg).toBeTruthy(); // 第三个参数为 danger 原因，非空表示命中危险规则
+    expect(outcome.allow).toBe(true);
   });
 
-  it("Remove-Item -Recurse -Force 被拦", async () => {
+  it("危险命令被用户拒绝时不放行，并给出危险相关文案", async () => {
     const gate = new CommandGate(["*"]);
-    const { deps } = makeDeps({ choice: "all" });
+    const { deps } = makeDeps({ choice: "reject" });
     const outcome = await gate.gate("Remove-Item -Recurse -Force C:\\data", deps);
     expect(outcome.allow).toBe(false);
+    expect(outcome.aiMessage).toBeTruthy();
   });
 });
 

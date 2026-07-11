@@ -75,6 +75,127 @@ workspace symlink 解析到 `packages/core` 和 `packages/host-vscode`。这两�
 2. 打包 server：在 `d:\projects\Axon\server` 执行 `npm run build`
 3. 启动：在 `d:\projects\Axon\server` 执行 `node dist/index.js`
 
+## 核心架构
+
+### 两层抽象
+
+`@axon/core` 不直接依赖 Node.js / VS Code API / 浏览器 API，而是通过两个抽象接口与外界交互：
+
+```
+┌──────────────────────────────────────────────────┐
+│  @axon/core（纯逻辑，零形态依赖）                    │
+│  AgentSession · LLM 策略 · 工具执行 · Relay · Skills │
+└────────────┬──────────────────────┬───────────────┘
+             │ AgentHost (①)        │ AgentChannel (②)
+             ▼                      ▼
+┌────────────────────┐  ┌──────────────────────────┐
+│ @axon/host-node     │  │ WebSocket / VS Code       │
+│ @axon/host-vscode   │  │ webview postMessage       │
+│                    │  │                          │
+│ "Agent 的双手"      │  │ "Agent 的嘴"              │
+│ 文件 · 命令 · 进程  │  │ 流式输出 · 工具卡片 · 事件 │
+└────────────────────┘  └──────────────────────────┘
+```
+
+- **AgentHost（①）**：决定"谁来动"——文件读写、命令执行、进程管理、诊断、搜索。两种实现：`@axon/host-node`（Web/CLI/Server 形态）和 `@axon/host-vscode`（Code OSS 内置扩展形态）
+- **AgentChannel（②）**：决定"怎么呈现"——流式文本、工具调用卡片、错误提示的传输通道。Web 形态走 WebSocket，VS Code 形态走 `postMessage`
+
+### @axon/core 核心模块
+
+| 模块 | 路径 | 职责 |
+|------|------|------|
+| `agentSession.ts` | `src/agentSession.ts` | Agent 会话主控：工具调度、轮次编排、状态管理（会话入口） |
+| `systemPrompt.ts` | `src/systemPrompt.ts` | 系统提示定义（行为规则、格式约束、工具说明） |
+| `session/` | `src/session/` | 工具执行链：`ToolCallExecutor` 分发 → `GenericToolExecutor` 通用执行 → `ToolOutcomeStateResolver` 结果解析 |
+| `tools/` | `src/tools/` | 工具定义（JSON Schema）+ 执行实现（`execute.ts`）+ 搜索/修补/安全校验 |
+| `llm/` | `src/llm/` | LLM 交互层：Chat Completions / Responses 两种 API 策略、流式处理、工具调用状态机 |
+| `host/` | `src/host/` | AgentHost 接口定义：`fs` / `commands` / `processes` / `diagnostics` / `edits` / `search` / `browser` / `webBrowser` / `ideContext` |
+| `channel/` | `src/channel/` | AgentChannel 事件类型定义（`stream_delta` / `tool_call` / `tool_result` 等） |
+| `relay/` | `src/relay/` | Relay 长任务工作流：需求→设计→计划→执行→评审 |
+| `skills/` | `src/skills/` | 技能系统（子 Agent 运行器、Power 加载） |
+| `snapshot/` | `src/snapshot/` | 文件快照：写文件前自动备份，支持回滚 |
+| `mcp/` | `src/mcp/` | MCP（Model Context Protocol）集成 |
+| `powers/` | `src/powers/` | Power 能力包系统 |
+| `storage/` | `src/storage/` | 持久化会话数据 |
+| `compactor.ts` | `src/compactor.ts` | 上下文压缩：当对话历史超长时自动摘要旧内容 |
+| `agentGuards.ts` | `src/agentGuards.ts` | 安全护栏：循环检测、重复调用拦截、文件读取去重提示 |
+
+### 工具分派链路
+
+```
+ToolCallExecutor.dispatchToolCall()
+    │ 按工具类型路由 (toolDispatchRouter)
+    ├── delegate_task / parallel_research / parallel_execute
+    │   └── DelegatedToolExecutor  →  子 Agent 隔离执行
+    ├── relay_*
+    │   └── RelayToolExecutor  →  Relay 工作流
+    ├── execute_command
+    │   └── CommandToolExecutor  →  信任门 → 终端执行
+    ├── mcp__*
+    │   └── McpToolExecutor  →  MCP 服务器
+    └── 其余通用工具 (read_file / search / str_replace / ...)
+        └── GenericToolExecutor  →  executeToolCall()
+```
+
+### 改动文件追踪 → 自动诊断
+
+AI 每次执行写文件工具（`str_replace` / `create_file` / `apply_patch`）后，系统自动将文件路径加入 `aiTouchedFilesNeedingDiagnostics` 集合。当 AI 调用 `check_diagnostics` 时：
+
+1. 先按集合过滤（已诊断且未再改动过的文件跳过）
+2. 诊断通过的文件从集合中移除
+3. 集合为空时后续 `check_diagnostics` 调用直接跳过，避免无意义诊断
+
+## 开发工作流
+
+### 日常开发循环
+
+最常用的场景：改 `packages/core` 代码 → 在 IDE 形态中验证。
+
+```bash
+# 终端 1：packages/core 的 tsc watch（修改后自动编译 dist）
+cd d:\projects\Axon\packages\core
+npx tsc --watch
+
+# 终端 2：扩展 esbuild watch（增量打包）
+cd d:\projects\Axon\apps\vscode-extension
+node esbuild.mjs --watch
+
+# VS Code：Reload Window 加载新扩展
+```
+
+改完代码 → tsc 自动编译 → esbuild watch 自动重打包 → F5 或 Reload Window 即可看到效果。
+
+### 前端调试
+
+如果只改 `web/src/`，不需要 tsc watch：
+
+```bash
+# 先拷贝 web 产物（一次性）
+cd d:\projects\Axon\apps\vscode-extension
+node scripts/copy-web.mjs
+node esbuild.mjs
+
+# 后续改 web 代码只需重复：
+node scripts/copy-web.mjs   # 拷贝最新 web 产物
+# → Reload Window
+```
+
+## 测试
+
+### 运行测试
+
+| 命令 | 目录 | 说明 |
+|------|------|------|
+| `npm test` | `packages/core/` | 运行 @axon/core 全部测试（vitest） |
+| `npm run test:watch` | `packages/core/` | watch 模式（边改边跑） |
+| `pnpm test` | 根目录 | 全 monorepo 测试（turbo 编排） |
+
+### 测试框架
+
+- **vitest**：单元测试框架，`packages/core` 使用
+- 测试文件与源码同目录，命名 `*.test.ts`
+- 测试覆盖的关键模块：`session/`（工具执行链）、`llm/`（LLM 交互策略）、`relay/`（工作流）
+
 ## 技术栈
 
 - **前端**：React 19 + Vite 8 + Tailwind CSS 4 + react-virtuoso（虚拟列表）
@@ -82,3 +203,4 @@ workspace symlink 解析到 `packages/core` 和 `packages/host-vscode`。这两�
 - **LLM**：OpenAI Chat Completions API / Responses API，支持多模型切换
 - **打包**：Turborepo（monorepo 编排）+ Vite（web）+ esbuild（extension）
 - **类型**：TypeScript 6.x（web）/ 5.x（packages/server）
+- **测试**：vitest

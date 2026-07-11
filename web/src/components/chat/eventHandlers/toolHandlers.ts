@@ -17,6 +17,23 @@ import { TOOL, TIMEOUT } from "@/lib/constants";
 export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
   if (ctx.cancelled.current) return;
   if (msg.name === TOOL.DELEGATE_TASK) return;
+  // 工具到来意味着本轮 reasoning 已结束，标记所有 streaming reasoning segment 完结（触发自动折叠）
+  ctx.setChatHistory((prev) => {
+    const last = prev[prev.length - 1];
+    if (!last || last.role !== "assistant" || !last.segments) return prev;
+    let changed = false;
+    const segs = last.segments.map((s) => {
+      if (s.type === "reasoning" && (s as any).streaming) {
+        changed = true;
+        return { ...s, streaming: false };
+      }
+      return s;
+    });
+    if (!changed) return prev;
+    const updated = [...prev];
+    updated[updated.length - 1] = { ...last, segments: segs };
+    return updated;
+  });
   // 兜底：如果打字机 buffer 还有残留（后端漏发 stream_pause），先 flush 掉，
   // 否则工具卡片插入后，残留文字会追加到错误的 segment 或丢失。
   const tw = ctx.typewriter;

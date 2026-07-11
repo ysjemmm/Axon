@@ -71,38 +71,74 @@ export interface TerminalRunOptions {
 //  终端管理
 // ═══════════════════════════════════════════════════════════════
 
-const terminals = new Map<string, vscode.Terminal>();
-const terminalCwds = new Map<string, string>();
-/** 终端忙碌标记：AI 命令运行期间为 true。用于避免复用用户可能正在交互/观察的终端。 */
-const terminalBusy = new Map<string, boolean>();
+/**
+ * 终端池：每个 session（terminalKey）维护一个终端列表。
+ * - 空闲终端优先复用（保留历史输出）
+ * - 全部忙时新建终端，不 dispose 旧终端
+ * - cwd 不匹配时复用 + cd 切换目录
+ */
 
-function getOrCreateTerminal(terminalKey: string, cwd?: string): vscode.Terminal {
-  const existing = terminals.get(terminalKey);
-  const trackedCwd = terminalCwds.get(terminalKey);
-  const isBusy = terminalBusy.get(terminalKey) === true;
+interface PooledTerminal {
+  id: string;
+  terminal: vscode.Terminal;
+  cwd: string;
+  busy: boolean;
+}
 
-  // 复用条件：终端存在 + 未退出 + 不忙 + cwd 匹配（或没指定 cwd）
-  if (existing && !existing.exitStatus && !isBusy && (!cwd || !trackedCwd || cwd === trackedCwd)) {
-    return existing;
+const terminalPools = new Map<string, PooledTerminal[]>();
+let poolCounter = 0;
+
+// 全局监听终端关闭，从池中清理退出的终端
+vscode.window.onDidCloseTerminal((closed) => {
+  for (const pool of terminalPools.values()) {
+    const idx = pool.findIndex((e) => e.terminal === closed);
+    if (idx >= 0) { pool.splice(idx, 1); return; }
+  }
+});
+
+/** 从池中获取空闲终端，没有则新建 */
+function acquireTerminal(terminalKey: string, cwd?: string): { terminal: vscode.Terminal; id: string; cwdChanged: boolean } {
+  const pool = terminalPools.get(terminalKey) ?? [];
+  terminalPools.set(terminalKey, pool);
+
+  // 清理已退出的终端
+  for (let i = pool.length - 1; i >= 0; i--) {
+    if (pool[i].terminal.exitStatus) {
+      pool.splice(i, 1);
+    }
   }
 
-  // cwd 变了、终端忙碌或终端不存在：创建新的（忙碌时不 dispose 旧终端，避免打断用户正在进行的任务）
-  if (existing && !isBusy) {
-    try { existing.dispose(); } catch { /* ignore */ }
-    terminals.delete(terminalKey);
-    terminalCwds.delete(terminalKey);
+  // 优先复用空闲终端
+  for (const entry of pool) {
+    if (!entry.busy) {
+      const cwdChanged = !!(cwd && entry.cwd && cwd !== entry.cwd);
+      entry.busy = true;
+      return { terminal: entry.terminal, id: entry.id, cwdChanged };
+    }
   }
 
-  const actualKey = (existing && isBusy) ? `${terminalKey}-fork-${Date.now().toString(36)}` : terminalKey;
+  // 全部忙 → 新建
+  const id = `axon-t${++poolCounter}-${Date.now().toString(36)}`;
   const t = vscode.window.createTerminal({
     name: "Axon",
     iconPath: new vscode.ThemeIcon("sparkle"),
     cwd: cwd || undefined,
     env: { GIT_PAGER: "cat", AXON_AI_TERMINAL: "1" },
   });
-  terminals.set(actualKey, t);
-  if (cwd) terminalCwds.set(actualKey, cwd);
-  return t;
+
+  const entry: PooledTerminal = { id, terminal: t, cwd: cwd ?? "", busy: true };
+  pool.push(entry);
+  return { terminal: t, id, cwdChanged: false };
+}
+
+/** 归还终端到池中 */
+function releaseTerminal(terminalKey: string, id: string, newCwd?: string): void {
+  const pool = terminalPools.get(terminalKey);
+  if (!pool) return;
+  const entry = pool.find((e) => e.id === id);
+  if (!entry) return;
+  entry.busy = false;
+  if (newCwd) entry.cwd = newCwd;
 }
 
 async function waitForShellIntegration(t: vscode.Terminal): Promise<boolean> {
@@ -665,9 +701,8 @@ function waitForCompletion(cfg: WaitForCompletionConfig): Promise<{ code: number
  */
 export async function runCommand(opts: TerminalRunOptions): Promise<TerminalRunResult> {
   const requestedKey = opts.terminalKey ?? "default";
-  const t = getOrCreateTerminal(requestedKey, opts.cwd);
-  const actualKey = [...terminals.entries()].find(([, term]) => term === t)?.[0] ?? requestedKey;
-  terminalBusy.set(actualKey, true);
+  const { terminal: t, id: terminalId, cwdChanged } = acquireTerminal(requestedKey, opts.cwd);
+  const effectiveCommand = cwdChanged ? `${cdCommand(opts.cwd!)}${opts.command}` : opts.command;
 
   try {
 
@@ -680,10 +715,6 @@ export async function runCommand(opts: TerminalRunOptions): Promise<TerminalRunR
       t.show(true);
     }
 
-    // 不再拼接 cdCommand 前缀：getOrCreateTerminal 已经通过 createTerminal({cwd}) 确保终端在正确目录。
-    // 这样终端里显示的命令和工具卡片一致（不会出现 Set-Location 前缀）。
-    const effectiveCommand = opts.command;
-
     // Mark AI command start for proactive awareness filtering
     const aiCmdStartTime = Date.now();
     vscode.commands.executeCommand("axon.internal.markAiCommandStart", aiCmdStartTime);
@@ -693,7 +724,6 @@ export async function runCommand(opts: TerminalRunOptions): Promise<TerminalRunR
     if (siReady) {
       const result = await runWithShellIntegration(t, effectiveCommand, opts);
       if (result) {
-        if (opts.cwd) terminalCwds.set(actualKey, opts.cwd);
         vscode.commands.executeCommand("axon.internal.markAiCommandEnd", aiCmdStartTime);
         return result;
       }
@@ -702,11 +732,10 @@ export async function runCommand(opts: TerminalRunOptions): Promise<TerminalRunR
     // ── Layer 2: Terminal Content Reading ──
     console.warn("[terminal] SI unavailable, falling back to content layer");
     const contentResult = await runWithTerminalContent(t, effectiveCommand, opts);
-    if (opts.cwd) terminalCwds.set(actualKey, opts.cwd);
     vscode.commands.executeCommand("axon.internal.markAiCommandEnd", aiCmdStartTime);
     return contentResult;
   } finally {
-    terminalBusy.set(actualKey, false);
+    releaseTerminal(requestedKey, terminalId, opts.cwd);
   }
 }
 
@@ -726,9 +755,10 @@ export async function runInTerminalCaptured(
 
 /** 聚焦 "Axon" 终端 */
 export function focusTerminal(): void {
-  for (const t of terminals.values()) {
-    if (t && !t.exitStatus) {
-      t.show(false);
+  for (const pool of terminalPools.values()) {
+    const entry = pool.find((e) => !e.busy && !e.terminal.exitStatus);
+    if (entry) {
+      entry.terminal.show(false);
       return;
     }
   }

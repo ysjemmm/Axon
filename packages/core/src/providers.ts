@@ -12,6 +12,7 @@
 import OpenAI from "openai";
 import { ChatCompletionsStrategy } from "./llm/chatCompletionsStrategy.js";
 import { ResponsesStrategy } from "./llm/responsesStrategy.js";
+import { AnthropicMessagesStrategy } from "./llm/anthropicMessagesStrategy.js";
 import type { LLMStrategy } from "./llm/types.js";
 import { ZHIPU_PROVIDER, type ProviderProtocol, type ResolvedProvider, type ApiKeyHeader } from "./providerTypes.js";
 import type { ProviderRegistry } from "./providerRegistry.js";
@@ -127,18 +128,34 @@ function protocolForModel(provider: string, model: string): ProviderProtocol {
   const name = normalizeProvider(provider);
   const resolved = _resolved?.get(name);
   const modelDef = resolved?.models.find((m) => m.id === model);
-  if (modelDef?.protocol === "responses" || modelDef?.protocol === "chat") return modelDef.protocol;
+  if (modelDef?.protocol === "responses" || modelDef?.protocol === "chat" || modelDef?.protocol === "anthropic") return modelDef.protocol;
   return configFor(name)?.protocol ?? "chat";
 }
 
 /**
  * 获取指定 provider + model 的 LLM 调用策略。
+ * - model.protocol = anthropic → AnthropicMessagesStrategy（原生 Messages API，独立于 OpenAI SDK）
  * - model.protocol = responses 且模型为 GPT 系 → ResponsesStrategy（原生 agentic loop，防自停）
  * - 其他 → ChatCompletionsStrategy
  */
 export function getStrategy(provider: string, model: string): LLMStrategy {
   const name = normalizeProvider(provider);
   const protocol = protocolForModel(name, model);
+
+  if (protocol === "anthropic") {
+    const key = `${name}:${model}:anthropic`;
+    if (!strategies[key]) {
+      const conf = configFor(name);
+      if (!conf) {
+        const known = getResolvedProviders().map((p) => p.name).join(", ") || "（无）";
+        throw new Error(`未知 provider: ${name}，已配置: ${known}`);
+      }
+      strategies[key] = new AnthropicMessagesStrategy(conf.baseUrl, conf.apiKey);
+      console.log(`[agent] 使用策略 ${strategies[key].name}（provider=${name}, model=${model}, protocol=${protocol}）`);
+    }
+    return strategies[key];
+  }
+
   const useResponses = protocol === "responses" && /^gpt/i.test(model);
   const key = `${name}:${model}:${useResponses ? "responses" : "chat"}`;
   if (!strategies[key]) {

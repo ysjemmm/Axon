@@ -8,7 +8,7 @@ export function handleStreamStart(_msg: WsMessage, ctx: EventHandlerCtx): void {
   const tw = ctx.typewriter;
   ctx.cancelled.current = false;
   tw.buffer.current = "";
-  ctx.setReasoning("");
+  // 不再清空全局 reasoning 状态（已改为 segment 内联渲染）
   ctx.setStatusText("正在回复...");
   ctx.setStatusPhase("responding");
   ctx.setChatHistory((prev) => {
@@ -19,6 +19,14 @@ export function handleStreamStart(_msg: WsMessage, ctx: EventHandlerCtx): void {
     // 避免把不同轮次/续写的内容错误拼接在一起。
     if (last?.role === "assistant" && last.streaming) {
       const segs = [...(last.segments || [])];
+      // 把上一轮的 reasoning segment 标记为完结（streaming=false）
+      for (let i = segs.length - 1; i >= 0; i--) {
+        const seg = segs[i];
+        if (seg.type === "reasoning" && seg.streaming) {
+          segs[i] = { ...seg, streaming: false };
+          break;
+        }
+      }
       const lastSeg = segs[segs.length - 1];
       // 自动续写（finish_reason=length）时，现有 text segment 已有内容，
       // 新建一个 text segment 以区分两段内容，避免前后拼接导致时序混乱。
@@ -61,6 +69,23 @@ export function handleStreamEnd(msg: WsMessage, ctx: EventHandlerCtx): void {
     credits: (msg as any).credits as number | undefined,
     creditDetail: (msg as any).creditDetail as any | undefined,
   };
+  // stream_end 意味着整轮结束，标记所有还在 streaming 的 reasoning segment 完结
+  ctx.setChatHistory((prev) => {
+    const last = prev[prev.length - 1];
+    if (!last || last.role !== "assistant" || !last.segments) return prev;
+    let changed = false;
+    const segs = last.segments.map((s) => {
+      if (s.type === "reasoning" && (s as any).streaming) {
+        changed = true;
+        return { ...s, streaming: false };
+      }
+      return s;
+    });
+    if (!changed) return prev;
+    const updated = [...prev];
+    updated[updated.length - 1] = { ...last, segments: segs };
+    return updated;
+  });
   // 打字机还在跑 → 标记收尾，tick 会在 buffer 排空后自动 flush + finishLoading
   if (tw.raf.current) {
     tw.streamEnding.current = stats;

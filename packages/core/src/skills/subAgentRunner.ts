@@ -12,13 +12,13 @@
  */
 
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import type OpenAI from "openai";
 import { executeToolCall, getToolDefinitions, getReadOnlyToolDefinitions, toolContentLimit, type ToolMeta, type SkillLoaderFn, type WebCapability, type GateOutcome } from "../tools/index.js";
 import type { LLMStrategy, ToolDef, LLMStreamCallbacks } from "../llm/types.js";
 import type { LoadedSkill } from "./skillLoader.js";
 import type { AgentHost } from "../host/index.js";
 import { looksLikeIncompleteReply, parseToolArguments, LoopGuard, policyForSubAgent, isSoftToolFailure, buildReflectionPrompt, buildSummaryRestartPrompt, type StuckTarget } from "../agentGuards.js";
 import { reflectiveCompact } from "../compactor.js";
+import type { NormalizedFinishReason } from "../llm/finishReasonMapper.js";
 
 const SUB_AGENT_SYSTEM_PROMPT = `你是一个子 Agent（subagent），由主 Agent 委派来独立完成一个具体任务。
 
@@ -92,8 +92,7 @@ export interface SubAgentDeps {
   skillLoader?: SkillLoaderFn;
   /** web 能力（透传给 executeToolCall，支持 web_search/web_fetch） */
   web?: WebCapability;
-  /** LLM client：卡住反复失败、即将投降前的"摘要重启"需要它生成复盘摘要。不注入则跳过摘要重启层。 */
-  client?: OpenAI;
+
   /**
    * 只读模式：true 时子 Agent 只能用只读工具（read_file/search/list_dir/web_*），
    * 不能写文件或执行命令。用于并行调研——多个子 Agent 同时探索同一工作区零冲突。
@@ -124,6 +123,25 @@ export interface SubAgentResult {
   outputTokens: number;
   /** 总 tokens（向后兼容，= inputTokens + outputTokens） */
   tokens: number;
+}
+
+function looksLikeInternalToolTrace(text: string): boolean {
+  const trimmed = (text || "").trim();
+  if (!trimmed) return false;
+  return (
+    /to=functions\./i.test(trimmed) ||
+    /recipient_name/i.test(trimmed) ||
+    /tool_uses/i.test(trimmed) ||
+    /analysis code/i.test(trimmed) ||
+    /"intent"\s*:\s*".*?"[\s\S]*?"tasks"\s*:/i.test(trimmed)
+  );
+}
+
+function sanitizeSubAgentFinalText(text: string): string {
+  const trimmed = (text || "").trim();
+  if (!trimmed) return trimmed;
+  if (!looksLikeInternalToolTrace(trimmed)) return trimmed;
+  return "子 Agent 已完成执行，但最终结论格式异常，混入了内部调试/工具调用痕迹；请以过程卡片中的实际调研步骤为准，由主 Agent 重新整理结论。";
 }
 
 export class SubAgentRunner {
@@ -208,12 +226,14 @@ export class SubAgentRunner {
         return { ok: false, text: finalText || "（任务已取消）", inputTokens: this.inputTokensUsed, outputTokens: this.outputTokensUsed, tokens: this.inputTokensUsed + this.outputTokensUsed };
       }
       const turn = await this.runTurn(messages);
-      const { content, toolCalls, finishReason } = turn;
+      const { content, toolCalls } = turn;
+      // 消费归一化后的产品语义结束原因（策略层保证已填充）；协议原始 finishReason 不再在此点直接判断。
+      const finishReason: NormalizedFinishReason = turn.normalizedFinishReason;
 
       // 无工具调用 → 候选最终结论，但先排查异常情况
       if (toolCalls.length === 0) {
-        // 输出被 max_tokens 截断 → 引导续写，而不是把半截当结论
-        if (finishReason === "length" && content) {
+        // 输出被截断（truncated，对应 max_tokens）→ 引导续写，而不是把半截当结论
+        if (finishReason === "truncated" && content) {
           messages.push({ role: "assistant", content });
           messages.push({
             role: "user",
@@ -244,7 +264,7 @@ export class SubAgentRunner {
           continue;
         }
 
-        finalText = content;
+        finalText = sanitizeSubAgentFinalText(content);
         this.deps.emit("stream_end", { elapsed: 0, tokens: content.length });
         return { ok: true, text: finalText, inputTokens: this.inputTokensUsed, outputTokens: this.outputTokensUsed, tokens: this.inputTokensUsed + this.outputTokensUsed };
       }
@@ -272,8 +292,8 @@ export class SubAgentRunner {
           await this.injectReflection(messages, stuck, guard);
           continue;
         }
-        if (guard.canSummaryRestart() && this.deps.client) {
-          messages = await this.injectSummaryRestart(messages, stuck, guard, this.deps.client);
+        if (guard.canSummaryRestart()) {
+          messages = await this.injectSummaryRestart(messages, stuck, guard);
           continue;
         }
         // 阶梯耗尽仍卡住 → 强制收尾，给出失败结论
@@ -284,7 +304,7 @@ export class SubAgentRunner {
             `基于已有信息用中文给出结论：说明你想做什么、卡在哪里、失败原因、你的判断和建议。不要再调用任何工具。`,
         });
         const summary = await this.runTurn(messages);
-        finalText = summary.content || "子 Agent 多次工具调用失败，未能完成任务。请检查相关文件或环境。";
+        finalText = sanitizeSubAgentFinalText(summary.content || "子 Agent 多次工具调用失败，未能完成任务。请检查相关文件或环境。");
         this.deps.emit("stream_end", { elapsed: 0, tokens: finalText.length });
         return { ok: false, text: finalText, inputTokens: this.inputTokensUsed, outputTokens: this.outputTokensUsed, tokens: this.inputTokensUsed + this.outputTokensUsed };
       }
@@ -296,7 +316,7 @@ export class SubAgentRunner {
       finalText = "任务步骤较多，子 Agent 在多轮探索后仍未形成明确结论，可能任务过于复杂或需要拆分。以下没有可呈现的最终结果。";
       this.deps.emit("stream_end", { elapsed: 0, tokens: finalText.length });
     }
-    return { ok: false, text: finalText, inputTokens: this.inputTokensUsed, outputTokens: this.outputTokensUsed, tokens: this.inputTokensUsed + this.outputTokensUsed };
+    return { ok: false, text: sanitizeSubAgentFinalText(finalText), inputTokens: this.inputTokensUsed, outputTokens: this.outputTokensUsed, tokens: this.inputTokensUsed + this.outputTokensUsed };
   }
 
   /** 执行一个 LLM 回合，把流式事件通过 emit 上抛 */
@@ -344,8 +364,8 @@ export class SubAgentRunner {
    * 摘要重启（重量层）：把反复失败的过程压成复盘摘要、清除噪声原文，再重读真实状态后换路重来。
    * 返回重建后的消息列表（调用方需用它替换原列表）。
    */
-  private async injectSummaryRestart(messages: ChatCompletionMessageParam[], stuck: StuckTarget | null, guard: LoopGuard, client: OpenAI): Promise<ChatCompletionMessageParam[]> {
-    const compacted = await reflectiveCompact(messages, client, this.deps.model);
+  private async injectSummaryRestart(messages: ChatCompletionMessageParam[], stuck: StuckTarget | null, guard: LoopGuard): Promise<ChatCompletionMessageParam[]> {
+    const compacted = await reflectiveCompact(messages, this.deps.strategy, this.deps.model);
     const freshState = await this.readStuckTargetState(stuck);
     compacted.push({ role: "system", content: buildSummaryRestartPrompt(stuck) + freshState } as ChatCompletionMessageParam);
     guard.noteSummaryRestart();

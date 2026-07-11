@@ -14,7 +14,6 @@ import { SubAgentRunner, type SubAgentResult, type SubAgentEmit } from "../skill
 import type { LLMStrategy } from "../llm/types.js";
 import type { SkillLoaderFn, WebCapability } from "../tools/index.js";
 import type { AgentHost } from "../host/index.js";
-import type OpenAI from "openai";
 
 /** 单个调研子任务 */
 export interface ResearchTask {
@@ -48,8 +47,6 @@ export interface ParallelResearchDeps {
   skillLoader?: SkillLoaderFn;
   /** web 能力（透传给调研子 Agent） */
   web?: WebCapability;
-  /** LLM client（透传给子 Agent，用于卡住时的"摘要重启"；不传则子 Agent 跳过摘要重启层） */
-  client?: OpenAI;
   /**
    * 事件发射器工厂：为某个调研子任务返回一个绑定其 id 的 emit，
    * 父级据此把不同子 Agent 的事件路由到各自的前端卡片。
@@ -89,7 +86,6 @@ export async function runParallelResearch(
         emit: deps.emitFor(task.id),
         skillLoader: deps.skillLoader,
         web: deps.web,
-        client: deps.client,
         readOnly: true, // 并行调研强制只读，保证并发安全
       });
 
@@ -125,8 +121,12 @@ export function aggregateResearchResults(results: ResearchResult[]): string {
     return `${head}\n\n${r.text}`;
   });
   const okCount = results.filter((r) => r.ok).length;
+  const failedFormattingCount = results.filter((r) => /最终结论格式异常，混入了内部调试\/工具调用痕迹/.test(r.text)).length;
   const header =
     `已完成 ${results.length} 路并行调研（成功 ${okCount} 路）。以下是各路调研的结论汇总，` +
-    `请基于它们综合判断；标注「未完成」的部分不可信，必要时你自己复核：\n\n`;
+    `请基于它们综合判断；标注「未完成」的部分不可信，必要时你自己复核：\n\n` +
+    (failedFormattingCount > 0
+      ? `⚠️ 其中 ${failedFormattingCount} 路子调研的最终结论混入了内部痕迹，需优先参考其过程卡片，再由主 Agent 重新整理。\n\n`
+      : "");
   return header + blocks.join("\n\n");
 }

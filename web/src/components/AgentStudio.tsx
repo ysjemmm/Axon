@@ -7,7 +7,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import {
-  ArrowLeft, Plus, Trash2, Save, Loader2, Bot, Check, X, RotateCcw,
+  ArrowLeft, Plus, Trash2, Save, Loader2, Bot, X, RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

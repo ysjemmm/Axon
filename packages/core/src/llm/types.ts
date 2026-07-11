@@ -7,6 +7,7 @@
  */
 
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import type { NormalizedFinishReason } from "./finishReasonMapper.js";
 
 /** 工具定义（与 OpenAI function tool 对齐，各策略自行转成对应 API 的格式） */
 export interface ToolDef {
@@ -24,7 +25,7 @@ export interface ToolDef {
  */
 export interface LLMStreamCallbacks {
   /** 思考过程增量（reasoning_content / reasoning），不持久化 */
-  onReasoningDelta(text: string): void;
+  onReasoningDelta(text: string, partIndex?: number, itemId?: string): void;
   /** 正文文本增量 */
   onTextDelta(text: string): void;
   /** 首次检测到某个工具调用（工具名已确定），用于前端立刻显示 loading 卡片。
@@ -59,8 +60,16 @@ export interface LLMTurnResult {
   content: string;
   /** 本回合的工具调用列表（为空表示模型给出了最终回复） */
   toolCalls: NormalizedToolCall[];
-  /** 结束原因：stop / tool_calls / length / content_filter 等 */
+  /** 结束原因：stop / tool_calls / length / content_filter 等（原始协议值，历史消费方依赖，勿改语义） */
   finishReason: string | null;
+  /**
+   * 归一化后的结束原因（产品语义，与协议解耦）。
+   *
+   * 说明：
+   * - 各策略在返回前必须用 normalizeFinishReason 填充；这是上层消费的唯一结束语义入口。
+   * - 上层不再直接判断协议原始 finishReason 字符串。
+   */
+  normalizedFinishReason: NormalizedFinishReason;
   /** Responses API 专用：本次响应 id，用于下一轮 previous_response_id 续接 */
   responseId?: string;
   /** 模型 API 返回的真实 token 用量（流式末尾的 usage）；不可得时为 undefined */
@@ -80,6 +89,12 @@ export interface RunTurnParams {
   callbacks: LLMStreamCallbacks;
   /** 采样温度 */
   temperature?: number;
+  /**
+   * 可选输出 token 上限。未设置时各策略使用自身默认值（Chat/Responses 不强制设置，
+   * 交给模型默认；Anthropic Messages API 该字段是协议必填项，未设置时用策略内置默认值）。
+   * 典型用途：压缩摘要等场景希望限制输出长度。
+   */
+  maxOutputTokens?: number;
 }
 
 /**

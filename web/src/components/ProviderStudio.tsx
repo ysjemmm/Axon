@@ -531,7 +531,7 @@ function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo;
   const [win, setWin] = useState(String(initial?.contextWindow || 128000));
   const [vision, setVision] = useState(!!initial?.vision);
   const [vendor, setVendor] = useState(initial?.vendor || "");
-  const [protocol, setProtocol] = useState<"chat" | "responses">(initial?.protocol || "chat");
+  const [protocol, setProtocol] = useState<"chat" | "responses" | "anthropic">(initial?.protocol || "chat");
 
   const vendorOptions = [
     { id: "openai", label: "OpenAI" },
@@ -540,6 +540,10 @@ function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo;
     { id: "zhipu", label: "Zhipu" },
     { id: "ollama", label: "Ollama" },
   ];
+
+  // 选择厂商 = Anthropic 时不自动切协议：多数中转站把 Claude 包装成 OpenAI 兼容格式，
+  // 走 chat 协议即可，只有该端点【只】提供原生 Anthropic Messages API 时才需要手动
+  // 把下方协议切到 Anthropic（该端点没有 /v1/chat/completions，会 404）。
 
   const submit = () => {
     if (!id.trim()) return;
@@ -573,6 +577,7 @@ function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo;
         <Input placeholder="上下文窗口" value={win} onChange={(e) => setWin(e.target.value)} className="h-7 text-xs w-32" />
         <LevelButton active={protocol === "chat"} onClick={() => setProtocol("chat")} label="Chat" />
         <LevelButton active={protocol === "responses"} onClick={() => setProtocol("responses")} label="Responses" />
+        <LevelButton active={protocol === "anthropic"} onClick={() => setProtocol("anthropic")} label="Anthropic" />
         <label className="flex items-center gap-1 text-xs text-muted-foreground cursor-pointer">
           <input type="checkbox" checked={vision} onChange={(e) => setVision(e.target.checked)} className="w-3 h-3 accent-primary" />
           多模态
@@ -582,7 +587,12 @@ function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo;
           <Button size="sm" variant="ghost" onClick={onCancel}>取消</Button>
         </div>
       </div>
-      <div className="text-[10px] text-muted-foreground">上下文窗口与多模态以该 provider 官方文档为准；可用上方"从端点导入"自动带出（若端点返回）。</div>
+      <div className="text-[10px] text-muted-foreground">
+        上下文窗口与多模态以该 provider 官方文档为准；可用上方"从端点导入"自动带出（若端点返回）。
+        {protocol === "anthropic" && (
+          <span className="text-amber-600"> 注意：Anthropic 协议会调用 {"{baseUrl}"}/messages（原生 Messages API），仅当该端点【只】提供这个接口、没有 OpenAI 兼容的 /chat/completions 时才需要选它——多数中转站选 Chat 即可。</span>
+        )}
+      </div>
     </div>
   );
 }

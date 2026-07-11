@@ -28,6 +28,8 @@ export interface MentionEditorHandle {
   deleteBeforeCaret(len: number): void;
   /** 在光标处插入一个 tag，返回 contextId（内容可后续用 updateTag 补全） */
   insertTag(data: AttachedFile): string;
+  /** 在光标处插入一段纯文本（如 @agent 引用），插入后光标落在文本之后 */
+  insertAtCursor(text: string): void;
   /** 用 contextId 更新 tag 的名称/内容（异步内容到达时） */
   updateTag(contextId: string, patch: Partial<AttachedFile>): void;
   /** 覆盖为纯文本（断连回填用） */
@@ -259,6 +261,31 @@ export const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>
       refreshEmpty();
       onChange?.("");
       return cid;
+    },
+    insertAtCursor: (text: string) => {
+      const el = editorRef.current;
+      if (!el) return;
+      const textNode = document.createTextNode(text);
+      const sel = window.getSelection();
+      let range: Range;
+      if (sel && sel.rangeCount > 0 && el.contains(sel.focusNode)) {
+        range = sel.getRangeAt(0);
+        range.deleteContents();
+      } else {
+        range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+      }
+      range.insertNode(textNode);
+      // 光标落到插入文本之后
+      const after = document.createRange();
+      after.setStartAfter(textNode);
+      after.collapse(true);
+      sel?.removeAllRanges();
+      sel?.addRange(after);
+      el.focus();
+      refreshEmpty();
+      onChange?.("");
     },
     updateTag: (contextId: string, patch: Partial<AttachedFile>) => {
       const cur = dataMap.current.get(contextId);

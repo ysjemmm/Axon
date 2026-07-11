@@ -8,7 +8,7 @@
  * skill 注册表/命令信任门 gateCommand/子 Agent token 累加等。
  */
 
-import { getStrategy, getClient } from "../providers.js";
+import { getStrategy } from "../providers.js";
 import { deriveSubAgentHost } from "../host/index.js";
 import { SubAgentRunner, type SubAgentResult } from "../skills/subAgentRunner.js";
 import type { LoadedSkill } from "../skills/skillLoader.js";
@@ -65,8 +65,6 @@ export class DelegateRunner {
       emit,
       skillLoader: this.s.loadSkillForTool,
       web: this.s.web,
-      // 子 Agent 也共享父会话的 LLM client，用于卡住时的"摘要重启"
-      client: getClient(this.s.provider, this.s.model),
       // 子 Agent 的 execute_command 复用父会话的信任门：灾难硬拦 + 白名单 + 冒泡到用户审批
       gateCommand: (command, toolCallId) => this.s.gateCommand(command, toolCallId),
     });

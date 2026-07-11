@@ -27,6 +27,8 @@ interface AppliedChangesBarProps {
   onUndo: (path: string) => void;
   onListSnapshots?: () => void;
   onRestoreSnapshot?: (id: string) => void;
+  /** 无头模式：隐藏标题栏，始终展开内容（由外部控制展开/收起） */
+  headless?: boolean;
 }
 
 interface ChangeFile {
@@ -56,8 +58,9 @@ export function AppliedChangesBar({
   onUndo,
   onListSnapshots,
   onRestoreSnapshot,
+  headless = false,
 }: AppliedChangesBarProps) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(headless);
   const [tab, setTab] = useState<TabKey>("changes");
   const [search, setSearch] = useState("");
 
@@ -181,8 +184,9 @@ export function AppliedChangesBar({
   };
 
   return (
-    <div className="mb-2 rounded-lg border border-border bg-popover/50 overflow-hidden text-xs">
-      {/* ── 标题栏 ── */}
+    <div className={`${headless ? "" : "mb-2"} rounded-lg border border-border bg-popover/50 overflow-hidden text-xs`}>
+      {/* ── 标题栏（headless 模式下隐藏） ── */}
+      {!headless && (
       <div className="flex items-center gap-1.5 px-2 py-1">
         <button
           onClick={() => setExpanded((v) => !v)}
@@ -212,6 +216,7 @@ export function AppliedChangesBar({
           </div>
         )}
       </div>
+      )}
 
       {/* ── 展开内容 ── */}
       {expanded && (
@@ -276,10 +281,10 @@ export function AppliedChangesBar({
                             <Clock className="w-2.5 h-2.5 shrink-0" />
                             {new Date(snap.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
                           </span>
-                          <span className="shrink-0 w-10 flex justify-end">
+                          <span className="shrink-0 w-14 flex justify-end">
                             {idx !== 0 ? (
-                              <button onClick={() => handleRestore(snap.id)} disabled={restoring !== null} className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 text-amber-500 hover:text-amber-600 hover:bg-amber-500/10 rounded px-1.5 py-px transition-all disabled:opacity-50">
-                                {restoring === snap.id ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <RotateCcw className="w-2.5 h-2.5" />}
+                              <button onClick={() => handleRestore(snap.id)} disabled={restoring !== null} className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 whitespace-nowrap text-amber-500 hover:text-amber-600 hover:bg-amber-500/10 rounded px-1.5 py-px transition-all disabled:opacity-50">
+                                {restoring === snap.id ? <Loader2 className="w-2.5 h-2.5 animate-spin shrink-0" /> : <RotateCcw className="w-2.5 h-2.5 shrink-0" />}
                                 回滚
                               </button>
                             ) : (

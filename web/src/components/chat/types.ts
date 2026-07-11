@@ -53,7 +53,15 @@ export interface ToolSegment {
   mcpTool?: string;
 }
 
-export type Segment = TextSegment | ToolSegment | SubAgentSegment;
+export type Segment = TextSegment | ToolSegment | SubAgentSegment | ReasoningSegment;
+
+/** 思考过程段：每轮 LLM 调用的 reasoning 独立为一个 segment，时序上紧跟在对应工具调用前 */
+export interface ReasoningSegment {
+  type: "reasoning";
+  content: string;
+  /** 是否仍在流式追加中 */
+  streaming?: boolean;
+}
 
 /** 用户消息的内联片段：纯文本 或 一个上下文 tag（用于气泡里把 tag 渲染成内联 pill） */
 export type UserSegment = { type: "text"; text: string } | { type: "tag"; tag: AttachedFile };

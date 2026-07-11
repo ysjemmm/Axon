@@ -34,7 +34,7 @@ export type AgentEventPayload =
   | { type: "stream_pause" }
   | { type: "stream_end"; elapsed: number; tokens: number; model?: string; credits?: number; creditDetail?: CreditDetail }
   | { type: "turn_cancelled"; elapsed: number; tokens: number; model?: string; credits?: number; creditDetail?: CreditDetail }
-  | { type: "reasoning_delta"; content: string }
+  | { type: "reasoning_delta"; content: string; partIndex?: number; itemId?: string }
   | { type: "status"; content: string }
   | { type: "compacted"; message: string }
   | { type: "compacting_start" }

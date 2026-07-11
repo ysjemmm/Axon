@@ -11,8 +11,9 @@
  */
 
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { getClient } from "../providers.js";
+import { getStrategy } from "../providers.js";
 import { needsCompaction, compactMessages, rollingCompact } from "../compactor.js";
+import type { LLMStrategy } from "../llm/types.js";
 import type { AgentSession } from "../agentSession.js";
 
 export class CompactionController {
@@ -29,9 +30,9 @@ export class CompactionController {
     this.s.isCompacting = true;
     this.s.send("compacting_start", {});
     try {
-      const client = getClient(this.s.provider, this.s.model);
+      const strategy = getStrategy(this.s.provider, this.s.model);
       this.s.send("status", { content: "整理上下文..." });
-      this.s.messages = await compactMessages(this.s.messages, client, this.s.model);
+      this.s.messages = await compactMessages(this.s.messages, strategy, this.s.model);
       this.s.isCompacting = false;
       this.s.lastPromptTokens = 0; // 重置缓存，让 updateAndSendTokenUsage 从压缩后的 messages 重新估算
       this.s.send("compacting_end", { success: true, message: "上下文已手动压缩" });
@@ -60,8 +61,8 @@ export class CompactionController {
     this.s.rollingSummaryInProgress = true;
 
     try {
-      const client = getClient(this.s.provider, this.s.model);
-      const [newMessages, didCompact] = await rollingCompact(this.s.messages, client, this.s.model, this.s.compactionConfig.keepRecentMessages);
+      const strategy = getStrategy(this.s.provider, this.s.model);
+      const [newMessages, didCompact] = await rollingCompact(this.s.messages, strategy, this.s.model, this.s.compactionConfig.keepRecentMessages);
       if (didCompact) {
         // 安全区替换：用压缩后的消息替换当前 messages
         this.s.messages = newMessages;
@@ -95,11 +96,11 @@ export class CompactionController {
 
     // new_session：压缩消息并存储用于迁移
     try {
-      const client = getClient(this.s.provider, this.s.model);
+      const strategy = getStrategy(this.s.provider, this.s.model);
       this.s.send("status", { content: "整理上下文..." });
       // 压缩前移除本轮刚推送的用户消息（它会在新会话中重新发送）
       const userMsg = this.s.messages.pop();
-      this.s.compactionMigrationMessages = await compactMessages(this.s.messages, client, this.s.model);
+      this.s.compactionMigrationMessages = await compactMessages(this.s.messages, strategy, this.s.model);
       // 恢复用户消息到原会话（保持历史完整，仅压缩版本不包含它）
       if (userMsg) this.s.messages.push(userMsg);
     } catch (err) {
@@ -142,6 +143,59 @@ export class CompactionController {
         }
       }, 120_000);
     });
+  }
+
+  /**
+   * 本轮请求前的自动压缩门：
+   * - 溢出（lastTotalTokens > 窗口，通常是切换到更小窗口模型）-> 强制无感压缩；
+   * - 达到窗口 75% -> 暂停询问用户「继续压缩 / 迁移到新会话」。
+   * @returns true 表示用户选择迁移到新会话、本轮应中止；false 表示可继续本轮。
+   */
+  async maybeAutoCompactBeforeTurn(strategy: LLMStrategy): Promise<boolean> {
+    const ctxWindow = this.s.getContextWindow();
+    const overflowing = this.s.lastTotalTokens > ctxWindow;
+    if (overflowing) {
+      // 模型切换溢出：强制无感压缩
+      this.s.isCompacting = true;
+      this.s.send("compacting_start", {});
+      try {
+        this.s.send("status", { content: "整理上下文..." });
+        this.s.messages = await compactMessages(this.s.messages, strategy, this.s.model);
+        this.s.isCompacting = false;
+        this.s.lastPromptTokens = 0;
+        this.s.send("compacting_end", { success: true, message: "切换模型后上下文已自动压缩" });
+        this.s.updateAndSendTokenUsage();
+      } catch (err) {
+        this.s.isCompacting = false;
+        this.s.send("compacting_end", { success: false, message: `压缩失败：${(err as Error).message}` });
+      }
+      return false;
+    }
+    if (this.s.lastTotalTokens > 0 && needsCompaction(this.s.lastTotalTokens, ctxWindow, 0.75)) {
+      // >=75% 自动压缩阈值：暂停，让用户选择
+      const choice = await this.waitForCompactionChoice(this.s.lastTotalTokens, ctxWindow);
+      if (choice === "continue") {
+        // 用户选择继续：压缩当前会话
+        this.s.isCompacting = true;
+        this.s.send("compacting_start", {});
+        try {
+          this.s.send("status", { content: "整理上下文..." });
+          this.s.messages = await compactMessages(this.s.messages, strategy, this.s.model);
+          this.s.isCompacting = false;
+          this.s.lastPromptTokens = 0;
+          this.s.send("compacting_end", { success: true, message: "上下文已压缩" });
+          this.s.updateAndSendTokenUsage();
+        } catch (err) {
+          this.s.isCompacting = false;
+          this.s.send("compacting_end", { success: false, message: `压缩失败：${(err as Error).message}` });
+        }
+        return false;
+      }
+      // 用户选择迁移到新会话：handleCompactionChoice 已压缩并存储迁移数据，通知前端并中止本轮
+      this.s.send("compaction_migrated", { migratedToNewSession: true });
+      return true;
+    }
+    return false;
   }
 }
 

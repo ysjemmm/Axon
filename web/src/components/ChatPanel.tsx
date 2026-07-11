@@ -8,7 +8,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Send, Loader2, Copy, ImagePlus, X, Paperclip, Plus, Camera, Feather, Check, ChevronDown, ListChecks, Sparkles, Globe, ShieldAlert, Undo2, Minimize2, Bot } from "lucide-react";
+import { Send, Loader2, Copy, ImagePlus, X, Paperclip, Plus, Camera, Feather, Check, ChevronDown, ListChecks, Sparkles, Globe, ShieldAlert, Undo2, Minimize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -22,9 +22,8 @@ import { SkillStudio } from "@/components/SkillStudio";
 import type { AttachedFile, ChatPanelProps, ReplyStyle, UserSegment } from "./chat/types";
 import { REPLY_STYLES } from "./chat/types";
 import { FILE_MAX_SIZE, isAllowedTextFile, looksBinary } from "./chat/fileUtils";
-import { ReasoningBlock } from "./chat/ReasoningBlock";
 import { MessageBubble } from "./chat/MessageBubble";
-import { AppliedChangesBar } from "./AppliedChangesBar";
+import { UnifiedStatusBar } from "./UnifiedStatusBar";
 import { MentionEditor, type MentionEditorHandle } from "./chat/MentionEditor";
 import { TokenIndicator } from "./chat/TokenIndicator";
 import { useChatSession, type SubmitPayload } from "./chat/useChatSession";
@@ -785,7 +784,6 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             }
             footer={
               <>
-                {session.reasoning && session.isLoading && <ReasoningBlock content={session.reasoning} />}
                 <div ref={bottomRef} />
               </>
             }
@@ -811,18 +809,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             )}
           />
           )}
-        {/* Loading 指示器：放在 Virtuoso 外面，DOM 始终存在，动画不被重建打断。
-            用 hidden 控制可见性而非条件渲染，保证 CSS animation 不中断。 */}
-        <div className={`flex items-center gap-2.5 text-muted-foreground text-sm px-3 py-1 pb-2 ${session.isLoading ? "" : "hidden"}`}>
-          <svg width="28" height="28" viewBox="0 0 40 40" className="shrink-0">
-            {/* 呼吸灯光晕：纯色 + opacity 动画，不依赖 gradient id 引用 */}
-            <circle cx="20" cy="20" r="17" fill="#6366f1" className="breath-origin" style={{ animation: "breath 2.5s ease-in-out infinite" }} />
-            <circle cx="20" cy="20" r="13" fill="white" stroke="#1e1b4b" strokeWidth="1.5" />
-            <ellipse cx="15" cy="19" rx="2" ry="2.5" fill="#6366f1" style={{ transformOrigin: "15px 19px", animation: "blink 3s ease-in-out infinite" }} />
-            <ellipse cx="25" cy="19" rx="2" ry="2.5" fill="#6366f1" style={{ transformOrigin: "25px 19px", animation: "blink 3s ease-in-out 0.12s infinite" }} />
-          </svg>
-          <span className="animate-pulse">{session.statusText}</span>
-        </div>
+        {/* Loading 指示器已合并到输入区上方的统一状态条中 */}
         <button
           onClick={animatedScrollToBottom}
           className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-10 w-9 h-9 rounded-full bg-background border border-border shadow-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:shadow-lg transition-all duration-200 ${showScrollBtn ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-2 pointer-events-none"}`}
@@ -835,19 +822,20 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
       {/* 输入区域 */}
       <div className="px-3 py-4">
-        {/* 改动总览 + 闪电回滚（统一面板）—— 问答模式（quest）无文件编辑，不展示 */}
-        {mode !== "quest" && (
-        <AppliedChangesBar
-            chatHistory={session.chatHistory}
-            pendingPaths={session.pendingPaths}
-            pendingDiffs={session.pendingDiffs}
-            onAcceptAll={session.acceptEdits}
-            onRejectAll={session.rejectEdits}
-            onUndo={session.undoEdits}
-            onListSnapshots={session.listSnapshots}
-            onRestoreSnapshot={session.restoreSnapshot}
-          />
-        )}
+        {/* 统一状态条：左侧 Loading 指示 + 右侧文件改动汇总，一行紧凑布局 */}
+        <UnifiedStatusBar
+          isLoading={session.isLoading}
+          statusText={session.statusText}
+          mode={mode}
+          chatHistory={session.chatHistory}
+          pendingPaths={session.pendingPaths}
+          pendingDiffs={session.pendingDiffs}
+          onAcceptAll={session.acceptEdits}
+          onRejectAll={session.rejectEdits}
+          onUndo={session.undoEdits}
+          onListSnapshots={session.listSnapshots}
+          onRestoreSnapshot={session.restoreSnapshot}
+        />
         <div className="relative">
           {/* 斜杠命令菜单（贴输入框上方，置于 overflow-hidden 容器之外避免被裁剪） */}
           {slash.open && (

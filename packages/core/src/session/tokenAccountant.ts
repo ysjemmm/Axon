@@ -1,16 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
- * TokenAccountant —— Token 计量与上报（从 AgentSession 解耦）
+ * TokenAccountant -- Token 计量与上报（从 AgentSession 解耦）
  *
- * 职责单一：记录每回合/子 Agent 的真实 token 用量，估算当前上下文占用，并向呈现端推送。
+ * 职责：记录每回合/子 Agent 的真实 token 用量，估算当前上下文占用，并向呈现端推送。
  * 状态字段仍留在 AgentSession（被主循环多处直接读写），本类通过构造注入的 session 引用
  * （@internal 字段）读写这些计量字段，自身不持有状态。
  *
- * 注意：跨域的 buildTokenBreakdown（混合 prompt 注入 + 工具定义估算）仍留在 AgentSession，
- * 不属于纯计量职责。
+ * buildTokenBreakdown（混合 prompt 注入 + 工具定义估算）在本类内，因为它需要访问
+ * messages / promptBuilder / getToolDefs，这些都是 session 级状态，通过注入引用访问。
  */
 
 import type { AgentSession } from "../agentSession.js";
+import { messageText } from "./promptBuilder.js";
 
 export class TokenAccountant {
   constructor(private readonly s: AgentSession) {}
@@ -90,5 +91,58 @@ export class TokenAccountant {
   /** 获取本会话累计 token 消耗（含子 Agent） */
   getCumulativeTokens(): number {
     return this.s.cumulativeTokens;
+  }
+
+  /**
+   * 把本轮 prompt 按来源拆分为 记忆 / system / 本次输入（供 tooltip 展示）。
+   * - system：系统提示 + 注入（风格/验证/多工作区/IDE/skill/power）+ 工具定义
+   * - 本次输入：本轮新增消息（用户消息 + 工具结果 + 中间 assistant 回填）的字符估算 + 本轮子 Agent
+   * - 记忆：真实总 prompt − system − 本次输入（余量，吸收"字符估算 vs 真实 token"的偏差）
+   *
+   * 关键：用字符估算去算【本次输入】这个小桶，让【记忆】这个大桶承接真实总量的余量。
+   * 反过来（估记忆、余量给本次输入）会把整段历史的估算误差--尤其 0.4/字符 对中文的严重低估
+   * --全甩进"本次输入"，导致一句"关掉前端吧"也显示几万 token。
+   */
+  buildTokenBreakdown(): { memoryTokens: number; systemTokens: number; questionTokens: number } {
+    // 各段字符数
+    let thisTurnChars = 0;
+    for (let i = Math.max(1, this.s.turnStartMsgCount); i < this.s.messages.length; i++) {
+      thisTurnChars += messageText(this.s.messages[i]).length;
+    }
+    let memoryChars = 0;
+    if (this.s.turnStartMsgCount > 1) {
+      for (let i = 1; i < this.s.turnStartMsgCount; i++) memoryChars += messageText(this.s.messages[i]).length;
+    }
+
+    // system 直接估算（最稳定可知：系统提示文本 + 注入 + 工具定义 JSON）。
+    // 自然文本约 0.4 token/字符；工具定义是结构化 JSON,token 密度更高,约 0.75。
+    let systemChars = this.s.messages[0] ? messageText(this.s.messages[0]).length : 0;
+    for (const inj of this.s.promptBuilder.buildInjections()) systemChars += messageText(inj).length;
+    let toolsChars = 0;
+    try { toolsChars = JSON.stringify(this.s.getToolDefs()).length; } catch { /* 忽略 */ }
+    const systemEstimate = Math.ceil(systemChars * 0.4 + toolsChars * 0.75);
+
+    // 有 API 返回的真实 prompt_tokens 时：
+    // system 用估算（封顶不超过真实总数）；剩余的真实 token 按字符比例分给 记忆 / 本次提问,保证三段加和 = 真实总数。
+    if (this.s.lastPromptTokens > 0) {
+      const systemTokens = Math.min(systemEstimate, this.s.lastPromptTokens);
+      const remaining = this.s.lastPromptTokens - systemTokens; // 记忆 + 本次提问 的真实总量
+      const splitBase = memoryChars + thisTurnChars;
+      let memoryTokens: number;
+      let questionTokens: number;
+      if (splitBase <= 0) {
+        memoryTokens = 0;
+        questionTokens = remaining;
+      } else {
+        memoryTokens = Math.round(remaining * (memoryChars / splitBase));
+        questionTokens = remaining - memoryTokens;
+      }
+      return { memoryTokens, systemTokens, questionTokens: questionTokens + this.s.lastSubAgentTokens };
+    }
+
+    // 兜底：没拿到 API usage,纯字符估算
+    const questionTokens = Math.ceil(thisTurnChars * 0.6) + this.s.lastSubAgentTokens;
+    const memoryTokens = this.s.turnStartMsgCount <= 1 ? 0 : Math.ceil(memoryChars * 0.6);
+    return { memoryTokens, systemTokens: systemEstimate, questionTokens };
   }
 }

@@ -17,6 +17,7 @@ import {
   type ToolStatus, type SearchGroupData, type ReadFileGroupData, type EditGroupData,
 } from "@/components/ToolCallItem";
 import type { Segment, ToolSegment, SubAgentSegment } from "./types";
+import { ReasoningBlock } from "./ReasoningBlock";
 import { isRelayTool, relayToolLabel } from "./relayUtils";
 
 /** 从展示串行号区间（如 "1300-1415" / "2-EOF"）解析起始行号 */
@@ -267,6 +268,12 @@ export function renderSegments(
     // 文字段
     if (seg.type === "text") {
       const isLast = i === segments.length - 1;
+      const trimmedContent = seg.content.trim();
+      // 跳过弱内容段（纯标点符号/省略号等无意义叙述，如模型工具调用前夹带的 "..."）
+      if (!trimmedContent || !/[A-Za-z0-9\u4e00-\u9fff]/.test(trimmedContent)) {
+        i++;
+        continue;
+      }
       if (streaming && isLast) {
         nodes.push(
           <div key={`text-${i}`} className="relative">
@@ -276,6 +283,16 @@ export function renderSegments(
         );
       } else if (seg.content.trim()) {
         nodes.push(<MarkdownRenderer key={`text-${i}`} content={seg.content} />);
+      }
+      i++;
+      continue;
+    }
+
+    // 思考过程段：每轮 LLM 的 reasoning 独立为一个可折叠区块
+    if (seg.type === "reasoning") {
+      // 有内容才渲染（避免空白折叠区）
+      if (seg.content.trim()) {
+        nodes.push(<ReasoningBlock key={`reasoning-${i}`} content={seg.content} streaming={seg.streaming} />);
       }
       i++;
       continue;

@@ -5,27 +5,47 @@
  */
 
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import type OpenAI from "openai";
 import { resolve } from "node:path";
-import { executeToolCall, toolContentLimit, ToolError, ToolName, ToolCallStatus, statusForTool, SOFT_FAIL_TOOLS, EDIT_PERSIST_TOOLS, REQUIRED_ARGS_TOOLS, type ToolMeta, type WebCapability, type ApprovalDecision, type TrustRule, type GateOutcome } from "./tools/index.js";
-import { calculateCredits, buildCreditDetail, formatCredits } from "./credits.js";
+import { executeToolCall, toolContentLimit, ToolError, ToolName, ToolCallStatus, statusForTool, SOFT_FAIL_TOOLS, EDIT_PERSIST_TOOLS, type ToolMeta, type WebCapability, type ApprovalDecision, type TrustRule, type GateOutcome } from "./tools/index.js";
+import { calculateCredits, buildCreditDetail } from "./credits.js";
 import type { AgentHost } from "./host/index.js";
 import type { AgentChannel, AgentEvent } from "./channel/index.js";
 import { needsCompaction, compactMessages, reflectiveCompact, pruneOldToolResults, DEFAULT_COMPACTION_CONFIG, setPruneKeepChars } from "./compactor.js";
 import type { CompactionUserConfig } from "./compactor.js";
-import { DEFAULT_CREDIT_BUDGET_CONFIG } from "./credits.js";
 import type { CreditBudgetUserConfig } from "./credits.js";
 import type { SerializedPendingEdit } from "./storage/types.js";
-import type { LLMStreamCallbacks, ToolDef } from "./llm/types.js";
+import type { LLMStreamCallbacks, ToolDef, LLMStrategy, LLMTurnResult, NormalizedToolCall } from "./llm/types.js";
+import type { NormalizedFinishReason } from "./llm/finishReasonMapper.js";
+import { StrategyTurnSource } from "./llm/strategyTurnSource.js";
+import { DefaultLLMHandler } from "./llm/llmHandler.js";
+import { DefaultOutputHandler } from "./llm/outputHandler.js";
 import { SkillRegistry } from "./skills/skillLoader.js";
 import { PowerRegistry } from "./powers/powerLoader.js";
-import { looksLikeIncompleteReply, parseToolArguments, LoopGuard, policyForModel, isSoftToolFailure, buildReflectionPrompt, buildSummaryRestartPrompt, type StuckTarget, type LoopGuardSnapshot } from "./agentGuards.js";
+import { looksLikeIncompleteReply, LoopGuard, policyForModel, isSoftToolFailure, buildReflectionPrompt, buildSummaryRestartPrompt, type StuckTarget, type LoopGuardSnapshot } from "./agentGuards.js";
 import { McpRegistry } from "./mcp/mcpRegistry.js";
-import { MCP_TOOL_PREFIX, type McpCapability } from "./mcp/types.js";
 import { modelContextWindow } from "./llm/modelContext.js";
 import { SYSTEM_PROMPT, QUEST_SYSTEM_PROMPT } from "./systemPrompt.js";
-import { getClient, getStrategy, ZHIPU_PROVIDER } from "./providers.js";
+import { getStrategy, ZHIPU_PROVIDER } from "./providers.js";
 import { PromptBuilder, messageText } from "./session/promptBuilder.js";
+import {
+  resolveToolDispatchRoute,
+  CommandToolExecutor,
+  RelayToolExecutor,
+  DelegatedToolExecutor,
+  McpToolExecutor,
+  GenericToolExecutor,
+  ToolOutcomeRecorder,
+  SessionTraceWriter,
+  truncateForTrace,
+  TurnFinalizer,
+  ToolOutcomeStateResolver,
+  ToolOutcomePostSync,
+  NoToolTurnDecider,
+  ErrorTurnHandler,
+  ReflectionHandler,
+  ToolCallExecutor,
+  type TurnState,
+} from "./session/index.js";
 import { TokenAccountant } from "./session/tokenAccountant.js";
 import { ToolDefBuilder } from "./session/toolDefBuilder.js";
 import { McpController } from "./session/mcpController.js";
@@ -33,12 +53,15 @@ import { DelegateRunner } from "./session/delegateRunner.js";
 import { ParallelRunner } from "./session/parallelRunner.js";
 import { RelayToolRunner } from "./session/relayToolRunner.js";
 import { CommandGateController } from "./session/commandGateController.js";
+import { resolveInWorkspaces } from "./tools/search.js";
 import { CommandGate } from "./tools/index.js";
 import { EditController } from "./session/editController.js";
 import { CompactionController } from "./session/compactionController.js";
+import { CreditBudgetGate } from "./session/creditBudgetGate.js";
 import { RelayStore } from "./relay/relayStore.js";
 import { SnapshotManager, SNAPSHOT_TOOLS } from "./snapshot/index.js";
 import type { EditSnapshot } from "./host/scopedHost.js";
+import type { McpCapability } from "./mcp/types.js";
 
 
 export class AgentSession {
@@ -62,7 +85,7 @@ export class AgentSession {
   /** 快照管理器（闪电回滚） */
   private snapshotMgr: SnapshotManager;
   /** 提示构建协作者（请求消息/注入/IDE 上下文，解耦自本类） */
-  private readonly promptBuilder: PromptBuilder;
+  /** @internal */ readonly promptBuilder: PromptBuilder;
   /** Token 计量协作者（记录/估算/上报 token 用量，解耦自本类） */
   private readonly tokenAccountant: TokenAccountant;
   /** 工具定义装配协作者（通用工具 + delegate + relay + MCP，解耦自本类） */
@@ -76,7 +99,7 @@ export class AgentSession {
   /** Relay 工具执行协作者（create/saveDoc/advance/updateTask/reviewTask，解耦自本类） */
   private readonly relayToolRunner: RelayToolRunner;
   /** 对话轮次计数（用于快照 id） */
-  private turnCount = 0;
+  /** @internal */ turnCount = 0;
   /** @internal */ lastTotalTokens = 0;
   /** @internal */ lastPromptTokens = 0;
   /** @internal */ lastCompletionTokens = 0;
@@ -84,7 +107,7 @@ export class AgentSession {
   /** @internal */ cumulativeTokens = 0;
   /** @internal */ lastTurnTokens = 0;
   /** 本轮开始前的累计 token 快照（取消时用差值复原本轮消耗） */
-  private turnStartCumulative = 0;
+  /** @internal */ turnStartCumulative = 0;
   /** 本轮（最近一次用户输入）调用的子 Agent 累计 token，turn 开始时清零 */
   /** @internal */ lastSubAgentTokens = 0;
   /** 本轮（最近一次用户输入）所有回合的输出 token 累加，turn 开始时清零。
@@ -143,6 +166,26 @@ export class AgentSession {
   private readonly editController: EditController;
   /** 上下文压缩控制器（手动/滚动/溢出迁移，解耦自本类） */
   private readonly compactionController: CompactionController;
+  /** 每个 session 一份 JSONL trace 文件写入器（记录 turn / tool / reasoning / text 的原始时序证据）。 */
+  private readonly traceWriter: SessionTraceWriter;
+  /** 工具执行分支路由执行器（拆薄 dispatchToolCall 的 route 分支）。 */
+  /** @internal */ readonly commandToolExecutor: CommandToolExecutor;
+  /** @internal */ readonly delegatedToolExecutor: DelegatedToolExecutor;
+  /** @internal */ readonly relayToolExecutor: RelayToolExecutor;
+  /** @internal */ readonly mcpToolExecutor: McpToolExecutor;
+  /** @internal */ readonly genericToolExecutor: GenericToolExecutor;
+  /** 纯逻辑协作者：收尾 / 无工具决策 / 工具结果三段式拆分。 */
+  /** @internal */ readonly turnFinalizer: TurnFinalizer;
+  /** @internal */ readonly toolOutcomeStateResolver: ToolOutcomeStateResolver;
+  /** @internal */ readonly toolOutcomeRecorder: ToolOutcomeRecorder;
+  /** @internal */ readonly toolOutcomePostSync: ToolOutcomePostSync;
+  private readonly noToolTurnDecider: NoToolTurnDecider;
+  /** 异常/取消 turn 统计兜底（解耦自本类）。 */
+  private readonly errorTurnHandler: ErrorTurnHandler;
+  /** 反思/摘要重启（解耦自本类）。 */
+  private readonly reflectionHandler: ReflectionHandler;
+  /** 工具调用执行链（拆薄 dispatchToolCall/executeSingleToolCall/recordToolOutcome/runToolDispatch）。 */
+  private readonly toolCallExecutor: ToolCallExecutor;
   // 当前会话 id（用于把 relay 关联到会话；由外部 index.ts 注入）
   /** @internal */ currentRelaySessionId?: string;
   /** 正在执行上下文压缩时为 true。此期间不允许取消，避免压缩中断导致消息状态不完整。 */
@@ -153,16 +196,10 @@ export class AgentSession {
   /** @internal */ rollingSummaryInProgress = false;
   /** 滚动压缩配置（运行时可更新）。来自呈现端注入，默认启用。 */
   /** @internal */ compactionConfig: CompactionUserConfig = { ...DEFAULT_COMPACTION_CONFIG };
-  /** Credits 预算门配置（运行时可更新）。来自呈现端注入，默认启用。 */
-  /** @internal */ creditBudgetConfig: CreditBudgetUserConfig = { ...DEFAULT_CREDIT_BUDGET_CONFIG };
+  /** Credits 预算门（软提醒 + 硬暂停，解耦自本类） */
+  private readonly creditBudgetGate: CreditBudgetGate;
   /** 跨用户回合的 LoopGuard 快照：避免同一未解决根因每轮重新触发相同反思/摘要话术。 */
-  private loopGuardSnapshot: LoopGuardSnapshot | null = null;
-  /** 本轮已发过一次软提醒（warnAt），避免同一轮反复注入 */
-  private budgetWarnedThisTurn = false;
-  /** 本轮硬暂停阈值的运行时快照：用户选择"继续"后翻倍，避免同一个长任务反复打断 */
-  private budgetPauseThreshold = 0;
-  /** 预算选择门：硬暂停触发时，await 此 Promise 阻塞直到用户在"继续/停止"中选择 */
-  private budgetChoiceResolve: ((choice: "continue" | "stop") => void) | null = null;
+  /** @internal */ loopGuardSnapshot: LoopGuardSnapshot | null = null;
   // 执行中的 relay 任务上下文：记录当前正在执行哪个 relay/任务，及该任务改动过的文件（供评审定位）
   /** @internal */ activeRelayTask: { relayId: string; taskId: string; changedFiles: Set<string> } | null = null;
   // 本轮用户输入内是否已推进过一次 Relay 阶段。确认门铁律：一条用户消息最多推进一个文档阶段，
@@ -206,6 +243,64 @@ export class AgentSession {
     this.commandGateController = new CommandGateController(this, commandGate ?? new CommandGate());
     this.editController = new EditController(this);
     this.compactionController = new CompactionController(this);
+    this.creditBudgetGate = new CreditBudgetGate(this);
+    this.traceWriter = new SessionTraceWriter({ host: this.host, cwd: this.cwd });
+    this.delegatedToolExecutor = new DelegatedToolExecutor({
+      runDelegateTask: (args, id) => this.runDelegateTask(args, id),
+      runParallelResearch: (args, id) => this.runParallelResearch(args, id),
+      runParallelExecution: (args, id) => this.runParallelExecution(args, id),
+    });
+    this.relayToolExecutor = new RelayToolExecutor({
+      waitForToolConfirmation: (name, args, kind, label) => this.waitForToolConfirmation(name, args, kind, label),
+      runRelayCreate: (args) => this.runRelayCreate(args),
+      runRelaySaveDoc: (args) => this.runRelaySaveDoc(args),
+      runRelayAdvance: (args) => this.runRelayAdvance(args),
+      runRelayUpdateTask: (args) => this.runRelayUpdateTask(args),
+      runRelayReviewTask: (args) => this.runRelayReviewTask(args),
+    });
+    this.mcpToolExecutor = new McpToolExecutor({
+      runMcpTool: (name, args) => this.runMcpTool(name, args),
+    });
+    this.commandToolExecutor = new CommandToolExecutor({
+      cwd: this.cwd,
+      host: this.host,
+      workspaces: this.workspaces,
+      web: this.web,
+      signal: this.abortController?.signal,
+      skillLoader: this.loadSkillForTool,
+      powerLoader: this.loadPowerForTool,
+      gateCommand: (command, id) => this.gateCommand(command, id),
+      trackTerminalCwd: (name, args, toolMeta) => this.trackTerminalCwd(name, args, toolMeta),
+    });
+    this.genericToolExecutor = new GenericToolExecutor({
+      cwd: this.cwd,
+      host: this.host,
+      workspaces: this.workspaces,
+      web: this.web,
+      skillLoader: this.loadSkillForTool,
+      powerLoader: this.loadPowerForTool,
+      snapshotMgr: this.snapshotMgr,
+      sendSnapshotsListed: (snapshots) => this.send("snapshots_listed", { snapshots }),
+      trackTerminalCwd: (name, args, toolMeta) => this.trackTerminalCwd(name, args, toolMeta),
+    });
+    this.turnFinalizer = new TurnFinalizer();
+    this.toolOutcomeStateResolver = new ToolOutcomeStateResolver();
+    this.toolOutcomeRecorder = new ToolOutcomeRecorder({
+      send: (type, data) => this.send(type, data),
+      pushToolMessage: (msg) => this.messages.push(msg as any),
+      markNextAsTransient: () => { (this as any).__markNextAsTransient = true; },
+    });
+    this.toolOutcomePostSync = new ToolOutcomePostSync({
+      trace: (type, payload, turn) => this.appendTrace(type, payload, turn),
+      markLastToolMessageTransient: () => { (this.messages[this.messages.length - 1] as any)._transient = true; },
+      enqueueScreenshot: (dataUrl) => { ((this as any).__pendingScreenshots ??= []).push(dataUrl); },
+      sendEditsUpdated: (rejected) => this.sendEditsUpdated(rejected),
+      onPendingChanged: this.onPendingChanged,
+    });
+    this.noToolTurnDecider = new NoToolTurnDecider();
+    this.errorTurnHandler = new ErrorTurnHandler(this);
+    this.reflectionHandler = new ReflectionHandler(this);
+    this.toolCallExecutor = new ToolCallExecutor(this);
     // 延迟初始化快照：等第一次实际需要时才 init（不在构造函数里跑 git 命令，
     // 避免 session 切换时终端面板被意外弹出）
   }
@@ -224,12 +319,12 @@ export class AgentSession {
 
   /** 设置 Credits 预算门配置（由呈现端在启动时 / 配置变更时调用） */
   setCreditBudgetConfig(cfg: Partial<CreditBudgetUserConfig>): void {
-    this.creditBudgetConfig = { ...this.creditBudgetConfig, ...cfg };
+    this.creditBudgetGate.setConfig(cfg);
   }
 
   /** 获取当前 Credits 预算门配置（诊断 / UI 展示用） */
   getCreditBudgetConfig(): CreditBudgetUserConfig {
-    return this.creditBudgetConfig;
+    return this.creditBudgetGate.config;
   }
 
   /** 获取当前完整消息列表（持久化用） */
@@ -258,7 +353,7 @@ export class AgentSession {
 
   /** 序列化 pendingEdits 为可持久化数组 */
   serializePendingEdits(): SerializedPendingEdit[] {
-    return this.host.edits.serialize().map((e) => ({
+    return this.host.edits.serialize().map((e: SerializedPendingEdit) => ({
       absPath: e.absPath,
       path: e.path,
       originalContent: e.originalContent,
@@ -272,7 +367,7 @@ export class AgentSession {
 
   /** 从持久化数据恢复 pendingEdits */
   restorePendingEdits(edits: SerializedPendingEdit[]): void {
-    this.host.edits.restore(edits.map((e) => ({
+    this.host.edits.restore(edits.map((e: SerializedPendingEdit) => ({
       path: e.path,
       absPath: e.absPath,
       originalContent: e.originalContent,
@@ -427,47 +522,29 @@ export class AgentSession {
     this.sendTurnCancelledFallback();
   }
 
-  /** 在 cancel() 被调用但 agent loop 尚未产出任何统计时的兜底 */
+    /** cancel() 兜底（委托 ErrorTurnHandler）。 */
   private sendTurnCancelledFallback(): void {
-    // 取消时用字符估算兜底 outputTokens（已接收的流式内容字符数 * 0.4）
-    const estimatedOutput = this.lastTurnOutputTokens || this.lastCompletionTokens || 0;
-    const breakdown = { ...this.buildTokenBreakdown(), outputTokens: estimatedOutput };
-    const turnTokens = breakdown.memoryTokens + breakdown.systemTokens + breakdown.questionTokens + breakdown.outputTokens;
-    if (turnTokens <= 0) return; // 没有任何数据可发
-    const credits = calculateCredits(this.model, breakdown);
-    const creditDetail = buildCreditDetail(this.model, breakdown);
-    this.send("turn_cancelled", {
-      elapsed: 0,
-      tokens: turnTokens,
-      model: this.model,
-      credits,
-      creditDetail,
-    });
+    this.errorTurnHandler.sendTurnCancelledFallback();
   }
 
-  /** 判断错误是否来自第三方 provider / 网关 / 基础设施层。
-   * 这类错误应展示给用户，但不该进入长期记忆污染后续轮次。 */
+
+    /** 判断第三方 provider 错误（委托 ErrorTurnHandler）。 */
   private isExternalProviderError(err: Error): boolean {
-    const msg = (err.message || "").toLowerCase();
-    if (!msg) return false;
-    return (
-      /\b429\b/.test(msg) ||
-      /rate limit|quota|too many requests/.test(msg) ||
-      /gateway|upstream|proxy|provider|service unavailable/.test(msg) ||
-      /unexpected eof|connection reset|socket hang up|network error|fetch failed|timeout|timed out/.test(msg) ||
-      /api key|authentication|unauthorized|forbidden/.test(msg)
-    );
+    return this.errorTurnHandler.isExternalProviderError(err);
   }
 
-  /** 把第三方错误展示给用户，但不写入长期消息历史。 */
+
+    /** 展示第三方错误（委托 ErrorTurnHandler）。 */
   private emitTransientError(errMsg: string, turnStartTime: number, streamedContentThisRound: string): void {
-    if (!streamedContentThisRound) {
-      this.send("stream_start", {});
-    }
-    this.send("stream_delta", { content: errMsg });
-    const model = (this as any)._lastSentModel || this.model;
-    this.send("stream_end", { elapsed: Date.now() - turnStartTime, tokens: this.lastTotalTokens, model } as any);
+    this.errorTurnHandler.emitTransientError(errMsg, turnStartTime, streamedContentThisRound);
   }
+
+
+    /** provider/网关异常落盘（委托 ErrorTurnHandler）。 */
+  private stampAbortedTurnStats(turnStartTime: number, streamedContent?: string, reason?: "cancelled" | "error"): void {
+    this.errorTurnHandler.stampAbortedTurnStats(turnStartTime, streamedContent, reason);
+  }
+
 
   /** 手动触发上下文压缩（供前端"压缩上下文"按钮调用）。需超过当前模型窗口 35% 才允许。 */
   /** 手动触发上下文压缩（委托 CompactionController）。 */
@@ -494,43 +571,11 @@ export class AgentSession {
     try { await this.host.webBrowser?.focus(); } catch { /* 忽略 */ }
   }
 
-  /**
-   * 取消退出时给最后一条 assistant 消息补上 turnStats（让 persistOnCancel 落盘后前端恢复时仍可展示）。
-   * 如果当前轮有已输出但未 push 的流式内容，先追加为 assistant 消息再标记 turnStats。
-   */
-  private stampCancelledTurnStats(turnStartTime: number, streamedContent?: string): void {
-    // 如果有流式内容但还没 push 到 messages，先 push
-    if (streamedContent && streamedContent.trim()) {
-      const last = this.messages[this.messages.length - 1];
-      // 只在最后一条不是 assistant 或没内容时追加（避免重复）
-      if (!last || last.role !== "assistant" || !(last as any).content) {
-        this.messages.push({ role: "assistant", content: streamedContent } as any);
-      }
-    }
-    const elapsed = Date.now() - turnStartTime;
-    // outputTokens：优先用 API 返回的真实值，没有时用流式内容字符数估算（约 0.4 token/字符）
-    const estimatedOutput = this.lastTurnOutputTokens || this.lastCompletionTokens
-      || (streamedContent ? Math.ceil(streamedContent.length * 0.4) : 0);
-    const breakdown = { ...this.buildTokenBreakdown(), outputTokens: estimatedOutput };
-    // 取消时可能没有任何 LLM 返回数据（lastTurnTokens=0, cumulative 也没涨）。
-    // 用 buildTokenBreakdown 的字符估算兜底，至少不显示 0。
-    const turnTokens = this.lastTurnTokens
-      || (this.turnStartCumulative > 0 ? this.cumulativeTokens - this.turnStartCumulative : 0)
-      || (breakdown.memoryTokens + breakdown.systemTokens + breakdown.questionTokens + breakdown.outputTokens);
-    const credits = calculateCredits(this.model, breakdown);
-    const creditDetail = buildCreditDetail(this.model, breakdown);
-    // 找到 messages 里最后一条 assistant 消息并追加 turnStats
-    for (let i = this.messages.length - 1; i >= 0; i--) {
-      if (this.messages[i].role === "assistant") {
-        (this.messages[i] as any).turnStats = { elapsed, tokens: turnTokens, model: this.model, credits, creditDetail };
-        break;
-      }
-    }
-    this.persistMessages();
-    // 把真实的四段拆分推给前端：取消时前端会先乐观合成一份粗糙 creditDetail（system/本次提问为 0），
-    // 这里用后端算出的真实 breakdown 覆盖它，避免 tooltip 显示 system=0、本次提问=0。
-    this.send("turn_cancelled", { elapsed, tokens: turnTokens, model: this.model, credits, creditDetail });
+    /** 取消退出时补 turnStats（委托 ErrorTurnHandler）。 */
+  /** @internal */ stampCancelledTurnStats(turnStartTime: number, streamedContent?: string): void {
+    this.errorTurnHandler.stampCancelledTurnStats(turnStartTime, streamedContent);
   }
+
 
   /**
    * 删除一个 relay：若当前会话正在跑这个 relay，先取消其关联的子 Agent 执行（abort 信号会
@@ -650,6 +695,9 @@ export class AgentSession {
     this.currentRelaySessionId = id;
     // 同步设置快照管理器的 sessionId，实现快照的 session 隔离
     this.snapshotMgr.setSessionId(id);
+    // 初始化该 session 的 JSONL trace 文件（不阻塞主流程）
+    void this.traceWriter.init(id);
+    void this.traceWriter.append({ ts: new Date().toISOString(), sessionId: id, type: "session.id_bound", payload: { workspace: this.cwd, model: this.model, provider: this.provider } });
   }
 
   /** 获取当前会话 id（持久化时绑定到正确的会话文件，避免切换会话后串写） */
@@ -657,8 +705,90 @@ export class AgentSession {
     return this.currentRelaySessionId || "";
   }
 
+  /** 本会话内由 AI 创建/编辑且仍需重新诊断的文件（绝对路径）。 */
+  /** @internal */ readonly aiTouchedFilesNeedingDiagnostics = new Set<string>();
+
+  /** 供 Hub/控制器追加一条 session trace 事件（结构化时序证据）。 */
+  /** @internal */ appendTrace(type: string, payload?: unknown, turn?: number): void {
+    this.trace(type, payload, turn);
+  }
+
+  /** 追加一条 session trace 事件（忽略 session 未初始化时的早期调用）。 */
+  private trace(type: string, payload?: unknown, turn?: number): void {
+    const sessionId = this.getSessionId();
+    if (!sessionId) return;
+    void this.traceWriter.append({ ts: new Date().toISOString(), sessionId, type, turn, payload });
+  }
+
+  /** 统一发事件给前端，并对关键事件补一份 session trace。 */
+  /** @internal */ send(type: string, data: Record<string, unknown> = {}): void {
+    // 先对会话级关键事件做 trace，再发给前端。这里只记高价值事件，避免把所有 stream_delta 都重复落两份。
+    switch (type) {
+      case "tool_call":
+        this.trace("tool.call", {
+          id: data.id,
+          name: data.name,
+          status: data.status,
+          args: data.args,
+          cwd: data.cwd,
+          mcpServer: data.mcpServer,
+          mcpTool: data.mcpTool,
+        }, this.turnCount || undefined);
+        break;
+      case "tool_result":
+        this.trace("tool.result.event", {
+          id: data.id,
+          name: data.name,
+          status: data.status,
+          userMessage: data.userMessage,
+          hidden: data.hidden,
+          pending: data.pending,
+          result: typeof data.result === "string" ? truncateForTrace(data.result, 2000) : data.result,
+        }, this.turnCount || undefined);
+        break;
+      case "stream_start":
+      case "stream_pause":
+        this.trace(type, data, this.turnCount || undefined);
+        break;
+      case "stream_end":
+        this.trace("stream.end", data, this.turnCount || undefined);
+        break;
+      case "turn_cancelled":
+        this.trace("turn.cancelled", data, this.turnCount || undefined);
+        break;
+      case "status":
+        this.trace("status", data, this.turnCount || undefined);
+        break;
+      case "confirm_command_request":
+        this.trace("command.confirm_request", {
+          requestId: data.requestId,
+          command: data.command,
+          toolCallId: data.id,
+          delegateId: data.delegateId,
+        }, this.turnCount || undefined);
+        break;
+      case "command_blocked":
+        this.trace("command.blocked", data, this.turnCount || undefined);
+        break;
+      case "confirm_tool_request":
+        this.trace("tool.confirm_request", data, this.turnCount || undefined);
+        break;
+      case "session_created":
+      case "session_loaded":
+      case "session_title_updated":
+      case "workspace_set":
+      case "edits_updated":
+      case "snapshots_listed":
+        this.trace(type, data, this.turnCount || undefined);
+        break;
+      default:
+        break;
+    }
+    this.channel.emit({ type, ...data } as AgentEvent);
+  }
+
   /** 工具定义装配（委托 ToolDefBuilder） */
-  private getToolDefs(): ToolDef[] {
+  /** @internal */ getToolDefs(): ToolDef[] {
     return this.toolDefBuilder.getToolDefs();
   }
 
@@ -755,11 +885,6 @@ export class AgentSession {
     return this.parallelRunner.execute(args, toolCallId);
   }
 
-  /** 发消息给前端 */
-  /** @internal */ send(type: string, data: Record<string, unknown> = {}): void {
-    this.channel.emit({ type, ...data } as AgentEvent);
-  }
-
   /** 根据当前模型返回上下文窗口大小（统一来源 modelContextWindow） */
   /** @internal */ getContextWindow(): number {
     return modelContextWindow(this.model);
@@ -775,6 +900,36 @@ export class AgentSession {
     this.tokenAccountant.recordTurnUsage(usage);
   }
 
+  /** 把 AI 本会话内改过、且尚未诊断通过的文件加入待诊断集合。 */
+  /** @internal */ async markAiTouchedFiles(paths: Iterable<string>): Promise<void> {
+    for (const p of paths) {
+      if (!p) continue;
+      try {
+        const abs = await resolveInWorkspaces(p, this.cwd, this.host, this.workspaces);
+        this.aiTouchedFilesNeedingDiagnostics.add(abs);
+      } catch {
+        this.aiTouchedFilesNeedingDiagnostics.add(resolve(this.cwd, p));
+      }
+    }
+  }
+
+  /** check_diagnostics 成功后，从待诊断集合中移除本次已通过检查的文件。 */
+  /** @internal */ async markDiagnosedFiles(toolArgs: Record<string, unknown>, meta: ToolMeta, status: "success" | "error"): Promise<void> {
+    if (status !== "success") return;
+    const paths = Array.isArray((toolArgs as any).paths) ? ((toolArgs as any).paths as string[]) : [];
+    const diags = Array.isArray((meta as any).diagnostics) ? ((meta as any).diagnostics as Array<{ path?: string; ok?: boolean }>) : [];
+    const okRel = new Set(diags.filter((d) => d.ok && typeof d.path === "string").map((d) => d.path as string));
+    for (const p of paths) {
+      if (!okRel.has(p)) continue;
+      try {
+        const abs = await resolveInWorkspaces(p, this.cwd, this.host, this.workspaces);
+        this.aiTouchedFilesNeedingDiagnostics.delete(abs);
+      } catch {
+        this.aiTouchedFilesNeedingDiagnostics.delete(resolve(this.cwd, p));
+      }
+    }
+  }
+
   /** 累加子 Agent 消耗的 token（委托 TokenAccountant） */
   /** @internal */ addSubAgentTokens(tokens: number): void {
     this.tokenAccountant.addSubAgentTokens(tokens);
@@ -787,94 +942,29 @@ export class AgentSession {
 
   /**
    * 把本轮 prompt 按来源拆分为 记忆 / system / 本次输入（供 tooltip 展示）。
-   * - system：系统提示 + 注入（风格/验证/多工作区/IDE/skill/power）+ 工具定义
-   * - 本次输入：本轮新增消息（用户消息 + 工具结果 + 中间 assistant 回填）的字符估算 + 本轮子 Agent
-   * - 记忆：真实总 prompt − system − 本次输入（余量，吸收"字符估算 vs 真实 token"的偏差）
-   *
-   * 关键：用字符估算去算【本次输入】这个小桶，让【记忆】这个大桶承接真实总量的余量。
-   * 反过来（估记忆、余量给本次输入）会把整段历史的估算误差——尤其 0.4/字符 对中文的严重低估
-   * ——全甩进"本次输入"，导致一句"关掉前端吧"也显示几万 token。
+   * 已委托 TokenAccountant，保留 @internal 方法签名供协作者及本类调用。
    */
-  private buildTokenBreakdown(): { memoryTokens: number; systemTokens: number; questionTokens: number } {
-    // 各段字符数
-    let thisTurnChars = 0;
-    for (let i = Math.max(1, this.turnStartMsgCount); i < this.messages.length; i++) {
-      thisTurnChars += messageText(this.messages[i]).length;
-    }
-    let memoryChars = 0;
-    if (this.turnStartMsgCount > 1) {
-      for (let i = 1; i < this.turnStartMsgCount; i++) memoryChars += messageText(this.messages[i]).length;
-    }
-
-    // system 直接估算（最稳定可知：系统提示文本 + 注入 + 工具定义 JSON）。
-    // 自然文本约 0.4 token/字符；工具定义是结构化 JSON,token 密度更高,约 0.75。
-    let systemChars = this.messages[0] ? messageText(this.messages[0]).length : 0;
-    for (const inj of this.promptBuilder.buildInjections()) systemChars += messageText(inj).length;
-    let toolsChars = 0;
-    try { toolsChars = JSON.stringify(this.getToolDefs()).length; } catch { /* 忽略 */ }
-    const systemEstimate = Math.ceil(systemChars * 0.4 + toolsChars * 0.75);
-
-    // 有 API 返回的真实 prompt_tokens 时：
-    // system 用估算（封顶不超过真实总数）；剩余的真实 token 按字符比例分给 记忆 / 本次提问,保证三段加和 = 真实总数。
-    if (this.lastPromptTokens > 0) {
-      const systemTokens = Math.min(systemEstimate, this.lastPromptTokens);
-      const remaining = this.lastPromptTokens - systemTokens; // 记忆 + 本次提问 的真实总量
-      const splitBase = memoryChars + thisTurnChars;
-      let memoryTokens: number;
-      let questionTokens: number;
-      if (splitBase <= 0) {
-        memoryTokens = 0;
-        questionTokens = remaining;
-      } else {
-        memoryTokens = Math.round(remaining * (memoryChars / splitBase));
-        questionTokens = remaining - memoryTokens;
-      }
-      return { memoryTokens, systemTokens, questionTokens: questionTokens + this.lastSubAgentTokens };
-    }
-
-    // 兜底：没拿到 API usage,纯字符估算
-    const questionTokens = Math.ceil(thisTurnChars * 0.6) + this.lastSubAgentTokens;
-    const memoryTokens = this.turnStartMsgCount <= 1 ? 0 : Math.ceil(memoryChars * 0.6);
-    return { memoryTokens, systemTokens: systemEstimate, questionTokens };
+  /** @internal */ buildTokenBreakdown(): { memoryTokens: number; systemTokens: number; questionTokens: number } {
+    return this.tokenAccountant.buildTokenBreakdown();
   }
 
-  /**
-   * 反思·换路（轻量层）：卡在某目标反复失败时，重读其真实状态 + 注入复盘引导，给一次"换路"机会。
-   * 重量版体现在 readStuckTargetState——主动把卡住文件的最新内容塞回上下文，消除"拿旧状态硬改"的根因。
-   */
+    /** 反思·换路（委托 ReflectionHandler）。 */
   private async injectReflection(stuck: StuckTarget | null, guard: LoopGuard): Promise<void> {
-    this.send("status", { content: "重新理清思路...", phase: "thinking" });
-    const freshState = await this.readStuckTargetState(stuck);
-    this.messages.push({ role: "system", content: buildReflectionPrompt(stuck) + freshState, _tailInjected: true, _ephemeralInjected: true } as ChatCompletionMessageParam);
-    guard.noteReflected();
-    this.loopGuardSnapshot = guard.snapshot();
-    this.persistMessages();
+    await this.reflectionHandler.injectReflection(stuck, guard);
   }
 
-  /**
-   * 摘要重启（重量层）：把反复失败的过程压成复盘摘要、清除噪声原文，再重读真实状态，
-   * 让模型带着干净上下文换一条完全不同的路重来。是投降前的最后一搏。
-   */
-  private async injectSummaryRestart(stuck: StuckTarget | null, guard: LoopGuard, client: OpenAI): Promise<void> {
-    this.send("status", { content: "整理思路，换个方式重来...", phase: "thinking" });
-    this.messages = await reflectiveCompact(this.messages, client, this.model);
-    const freshState = await this.readStuckTargetState(stuck);
-    this.messages.push({ role: "system", content: buildSummaryRestartPrompt(stuck) + freshState, _tailInjected: true, _ephemeralInjected: true } as ChatCompletionMessageParam);
-    guard.noteSummaryRestart();
-    this.loopGuardSnapshot = guard.snapshot();
-    this.persistMessages();
+
+    /** 摘要重启（委托 ReflectionHandler）。 */
+  private async injectSummaryRestart(stuck: StuckTarget | null, guard: LoopGuard, strategy: LLMStrategy): Promise<void> {
+    await this.reflectionHandler.injectSummaryRestart(stuck, guard, strategy);
   }
 
-  /** 重读卡住目标的最新真实内容（仅当卡在某个文件上时）；失败不阻塞，返回空串。 */
+
+    /** 重读卡住目标真实内容（委托 ReflectionHandler）。 */
   private async readStuckTargetState(stuck: StuckTarget | null): Promise<string> {
-    if (!stuck?.path) return "";
-    try {
-      const content = await executeToolCall("read_file", { path: stuck.path }, this.cwd, this.host, {}, this.workspaces);
-      return `\n\n以下是 ${stuck.path} 的最新真实内容，请基于它（而不是你记忆中的旧状态）重新规划：\n${content}`;
-    } catch {
-      return ""; // 文件可能已删除/路径变化，读不到不影响反思引导本身
-    }
+    return this.reflectionHandler.readStuckTargetState(stuck);
   }
+
 
   /**
    * 预取 MCP 工具（每轮用户输入前）：解析三来源配置 → 同步连接 → 拉取工具清单，
@@ -886,18 +976,16 @@ export class AgentSession {
     await this.mcpController.prefetchMcpTools();
   }
 
-  /** 工具是否必须有参数（空参数对象视为调用失败，避免把 {} 当有效参数执行） */
+    /** 工具是否必须有参数（委托 ToolCallExecutor）。 */
   private toolRequiresArguments(toolName: string): boolean {
-    if (REQUIRED_ARGS_TOOLS.has(toolName)) return true;
-    // MCP 工具一律要求带参数
-    if (toolName.startsWith(MCP_TOOL_PREFIX)) return true;
-    return false;
+    return this.toolCallExecutor.requiresArguments(toolName);
   }
+
 
   /** 若是 MCP 工具，返回其真实 server 名与工具名（供前端卡片展示）。
    * 不在 mcpToolMap（已禁用/移除）时，从编码名尽力还原，至少让卡片能标出 server/tool 名。 */
   /** MCP 工具的真实 server/tool 名（委托 McpController） */
-  private mcpMetaFor(toolName: string): { mcpServer?: string; mcpTool?: string } {
+  /** @internal */ mcpMetaFor(toolName: string): { mcpServer?: string; mcpTool?: string } {
     return this.mcpController.mcpMetaFor(toolName);
   }
 
@@ -910,401 +998,179 @@ export class AgentSession {
     return this.mcpController.runMcpTool(modelToolName, args);
   }
 
-  /**
-   * 本轮请求前的自动压缩门：
-   * - 溢出（lastTotalTokens > 窗口，通常是切换到更小窗口模型）→ 强制无感压缩；
-   * - 达到窗口 75% → 暂停询问用户「继续压缩 / 迁移到新会话」。
-   * @returns true 表示用户选择迁移到新会话、本轮应中止；false 表示可继续本轮。
-   */
-  private async maybeAutoCompactBeforeTurn(client: OpenAI): Promise<boolean> {
-    const ctxWindow = this.getContextWindow();
-    const overflowing = this.lastTotalTokens > ctxWindow;
-    if (overflowing) {
-      // 模型切换溢出：强制无感压缩
-      this.isCompacting = true;
-      this.send("compacting_start", {});
-      try {
-        this.send("status", { content: "整理上下文..." });
-        this.messages = await compactMessages(this.messages, client, this.model);
-        this.isCompacting = false;
-        this.lastPromptTokens = 0; // 重置缓存，让 updateAndSendTokenUsage 从压缩后的 messages 重新估算
-        this.send("compacting_end", { success: true, message: "切换模型后上下文已自动压缩" });
-        this.updateAndSendTokenUsage();
-      } catch (err) {
-        this.isCompacting = false;
-        this.send("compacting_end", { success: false, message: `压缩失败：${(err as Error).message}` });
-      }
-      return false;
-    }
-    if (this.lastTotalTokens > 0 && needsCompaction(this.lastTotalTokens, ctxWindow, 0.75)) {
-      // >=75% 自动压缩阈值：暂停，让用户选择
-      const choice = await this.waitForCompactionChoice(this.lastTotalTokens, ctxWindow);
-      if (choice === "continue") {
-        // 用户选择继续：压缩当前会话
-        this.isCompacting = true;
-        this.send("compacting_start", {});
-        try {
-          this.send("status", { content: "整理上下文..." });
-          this.messages = await compactMessages(this.messages, client, this.model);
-          this.isCompacting = false;
-          this.lastPromptTokens = 0; // 重置缓存，让 updateAndSendTokenUsage 从压缩后的 messages 重新估算
-          this.send("compacting_end", { success: true, message: "上下文已压缩" });
-          this.updateAndSendTokenUsage();
-        } catch (err) {
-          this.isCompacting = false;
-          this.send("compacting_end", { success: false, message: `压缩失败：${(err as Error).message}` });
-        }
-        return false;
-      }
-      // 用户选择迁移到新会话：handleCompactionChoice 已压缩并存储迁移数据，通知前端并中止本轮
-      this.send("compaction_migrated", { migratedToNewSession: true });
-      return true;
-    }
-    return false;
+  /** 本轮请求前的自动压缩门（委托 CompactionController）。 */
+  private async maybeAutoCompactBeforeTurn(strategy: LLMStrategy): Promise<boolean> {
+    return this.compactionController.maybeAutoCompactBeforeTurn(strategy);
   }
 
-  /**
-   * 本轮 Credits 预算门：每轮工具调用前检查本轮累计花费，分两级响应。
-   * 设计目标——对用户友好、不误伤正常长任务：
-   *   · 软提醒（warnAt）：只注入一条系统提示引导模型尽快收尾，不打断，每轮最多提醒一次。
-   *   · 硬暂停（pauseAt）：暂停循环，把真实花费展示给用户，由用户选择「继续」或「停止」。
-   *     选择继续后暂停阈值翻倍（this.budgetPauseThreshold *= 2）——同一个长任务后续
-   *     不会因为跨过同一条线反复弹窗，只在花费再翻一倍时才二次确认。
-   * @returns true 表示用户选择停止、本轮应立即中止；false 表示可继续本轮。
-   */
+
+  /** 本轮 Credits 预算门（委托 CreditBudgetGate）。 */
   private async maybeCreditBudgetGate(turnStartTime: number, streamedContentThisRound: string): Promise<boolean> {
-    if (!this.creditBudgetConfig.enabled) return false;
-    const breakdown = this.buildTokenBreakdown();
-    // 用当前已知的输出 token 做实时估算（本回合尚未产出的输出忽略，下一回合会覆盖到更准的值）
-    const estimatedOutput = this.lastTurnOutputTokens || this.lastCompletionTokens || 0;
-    const spent = calculateCredits(this.model, { ...breakdown, outputTokens: estimatedOutput });
-
-    if (spent >= this.budgetPauseThreshold) {
-      const choice = await this.waitForBudgetChoice(spent, this.budgetPauseThreshold);
-      if (choice === "stop") {
-        this.messages.push({
-          role: "assistant",
-          content: `本轮任务已消耗 ${formatCredits(spent)} credits，用户选择在此暂停。已完成的部分保留，需要继续时请告诉我下一步。`,
-        } as ChatCompletionMessageParam);
-        this.stampCancelledTurnStats(turnStartTime, streamedContentThisRound);
-        return true;
-      }
-      // 用户选择继续：阈值翻倍，避免同一任务后续反复打断
-      this.budgetPauseThreshold = spent * 2;
-      return false;
-    }
-
-    if (!this.budgetWarnedThisTurn && spent >= this.creditBudgetConfig.warnAt) {
-      this.budgetWarnedThisTurn = true;
-      this.messages.push({
-        role: "system",
-        content:
-          `⚠️ 本轮任务已消耗 ${formatCredits(spent)} credits，成本较高。如果当前目标已经基本达成或还差不多的收尾工作，` +
-          `请尽快用文字给用户一个结论性回复，不要为了"更完美"继续做非必要的额外探索/验证。` +
-          `如果任务确实还没做完（用户明确要求的核心工作尚未完成），仍应继续把它做完，不要半途而废。`,
-        _tailInjected: true,
-        _ephemeralInjected: true,
-      } as ChatCompletionMessageParam);
-    }
-    return false;
+    return this.creditBudgetGate.check(turnStartTime, streamedContentThisRound);
   }
 
-  /**
-   * 等待用户对预算暂停做出选择。发送 credit_budget_paused 事件给前端，
-   * 阻塞直到用户选择"继续"或"停止"。120 秒超时自动选"继续"（与压缩选择门的兜底策略一致，防死锁）。
-   */
-  private waitForBudgetChoice(spent: number, threshold: number): Promise<"continue" | "stop"> {
-    this.send("credit_budget_paused", { spent, threshold, model: this.model });
-    return new Promise<"continue" | "stop">((resolve) => {
-      this.budgetChoiceResolve = resolve;
-      const cancelCheck = setInterval(() => {
-        if (this.cancelled && this.budgetChoiceResolve === resolve) {
-          this.budgetChoiceResolve = null;
-          clearInterval(cancelCheck);
-          resolve("stop");
-        }
-      }, 500);
-      setTimeout(() => {
-        clearInterval(cancelCheck);
-        if (this.budgetChoiceResolve === resolve) {
-          this.budgetChoiceResolve = null;
-          resolve("continue");
-        }
-      }, 120_000);
-    });
-  }
-
-  /** 处理用户对预算暂停的选择（由 sessionHub 的 credit_budget_choice 调用） */
+  /** 处理用户对预算暂停的选择（委托 CreditBudgetGate）。 */
   handleCreditBudgetChoice(choice: "continue" | "stop"): void {
-    this.budgetChoiceResolve?.(choice);
-    this.budgetChoiceResolve = null;
+    this.creditBudgetGate.handleChoice(choice);
   }
 
-  /**
-   * 按工具类型分发单次工具执行。重复调用拦截 / 子 Agent 委托 / 并行编排 / Relay 工具 /
-   * 命令信任门 / MCP / 通用工具，各分支统一产出 result + status；meta 按引用填充（userMessage 等）。
-   * @returns result/status/commandWasEdited，以及实际执行所用的 toolArgs（命令可能被用户编辑）。
-   */
-  private async dispatchToolCall(
-    toolName: string,
-    toolArgs: Record<string, unknown>,
-    toolCallId: string,
-    verdict: { allowed: boolean; message?: string },
-    meta: ToolMeta,
-    guard: LoopGuard,
-  ): Promise<{ result: string; status: "success" | "error"; commandWasEdited?: string; toolArgs: Record<string, unknown> }> {
-    let result = "";
-    let status: "success" | "error" = "success";
-    let commandWasEdited: string | undefined; // execute_command 专用：用户编辑后的命令（仅注入 AI 上下文，不渲染给前端）
-
-    if (!verdict.allowed) {
-      // 检测到鬼打墙：拿一模一样的参数反复调同一个工具。不再执行，直接回引导
-      result = verdict.message || "调用被拦截。";
-      status = "error";
-    } else if (toolName === ToolName.DelegateTask) {
-      // 委托子 agent：不走通用 executeToolCall，由 AgentSession 特殊处理（隔离执行 + 事件包装）
-      try {
-        result = await this.runDelegateTask(toolArgs, toolCallId);
-      } catch (err) {
-        result = `委托子 Agent 失败: ${(err as Error).message}`;
-        status = "error";
-      }
-    } else if (toolName === ToolName.ParallelResearch) {
-      // 并行调研：派发多个只读子 agent 并发执行，聚合结论
-      try {
-        result = await this.runParallelResearch(toolArgs, toolCallId);
-      } catch (err) {
-        result = `并行调研失败: ${(err as Error).message}`;
-        status = "error";
-      }
-    } else if (toolName === ToolName.ParallelExecute) {
-      // 并行执行：派发多个子 agent 并发执行写任务（文件分区隔离）
-      try {
-        result = await this.runParallelExecution(toolArgs, toolCallId);
-      } catch (err) {
-        result = `并行执行失败: ${(err as Error).message}`;
-        status = "error";
-      }
-    } else if (toolName === ToolName.RelayCreate || toolName === ToolName.RelaySaveDoc || toolName === ToolName.RelayAdvance || toolName === ToolName.RelayUpdateTask || toolName === ToolName.RelayReviewTask) {
-      // Relay 工作流工具：由 AgentSession 管理状态机与落盘
-      try {
-        if (toolName === ToolName.RelayCreate) {
-          // 确认门：relay_create 需要用户确认后才执行
-          const confirmed = await this.waitForToolConfirmation(toolName, toolArgs);
-          if (!confirmed) {
-            result = "用户拒绝创建 Relay 工作流。请直接在本次对话中解决问题，不使用 Relay 长任务工作流。可以正常使用工具（读文件、写代码、执行命令等），只是不走 Relay 的分阶段流程。";
-            meta.userMessage = "用户跳过了 Relay 创建";
-            status = "error";
-          } else {
-            result = await this.runRelayCreate(toolArgs);
-          }
-        }
-        else if (toolName === ToolName.RelaySaveDoc) result = await this.runRelaySaveDoc(toolArgs);
-        else if (toolName === ToolName.RelayAdvance) result = await this.runRelayAdvance(toolArgs);
-        else if (toolName === ToolName.RelayUpdateTask) result = await this.runRelayUpdateTask(toolArgs);
-        else result = await this.runRelayReviewTask(toolArgs);
-      } catch (err) {
-        result = `Relay 操作失败: ${(err as Error).message}`;
-        status = "error";
-      }
-    } else if (toolName === ToolName.ExecuteCommand || toolName === ToolName.StartProcess) {
-      // 命令信任门：灾难硬拦 → 白名单 → 未信任则弹三档授权（execute_command 与 start_process 共用同一 gate）
-      const command = String((toolArgs as { command?: unknown }).command ?? "");
-      const outcome = await this.gateCommand(command, toolCallId);
-      if (!outcome.allow) {
-        result = outcome.aiMessage || "命令未执行。";
-        if (outcome.userMessage) meta.userMessage = outcome.userMessage;
-        status = "error";
-      } else {
-        // 用户编辑了命令：用编辑后的版本执行，但【不改写】AI 自己的 tool_call（保留它真实的原始意图），
-        // "命令被用户改过"这件事只通过工具结果（aiHint）告知 AI，避免它看到自己消息被篡改而困惑。
-        if (outcome.editedCommand) commandWasEdited = outcome.editedCommand;
-        const execArgs = outcome.editedCommand
-          ? { ...toolArgs, command: outcome.editedCommand }
-          : toolArgs;
-        if (outcome.editedCommand) toolArgs = execArgs; // 仅用于 tool_result 事件展示实际执行的命令
-        try {
-          result = await executeToolCall(toolName, execArgs, this.cwd, this.host, meta, this.workspaces, this.loadSkillForTool, this.web, this.loadPowerForTool, this.abortController?.signal);
-          // 同步终端工作目录（后续命令不传 cwd 时默认在此执行）
-          this.trackTerminalCwd(toolName, execArgs, meta);
-        } catch (err) {
-          const error = err as Error;
-          result = `错误: ${error.message}`;
-          status = "error";
-          if (error.name === "ToolError" && (error as ToolError).userMessage && !meta.userMessage) {
-            meta.userMessage = (error as ToolError).userMessage;
-          }
-        }
-      }
-    } else if (toolName.startsWith(MCP_TOOL_PREFIX)) {
-      // MCP 工具：经审批门后路由到对应 server（autoApprove 命中则免确认）
-      const out = await this.runMcpTool(toolName, toolArgs);
-      result = out.result;
-      status = out.status;
-      if (out.userMessage) meta.userMessage = out.userMessage; // 给前端卡片的简短文案（区别于给 AI 的详细 result）
-    } else {
-      // 通用工具执行：在写文件工具执行前创建快照（问答模式不做快照）
-      if (this.mode !== "quest" && SNAPSHOT_TOOLS.has(toolName)) {
-        const filesToSnapshot = await extractTargetFiles(toolName, toolArgs, this.cwd, this.host, this.workspaces);
-        if (filesToSnapshot.length > 0) {
-          const turnId = `turn-${this.turnCount}`;
-          const created = await this.snapshotMgr.beforeEdit(turnId, filesToSnapshot).catch(() => false);
-          // 快照创建成功 → 主动推送新列表给前端（无需用户手动刷新）
-          if (created) {
-            const snapshots = await this.snapshotMgr.list().catch(() => []);
-            this.send("snapshots_listed", { snapshots });
-          }
-        }
-      }
-      try {
-        result = await executeToolCall(toolName, toolArgs, this.cwd, this.host, meta, this.workspaces, this.loadSkillForTool, this.web, this.loadPowerForTool, this.abortController?.signal);
-        this.trackTerminalCwd(toolName, toolArgs, meta);
-        // 反复零碎读同一文件检测：超过阈值时追加提示，引导模型用已读内容而非继续切片重读
-        if (toolName === "read_file" && typeof toolArgs.path === "string") {
-          result += guard.noteFileRead(toolArgs.path);
-        }
-      } catch (err) {
-        const error = err as Error;
-        result = `错误: ${error.message}`;
-        status = "error";
-        // ToolError 携带给用户的简短文案：兜底写入 meta（工具内部通常已写，这里防漏）
-        if (error.name === "ToolError" && (error as ToolError).userMessage && !meta.userMessage) {
-          meta.userMessage = (error as ToolError).userMessage;
-        }
-      }
-    }
-
-    return { result, status, commandWasEdited, toolArgs };
+    /** 按工具类型分发执行（委托 ToolCallExecutor）。 */
+  private async dispatchToolCall(toolName: string, toolArgs: Record<string, unknown>, toolCallId: string, verdict: { allowed: boolean; message?: string }, meta: ToolMeta, guard: LoopGuard): Promise<{ result: string; status: "success" | "error"; commandWasEdited?: string; toolArgs: Record<string, unknown> }> {
+    return this.toolCallExecutor.dispatchToolCall(toolName, toolArgs, toolCallId, verdict, meta, guard);
   }
+
+    /** 执行单个工具调用（委托 ToolCallExecutor）。 */
+  private async executeSingleToolCall(toolCall: NormalizedToolCall, toolCalls: NormalizedToolCall[], guard: LoopGuard, ts: TurnState, mutatedFiles: Set<string>): Promise<void> {
+    await this.toolCallExecutor.executeSingleToolCall(toolCall, toolCalls, guard, ts, mutatedFiles);
+  }
+
+
+    /** 工具轮编排（委托 ToolCallExecutor）。 */
+  private async runToolDispatch(toolCalls: NormalizedToolCall[], guard: LoopGuard, ts: TurnState, mutatedFiles: Set<string>): Promise<void> {
+    await this.toolCallExecutor.runToolDispatch(toolCalls, guard, ts, mutatedFiles);
+  }
+
 
   /**
    * 正常收尾：把最终 assistant 回复（含 turnStats）落盘、推 stream_end、裁剪旧工具结果、
    * 按阈值异步触发滚动摘要。仅在"本轮无工具调用且确定为最终回复"时调用，调用后即结束本轮。
    */
   private finalizeAssistantReply(contentBuffer: string, turnStartTime: number, streamedContentThisRound: string, rounds: number): void {
-    const elapsed = Date.now() - turnStartTime;
-    const turnTokens = this.lastTurnTokens || contentBuffer.length;
-    // Credits 计算：请求级四段加权（记忆/system/本次输入/输出），见 credits.ts
-    // outputTokens：优先用 API 返回的真实值，没有时用流式内容 + 工具调用参数的字符数估算
-    const realOutput = this.lastTurnOutputTokens || this.lastCompletionTokens;
-    const estimatedOutput = realOutput > 0 ? realOutput : Math.ceil((contentBuffer.length + streamedContentThisRound.length) * 0.4);
-    const breakdown = { ...this.buildTokenBreakdown(), outputTokens: estimatedOutput };
-    const credits = calculateCredits(this.model, breakdown);
-    const creditDetail = buildCreditDetail(this.model, breakdown);
-    this.messages.push({ role: "assistant", content: contentBuffer, turnStats: { elapsed, tokens: turnTokens, model: this.model, credits, creditDetail } } as any);
+    const out = this.turnFinalizer.finalize({
+      contentBuffer,
+      streamedContentThisRound,
+      turnStartTime,
+      model: this.model,
+      messages: this.messages,
+      lastTurnTokens: this.lastTurnTokens,
+      lastTurnOutputTokens: this.lastTurnOutputTokens,
+      lastCompletionTokens: this.lastCompletionTokens,
+      buildTokenBreakdown: () => this.buildTokenBreakdown(),
+      compactionEnabled: this.compactionConfig.enabled,
+      toolResultKeepTurns: this.compactionConfig.toolResultKeepTurns,
+      rollingSummaryAccumulated: this.rollingSummaryAccumulated,
+      triggerTokens: this.compactionConfig.triggerTokens,
+    });
+    this.messages = out.messages;
     this.persistMessages(); // 最终回复落盘，切走也保留
-    // 本轮真实 token（拿不到 usage 时回退到字符数估算）
-    this.send("stream_end", { elapsed, tokens: turnTokens, model: this.model, credits, creditDetail });
-    // 本轮结束：裁剪旧 tool 结果，控制上下文体积增长（每轮都做，用户无感）
-    // 压缩关闭时跳过——用户明确选择保留完整工具结果
-    if (this.compactionConfig.enabled) {
-      this.messages = pruneOldToolResults(this.messages, this.compactionConfig.toolResultKeepTurns);
-      this.persistMessages();
-    }
-
-    // 滚动摘要：累计 token 超阈值 → 异步触发（不阻塞用户发下一条）
-    this.rollingSummaryAccumulated += turnTokens;
-    if (this.rollingSummaryAccumulated >= this.compactionConfig.triggerTokens) {
+    this.send("stream_end", { elapsed: out.elapsed, tokens: out.turnTokens, model: this.model, credits: out.credits, creditDetail: out.creditDetail });
+    this.rollingSummaryAccumulated = out.nextRollingSummaryAccumulated;
+    if (out.shouldTriggerRollingSummary) {
       this.maybeRollingSummary();
     }
   }
 
   /**
-   * 记录单次工具执行结果：软失败计数/隐藏卡片、编辑工具连续失败落盘控制、改动文件追踪、
-   * 发 tool_call(补发)/tool_result 事件、按类型截断后写入对话历史、截图收集、待确认列表同步。
-   * @param mutatedFiles 就地填充本轮改动过的文件路径
-   * @returns mutated/diagnosed：本次是否产生了文件改动 / 是否执行了 check_diagnostics（供调用方累计 didMutate/didDiagnose）
+   * 流式正文的提交门：agent 回合里 content delta 在本轮完成前语义未定，
+   * 可能是最终回答，也可能只是工具调用前后的叙述。先缓冲极短片段，
+   * 等它具备独立展示价值后再提交给前端，避免把 "..." 这类中间态 token
+   * 提升为正式消息段。
    */
-  private recordToolOutcome(
-    toolCallId: string,
-    toolName: string,
-    toolArgs: Record<string, unknown>,
-    result: string,
-    status: "success" | "error",
-    commandWasEdited: string | undefined,
-    meta: ToolMeta,
-    displayCwd: string,
-    guard: LoopGuard,
-    mutatedFiles: Set<string>,
-  ): { mutated: boolean; diagnosed: boolean } {
-    let mutated = false;
-    let diagnosed = false;
+  private shouldCommitPendingAssistantText(text: string): boolean {
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+    if (!/[A-Za-z0-9\u4e00-\u9fff]/.test(trimmed)) return false;
+    if (trimmed.length >= 24) return true;
+    if (/\n/.test(trimmed)) return true;
+    if (/[。！？.!?]\s*$/.test(trimmed) && trimmed.length >= 8) return true;
+    return false;
+  }
 
-    // 连续失败计数：失败累加，成功归零。str_replace 未匹配/参数非法等"软失败"不计入
-    // （错误返回里带了实际内容/行号，模型据此重试是正常纠错，不应被过早掐断）
-    const softFail = status === "error" && isSoftToolFailure(toolName, result);
-    guard.recordToolResult(status !== "error", softFail, { toolName, args: toolArgs });
+  /** 工具轮里的弱叙述：协议上是 content，但产品语义上不足以成为独立可见段。 */
+  private isWeakToolNarration(text: string): boolean {
+    const trimmed = text.trim();
+    if (!trimmed) return true;
+    if (!/[A-Za-z0-9\u4e00-\u9fff]/.test(trimmed)) return true;
+    if (trimmed.length <= 3) return true;
+    return false;
+  }
 
-    // 编辑工具失败：不展示卡片也不落盘。
-    // str_replace / create_file / apply_patch 的错误信息只是给 AI 的纠错反馈，
-    // 用户不需要看到（前端由 hidden 控制不展示，sessionHub 由 _transient 控制不落盘）。
-    const isEditError = status === "error" && EDIT_PERSIST_TOOLS.has(toolName);
-    if (isEditError) {
-      meta.hidden = true;
-      if (meta.userMessage) delete meta.userMessage;
-      (this as any).__markNextAsTransient = true;
-    }
+    /** 记录工具结果（委托 ToolCallExecutor）。 */
+  private recordToolOutcome(toolCallId: string, toolName: string, toolArgs: Record<string, unknown>, result: string, status: "success" | "error", commandWasEdited: string | undefined, meta: ToolMeta, displayCwd: string, guard: LoopGuard, mutatedFiles: Set<string>): { mutated: boolean; diagnosed: boolean } {
+    return this.toolCallExecutor.recordToolOutcome(toolCallId, toolName, toolArgs, result, status, commandWasEdited, meta, displayCwd, guard, mutatedFiles);
+  }
 
-    // 手动模式下文件改动是否进入了暂存（待确认）
-    const isPending = this.host.edits.getMode() === "manual" && (toolName === ToolName.StrReplace || toolName === ToolName.CreateFile || toolName === ToolName.ApplyPatch) && status === "success";
-    // 记录本轮是否有过实质文件改动（仅 str_replace/create_file/apply_patch 成功才算）。
-    // execute_command 不计入——跑命令看输出是验证/查看行为，不是"改动"。
-    if (status === "success" && (toolName === ToolName.StrReplace || toolName === ToolName.CreateFile || toolName === ToolName.ApplyPatch)) {
-      mutated = true;
-      // apply_patch 可能改多个文件：优先用 fileDiffs 收集全部改动路径
-      const diffs = meta.fileDiffs && meta.fileDiffs.length > 0 ? meta.fileDiffs : (meta.fileDiff ? [meta.fileDiff] : []);
-      for (const d of diffs) {
-        if (d.path) mutatedFiles.add(d.path);
-      }
-    }
-    // 执行中的 relay 任务：记录本任务改动过的文件（供两阶段评审定位改动点）
-    if (status === "success" && this.activeRelayTask) {
-      const diffs = meta.fileDiffs && meta.fileDiffs.length > 0 ? meta.fileDiffs : (meta.fileDiff ? [meta.fileDiff] : []);
-      for (const d of diffs) {
-        if (d.path) this.activeRelayTask.changedFiles.add(d.path);
-      }
-    }
-    if (status === "success" && toolName === ToolName.CheckDiagnostics) {
-      diagnosed = true;
-    }
-    // 软失败工具延迟展示：成功前不发 tool_call，现在确认可见才补发
-    if (SOFT_FAIL_TOOLS.has(toolName) && !meta.hidden) {
-      this.send("tool_call", { id: toolCallId, name: toolName, args: toolArgs, cwd: displayCwd, status: ToolCallStatus.Success, ...this.mcpMetaFor(toolName) });
-    }
-    this.send("tool_result", { id: toolCallId, name: toolName, args: toolArgs, result: result.slice(0, 500), status, fileDiff: meta.fileDiff, fileDiffs: meta.fileDiffs, noopEdit: meta.noopEdit, readRange: meta.readRange, diagnostics: meta.diagnostics, searchResults: (meta as any).searchResults, fetchResult: (meta as any).fetchResult, powerActivated: (meta as any).powerActivated, pending: isPending, userMessage: meta.userMessage, hidden: meta.hidden, resolvedPath: (meta as any).resolvedPath, ...this.mcpMetaFor(toolName) });
-    // 存入历史时按工具类型截断：read_file/web_fetch 给大预算（避免模型分页重读），
-    // search/list_dir 中等，其余较小。模型在本轮已看过完整内容，后续轮次只需够用的记忆。
-    const maxToolContent = toolContentLimit(toolName);
-    // 用户编辑了命令时，aiHint 仅注入 AI 上下文：明确"你请求的命令被用户改了"，叙事一致不困惑
-    const aiHint = commandWasEdited
-      ? `[系统提示：用户在审批环节将你请求的命令手动改为 "${commandWasEdited}" 并执行。这是用户的正常操作（不是你的错误），以下输出来自实际执行的 "${commandWasEdited}"。请据此继续，不要重试、不要道歉。]\n`
-      : meta.noopEdit
-        ? "[系统提示：本次编辑工具调用已执行成功，但生成的新内容与当前文件内容完全一致，因此没有产生任何实际修改。请据此继续判断：如果你本来预期文件应被修改，说明这次编辑是 no-op，需要换参数、换工具或重新评估目标；不要把它当成已改成功。]\n"
-        : "";
-    const contentForAI = aiHint + result;
-    const storedResult = contentForAI.length > maxToolContent
-      ? contentForAI.slice(0, maxToolContent) + `\n\n[内容已截断，原始长度 ${result.length} 字符。如需更多内容，请用更大的行范围一次性读取，不要分多次零碎读取]`
-      : contentForAI;
-    this.messages.push({ role: "tool", tool_call_id: toolCallId, _toolName: toolName, content: storedResult, displayContent: commandWasEdited ? result : undefined, displayCommand: commandWasEdited || undefined, status, fileDiff: meta.fileDiff, fileDiffs: meta.fileDiffs, readRange: meta.readRange, diagnostics: meta.diagnostics, searchResults: (meta as any).searchResults, fetchResult: (meta as any).fetchResult, powerActivated: (meta as any).powerActivated, pending: isPending, userMessage: meta.userMessage, hidden: meta.hidden, ...this.mcpMetaFor(toolName) } as any);
-    // 标记编辑工具连续软失败（在阈值内）为 transient，不落盘
-    if ((this as any).__markNextAsTransient) {
-      (this as any).__markNextAsTransient = false;
-      (this.messages[this.messages.length - 1] as any)._transient = true;
-    }
-    // screenshot_page：收集截图 URL，等所有 tool 结果都 push 完后再统一追加 user 图片消息
-    if (meta.screenshotDataUrl) {
-      ((this as any).__pendingScreenshots ??= []).push(meta.screenshotDataUrl);
-    }
-    // 同步当前待确认/可撤销列表给前端
-    if (isPending) {
-      this.sendEditsUpdated();
-      this.onPendingChanged?.();
-    } else if (status === "success" && (toolName === ToolName.StrReplace || toolName === ToolName.CreateFile || toolName === ToolName.ApplyPatch)) {
-      // auto 模式下编辑已落盘并记入 undoable，但前端还不知道 → 补发一次，让工具卡片显示撤销图标
-      this.sendEditsUpdated();
-    }
 
-    return { mutated, diagnosed };
+  /**
+   * 回合产出：由新链路（LLMTurnSource → DefaultLLMHandler）驱动本回合的 LLM 推进。
+   *
+   * - 流式增量【实时转发】给前端（通过复用主循环的 callbacks），用户看到正常的打字/思考效果。
+   * - 只跑一次回合，不产生双倍 token。
+   *
+   * 接管边界：
+   * - 接管的是「回合产出 + 归一化」这一层——LLMTurnSource 执行协议、DefaultLLMHandler 归一化成统一草案。
+   * - 归一化后的草案回填成主循环消费的 LLMTurnResult 形状，下游（工具执行/收尾/计费/持久化）复用同一套逻辑。
+   */
+  private async runPipelineTurn(
+    strategy: LLMStrategy,
+    requestMessages: ChatCompletionMessageParam[],
+    callbacks: LLMStreamCallbacks,
+  ): Promise<LLMTurnResult> {
+    const turnSource = new StrategyTurnSource({
+      strategy,
+      model: this.model,
+      tools: this.getToolDefs(),
+      temperature: 0.2,
+      signal: this.abortController?.signal,
+      // 关键：把新链路的流式增量实时接到主循环 callbacks 上，让前端看到正常的思考/打字效果。
+      onReasoningDelta: (text, partIndex, itemId) => callbacks.onReasoningDelta(text, partIndex, itemId),
+      onTextDelta: (text) => callbacks.onTextDelta(text),
+    });
+    const handler = new DefaultLLMHandler(turnSource);
+    const draft = await handler.handle({
+      requestId: `req-${this.turnCount}`,
+      turnId: `turn-${this.turnCount}-${Date.now()}`,
+      effectiveMessages: requestMessages,
+    });
+    console.log(`[pipeline] 新链路驱动本回合，stage=${draft.stage}，toolDrafts=${draft.toolDrafts.length}`);
+
+    // 把新链路草案回填成老循环消费的 LLMTurnResult 形状。
+    // 工具草案 → NormalizedToolCall：id/name/arguments 与老协议一一对应，rawArgsText 即原始参数串。
+    const toolCalls: NormalizedToolCall[] = draft.toolDrafts.map((td) => ({
+      id: td.callId,
+      name: td.toolName,
+      arguments: td.rawArgsText ?? "",
+    }));
+    const normalized: NormalizedFinishReason = draft.finishReason ?? "complete";
+    return {
+      content: draft.contentDraft ?? "",
+      toolCalls,
+      // finishReason 是历史遗留的原始协议值字段；下游只消费 normalizedFinishReason，
+      // 这里用归一化值填充即可（不再有消费方读原始值做逻辑判断）。
+      finishReason: normalized,
+      normalizedFinishReason: normalized,
+      usage: draft.usage,
+    };
+  }
+
+  /**
+   * 收尾判定：纯回答 turn（无工具、finishReason=complete）的最终正文由 DefaultOutputHandler 产出。
+   *
+   * 接管边界（最小、可回落）：
+   * - 只接管"最终内容判定"这一薄层：OutputHandler 在 complete 时返回 contentDraft，与 contentBuffer 等价。
+   * - 真正的持久化 / 前端 stream_end / credits 计费 / 压缩触发仍复用 finalizeAssistantReply，语义天然对齐。
+   *
+   * 安全：任何异常都返回 null，调用方回落 contentBuffer 收尾。
+   */
+  private async runPipelineOutput(contentBuffer: string, finishReason: NormalizedFinishReason): Promise<string | null> {
+    try {
+      const handler = new DefaultOutputHandler();
+      const draft = await handler.handle({
+        requestId: `req-${this.turnCount}`,
+        turnId: `turn-${this.turnCount}-${Date.now()}`,
+        runtimeEvents: [],
+        committedEvents: [],
+        toolContexts: [],
+        contentDraft: contentBuffer,
+        finishReason,
+      });
+      console.log(`[pipeline] OutputHandler 接管收尾，stage=${draft.stage}，shouldContinue=${draft.shouldContinue}`);
+      // complete 时 OutputHandler 返回 contentDraft；其余情形 finalContent 为空，回落原始 contentBuffer 保底。
+      return draft.finalContent ?? contentBuffer;
+    } catch (err) {
+      console.warn("[pipeline] OutputHandler 收尾失败（已回落原始正文）:", (err as Error).message);
+      return null;
+    }
   }
 
   /**
@@ -1318,17 +1184,28 @@ export class AgentSession {
    */
   private async handleNoToolCallTurn(
     contentBuffer: string,
-    finishReason: string | null | undefined,
+    finishReason: NormalizedFinishReason,
     guard: LoopGuard,
     ts: TurnState,
     mutatedFiles: Set<string>,
     turnStartTime: number,
     streamedContentThisRound: string,
     rounds: number,
+    commitPendingText: () => void,
   ): Promise<"continue" | "done"> {
-    // 根源处理 1：输出被 max_tokens 截断（finish_reason=length）→ 让模型接着写，而不是把半截内容当成最终答案
-    if (finishReason === "length" && contentBuffer) {
+    const decision = this.noToolTurnDecider.decide({ contentBuffer, finishReason, guard, ts });
+
+    // provider/网关级失败不能按正常 stop 收尾。
+    if (decision.action === "abort_error") {
+      if (contentBuffer) this.messages.push({ role: "assistant", content: contentBuffer });
+      this.stampAbortedTurnStats(turnStartTime, streamedContentThisRound || contentBuffer, "error");
+      return "done";
+    }
+
+    // 输出被截断（truncated，对应 max_tokens）→ 让模型接着写，而不是把半截内容当成最终答案
+    if (decision.action === "continue_truncated") {
       console.log("[agent] 输出被截断（length），注入续写引导");
+      commitPendingText();
       this.messages.push({ role: "assistant", content: contentBuffer });
       // 用正向指令引导续写，避免负面措辞（"不要重复"）反而把"重复"植入模型注意力焦点
       this.messages.push({
@@ -1340,10 +1217,9 @@ export class AgentSession {
       return "continue";
     }
 
-    if (looksLikeIncompleteReply(contentBuffer)) {
-      const exceeded = guard.noteIncompleteRetry();
+    if (decision.action === "continue_incomplete") {
       // 超过重试上限：不再续写，避免模型反复吐内心 OS 陷入死循环，转为强制收尾
-      if (exceeded) {
+      if (decision.forceFinalizePrompt) {
         console.log("[agent] reasoning 泄露续写已达上限，强制收尾");
         this.messages.push({ role: "assistant", content: contentBuffer });
         this.messages.push({
@@ -1370,13 +1246,9 @@ export class AgentSession {
       } as any);
       return "continue";
     }
-    // 完成前自检：已关闭（速度优先，避免 DeepSeek 等模型多跑一轮验证）。
-    ts.didSelfCheck = true; // 跳过自检轮
-    // 空回复兜底：模型声称结束（finish=stop、无工具调用）但内容为空，
-    // 这通常是 API 侧偶发的 SSE 异常（output item 未产出）。不要给用户显示空白——
-    // 注入引导让模型重新生成一次回复。最多重试 1 次，防无限循环。
-    if (!contentBuffer && !ts.emptyRetried) {
-      ts.emptyRetried = true;
+
+    // 空回复兜底：模型声称结束（finish=stop、无工具调用）但内容为空，最多重试 1 次。
+    if (decision.action === "continue_empty_retry") {
       this.messages.push({
         role: "system",
         content:
@@ -1388,11 +1260,18 @@ export class AgentSession {
       } as any);
       return "continue";
     }
+
     // 自动语法检查注入：已移除。
     // 原因：diagnostics.check() 返回全量诊断（包括 @types/node 缺失、lib 配置不全等环境噪音），
     // 这些是 tsconfig 配置问题，模型永远无法通过改代码修复，注入给模型只会导致死循环。
     // 模型有 check_diagnostics 工具可以主动调用做验证，代码层不需要强制注入。
-    this.finalizeAssistantReply(contentBuffer, turnStartTime, streamedContentThisRound, rounds);
+    commitPendingText();
+    // 收尾正文由新链路 DefaultOutputHandler 判定（complete 时等价于 contentBuffer），失败回落 contentBuffer。
+    // 其余收尾（持久化/stream_end/计费/压缩）仍复用 finalizeAssistantReply。
+    const taken = await this.runPipelineOutput(contentBuffer, finishReason);
+    const finalContent = taken !== null ? taken : contentBuffer;
+    this.finalizeAssistantReply(finalContent, turnStartTime, streamedContentThisRound, rounds);
+    this.trace("turn.end", { finishReason, finalContent: truncateForTrace(finalContent || "", 2000) }, this.turnCount);
     return "done";
   }
 
@@ -1460,9 +1339,9 @@ export class AgentSession {
     userMeta?: { displayText?: string; attachedFiles?: { name: string; size: number }[]; replyStyle?: string; userSegments?: unknown[] },
   ): Promise<void> {
     this.turnCount++;
+    this.trace("turn.start", { input: truncateForTrace(input, 2000), model: model || this.model, provider: provider || this.provider }, this.turnCount);
     // 新一轮：重置本轮 Credits 预算门状态（软提醒标记 + 硬暂停阈值回到配置基线）
-    this.budgetWarnedThisTurn = false;
-    this.budgetPauseThreshold = this.creditBudgetConfig.pauseAt;
+    this.creditBudgetGate.resetForTurn();
     // 动态切换模型和 provider
     if (model && model !== this.model) {
       this.model = model;
@@ -1487,7 +1366,6 @@ export class AgentSession {
     // 保存本轮用户输入（压缩迁移时需要在新会话中重放）
     this.lastUserInput = { content: input, model, images, provider, userMeta: userMeta as Record<string, unknown> | undefined };
 
-    const client = getClient(this.provider, this.model);
     const strategy = getStrategy(this.provider, this.model);
     const turnStartTime = Date.now();
     this.abortController = new AbortController();
@@ -1526,15 +1404,15 @@ export class AgentSession {
     void this.persistMessages();
 
     // 自动压缩（溢出强制无感 / 达 75% 阈值询问用户）；用户选择迁移到新会话时本轮中止
-    if (await this.maybeAutoCompactBeforeTurn(client)) return;
+    if (await this.maybeAutoCompactBeforeTurn(strategy)) return;
 
     this.send("status", { content: "思考中...", phase: "thinking" });
 
     // 预取 IDE 上下文 / skill / power / MCP —— 它们之间无依赖，并行拉取以缩短首字延迟
     const [ideCtx, skillsPrompt, powersPrompt] = await Promise.all([
-      this.promptBuilder.buildIdeContextPrompt(false).catch((e) => { console.warn("[ide-ctx] 预取失败（忽略）:", (e as Error).message); return null; }),
-      this.skillRegistry.buildSkillsPrompt().catch((e) => { console.warn("[skill] 发现 skill 失败（忽略）:", (e as Error).message); return null; }),
-      this.powerRegistry ? this.powerRegistry.buildPowersPrompt().catch((e) => { console.warn("[power] 发现 power 失败（忽略）:", (e as Error).message); return null; }) : Promise.resolve(null),
+      this.promptBuilder.buildIdeContextPrompt(false).catch((e: unknown) => { console.warn("[ide-ctx] 预取失败（忽略）:", (e as Error).message); return null; }),
+      this.skillRegistry.buildSkillsPrompt().catch((e: unknown) => { console.warn("[skill] 发现 skill 失败（忽略）:", (e as Error).message); return null; }),
+      this.powerRegistry ? this.powerRegistry.buildPowersPrompt().catch((e: unknown) => { console.warn("[power] 发现 power 失败（忽略）:", (e as Error).message); return null; }) : Promise.resolve(null),
       this.prefetchMcpTools(),  // ← 之前串行 await，现在并入并行
     ]);
     this.ideContextCache = ideCtx;
@@ -1577,10 +1455,32 @@ export class AgentSession {
       // 通过策略执行一个回合（策略负责调 API + 解析流式响应，产出标准化结果）
       // 每轮独立：本轮是否已发 stream_start（控制打字机启动）
       let turnStreamStarted = false;
+      let pendingTextBuffer = "";
       let reasoningStarted = false;
       let reasoningChars = 0;
+      const commitPendingText = () => {
+        if (!pendingTextBuffer) return;
+        // 剥离尾部弱内容（如模型在工具调用前夹带的 "..." 省略号独立行）
+        const stripped = pendingTextBuffer.replace(/\n[^\n]*$/g, (lastLine) => {
+          const trimmed = lastLine.replace(/^\n/, "").trim();
+          if (!trimmed) return lastLine; // 空行保留
+          if (!/[A-Za-z0-9\u4e00-\u9fff]/.test(trimmed) && trimmed.length <= 5) return ""; // 纯标点短行剥离
+          return lastLine;
+        });
+        if (!stripped.trim()) { pendingTextBuffer = ""; return; }
+        if (!turnStreamStarted) {
+          console.log("[stream] 首个 chunk 到达，耗时:", Date.now() - turnStartTime, "ms");
+          this.send("stream_start", {});
+          this.send("status", { content: "正在回复...", phase: "responding" });
+          turnStreamStarted = true;
+        }
+        this.updateDrawingStatus(streamedContentThisRound);
+        this.send("stream_delta", { content: stripped });
+        pendingTextBuffer = "";
+      };
       const callbacks: LLMStreamCallbacks = {
-        onReasoningDelta: (text) => {
+        onReasoningDelta: (text, partIndex, itemId) => {
+          this.trace("reasoning.delta", { text: truncateForTrace(text, 2000), partIndex, itemId }, this.turnCount);
           // 思考过程：推送给前端展示，不持久化到消息历史
           // Quest 模式且未开启「思考」开关时，不转发 reasoning（前端也就不展示思考过程）
           if (this.mode === "quest" && !this.questThink) return;
@@ -1597,21 +1497,19 @@ export class AgentSession {
               this.send("status", { content: "正在构思图形...", phase: "thinking" });
             }
           }
-          this.send("reasoning_delta", { content: text });
+          this.send("reasoning_delta", { content: text, partIndex, itemId });
         },
         onTextDelta: (text) => {
-          if (!turnStreamStarted) {
-            console.log("[stream] 首个 chunk 到达，耗时:", Date.now() - turnStartTime, "ms");
-            this.send("stream_start", {});
-            this.send("status", { content: "正在回复...", phase: "responding" });
-            turnStreamStarted = true;
-          }
+          this.trace("text.delta", { text: truncateForTrace(text, 2000) }, this.turnCount);
           streamedContentThisRound += text;
-          // 增强渲染代码块进度提示：根据已输出内容动态细化状态
-          this.updateDrawingStatus(streamedContentThisRound);
-          this.send("stream_delta", { content: text });
+          pendingTextBuffer += text;
+          // 注意：这里不再边生成边提交正文。
+          // 原因：同一轮最终可能以 tool_calls 收尾，模型在工具调用前夹带的 prose
+          // （如“你的观察是对的，我先看一下...”）若提前发给前端，就会在多工具任务中每轮重复刷屏。
+          // 统一等 runTurn 返回后再判断：无工具调用 → 作为最终回答提交；有工具调用 → 丢弃这段工具轮叙述。
         },
         onToolCallDetected: (name, id) => {
+          this.trace("tool.detected", { name, id }, this.turnCount);
           // ⚠️ 不在这里发 tool_call(pending)！
           // onToolCallDetected 在流式输出阶段被调用，此时 LLM 可能一次返回多个 tool_calls，
           // 每个都会触发此回调。如果在这里全发 pending 卡片，用户会同时看到 N 张"准备执行"卡片，
@@ -1622,19 +1520,20 @@ export class AgentSession {
         },
       };
 
-      const turn = await strategy.runTurn({
-        model: this.model,
-        messages: this.promptBuilder.buildRequestMessages(),
-        tools: this.getToolDefs(),
-        signal: this.abortController?.signal,
-        callbacks,
-        temperature: 0.2,
-      });
+      const requestMessages = this.promptBuilder.buildRequestMessages();
+      // 回合产出由新链路统一驱动（LLMTurnSource → LLMHandler 归一化 + 实时流式），内部仍复用 strategy。
+      const turn: LLMTurnResult = await this.runPipelineTurn(strategy, requestMessages, callbacks);
 
       let contentBuffer = turn.content;
       const toolCalls = turn.toolCalls;
-      const finishReason = turn.finishReason;
-
+      // 消费归一化后的产品语义结束原因（error/truncated/complete/tool_calls/cancelled）；
+      // 策略层保证已填充，协议原始 finishReason 不再在本消费点直接判断。
+      const finishReason: NormalizedFinishReason = turn.normalizedFinishReason;
+      this.trace("turn.result", {
+        finishReason,
+        toolCalls: toolCalls.map((tc) => ({ id: tc.id, name: tc.name, argsPreview: truncateForTrace(tc.arguments || "", 1000) })),
+        contentPreview: truncateForTrace(contentBuffer || "", 2000),
+      }, this.turnCount);
       // 记录本回合 API 返回的真实 token 用量（用于精确驱动压缩与进度条）
       this.recordTurnUsage(turn.usage);
 
@@ -1646,7 +1545,7 @@ export class AgentSession {
       // 无工具调用 → 候选最终回复。交由专门方法处理（截断续写 / 内心 OS 重试 / 空回复兜底 /
       // 自动诊断 / 正常收尾），返回 "continue"=进入下一轮，"done"=本轮结束。
       if (toolCalls.length === 0) {
-        const outcome = await this.handleNoToolCallTurn(contentBuffer, finishReason, guard, ts, mutatedFiles, turnStartTime, streamedContentThisRound, rounds);
+        const outcome = await this.handleNoToolCallTurn(contentBuffer, finishReason, guard, ts, mutatedFiles, turnStartTime, streamedContentThisRound, rounds, commitPendingText);
         if (outcome === "done") return;
         continue;
       }
@@ -1655,15 +1554,17 @@ export class AgentSession {
       // 放在"有工具调用"分支：无工具调用已经在收尾，不需要在此拦截。
       if (await this.maybeCreditBudgetGate(turnStartTime, streamedContentThisRound)) return;
 
-      // 有工具调用 → 如果之前有流式文字，先发 stream_pause 告知前端文字暂停
-      if (turnStreamStarted && contentBuffer) {
-        // 先无条件通知前端 flush 打字机 buffer（避免前端丢字），
-        // 然后再判断是否为 reasoning 泄露（决定是否持久化）。
-        this.send("stream_pause", {});
-        if (looksLikeIncompleteReply(contentBuffer)) {
-          console.debug("[agent] 过滤工具调用间的 reasoning 泄露:", JSON.stringify(contentBuffer.slice(0, 60)));
-          contentBuffer = "";
+      // 有工具调用 → 本轮 content 语义为工具轮叙述，不是最终回答。
+      // 只有具备独立展示价值的叙述才提交给前端；"..." 这类弱中间态保留在历史 displayContent
+      // 之外，并且 runtimeContent: null 会阻止它进入下一轮模型上下文。
+      if (contentBuffer && !this.isWeakToolNarration(contentBuffer)) {
+        commitPendingText();
+        if (turnStreamStarted) {
+          this.send("stream_pause", {});
         }
+      } else {
+        pendingTextBuffer = "";
+        contentBuffer = "";
       }
 
       // 记录 assistant 消息并执行工具。
@@ -1682,96 +1583,10 @@ export class AgentSession {
       };
       this.messages.push(assistantMsg);
 
-      for (const toolCall of toolCalls) {
-        const toolName = toolCall.name;
-        // 多工具串行执行时，让前端有时间渲染上一个工具的终态卡片。
-        // 不加间隔时，多个 tool_call/tool_result 事件在同一 microtask batch 到达前端，
-        // React 批量 setState 导致多个卡片"同时弹出"，用户无法看清顺序。
-        // setTimeout(0) 让事件循环刷新一次，确保前端的 postMessage 已被处理。
-        if (toolCalls.length > 1) {
-          await new Promise<void>((r) => setTimeout(r, 0));
-        }
-        // 健壮解析参数：模型偶尔生成非法 JSON（如未转义的 Windows 路径反斜杠），
-        // 不能让整轮崩掉。解析失败时当作"该工具调用失败"，反馈给模型重写。
-        let toolArgs: Record<string, unknown>;
-        try {
-          toolArgs = parseToolArguments(toolCall.arguments);
-        } catch (parseErr) {
-          let errMsg = (parseErr as Error).message;
-          // 如果 create_file / str_replace 连续 JSON 解析失败（同名工具第 2 次以上），
-          // 在错误消息里附带降级引导——让模型改用 execute_command 写文件，绕开
-          // "把长 HTML/代码完美序列化进 JSON 字符串"这个它做不到的事。
-          const jsonFailKey = `json_fail:${toolName}`;
-          const jsonFailCount = ((this as any).__jsonFailCounts ??= new Map<string, number>());
-          jsonFailCount.set(jsonFailKey, (jsonFailCount.get(jsonFailKey) || 0) + 1);
-          if (jsonFailCount.get(jsonFailKey)! >= 2 && (toolName === "create_file" || toolName === "str_replace")) {
-            errMsg += `\n\n⚠️ 你已经连续 ${jsonFailCount.get(jsonFailKey)} 次因 JSON 格式问题无法调用 ${toolName}。` +
-              `这通常是因为文件内容太长/含大量引号嵌套，你无法在 JSON 字符串里完美序列化它。` +
-              `请立即换手段：用 execute_command 执行一个 Node 脚本或 PowerShell 命令来写文件` +
-              `（如 node -e "require('fs').writeFileSync('path', content)" 或写临时 .mjs 脚本再执行），` +
-              `不要再尝试 ${toolName}——它会继续失败。`;
-          }
-          this.send("tool_call", { id: toolCall.id, name: toolName, args: {}, cwd: this.cwd, status: ToolCallStatus.Executing });
-          this.send("tool_result", { id: toolCall.id, name: toolName, args: {}, result: errMsg, status: ToolCallStatus.Error });
-          this.messages.push({ role: "tool", tool_call_id: toolCall.id, _toolName: toolName, content: errMsg, status: "error" } as any);
-          guard.recordToolResult(false, true);
-          continue;
-        }
-
-        // 防御：模型有时生成空参数对象（流式截断/幻觉），直接执行会因缺参数而失败。
-        // 提前拦截，反馈给模型重写，比让 executeToolCall 报"缺少必填参数 path"更友好。
-        if (this.toolRequiresArguments(toolName) && Object.keys(toolArgs).length === 0) {
-          const hint = typeof toolCall.arguments === "string" && toolCall.arguments.trim()
-            ? `收到参数原文 "${toolCall.arguments.slice(0, 200)}"`
-            : "未收到任何参数（流式输出可能被截断）";
-          const errMsg = `${toolName}: 参数为空。${hint}，请重新生成这次调用。`;
-          this.send("tool_call", { id: toolCall.id, name: toolName, args: {}, cwd: this.cwd, status: ToolCallStatus.Executing });
-          this.send("tool_result", { id: toolCall.id, name: toolName, args: {}, result: errMsg, status: ToolCallStatus.Error, userMessage: "参数缺失" });
-          this.messages.push({ role: "tool", tool_call_id: toolCall.id, _toolName: toolName, content: errMsg, status: "error" } as any);
-          guard.recordToolResult(false, true);
-          continue;
-        }
-
-        // 命令类工具：显式 cwd → 解析为绝对路径（AI 可能传相对路径如 "."），否则用会话主工作区
-        const displayCwd = (() => {
-          if (toolName !== "execute_command" && toolName !== "start_process") return "";
-          const argCwd = typeof (toolArgs as { cwd?: unknown }).cwd === "string" && (toolArgs as { cwd: string }).cwd.trim();
-          return argCwd ? resolve(this.cwd, argCwd) : this.cwd;
-        })();
-        // 前 2 次软失败不发 tool_call（不闪卡片），直接发带 hidden 的 tool_result。
-        // 第 3 次还是失败才展示，此时发 tool_call + tool_result。
-        // 易软失败工具（str_replace/apply_patch/read_file）由 tools/catalog 的 SOFT_FAIL_TOOLS 统一定义。
-        if (!SOFT_FAIL_TOOLS.has(toolName)) {
-          // 先发 pending（卡片出现），再立即发 executing（更新参数）。
-          // 这样卡片严格在串行执行到该工具时才出现，不会提前 N 个同时弹出。
-          this.send("tool_call", { id: toolCall.id, name: toolName, args: {}, cwd: displayCwd, status: ToolCallStatus.Pending, ...this.mcpMetaFor(toolName) });
-          this.send("tool_call", { id: toolCall.id, name: toolName, args: toolArgs, cwd: displayCwd, status: ToolCallStatus.Executing, ...this.mcpMetaFor(toolName) });
-        }
-
-        // 推送细化状态（给前端展示具体动作）
-        const toolStatus = statusForTool(toolName);
-        this.send("status", toolStatus);
-
-        // 相同调用重复检测：同名工具 + 完全相同参数
-        const verdict = guard.checkToolCall(toolName, toolCall.arguments);
-
-        const meta: ToolMeta = { editId: toolCall.id };
-        // execute_command：挂上"等待输入"回调——终端检测到静默时通知前端给卡片加呼吸灯
-        if (toolName === "execute_command") {
-          meta.onWaitingInput = () => this.send("tool_waiting_input", { toolCallId: toolCall.id });
-        }
-        // 按工具类型分发执行（重复拦截 / 子 Agent / 并行 / Relay / 命令门 / MCP / 通用），meta 按引用被填充
-        const dispatched = await this.dispatchToolCall(toolName, toolArgs, toolCall.id, verdict, meta, guard);
-        const result = dispatched.result;
-        const status = dispatched.status;
-        const commandWasEdited = dispatched.commandWasEdited;
-        toolArgs = dispatched.toolArgs; // 命令可能被用户编辑过，用实际执行的参数继续后续展示/落盘
-
-        // 记录工具结果：软失败/编辑落盘控制、改动追踪、发事件、写入历史（mutatedFiles 就地填充）
-        const rec = this.recordToolOutcome(toolCall.id, toolName, toolArgs, result, status, commandWasEdited, meta, displayCwd, guard, mutatedFiles);
-        ts.didMutate = ts.didMutate || rec.mutated;
-        ts.didDiagnose = ts.didDiagnose || rec.diagnosed;
-      }
+      // 工具轮执行：由新链路 DefaultToolDispatchHandler 编排（驱动 plan→execute→complete 状态机），
+      // 每个工具的实际执行/门控/前端事件/落盘复用已验证的 executeSingleToolCall
+      // （保留确认门/子Agent/Relay/MCP/软失败等全部行为）。
+      await this.runToolDispatch(toolCalls, guard, ts, mutatedFiles);
 
       // 所有 tool 结果 push 完毕后,统一追加本轮收集到的截图 user 消息。
       // 必须在 tool 消息全部就位之后——中间插 user 会违反 API "tool_calls → tool messages" 连续性要求导致 400。
@@ -1813,7 +1628,7 @@ export class AgentSession {
         }
         if (guard.canSummaryRestart()) {
           console.debug(`[agent] 反思仍无效（${stuck?.key ?? "连续失败"}）→ 摘要重启`);
-          await this.injectSummaryRestart(stuck, guard, client);
+          await this.injectSummaryRestart(stuck, guard, strategy);
           continue;
         }
         // 阶梯耗尽仍卡住 → 强制收尾投降，让模型如实向用户说明
@@ -1823,7 +1638,8 @@ export class AgentSession {
           content:
             `你已经多次尝试（包括重新理清思路、换路重来）仍未能完成。请立即停止重试，` +
             `用文字向用户如实说明：你想做什么、卡在哪里、失败的原因，以及你的判断和建议。不要再调用任何工具。`,
-        });
+          _ephemeralInjected: true,
+        } as any);
         // 让模型基于这条引导生成一段总结性回复
         await this.streamFinalSummary(turnStartTime);
         return;
@@ -1840,6 +1656,7 @@ export class AgentSession {
           `你已经连续调用了 ${MAX_ROUNDS} 轮工具仍未结束。请立即停止调用工具，` +
           `基于目前已经收集到的信息，用中文给用户一个完整的回答：` +
           `说明你已经查到了什么、得出的结论，如果任务尚未彻底完成，说明还差哪一步、建议怎么做。不要再调用任何工具。`,
+        _ephemeralInjected: true,
       } as any);
       await this.streamFinalSummary(turnStartTime);
       return;
@@ -1917,17 +1734,6 @@ export class AgentSession {
   }
 }
 
-/** 一次 handleUserInput 内跨回合共享的可变标志（收敛传递，便于拆分收尾逻辑）。 */
-interface TurnState {
-  /** 本轮是否有过实质文件改动（str_replace/create_file/apply_patch 成功） */
-  didMutate: boolean;
-  /** 是否已做过收尾自检（当前自检轮已关闭，恒置 true 跳过） */
-  didSelfCheck: boolean;
-  /** 空回复兜底是否已重试过（最多 1 次，防无限循环） */
-  emptyRetried: boolean;
-  /** 本轮是否已跑过 check_diagnostics（主动或自动），避免重复诊断 */
-  didDiagnose: boolean;
-}
 
 /**
  * 从工具参数中提取即将被修改的文件绝对路径（用于快照）。

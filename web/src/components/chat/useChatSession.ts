@@ -132,6 +132,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const statusPhaseRef = useRef(statusPhase); statusPhaseRef.current = statusPhase;
   const editModeRef = useRef(editMode); editModeRef.current = editMode;
   const toolResultResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reasoningParts = useRef<Map<string, string>>(new Map());
   const typewriter = useTypewriter();
   // ── tool_call 渲染队列 hook（卡片按序逐个入场） ──
   const toolCallQueueApi = useToolCallQueue();
@@ -180,7 +181,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     cancelled, cancelledTurnMsgId, turnGeneration,
     modelRef, statusPhaseRef, toolResultResetTimer,
     compactionMigratedRef, onSessionCreatedRef, onCompactionMigratedRef,
-    ownedSessionId,
+    ownedSessionId, reasoningParts,
     typewriter: {
       buffer: typewriter.buffer,
       raf: typewriter.raf,

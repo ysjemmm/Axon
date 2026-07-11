@@ -11,9 +11,9 @@
  * OpenAI/Anthropic 会因"孤儿 tool_calls / 孤儿 tool 结果"直接报错。
  */
 
-import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { DEFAULT_CONTEXT_WINDOW } from "./llm/modelContext.js";
+import type { LLMStrategy } from "./llm/types.js";
 
 /** 压缩配置 */
 interface CompactConfig {
@@ -50,9 +50,16 @@ export interface CompactionUserConfig {
   toolResultKeepTurns: number;
 }
 
-/** 默认滚动压缩配置（与历史硬编码值一致） */
+/**
+ * 默认滚动压缩配置。
+ *
+ * enabled 默认 false：滚动压缩会静默把早期消息替换为 LLM 摘要，用户完全无感知
+ * （不弹窗、不询问，仅发一个前端未必监听的 rolling_summary_done 事件）。这是一个
+ * 影响用户可见历史的行为，必须由用户显式开启，不能作为"未配置时的兜底行为"。
+ * 各宿主（VS Code 设置 / Web server 环境变量）如需开启，应显式传入 enabled: true。
+ */
 export const DEFAULT_COMPACTION_CONFIG: CompactionUserConfig = {
-  enabled: true,
+  enabled: false,
   triggerTokens: 30_000,
   keepRecentMessages: 8,
   toolResultPruneChars: 800,
@@ -118,14 +125,14 @@ function alignSplitIndex(history: ChatCompletionMessageParam[], desiredKeep: num
  * 执行无感压缩
  *
  * @param messages 当前完整消息列表
- * @param client OpenAI 客户端（用于生成摘要）
+ * @param strategy LLM 策略（用于生成摘要；与主对话使用同一策略，兼容 chat/responses/anthropic 协议）
  * @param model 模型名
  * @param config 压缩配置（调用方注入真实 maxTokens）
  * @returns 压缩后的消息列表
  */
 export async function compactMessages(
   messages: ChatCompletionMessageParam[],
-  client: OpenAI,
+  strategy: LLMStrategy,
   model: string,
   config = DEFAULT_CONFIG,
 ): Promise<ChatCompletionMessageParam[]> {
@@ -150,7 +157,7 @@ export async function compactMessages(
   const recentMessages = history.slice(splitIndex);
 
   // 用 LLM 对旧消息生成摘要
-  const summary = await generateSummary(oldMessages, client, model);
+  const summary = await generateSummary(oldMessages, strategy, model);
 
   // 构建压缩后的消息列表
   return [
@@ -176,17 +183,24 @@ function serializeHistory(messages: ChatCompletionMessageParam[]): string {
     .join("\n");
 }
 
+/** 生成摘要用的空回调（不需要流式上报给前端，只取最终 content） */
+const SILENT_CALLBACKS = {
+  onReasoningDelta: () => {},
+  onTextDelta: () => {},
+  onToolCallDetected: () => {},
+};
+
 /**
  * 用 LLM 生成历史消息的摘要
  */
 async function generateSummary(
   messages: ChatCompletionMessageParam[],
-  client: OpenAI,
+  strategy: LLMStrategy,
   model: string,
 ): Promise<string> {
   const historyText = serializeHistory(messages);
 
-  const response = await client.chat.completions.create({
+  const turn = await strategy.runTurn({
     model,
     messages: [
       {
@@ -211,10 +225,12 @@ async function generateSummary(
         content: historyText,
       },
     ],
-    max_tokens: 500,
+    tools: [],
+    callbacks: SILENT_CALLBACKS,
+    maxOutputTokens: 500,
   });
 
-  return response.choices[0]?.message?.content || "（无法生成摘要）";
+  return turn.content || "（无法生成摘要）";
 }
 
 /**
@@ -228,7 +244,7 @@ async function generateSummary(
  */
 export async function reflectiveCompact(
   messages: ChatCompletionMessageParam[],
-  client: OpenAI,
+  strategy: LLMStrategy,
   model: string,
 ): Promise<ChatCompletionMessageParam[]> {
   const systemMsg = messages[0]; // system prompt 始终保留
@@ -238,7 +254,7 @@ export async function reflectiveCompact(
     return messages;
   }
 
-  const summary = await generateFailureSummary(history, client, model);
+  const summary = await generateFailureSummary(history, strategy, model);
 
   return [
     systemMsg,
@@ -253,12 +269,12 @@ export async function reflectiveCompact(
  */
 async function generateFailureSummary(
   messages: ChatCompletionMessageParam[],
-  client: OpenAI,
+  strategy: LLMStrategy,
   model: string,
 ): Promise<string> {
   const historyText = serializeHistory(messages);
 
-  const response = await client.chat.completions.create({
+  const turn = await strategy.runTurn({
     model,
     messages: [
       {
@@ -275,10 +291,12 @@ async function generateFailureSummary(
       },
       { role: "user", content: historyText },
     ],
-    max_tokens: 700,
+    tools: [],
+    callbacks: SILENT_CALLBACKS,
+    maxOutputTokens: 700,
   });
 
-  return response.choices[0]?.message?.content || "（无法生成复盘摘要）";
+  return turn.content || "（无法生成复盘摘要）";
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -317,7 +335,7 @@ function findSummaryBoundary(messages: ChatCompletionMessageParam[]): number {
  */
 export async function rollingCompact(
   messages: ChatCompletionMessageParam[],
-  client: OpenAI,
+  strategy: LLMStrategy,
   model: string,
   keepRecentCount = 8,
 ): Promise<[ChatCompletionMessageParam[], boolean]> {
@@ -344,7 +362,7 @@ export async function rollingCompact(
     : "";
 
   // 生成新摘要（合并旧摘要 + 新旧消息）
-  const summary = await generateRollingSummary(prevSummaryText, oldMessages, client, model);
+  const summary = await generateRollingSummary(prevSummaryText, oldMessages, strategy, model);
 
   return [
     [
@@ -363,7 +381,7 @@ export async function rollingCompact(
 async function generateRollingSummary(
   prevSummary: string,
   newMessages: ChatCompletionMessageParam[],
-  client: OpenAI,
+  strategy: LLMStrategy,
   model: string,
 ): Promise<string> {
   const newHistoryText = serializeHistory(newMessages);
@@ -387,16 +405,18 @@ ${newHistoryText}
 
 输出格式：用简洁的要点列表，控制在 1000 字以内。`;
 
-  const response = await client.chat.completions.create({
+  const turn = await strategy.runTurn({
     model,
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: newHistoryText },
     ],
-    max_tokens: 500,
+    tools: [],
+    callbacks: SILENT_CALLBACKS,
+    maxOutputTokens: 500,
   });
 
-  return response.choices[0]?.message?.content || "（无法生成摘要）";
+  return turn.content || "（无法生成摘要）";
 }
 //
 // 核心思路：Agent 一轮对话可能调 5-10 次工具，每次返回几百到几千 token。

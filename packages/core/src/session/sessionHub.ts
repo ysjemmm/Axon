@@ -496,6 +496,14 @@ export class SessionHub {
       pendingDiffs: session.getPendingDiffs(),
       pendingEditIds: session.getPendingEditIds(),
     } as AgentEvent);
+    session.appendTrace("session.loaded", {
+      workspace: ws_dir,
+      workspaces: ws_dirs,
+      workspaceGroupId: savedSession?.workspaceGroupId || null,
+      messagesCount: session.getMessages().length > 0 ? this.filterPersistable(session.getMessages()).length : (savedSession?.messages || []).length,
+      totalTokens: session.getLastTotalTokens() || savedSession?.totalTokens || 0,
+      pendingPaths: session.getPendingPaths(),
+    });
   }
 
   /** 设置/切换会话工作区（带 clientId 定向；无 clientId 时为工作区文件夹变化广播，应用到全部活跃会话） */
@@ -523,6 +531,7 @@ export class SessionHub {
       if (s) applyTo(s);
       await this.storage.updateSession(sid, { workspace: dir, workspaces: dirs }).catch(() => {});
       this.sendTo(sid, clientId, { type: "workspace_set", workspace: dir, workspaces: dirs } as AgentEvent);
+      s?.appendTrace("workspace.set", { workspace: dir, workspaces: dirs });
     } else if (clientId) {
       // 面板已指定但会话未创建：定向回该面板（不广播）
       this.sendToClient(clientId, { type: "workspace_set", workspace: dir, workspaces: dirs } as AgentEvent);
@@ -577,6 +586,12 @@ export class SessionHub {
       groupId: group.id,
       groupName: group.name,
     } as AgentEvent);
+    if (sid) this.getActiveSession(sid)?.appendTrace("workspace.set", {
+      workspace: group.paths[0],
+      workspaces: group.paths,
+      groupId: group.id,
+      groupName: group.name,
+    });
   }
 
   /** 新建会话（显式指令；前端通常走「发首条消息惰性创建」路径） */
@@ -609,6 +624,12 @@ export class SessionHub {
       workspace: ws_dir,
       workspaces: allWorkspaces,
     } as AgentEvent);
+    session.appendTrace("session.created", {
+      workspace: ws_dir,
+      workspaces: allWorkspaces,
+      mode,
+      title: "新对话",
+    });
   }
 
   /**
@@ -664,6 +685,13 @@ export class SessionHub {
       workspace: ws_dir,
       workspaces: ws_dirs,
     } as AgentEvent);
+    session.appendTrace("session.created", {
+      workspace: ws_dir,
+      workspaces: ws_dirs,
+      mode,
+      title,
+      migratedFrom: parentSessionId,
+    });
 
     // 在新会话中发送用户消息，触发 AI 回复
     this.runningSessions.add(created.id);
@@ -782,6 +810,12 @@ export class SessionHub {
       this.registerPersistence(session, sid);
       this.activeSessions.set(sid, session);
       this.sendTo(sid, clientId, { type: "session_created", sessionId: sid, workspace: ws_dir, workspaces: ws_dirs } as AgentEvent);
+      session.appendTrace("session.created", {
+        workspace: ws_dir,
+        workspaces: ws_dirs,
+        mode,
+        title: "新对话",
+      });
     }
 
     // Quest 模式：每轮注入思考/联网开关（决定工具集与 reasoning 转发）
@@ -848,6 +882,7 @@ export class SessionHub {
 
       if (title !== savedSession?.title) {
         this.sendTo(turnSid, clientId, { type: "session_title_updated", title } as AgentEvent);
+        execSession.appendTrace("session.title_updated", { title });
       }
     }
   }

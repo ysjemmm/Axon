@@ -7,8 +7,16 @@
  *  - ProviderRegistry 把两者合并成 ResolvedProvider[]，供 getClient / getStrategy / 前端选择器消费
  */
 
-/** provider 的 LLM 调用协议：chat = Chat Completions（通用）；responses = OpenAI Responses API（原生 agentic loop） */
-export type ProviderProtocol = "chat" | "responses";
+/**
+ * provider 的 LLM 调用协议：
+ * - chat：OpenAI Chat Completions（通用，绝大多数中转站/网关走这个，包括把 Claude 包装成
+ *   OpenAI 兼容格式的中转站）
+ * - responses：OpenAI Responses API（原生 agentic loop）
+ * - anthropic：Anthropic 原生 Messages API（POST {baseUrl}/messages，x-api-key 认证，
+ *   SSE 事件格式与 OpenAI 完全不同）。仅当该端点【只】提供原生 Anthropic 接口、没有
+ *   OpenAI 兼容层时才需要选这个——多数声称支持 Claude 的中转站其实是走 chat 协议。
+ */
+export type ProviderProtocol = "chat" | "responses" | "anthropic";
 
 /** 认证头类型：bearer = Authorization: Bearer <key>（默认）；x-api-key = x-api-key: <key>（Anthropic 等） */
 export type ApiKeyHeader = "bearer" | "x-api-key";

@@ -18,6 +18,7 @@ import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import type { LLMStrategy, RunTurnParams, LLMTurnResult, NormalizedToolCall, ToolDef } from "./types.js";
 import { sanitizeToolPairing } from "../messageSanitizer.js";
+import { normalizeFinishReason, mapResponsesStatusToFinishReason } from "./finishReasonMapper.js";
 
 /** Responses API 的输入项（联合类型，覆盖普通消息 / 工具调用 / 工具结果） */
 type ResponsesInputItem =
@@ -39,9 +40,14 @@ export class ResponsesStrategy implements LLMStrategy {
   constructor(private client: OpenAI) {}
 
   async runTurn(params: RunTurnParams): Promise<LLMTurnResult> {
-    const { model, messages, tools, signal, callbacks, temperature } = params;
+    const { model, messages, tools, signal, callbacks, temperature, maxOutputTokens } = params;
 
     const isGpt = /^gpt/i.test(model);
+    // 推理模型（gpt-5.x / o1 / o3 / o4 系列）支持 reasoning summary。
+    // 显式请求 summary 后，流式响应中会返回 reasoning_summary_text.delta 事件，
+    // 上层 onReasoningDelta 回调接收后推送给前端展示为可折叠"思考过程"。
+    // 不传该参数时模型默认不吐摘要，前端 ReasoningBlock 拿不到内容。
+    const isReasoningModel = /^(gpt-5|o1|o3|o4)/i.test(model);
     const { instructions, input } = this.convertMessages(messages);
     const hasTools = tools.length > 0;
     const actionReinforcement = isGpt
@@ -55,6 +61,10 @@ export class ResponsesStrategy implements LLMStrategy {
         input,
         ...(hasTools ? { tools: this.convertTools(tools), tool_choice: "auto", parallel_tool_calls: true } : {}),
         ...(temperature !== undefined ? { temperature } : {}),
+        ...(maxOutputTokens !== undefined ? { max_output_tokens: maxOutputTokens } : {}),
+        // 推理模型显式请求思考摘要：summary="auto" 让模型自行决定是否产出，
+        // 避免简单任务也强制生成摘要浪费 token。
+        ...(isReasoningModel ? { reasoning: { summary: "auto" } } : {}),
         store: false,
         stream: true,
       },
@@ -83,7 +93,7 @@ export class ResponsesStrategy implements LLMStrategy {
         // 思考过程增量（reasoning summary）
         case "response.reasoning_summary_text.delta":
         case "response.reasoning_text.delta":
-          if (event.delta) callbacks.onReasoningDelta(event.delta);
+          if (event.delta) callbacks.onReasoningDelta(event.delta, event.summary_index, event.item_id);
           break;
 
         // 新的 output item 出现：可能是 function_call，记录其 id/name
@@ -162,9 +172,9 @@ export class ResponsesStrategy implements LLMStrategy {
               cachedTokens: resp.usage.input_tokens_details?.cached_tokens ?? 0,
             };
           }
-          const status = resp?.status;
-          // 映射结束原因：有工具调用则记为 tool_calls，否则按状态
-          finishReason = status === "incomplete" ? "length" : "stop";
+          // completed=正常完成；incomplete=被截断需续写；failed=非正常中断，交给上层按异常收尾处理。
+          // 映射规则收敛到 mapResponsesStatusToFinishReason 纯函数，避免散落多份、被测试锁死。
+          finishReason = mapResponsesStatusToFinishReason(resp?.status);
           break;
         }
 
@@ -183,7 +193,10 @@ export class ResponsesStrategy implements LLMStrategy {
 
     if (toolCalls.length > 0) finishReason = "tool_calls";
 
-    return { content, toolCalls, finishReason, responseId, usage };
+    // 归一化结束原因（并存字段）：与 finishReason 并存，不替换旧字段，供新 pipeline 逐步接管。
+    const normalizedFinishReason = normalizeFinishReason(finishReason);
+
+    return { content, toolCalls, finishReason, normalizedFinishReason, responseId, usage };
   }
 
   /**

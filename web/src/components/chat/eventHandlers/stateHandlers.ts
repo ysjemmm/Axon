@@ -12,6 +12,10 @@ import { segEditUnits, extractBasename } from "../utils";
 import type { CommandApproval } from "../useChatSession";
 import type { EventHandlerCtx, WsMessage } from "./types";
 
+function normalizeReasoningDelta(content: string): string {
+  return content;
+}
+
 export function handleStatus(msg: WsMessage, ctx: EventHandlerCtx): void {
   ctx.setStatusText((msg as any).content as string || "思考中...");
   ctx.setStatusPhase((msg as any).phase as string || "thinking");
@@ -26,7 +30,38 @@ export function handleTokenUsage(msg: WsMessage, ctx: EventHandlerCtx): void {
 }
 
 export function handleReasoningDelta(msg: WsMessage, ctx: EventHandlerCtx): void {
-  ctx.setReasoning((prev) => prev + ((msg as any).content || ""));
+  const content = normalizeReasoningDelta((msg as any).content || "");
+  if (!content) return;
+
+  // 将 reasoning 内容追加到当前 assistant 消息的最后一个 reasoning segment。
+  // 如果最后一个 segment 不是 reasoning（或还没有 assistant 消息），新建一个。
+  ctx.setChatHistory((prev) => {
+    const updated = [...prev];
+    const last = updated[updated.length - 1];
+    if (last?.role === "assistant" && last.segments) {
+      const segs = [...last.segments];
+      const lastSeg = segs[segs.length - 1];
+      if (lastSeg && lastSeg.type === "reasoning" && lastSeg.streaming) {
+        // 追加到已有的 streaming reasoning segment
+        segs[segs.length - 1] = { ...lastSeg, content: lastSeg.content + content };
+      } else {
+        // 新建一个 reasoning segment
+        segs.push({ type: "reasoning", content, streaming: true });
+      }
+      updated[updated.length - 1] = { ...last, segments: segs };
+    } else {
+      // 还没有 assistant 消息，创建一个（理论上 stream_start 应该先到，这里兜底）
+      updated.push({
+        id: `assistant-${Date.now()}`,
+        role: "assistant",
+        segments: [{ type: "reasoning", content, streaming: true }],
+        streaming: true,
+        turnGen: ctx.turnGeneration.current,
+      });
+    }
+    return updated;
+  });
+
   if (ctx.statusPhaseRef.current === "thinking") {
     ctx.setStatusText("正在推理...");
     ctx.setStatusPhase("reasoning");

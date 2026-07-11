@@ -21,7 +21,6 @@ import { createScopedHost, type EditSnapshot } from "../host/scopedHost.js";
 import type { LLMStrategy } from "../llm/types.js";
 import type { SkillLoaderFn, WebCapability } from "../tools/index.js";
 import type { AgentHost } from "../host/index.js";
-import type OpenAI from "openai";
 
 /** 单个执行子任务 */
 export interface ExecutionTask {
@@ -57,7 +56,6 @@ export interface ParallelExecutionDeps {
   signal?: AbortSignal;
   skillLoader?: SkillLoaderFn;
   web?: WebCapability;
-  client?: OpenAI;
   /**
    * 事件发射器工厂：为某个子任务返回一个绑定其 id 的 emit，
    * 父级据此把不同子 Agent 的事件路由到各自的前端卡片。
@@ -118,7 +116,6 @@ export async function runParallelExecution(
         emit: deps.emitFor(task.id),
         skillLoader: deps.skillLoader,
         web: deps.web,
-        client: deps.client,
         readOnly: false, // 并行执行允许写（受 ScopedHost 文件作用域限制）
         maxRounds: 30, // 并行子 Agent 紧上限：30 轮（约 2-3 分钟），避免长时间空转
       });

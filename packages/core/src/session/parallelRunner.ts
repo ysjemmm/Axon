@@ -8,13 +8,27 @@
  * 并发计数器/活动 Relay 任务/并行回滚快照存储/子 Agent token 累加等。
  */
 
-import { getStrategy, getClient } from "../providers.js";
+import { getStrategy } from "../providers.js";
 import { deriveSubAgentHost } from "../host/index.js";
 import { runParallelResearch, aggregateResearchResults, type ResearchTask } from "../relay/parallelResearch.js";
 import { runParallelExecution, aggregateExecutionResults, type ExecutionTask } from "../relay/parallelExecution.js";
 import type { EditSnapshot } from "../host/scopedHost.js";
 import type { SubAgentEmit } from "../skills/subAgentRunner.js";
 import type { AgentSession } from "../agentSession.js";
+
+function sanitizeSubAgentDisplayResult(text: string): string {
+  const trimmed = (text || "").trim();
+  if (!trimmed) return trimmed;
+  if (
+    /to=functions\./i.test(trimmed) ||
+    /recipient_name/i.test(trimmed) ||
+    /tool_uses/i.test(trimmed) ||
+    /analysis code/i.test(trimmed)
+  ) {
+    return "该子任务的最终结论混入了内部工具/调试痕迹，已隐藏原始串；请参考过程卡片中的执行过程，由主 Agent 重新整理结论。";
+  }
+  return trimmed;
+}
 
 export class ParallelRunner {
   constructor(private readonly s: AgentSession) {}
@@ -62,13 +76,12 @@ export class ParallelRunner {
       skillLoader: this.s.loadSkillForTool,
       web: this.s.web,
       emitFor,
-      client: getClient(this.s.provider, this.s.model),
       maxConcurrency: 3,
     });
 
     // 通知前端：各路调研结束
     for (const r of results) {
-      this.s.send("sub_agent_end", { delegateId: r.id, result: r.text });
+      this.s.send("sub_agent_end", { delegateId: r.id, result: sanitizeSubAgentDisplayResult(r.text) });
     }
     // 累加所有调研子 Agent 的 token 到会话总量
     this.s.addSubAgentTokens(results.reduce((sum, r) => sum + (r.tokens || 0), 0));
@@ -126,7 +139,6 @@ export class ParallelRunner {
       skillLoader: this.s.loadSkillForTool,
       web: this.s.web,
       emitFor,
-      client: getClient(this.s.provider, this.s.model),
       maxConcurrency: 3,
       snapshotStore: batchSnapshots,
     });

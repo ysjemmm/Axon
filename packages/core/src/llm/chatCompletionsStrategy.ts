@@ -8,6 +8,7 @@
 import OpenAI from "openai";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { LLMStrategy, RunTurnParams, LLMTurnResult, NormalizedToolCall } from "./types.js";
+import { normalizeFinishReason } from "./finishReasonMapper.js";
 
 export class ChatCompletionsStrategy implements LLMStrategy {
   readonly name = "chat_completions";
@@ -15,7 +16,7 @@ export class ChatCompletionsStrategy implements LLMStrategy {
   constructor(private client: OpenAI) {}
 
   async runTurn(params: RunTurnParams): Promise<LLMTurnResult> {
-    const { model, messages, tools, signal, callbacks, temperature } = params;
+    const { model, messages, tools, signal, callbacks, temperature, maxOutputTokens } = params;
 
     // 🔍 调试：检查最后一条 user 消息的 content 格式（排查图片是否到达 LLM）
     // 仅在设置 AXON_LLM_DEBUG 环境变量时输出，避免污染 Extension Host 控制台。
@@ -73,6 +74,10 @@ export class ChatCompletionsStrategy implements LLMStrategy {
     const isQwen37Plus = /qwen(?:3\.7|37)/i.test(model);
     const isDeepSeek4Plus = /deepseek(?:-?v?4|4)/i.test(model);
     const isGLM52Plus = /glm(?:-?5\.[2-9]|-?[6-9]|52)/i.test(model);
+    // GLM-5 系列思考模型（glm-5 / glm-5.1 / glm-5.2 / glm-5-turbo ...）：必须显式下发
+    // thinking:{type:"enabled"}，API 才会把思考内容单独放进 reasoning_content 字段。
+    // 否则思考过程会混进普通 content 返回，被上层当作正文流式输出。glm-4-flash 等非思考模型不匹配。
+    const isGLM5Thinking = /glm-?5/i.test(model);
     // stream_options（include_usage）是 OpenAI 专有参数。经中转网关的非 OpenAI 原生模型
     // （deepseek / glm 等）收到后可能断流或返回格式异常的 chunk，故仅对原生 OpenAI（GPT 系）
     // 及确认兼容的 provider 下发。
@@ -90,11 +95,15 @@ export class ChatCompletionsStrategy implements LLMStrategy {
             }
           : {}),
         ...(temperature !== undefined ? { temperature } : {}),
+        ...(maxOutputTokens !== undefined ? { max_tokens: maxOutputTokens } : {}),
         // Qwen 模型抑制重复退化：frequency_penalty 是 OpenAI 标准参数，所有兼容网关都支持。
         // ⚠️ 不要加 repetition_penalty——它是 HuggingFace/vLLM 专有参数，中转网关收到会直接断流。
         ...(isQwen
           ? { frequency_penalty: 0.3 }
           : {}),
+        // GLM-5 系列：开启思考模式，让 API 把思考内容分离到 reasoning_content 字段，
+        // 避免思考过程混进 content 被当作正文输出（智谱官方要求成对下发的参数）。
+        ...(isGLM5Thinking ? { thinking: { type: "enabled" } } : {}),
         // 部分 thinking 模型支持 reasoning_effort，用于控制隐藏思考强度。
         // 默认给 high，避免推理模型在简单任务上过度思考；未确认支持的模型绝不猜传。
         ...(enableReasoningEffort ? { reasoning_effort: "high" } : {}),
@@ -194,7 +203,10 @@ export class ChatCompletionsStrategy implements LLMStrategy {
       toolCalls.push({ id, name: t.name, arguments: t.arguments || "{}" });
     }
 
-    return { content, toolCalls, finishReason, usage };
+    // 归一化结束原因（并存字段）：有工具调用时优先按 tool_calls 语义，否则按原始 finishReason 归一化。
+    const normalizedFinishReason = normalizeFinishReason(toolCalls.length > 0 ? "tool_calls" : finishReason);
+
+    return { content, toolCalls, finishReason, normalizedFinishReason, usage };
   }
 }
 

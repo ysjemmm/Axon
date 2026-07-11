@@ -97,10 +97,14 @@ function buildMessages(
 
 // ── 默认 provider 探测 ───────────────────────────────────────────────────
 
-/** 探测第一个可用的 provider：优先已解析列表（apiKey 非空且至少有一个未禁用模型），兜底 env */
+/**
+ * 探测第一个可用的 provider：优先已解析列表（apiKey 非空且至少有一个【非 anthropic 协议】的
+ * 未禁用模型），兜底 env。内联补全走 OpenAI Chat Completions（getClient），anthropic 协议
+ * 端点没有该接口，必须跳过，否则会直接 404。
+ */
 function detectProvider(): string {
   const resolved = getResolvedProviders();
-  const first = resolved.find((p) => p.configured && p.models.some((m) => !m.disabled));
+  const first = resolved.find((p) => p.configured && p.models.some((m) => !m.disabled && m.protocol !== "anthropic"));
   if (first) return first.name;
 
   for (const k of Object.keys(process.env)) {
@@ -111,11 +115,11 @@ function detectProvider(): string {
   return "";
 }
 
-/** 探测指定 provider 的第一个可用模型（优先级：gpt-5.5 → gpt-5.4，跳过推理模型，兜底 gpt-5.5） */
+/** 探测指定 provider 的第一个可用模型（优先级：gpt-5.5 → gpt-5.4，跳过推理模型/anthropic 协议模型，兜底 gpt-5.5） */
 function detectModel(providerName: string): string {
   const resolved = getResolvedProviders();
   const p = resolved.find((r) => r.name === providerName);
-  const enabled = (p?.models || []).filter((m) => !m.disabled);
+  const enabled = (p?.models || []).filter((m) => !m.disabled && m.protocol !== "anthropic");
   const priority = [/gpt-5\.5/i, /gpt-5\.4/i];
   for (const re of priority) {
     const hit = enabled.find((m) => re.test(m.id) && !/v4-pro|reasoner/i.test(m.id));
@@ -160,6 +164,11 @@ export function registerInlineCompletion(context: vscode.ExtensionContext): void
       const modelName = cfg.model || detectModel(providerName);
 
       if (!modelName) return [];
+
+      // 用户显式配置了 anthropic 协议模型：内联补全走 OpenAI Chat Completions，
+      // 该协议的端点没有这个接口，直接跳过而非报错刷屏。
+      const resolvedModels = getResolvedProviders().find((r) => r.name === providerName)?.models || [];
+      if (resolvedModels.find((m) => m.id === modelName)?.protocol === "anthropic") return [];
 
       const messages = buildMessages(document, prefix, suffix);
 

@@ -19,6 +19,7 @@ export function handleSessionCreated(msg: WsMessage, ctx: EventHandlerCtx): void
   // 此时 ownedSessionId 已指向新 id，effect 命中"自己创建、非重连"跳过分支，
   // 不会清空历史 / 重置 isLoading（否则首条消息的流式状态会被冲掉）。
   ctx.ownedSessionId.current = (msg as any).sessionId;
+  ctx.reasoningParts.current.clear();
   ctx.setReasoning(""); // 新会话：清空上一条会话残留的思考过程
   ctx.onSessionCreatedRef.current((msg as any).sessionId);
   if ((msg as any).workspace) ctx.setWorkspace((msg as any).workspace);
@@ -32,6 +33,7 @@ export function handleSessionError(msg: WsMessage, ctx: EventHandlerCtx): void {
 
 export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void {
   ctx.setIsLoadingSession(false);
+  ctx.reasoningParts.current.clear();
   ctx.setReasoning(""); // 切换/恢复会话时清空思考过程残留
   const messages = (msg as any).messages || [];
   const totalTokens = (msg as any).totalTokens || 0;

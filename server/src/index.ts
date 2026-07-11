@@ -17,8 +17,9 @@ import { loadConfig, saveConfig, type WorkspaceGroup } from "./config.js";
 import { registerSkillRoutes } from "./skills/skillRoutes.js";
 import { registerAgentRoutes } from "./agents/agentRoutes.js";
 import { registerMcpRoutes } from "./mcp/mcpRoutes.js";
+import { registerPowerRoutes } from "./powers/powerRoutes.js";
 import { registerProviderRoutes } from "./providers/providerRoutes.js";
-import { RelayStore, SessionHub, ZHIPU_PROVIDER, ProviderRegistry, refreshProviders, type AgentEvent, type ControlCommand } from "@axon/core";
+import { RelayStore, SessionHub, ZHIPU_PROVIDER, ProviderRegistry, refreshProviders, DEFAULT_COMPACTION_CONFIG, type AgentEvent, type ControlCommand, type CompactionUserConfig } from "@axon/core";
 import { createNodeAgentHost, FileCommandTrustStore, createNodeMcpCapability } from "@axon/host-node";
 import { WsChannel } from "./wsChannel.js";
 import { webSearch, webFetch } from "./webSearch.js";
@@ -29,6 +30,24 @@ const PORT = parseInt(process.env.PORT || "3001", 10);
 const DEFAULT_WORKSPACE = process.env.WORKSPACE_DIR || process.cwd();
 // 监听地址：默认仅回环（本机安全），显式设置 BIND_HOST 才对外
 const HOST = bindHost();
+
+/**
+ * 滚动压缩配置（axon.compaction.* 的 Web 形态等价物）。
+ *
+ * 显式在此声明，不依赖 SessionHub/core 包的兜底默认值：滚动压缩会静默把早期
+ * 消息替换为 LLM 摘要，用户无感知（不弹窗），必须由运维/用户显式开启。
+ * 默认关闭，与 VS Code 扩展的 axon.compaction.enabled 默认值保持一致。
+ * 可通过环境变量 AXON_COMPACTION_ENABLED=true 显式开启。
+ */
+function readCompactionConfig(): CompactionUserConfig {
+  return {
+    enabled: process.env.AXON_COMPACTION_ENABLED === "true",
+    triggerTokens: parseInt(process.env.AXON_COMPACTION_TRIGGER_TOKENS || "", 10) || DEFAULT_COMPACTION_CONFIG.triggerTokens,
+    keepRecentMessages: parseInt(process.env.AXON_COMPACTION_KEEP_RECENT || "", 10) || DEFAULT_COMPACTION_CONFIG.keepRecentMessages,
+    toolResultPruneChars: DEFAULT_COMPACTION_CONFIG.toolResultPruneChars,
+    toolResultKeepTurns: DEFAULT_COMPACTION_CONFIG.toolResultKeepTurns,
+  };
+}
 
 // 会话存储固定在用户目录 ~/.axon（与工作区解耦）
 const storage = new JsonFileStorage();
@@ -263,6 +282,7 @@ wss.on("connection", (ws: WebSocket, req) => {
     web,
     mcp: createNodeMcpCapability(),
     commandTrust: new FileCommandTrustStore(),
+    getCompactionConfig: readCompactionConfig,
   });
 
   ws.on("message", async (data) => {

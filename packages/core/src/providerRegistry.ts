@@ -140,7 +140,7 @@ export class ProviderRegistry {
       baseUrl: (entry.baseUrl || "").trim(),
       apiKey,
       apiKeyHeader: entry.apiKeyHeader || "bearer",
-      protocol: entry.protocol === "responses" ? "responses" : "chat",
+      protocol: entry.protocol === "responses" || entry.protocol === "anthropic" ? entry.protocol : "chat",
       models: Array.isArray(entry.models) ? entry.models : [],
       builtin: false,
       locked: false,

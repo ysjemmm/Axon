@@ -29,6 +29,25 @@ body.vscode-dark, body.vscode-high-contrast {
 .hljs-title, .hljs-section, .hljs-selector-id { color: var(--hl-title); font-weight: bold; }
 .hljs-symbol, .hljs-number, .hljs-attribute, .hljs-bullet { color: var(--hl-num); }
 
+/* ── 代码块容器调色板 ── */
+:root {
+  --axon-code-bg: #fafafa;
+  --axon-code-border: rgba(0,0,0,0.06);
+  --axon-code-header-bg: rgba(0,0,0,0.02);
+}
+body.vscode-dark, body.vscode-high-contrast {
+  --axon-code-bg: #1e1e1e;
+  --axon-code-border: rgba(255,255,255,0.08);
+  --axon-code-header-bg: rgba(255,255,255,0.03);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --axon-code-bg: #1e1e1e;
+    --axon-code-border: rgba(255,255,255,0.08);
+    --axon-code-header-bg: rgba(255,255,255,0.03);
+  }
+}
+
 /* 文本选中高亮：跟随主题的柔和强调色，替换浏览器逆天的原生亮蓝。
    半透明保证叠加在 code/表格上时文字仍可读，过渡让选中更顺滑。 */
 ::selection {
@@ -152,16 +171,16 @@ body.vscode-dark, body.vscode-high-contrast {
   white-space: nowrap;
 }
 
-/* 行内代码：每个 `code` 作为原子块，放不下时【整块】换到下一行（不从中间断词）；
-   靠垂直 margin 拉开换行后的行距，避免上下两行 code 贴紧。
-   .axon-path-link 排除在外：它需要 inline-flex 让图标+文件名保持水平对齐，
-   这条通用规则的 inline-block 会覆盖掉 MarkdownRenderer 内联样式设的 display，导致图标掉到文字下面换行。 */
+/* 行内代码：作为紧凑的 inline badge 渲染。
+   不再给垂直 margin，也不把 line-height 拉高；否则在列表项里会把同一行的中文文本
+   和 code badge 顶部/基线错开，看起来像“高度没对齐”。
+   .axon-path-link 排除在外：它需要 inline-flex 让图标+文件名保持水平对齐。 */
 .prose :not(pre) > code:not(.axon-path-link) {
   display: inline-block;
   white-space: nowrap;        /* 不在 code 内部断行：整块作为一个单位 */
-  padding: 0.12em 0.45em;
-  margin: 0.2em 0.18em;       /* 上下 0.2em 行距 + 左右 0.18em 间距 */
-  line-height: 1.4;
+  padding: 0.08em 0.38em !important;
+  margin: 0 0.16em !important;
+  line-height: 1.25 !important;
   vertical-align: middle;
   max-width: 100%;
   overflow-x: auto;           /* 超长单 token 内部滚动，不溢出容器 */

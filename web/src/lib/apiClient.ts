@@ -445,7 +445,7 @@ export function openMcpConfigInEditor(level: McpLevel, workspace?: string): Prom
 // ── Provider 配置（.axon/settings/providers.json，用户级/工作区级）──────────
 
 export type ProviderLevel = "user" | "workspace";
-export type ProviderProtocol = "chat" | "responses";
+export type ProviderProtocol = "chat" | "responses" | "anthropic";
 
 /** 单个模型元数据 */
 export interface ProviderModelInfo {
