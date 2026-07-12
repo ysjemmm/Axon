@@ -23,9 +23,11 @@ export type ApiKeyHeader = "bearer" | "x-api-key";
 
 /** provider 名常量（唯一真源，避免字面量散落） */
 export const ZHIPU_PROVIDER = "zhipu";
+/** Axon 官方 provider：出厂内置 Claude 模型目录，apiKey 默认空，由官方分发或后续登录系统注入 */
+export const AXON_PROVIDER = "axon";
 
 /** 内置 provider 的保留名（自定义 provider 不允许占用） */
-export const RESERVED_PROVIDER_NAMES = [ZHIPU_PROVIDER];
+export const RESERVED_PROVIDER_NAMES = [ZHIPU_PROVIDER, AXON_PROVIDER];
 
 /** 单个模型的元数据 */
 export interface ProviderModel {

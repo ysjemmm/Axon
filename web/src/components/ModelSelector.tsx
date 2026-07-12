@@ -288,6 +288,7 @@ export function ModelSelector({ value, provider, onChange, disabledModels = [], 
 
   const trigger = (
     <button
+      type="button"
       className={`inline-flex items-center h-7 gap-1 rounded-md px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors ${disabled ? "opacity-30 cursor-not-allowed" : ""}`}
       onClick={() => { if (!disabled) setOpen(!open); }}
     >
@@ -296,23 +297,25 @@ export function ModelSelector({ value, provider, onChange, disabledModels = [], 
     </button>
   );
 
+  if (disabled && disabledTooltip) {
+    return (
+      <TooltipProvider delayDuration={200}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            {trigger}
+          </TooltipTrigger>
+          <TooltipContent side="top" align="start">
+            <p className="text-xs">{disabledTooltip}</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
+
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
-        {disabled && disabledTooltip ? (
-          <TooltipProvider delayDuration={200}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">{trigger}</span>
-              </TooltipTrigger>
-              <TooltipContent side="top" align="start">
-                <p className="text-xs">{disabledTooltip}</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        ) : (
-          trigger
-        )}
+        {trigger}
       </PopoverTrigger>
       <PopoverContent
         side="top"

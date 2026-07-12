@@ -7,10 +7,10 @@
  * 自定义 provider 不走这里，走 providers.json（见 ProviderRegistry）。
  */
 
-import { ZHIPU_PROVIDER, type ProviderModel, type ProviderProtocol } from "./providerTypes.js";
+import { ZHIPU_PROVIDER, AXON_PROVIDER, type ProviderModel, type ProviderProtocol } from "./providerTypes.js";
 
 // 把"值"常量经由本模块对外导出，供 server / extension 运行时使用。
-export { ZHIPU_PROVIDER, RESERVED_PROVIDER_NAMES, type ApiKeyHeader } from "./providerTypes.js";
+export { ZHIPU_PROVIDER, AXON_PROVIDER, RESERVED_PROVIDER_NAMES, type ApiKeyHeader } from "./providerTypes.js";
 
 /** 内置 provider 定义（apiKey 不在此处，运行时从 env / providers.json 注入） */
 export interface BuiltinProviderDef {
@@ -36,6 +36,24 @@ export const BUILTIN_PROVIDERS: BuiltinProviderDef[] = [
     models: [
       { id: "glm-4-flash", name: "GLM-4 Flash", contextWindow: 128_000, vision: false, free: true, description: "免费，快速响应", group: "智谱", tier: "fast" },
       { id: "glm-4-flashx", name: "GLM-4 FlashX", contextWindow: 128_000, vision: false, free: true, description: "免费，极速推理", group: "智谱", tier: "fast" },
+    ],
+  },
+  {
+    // Axon 官方 provider：出厂内置 Claude 模型目录，baseUrl/协议/模型清单锁定，
+    // apiKey 默认空，前期由官方分发给用户手动粘贴，后续接入登录系统后自动注入。
+    name: AXON_PROVIDER,
+    label: "Axon 官方",
+    baseUrl: "https://ai.xn--djrq4gl4hvoi.top:8443/v1",
+    protocol: "anthropic",
+    locked: true,
+    apiKeyHeader: "x-api-key",
+    models: [
+      { id: "claude-opus-4-8", name: "Claude Opus 4.8", contextWindow: 1_000_000, vision: true, vendor: "anthropic", description: "最强 Opus 档，长上下文", group: "Axon 官方", tier: "flagship" },
+      { id: "claude-opus-4-7", name: "Claude Opus 4.7", contextWindow: 1_000_000, vision: true, vendor: "anthropic", description: "上一代 Opus，长上下文", group: "Axon 官方", tier: "flagship" },
+      { id: "claude-opus-4-6", name: "Claude Opus 4.6", contextWindow: 1_000_000, vision: true, vendor: "anthropic", description: "较早 Opus，长上下文", group: "Axon 官方", tier: "flagship" },
+      { id: "claude-sonnet-5", name: "Claude Sonnet 5", contextWindow: 1_000_000, vision: true, vendor: "anthropic", description: "Sonnet 档最新旗舰，长上下文", group: "Axon 官方", tier: "balanced" },
+      { id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", contextWindow: 1_000_000, vision: true, vendor: "anthropic", description: "上一代 Sonnet，长上下文", group: "Axon 官方", tier: "balanced" },
+      { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", contextWindow: 200_000, vision: true, vendor: "anthropic", description: "速度最快，成本最低", group: "Axon 官方", tier: "fast" },
     ],
   },
 ];

@@ -614,6 +614,9 @@ export class RequestRouter {
       const { name, apiKey } = (body || {}) as { name?: string; apiKey?: string };
       await setBuiltinProviderKey(level, name || "", apiKey || "", ws);
       await resolveProviders(ws);
+      if (name === "axon") {
+        void vscode.commands.executeCommand("axon.usage.refresh");
+      }
       return { ok: true };
     }
     if (path === "/api/open-provider-config" && method === "POST") {

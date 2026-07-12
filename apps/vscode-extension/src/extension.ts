@@ -24,7 +24,7 @@ import { AxonViewProvider } from "./viewProvider.js";
 import { RequestRouter, vscodeBrowse } from "./requestRouter.js";
 import { registerTreeViews } from "./treeViews.js";
 import { AgentEditor } from "./agentEditor.js";
-import { registerAxonStatusBar } from "./statusBar.js";
+import { registerAxonStatusBar, registerAxonUsageStatusBar } from "./statusBar.js";
 import { openOrFocusPanel, postToPanel } from "./panelManager.js";
 import { registerGitBlameAnnotation } from "./gitBlameAnnotation.js";
 import { registerInlineCompletion } from "./inlineCompletion.js";
@@ -1111,6 +1111,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // 底部状态栏 Axon 入口（点击打开右侧 AI 对话栏）
   registerAxonStatusBar(context);
+  // 底部状态栏 Credits 用量：独立按钮，priority=101，显示在 Axon(100) 左边。
+  const usageStatusBar = registerAxonUsageStatusBar(context);
+  context.subscriptions.push(vscode.commands.registerCommand("axon.usage.refresh", () => usageStatusBar.refresh()));
 
   // 编辑器行号右键菜单：使用 Git 追溯注解（对标 IDEA Annotate）
   registerGitBlameAnnotation(context);
@@ -1312,6 +1315,7 @@ export function activate(context: vscode.ExtensionContext): void {
         name: p.name, label: p.label, builtin: p.builtin, locked: p.locked,
         configured: p.configured, modelCount: p.models.length,
       })));
+      void usageStatusBar.refresh();
     } catch (err) {
       console.warn("[axon] provider 树刷新失败:", (err as Error).message);
     }
