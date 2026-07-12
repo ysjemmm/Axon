@@ -1,0 +1,28 @@
+web/src/components/chat/AssistantTurn.tsx
+  s_c493d8f40a4aac::t_b3bed90c6fa9f5 72
+  s_c493d8f40a4aac::t_e8da53b13e3914 89
+  s_c493d8f40a4aac::t_7bfe6a6b62d712 8-18,22-30,37-38,50,61,68-69,73-88,90-91,95,98-99,102-104
+  s_c493d8f40a4aac::t_f59e3b8c6bc7a9 67,70-71,93-94
+web/src/components/ui/button.tsx
+  s_c493d8f40a4aac::t_8179299aef1bfd 44-74,76
+apps/vscode-extension/media/web/index.html
+  s_c493d8f40a4aac::t_7c4ca213cda900 8-26
+web/src/components/ModelSelector.tsx
+  s_c493d8f40a4aac::t_7220d2f82e4942 291,300-314,318
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "ba108d08fb6ead21038948e73f3d9499d0d9bc17",
+  "prompts": {},
+  "sessions": {
+    "s_c493d8f40a4aac": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f555e-5afc-7893-9c8e-3410cf46fa89",
+        "model": "gpt-5.5"
+      },
+      "human_author": "码扬 <mayang@tsign.cn>"
+    }
+  }
+}
