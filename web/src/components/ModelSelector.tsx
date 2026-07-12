@@ -200,6 +200,13 @@ function openProviderPanel() {
 
 interface ModelSelectorProps {
   value: string;
+  /**
+   * 当前选中模型所属的 provider（可选）。多个 provider 下存在同名模型时，
+   * 仅靠 value（模型 id）无法区分具体是哪一个，必须由外部会话状态显式传入，
+   * 否则组件重新挂载后（如 IDE 重启、面板重渲染）会丢失记忆，退化为随机匹配
+   * 第一个同名模型，导致显示/勾选与实际使用的 provider 不一致。
+   */
+  provider?: string;
   onChange: (modelId: string, providerName?: string) => void;
   disabledModels?: string[];
   /** 整个选择器禁用（如压缩期间） */
@@ -248,13 +255,18 @@ function ModelRow({ model, selected, disabled, disabledHint, onPick }: { model: 
   return btn;
 }
 
-export function ModelSelector({ value, onChange, disabledModels = [], disabled = false, disabledTooltip }: ModelSelectorProps) {
+export function ModelSelector({ value, provider, onChange, disabledModels = [], disabled = false, disabledTooltip }: ModelSelectorProps) {
   const groups = useProviderGroups();
   const [open, setOpen] = useState(false);
   // 当前展开的 provider；打开时默认展开当前所选模型所属 provider
   const [expanded, setExpanded] = useState<string | null>(null);
-  // 记住最后选择的 provider，同名模型优先匹配它
-  const [lastProvider, setLastProvider] = useState<string | null>(null);
+  // 记住最后选择的 provider，同名模型优先匹配它；初始值取外部传入的会话 provider，
+  // 避免组件重新挂载（IDE 重启/面板重渲染）后丢失记忆而误配到同名模型的第一个 provider
+  const [lastProvider, setLastProvider] = useState<string | null>(provider ?? null);
+  // 外部 provider 变化时（如会话加载完成后才拿到值、或父组件切换了会话）同步跟随
+  useEffect(() => {
+    if (provider) setLastProvider(provider);
+  }, [provider]);
 
   /** 按 value 找模型：优先 lastProvider，回退到任意匹配 */
   const allModels = getModels();

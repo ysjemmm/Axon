@@ -333,6 +333,77 @@ export class RequestRouter {
       return { ok: true };
     }
 
+    // ── Marketplace（Skill/Power 远程源）──
+    if (path === "/api/marketplaces" && method === "GET") {
+      const { MarketplaceRegistry } = await import("@axon/core");
+      const registry = new MarketplaceRegistry(homedir(), createVSCodeAgentHost());
+      return { sources: await registry.listSources() };
+    }
+    if (path === "/api/marketplaces" && method === "POST") {
+      const { MarketplaceRegistry } = await import("@axon/core");
+      const registry = new MarketplaceRegistry(homedir(), createVSCodeAgentHost());
+      const source = (body || {}) as { name?: string; url?: string; description?: string };
+      if (!source.name || !source.url) throw new Error("name 和 url 必填");
+      await registry.addSource({ name: source.name, url: source.url, description: source.description });
+      return { ok: true };
+    }
+    const marketplaceDeleteMatch = path.match(/^\/api\/marketplaces\/([^/]+)$/);
+    if (marketplaceDeleteMatch && method === "DELETE") {
+      const { MarketplaceRegistry } = await import("@axon/core");
+      const registry = new MarketplaceRegistry(homedir(), createVSCodeAgentHost());
+      await registry.removeSource(decodeURIComponent(marketplaceDeleteMatch[1]));
+      return { ok: true };
+    }
+    if (path === "/api/marketplaces/config/raw" && method === "GET") {
+      const { MarketplaceRegistry } = await import("@axon/core");
+      const registry = new MarketplaceRegistry(homedir(), createVSCodeAgentHost());
+      return { content: await registry.readRawConfig() };
+    }
+    if (path === "/api/marketplaces/config/raw" && method === "PUT") {
+      const { MarketplaceRegistry } = await import("@axon/core");
+      const registry = new MarketplaceRegistry(homedir(), createVSCodeAgentHost());
+      const content = (body as { content?: string } | undefined)?.content;
+      if (typeof content !== "string") throw new Error("content 必须是字符串");
+      await registry.writeRawConfig(content);
+      return { ok: true };
+    }
+    const marketplaceItemsMatch = path.match(/^\/api\/marketplaces\/([^/]+)\/items$/);
+    if (marketplaceItemsMatch && method === "GET") {
+      const { MarketplaceRegistry } = await import("@axon/core");
+      const registry = new MarketplaceRegistry(homedir(), createVSCodeAgentHost());
+      return { items: await registry.fetchItems(decodeURIComponent(marketplaceItemsMatch[1])) };
+    }
+    const marketplaceInstallMatch = path.match(/^\/api\/marketplaces\/([^/]+)\/install$/);
+    if (marketplaceInstallMatch && method === "POST") {
+      const sourceName = decodeURIComponent(marketplaceInstallMatch[1]);
+      const { path: itemPath, kind, workspace } = (body || {}) as { path?: string; kind?: "skill" | "power"; workspace?: string };
+      if (kind !== "skill" && kind !== "power") throw new Error("kind 必须是 skill 或 power");
+      if (!itemPath) throw new Error("path 必填");
+      const ws = workspace || d.defaultWorkspace;
+      const { MarketplaceRegistry, parseFrontmatter, parsePowerFrontmatter, globalSkillsDir, workspaceSkillsDir, globalPowersDir, workspacePowersDir } = await import("@axon/core");
+      const { join } = await import("node:path");
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      const registry = new MarketplaceRegistry(homedir(), createVSCodeAgentHost());
+      const content = await registry.downloadItemContent(sourceName, itemPath);
+      if (kind === "skill") {
+        const { name } = parseFrontmatter(content);
+        if (!name) throw new Error("SKILL.md 缺少 frontmatter 中的 name 字段");
+        const baseDir = workspace ? workspaceSkillsDir(ws) : globalSkillsDir(homedir());
+        const dir = join(baseDir, name);
+        await mkdir(dir, { recursive: true });
+        await writeFile(join(dir, "SKILL.md"), content, "utf-8");
+        return { ok: true, name, dir };
+      } else {
+        const { name } = parsePowerFrontmatter(content);
+        if (!name) throw new Error("POWER.md 缺少 frontmatter 中的 name 字段");
+        const baseDir = workspace ? workspacePowersDir(ws) : globalPowersDir(homedir());
+        const dir = join(baseDir, name);
+        await mkdir(dir, { recursive: true });
+        await writeFile(join(dir, "POWER.md"), content, "utf-8");
+        return { ok: true, name, dir };
+      }
+    }
+
     // ── 独立 MCP 配置（.axon/settings/mcp.json）──
     if (path === "/api/mcp" && method === "GET") {
       const ws = query.get("workspace") || d.defaultWorkspace;

@@ -91,6 +91,13 @@ export const DEFAULT_QUALITY_CONFIG: RelayQualityConfig = {
   review: true,
 };
 
+/**
+ * 各环节可独立指定的模型覆盖配置（创建时确定，不填则回退到当前会话模型）。
+ * key 为 brainstorm/design/plan/executing 四个阶段 + review（评审）。
+ * 值为模型 id（如 "gpt-5.5"、"claude-sonnet-5"），需与已配置的 provider 目录匹配。
+ */
+export type RelayModelOverrides = Partial<Record<RelayPhase | "review", string>>;
+
 /** Relay 元数据（落盘为 relay.json，文档正文另存 md 文件） */
 export interface RelayMeta {
   /** 唯一 id（也是目录名，slug 化） */
@@ -107,6 +114,8 @@ export interface RelayMeta {
   approvals: Partial<Record<RelayPhase, boolean>>;
   /** 质量门配置（TDD / 评审开关） */
   quality?: RelayQualityConfig;
+  /** 各阶段/评审的模型覆盖（不填的环节回退到当前会话模型） */
+  modelOverrides?: RelayModelOverrides;
   /** 关联的会话 id（哪个对话创建/驱动了这个 relay） */
   sessionId?: string;
   /** 创建时间 ISO 字符串 */

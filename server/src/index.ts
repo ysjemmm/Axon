@@ -18,6 +18,7 @@ import { registerSkillRoutes } from "./skills/skillRoutes.js";
 import { registerAgentRoutes } from "./agents/agentRoutes.js";
 import { registerMcpRoutes } from "./mcp/mcpRoutes.js";
 import { registerPowerRoutes } from "./powers/powerRoutes.js";
+import { registerMarketplaceRoutes } from "./marketplace/marketplaceRoutes.js";
 import { registerProviderRoutes } from "./providers/providerRoutes.js";
 import { RelayStore, SessionHub, ZHIPU_PROVIDER, ProviderRegistry, refreshProviders, DEFAULT_COMPACTION_CONFIG, type AgentEvent, type ControlCommand, type CompactionUserConfig } from "@axon/core";
 import { createNodeAgentHost, FileCommandTrustStore, createNodeMcpCapability } from "@axon/host-node";
@@ -177,6 +178,10 @@ registerAgentRoutes(app);
 // ── Power 能力扩展包 API ─────────────────────────────────────────────────
 // 业务逻辑在 powers/powerService.ts，路由注册见 registerPowerRoutes。
 registerPowerRoutes(app);
+
+// ── Marketplace（Skill/Power 远程源）API ─────────────────────────────────
+// 业务逻辑在 marketplace/marketplaceService.ts，路由注册见 registerMarketplaceRoutes。
+registerMarketplaceRoutes(app);
 
 // ── 独立 MCP 配置 API ─────────────────────────────────────────────────────
 // 管理 .axon/settings/mcp.json（用户级/工作区级），与 Power 内嵌 mcp.json 互补。

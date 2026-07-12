@@ -71,6 +71,22 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const [model, setModelState] = useState(() => {
     try { return localStorage.getItem(STORAGE.LAST_MODEL) || DEFAULT_MODEL_ID; } catch { return DEFAULT_MODEL_ID; }
   });
+  const [providerState, setProviderState] = useState<string | undefined>(() => {
+    try { return localStorage.getItem(STORAGE.LAST_PROVIDER) || undefined; } catch { return undefined; }
+  });
+  const setModel = useCallback((newModel: string, providerName?: string) => {
+    setModelState(newModel);
+    setProviderState(providerName);
+    try {
+      localStorage.setItem(STORAGE.LAST_MODEL, newModel);
+      if (providerName) localStorage.setItem(STORAGE.LAST_PROVIDER, providerName);
+      else localStorage.removeItem(STORAGE.LAST_PROVIDER);
+    } catch { /* ignore */ }
+    const targetModel = providerName
+      ? getModels().find((m) => m.id === newModel && m.provider === providerName)
+      : findModel(newModel);
+    if (targetModel) setTokenUsage((prev) => ({ ...prev, max: targetModel.contextWindow > 0 ? targetModel.contextWindow : prev.max }));
+  }, []);
   const [workspace, setWorkspace] = useState<string>("");
   const [workspaces, setWorkspacesState] = useState<string[]>([]);
   const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
@@ -326,7 +342,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     setStatusText("思考中...");
     setStatusPhase("thinking");
     turnStartTime.current = Date.now();
-  }, [send]);
+  }, [send, providerState]);
 
   const submit = useCallback((payload: SubmitPayload): boolean => {
     if (isLoading || isCompacting) {
@@ -337,10 +353,14 @@ export function useChatSession(opts: UseChatSessionOptions) {
     return false;
   }, [isLoading, isCompacting, sendNow]);
 
-  /** 手动压缩上下文 */
+  /**
+   * 手动压缩上下文。带上当前选中的 model/provider——用户可能刚切换了模型选择器
+   * 但还没发送消息，此时后端会话内部的 model/provider 仍是上一条消息用的旧值，
+   * 需要显式同步，避免多 provider 同名模型场景下用错端点压缩。
+   */
   const compactSession = useCallback(() => {
-    send({ type: "compact_session" });
-  }, [send]);
+    send({ type: "compact_session", model, provider: providerState });
+  }, [send, model, providerState]);
 
   /** 用户对压缩方式做出选择 */
   const chooseCompaction = useCallback((choice: "continue" | "new_session") => {
@@ -489,23 +509,6 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const dismissCommandBlocked = useCallback(() => setCommandBlocked(null), []);
 
   /** 选择模型：持久化 + 更新 token 上下文窗口 */
-  const [providerState, setProviderState] = useState<string | undefined>(() => {
-    try { return localStorage.getItem(STORAGE.LAST_PROVIDER) || undefined; } catch { return undefined; }
-  });
-  const setModel = useCallback((newModel: string, providerName?: string) => {
-    setModelState(newModel);
-    setProviderState(providerName);
-    try {
-      localStorage.setItem(STORAGE.LAST_MODEL, newModel);
-      if (providerName) localStorage.setItem(STORAGE.LAST_PROVIDER, providerName);
-      else localStorage.removeItem(STORAGE.LAST_PROVIDER);
-    } catch { /* ignore */ }
-    const targetModel = providerName
-      ? getModels().find((m) => m.id === newModel && m.provider === providerName)
-      : findModel(newModel);
-    if (targetModel) setTokenUsage((prev) => ({ ...prev, max: targetModel.contextWindow > 0 ? targetModel.contextWindow : prev.max }));
-  }, []);
-
   const selectWorkspace = useCallback((path: string) => {
     setWorkspace(path);
     setWorkspaces([path]);

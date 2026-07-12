@@ -373,7 +373,7 @@ export class SessionHub {
         this.getActiveSession(this.resolveSessionId(cmd))?.cancel();
         return;
       case "compact_session":
-        this.getActiveSession(this.resolveSessionId(cmd))?.compactSession();
+        this.getActiveSession(this.resolveSessionId(cmd))?.compactSession(cmd.model, cmd.provider);
         return;
       case "compaction_choice": {
         const sid = this.resolveSessionId(cmd);

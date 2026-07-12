@@ -24,6 +24,7 @@ export const STORAGE = {
   QUEST_THINK: "axon-quest-think",
   QUEST_WEBSEARCH: "axon-quest-websearch",
   PARALLEL_MODEL: "axon-parallel-model",
+  PARALLEL_PROVIDER: "axon-parallel-provider",
   PARALLEL_BATCHES: "axon-parallel-batches",
   PROVIDER_EXPAND: "axon-provider-expand",
   LAST_PROVIDER: "axon-last-provider",

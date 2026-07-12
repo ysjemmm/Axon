@@ -96,7 +96,9 @@ export class ToolDefBuilder {
             "【确认门】每阶段写完文档后必须停下来等用户确认（relay_advance 在下一条消息里调），一条消息最多推一个阶段。\n" +
             "【评审门】任务未通过 relay_review_task 不能标 completed，被打回必须逐条修复后重审。\n" +
             "【连续执行】进入 executing 后连续推进所有任务，仅评审打回/环境阻塞/全部完成时停下。\n" +
-            "【parallel_research】并发布多个只读子 Agent 调研互不依赖的子问题。",
+            "【parallel_research】并发布多个只读子 Agent 调研互不依赖的子问题。\n\n" +
+            "【模型选择】默认所有阶段和评审都用当前会话模型。仅当用户明确提出\"评审用更强的模型\"" +
+            "\"执行阶段换个便宜模型\"等诉求时，才通过 modelOverrides 参数为对应环节指定模型，不要主动询问。",
           parameters: {
             type: "object",
             properties: {
@@ -104,6 +106,17 @@ export class ToolDefBuilder {
               summary: { type: "string", description: "一句话目标摘要" },
               tdd: { type: "boolean", description: "是否强制 TDD（先写失败测试→实现→测试通过）。默认 false。用户明确要求测试驱动时设 true" },
               review: { type: "boolean", description: "是否启用两阶段评审（规格符合性+代码质量）。默认 true，强烈建议保持开启" },
+              modelOverrides: {
+                type: "object",
+                description:
+                  "可选：为执行/评审环节单独指定模型（不填则回退到当前会话模型）。仅 executing 和 review 两个 key 生效" +
+                  "（brainstorm/design/plan 由主对话直接生成，暂不支持独立模型）。value 为模型 id（如 \"gpt-5.5\"）。" +
+                  "用户明确要求某环节用别的模型时才填，否则整个字段省略。",
+                properties: {
+                  executing: { type: "string", description: "执行阶段（子 Agent 实现任务）使用的模型 id" },
+                  review: { type: "string", description: "两阶段评审使用的模型 id" },
+                },
+              },
             },
             required: ["title", "summary"],
           },

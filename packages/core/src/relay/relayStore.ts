@@ -16,7 +16,7 @@
  */
 
 import { join } from "node:path";
-import type { RelayData, RelayMeta, RelaySummary, RelayPhase, RelayTask, RelayQualityConfig, TaskReview, TaskReviewStatus } from "./types.js";
+import type { RelayData, RelayMeta, RelaySummary, RelayPhase, RelayTask, RelayQualityConfig, RelayModelOverrides, TaskReview, TaskReviewStatus } from "./types.js";
 import { toRelaySummary, slugify, PHASE_DOC_FILE, DEFAULT_QUALITY_CONFIG } from "./types.js";
 import { parseTasks, writeBackTaskStatus } from "./planParser.js";
 import type { AgentHost } from "../host/index.js";
@@ -123,7 +123,7 @@ export class RelayStore {
   }
 
   /** 创建一个新 relay（仅元数据，文档随阶段推进再写入） */
-  async create(params: { title: string; summary: string; sessionId?: string; quality?: RelayQualityConfig }): Promise<RelayData> {
+  async create(params: { title: string; summary: string; sessionId?: string; quality?: RelayQualityConfig; modelOverrides?: RelayModelOverrides }): Promise<RelayData> {
     const now = new Date().toISOString();
     let id = slugify(params.title);
     // 避免目录冲突：已存在则追加短后缀
@@ -138,6 +138,7 @@ export class RelayStore {
       tasks: [],
       approvals: {},
       quality: params.quality || { ...DEFAULT_QUALITY_CONFIG },
+      modelOverrides: params.modelOverrides,
       sessionId: params.sessionId,
       createdAt: now,
       updatedAt: now,

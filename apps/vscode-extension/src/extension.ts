@@ -607,6 +607,64 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.showErrorMessage(`操作失败：${(err as Error).message}`);
       }
     }),
+    vscode.commands.registerCommand("axon.skill.installFromMarketplace", async () => {
+      const { MarketplaceRegistry } = await import("@axon/core");
+      const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+      const registry = new MarketplaceRegistry(homedir(), createHost());
+      const sources = await registry.listSources();
+      if (sources.length === 0) {
+        vscode.window.showInformationMessage("还没有配置任何 Marketplace 源，请先添加一个团队仓库地址。", "添加源")
+          .then((choice) => { if (choice === "添加源") vscode.commands.executeCommand("axon.openMarketplaceManager"); });
+        return;
+      }
+      const sourceChoice = await vscode.window.showQuickPick(
+        sources.map((s) => ({ label: s.name, description: s.url, detail: s.description })),
+        { placeHolder: "选择一个源" },
+      );
+      if (!sourceChoice) return;
+
+      let items;
+      try {
+        items = await registry.fetchItems(sourceChoice.label);
+      } catch (err) {
+        vscode.window.showErrorMessage(`拉取源列表失败：${(err as Error).message}`);
+        return;
+      }
+      const skillItems = items.filter((i) => i.kind === "skill");
+      if (skillItems.length === 0) {
+        vscode.window.showInformationMessage(`源「${sourceChoice.label}」暂无可安装的 Skill。`);
+        return;
+      }
+      const itemChoice = await vscode.window.showQuickPick(
+        skillItems.map((i) => ({ label: i.name, description: i.description, detail: i.path })),
+        { placeHolder: "选择要安装的 Skill" },
+      );
+      if (!itemChoice) return;
+      const selectedItem = skillItems.find((i) => i.name === itemChoice.label && i.path === itemChoice.detail);
+      if (!selectedItem) return;
+
+      const locationChoice = await vscode.window.showQuickPick(
+        ["安装到项目", "安装到全局"],
+        { placeHolder: "安装到哪里？" },
+      );
+      if (!locationChoice) return;
+      const isProject = locationChoice === "安装到项目";
+
+      try {
+        const content = await registry.downloadItemContent(sourceChoice.label, selectedItem.path);
+        const { parseFrontmatter, globalSkillsDir, workspaceSkillsDir } = await import("@axon/core");
+        const { name } = parseFrontmatter(content);
+        if (!name) throw new Error("SKILL.md 缺少 frontmatter 中的 name 字段");
+        const baseDir = isProject ? workspaceSkillsDir(defaultWorkspace) : globalSkillsDir(homedir());
+        const dir = require("path").join(baseDir, name);
+        await vscode.workspace.fs.createDirectory(vscode.Uri.file(dir));
+        await vscode.workspace.fs.writeFile(vscode.Uri.file(require("path").join(dir, "SKILL.md")), new TextEncoder().encode(content));
+        await refreshSkillTree();
+        vscode.window.showInformationMessage(`Skill「${name}」已安装。`);
+      } catch (err) {
+        vscode.window.showErrorMessage(`安装失败：${(err as Error).message}`);
+      }
+    }),
     vscode.commands.registerCommand("axon.skill.create", async (node?: unknown) => {
       // 判断在哪个组创建：如果从右键菜单触发，node 可能是 SkillGroupNode
       const choices = ["项目 Skill（当前工作区）", "全局 Skill（用户级）"];
@@ -825,6 +883,74 @@ export function activate(context: vscode.ExtensionContext): void {
         id: "mcp-manager",
         title: "MCP 服务器",
         query: `view=mcp&workspace=${encodeURIComponent(workspace)}`,
+        extensionUri: context.extensionUri,
+        router,
+        icon: "media/powers.svg",
+      });
+    }),
+    vscode.commands.registerCommand("axon.power.installFromMarketplace", async () => {
+      const { MarketplaceRegistry } = await import("@axon/core");
+      const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+      const registry = new MarketplaceRegistry(homedir(), createHost());
+      const sources = await registry.listSources();
+      if (sources.length === 0) {
+        vscode.window.showInformationMessage("还没有配置任何 Marketplace 源，请先添加一个团队仓库地址。", "添加源")
+          .then((choice) => { if (choice === "添加源") vscode.commands.executeCommand("axon.openMarketplaceManager"); });
+        return;
+      }
+      const sourceChoice = await vscode.window.showQuickPick(
+        sources.map((s) => ({ label: s.name, description: s.url, detail: s.description })),
+        { placeHolder: "选择一个源" },
+      );
+      if (!sourceChoice) return;
+
+      let items;
+      try {
+        items = await registry.fetchItems(sourceChoice.label);
+      } catch (err) {
+        vscode.window.showErrorMessage(`拉取源列表失败：${(err as Error).message}`);
+        return;
+      }
+      const powerItems = items.filter((i) => i.kind === "power");
+      if (powerItems.length === 0) {
+        vscode.window.showInformationMessage(`源「${sourceChoice.label}」暂无可安装的 Power。`);
+        return;
+      }
+      const itemChoice = await vscode.window.showQuickPick(
+        powerItems.map((i) => ({ label: i.name, description: i.description, detail: i.path })),
+        { placeHolder: "选择要安装的 Power" },
+      );
+      if (!itemChoice) return;
+      const selectedItem = powerItems.find((i) => i.name === itemChoice.label && i.path === itemChoice.detail);
+      if (!selectedItem) return;
+
+      const locationChoice = await vscode.window.showQuickPick(
+        ["安装到项目", "安装到全局"],
+        { placeHolder: "安装到哪里？" },
+      );
+      if (!locationChoice) return;
+      const isProject = locationChoice === "安装到项目";
+
+      try {
+        const content = await registry.downloadItemContent(sourceChoice.label, selectedItem.path);
+        const { parsePowerFrontmatter, globalPowersDir, workspacePowersDir } = await import("@axon/core");
+        const { name } = parsePowerFrontmatter(content);
+        if (!name) throw new Error("POWER.md 缺少 frontmatter 中的 name 字段");
+        const baseDir = isProject ? workspacePowersDir(defaultWorkspace) : globalPowersDir(homedir());
+        const dir = require("path").join(baseDir, name);
+        await vscode.workspace.fs.createDirectory(vscode.Uri.file(dir));
+        await vscode.workspace.fs.writeFile(vscode.Uri.file(require("path").join(dir, "POWER.md")), new TextEncoder().encode(content));
+        await refreshPowerTree();
+        vscode.window.showInformationMessage(`Power「${name}」已安装。`);
+      } catch (err) {
+        vscode.window.showErrorMessage(`安装失败：${(err as Error).message}`);
+      }
+    }),
+    vscode.commands.registerCommand("axon.openMarketplaceManager", () => {
+      openOrFocusPanel({
+        id: "marketplace-manager",
+        title: "Marketplace 源管理",
+        query: "view=marketplace",
         extensionUri: context.extensionUri,
         router,
         icon: "media/powers.svg",

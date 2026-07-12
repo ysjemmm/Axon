@@ -35,11 +35,21 @@ export function ParallelPanel({ connected, send }: ParallelPanelProps) {
   const [model, setModel] = useState(() => {
     try { return localStorage.getItem(STORAGE.PARALLEL_MODEL) || "auto"; } catch { return "auto"; }
   });
+  // provider 需与 model 一起持久化：多个 provider 下存在同名模型时，
+  // 仅存 model id 无法区分具体是哪一个，会在下次打开时误配到第一个同名模型
+  const [provider, setProvider] = useState<string | undefined>(() => {
+    try { return localStorage.getItem(STORAGE.PARALLEL_PROVIDER) || undefined; } catch { return undefined; }
+  });
 
   // 模型选择持久化
-  const handleModelChange = useCallback((m: string) => {
+  const handleModelChange = useCallback((m: string, providerName?: string) => {
     setModel(m);
-    try { localStorage.setItem(STORAGE.PARALLEL_MODEL, m); } catch { /* ignore */ }
+    setProvider(providerName);
+    try {
+      localStorage.setItem(STORAGE.PARALLEL_MODEL, m);
+      if (providerName) localStorage.setItem(STORAGE.PARALLEL_PROVIDER, providerName);
+      else localStorage.removeItem(STORAGE.PARALLEL_PROVIDER);
+    } catch { /* ignore */ }
   }, []);
   const [composerEmpty, setComposerEmpty] = useState(true);
   const editorRef = useRef<MentionEditorHandle>(null);
@@ -49,12 +59,12 @@ export function ParallelPanel({ connected, send }: ParallelPanelProps) {
     if (!text.trim()) return;
     // 如果是 auto 模式，根据内容选择模型
     let actualModel = model;
-    let actualProvider: string | undefined;
+    let actualProvider: string | undefined = provider;
     if (model === "auto") {
       const selected = autoSelectModel(text, false);
       actualModel = selected.id;
       actualProvider = selected.provider;
-    } else {
+    } else if (!actualProvider) {
       const found = findModel(model);
       if (found) actualProvider = found.provider;
     }
@@ -62,7 +72,7 @@ export function ParallelPanel({ connected, send }: ParallelPanelProps) {
     editorRef.current?.clear();
     setComposerEmpty(true);
     editorRef.current?.focus();
-  }, [model, submit]);
+  }, [model, provider, submit]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -136,6 +146,7 @@ export function ParallelPanel({ connected, send }: ParallelPanelProps) {
         <div className="flex items-center justify-between">
           <ModelSelector
             value={model}
+            provider={provider}
             onChange={handleModelChange}
             disabled={hasRunning}
           />

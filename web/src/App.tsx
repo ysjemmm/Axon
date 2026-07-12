@@ -6,6 +6,7 @@ import { RelayTabView } from "./components/RelayTabView";
 import { PowerStudio } from "./components/PowerStudio";
 import { McpStudio } from "./components/McpStudio";
 import { ProviderStudio } from "./components/ProviderStudio";
+import { MarketplaceStudio } from "./components/MarketplaceStudio";
 import { ParallelPanel } from "./components/parallel/ParallelPanel";
 import { History, X, Plus, HelpCircle, GitBranch } from "lucide-react";
 import { listSessions } from "./lib/apiClient";
@@ -24,7 +25,7 @@ function genTabKey(): string {
 }
 
 /** URL 参数路由：不同 view 模式 */
-function getViewMode(): "chat" | "skills" | "relay" | "powers" | "mcp" | "providers" {
+function getViewMode(): "chat" | "skills" | "relay" | "powers" | "mcp" | "providers" | "marketplace" {
   // WebviewPanel 模式：通过注入的全局变量传参
   const injected = (window as any).__axonViewParams as string | undefined;
   const searchStr = injected || window.location.search;
@@ -35,6 +36,7 @@ function getViewMode(): "chat" | "skills" | "relay" | "powers" | "mcp" | "provid
   if (view === "powers") return "powers";
   if (view === "mcp") return "mcp";
   if (view === "providers") return "providers";
+  if (view === "marketplace") return "marketplace";
   return "chat";
 }
 
@@ -97,6 +99,15 @@ function App() {
     return (
       <div className="h-screen bg-background text-foreground">
         <ProviderStudio workspace={workspace} />
+      </div>
+    );
+  }
+
+  // 全局 Marketplace 源管理（编辑器 Tab 内嵌，view=marketplace）
+  if (viewMode === "marketplace") {
+    return (
+      <div className="h-screen bg-background text-foreground">
+        <MarketplaceStudio />
       </div>
     );
   }

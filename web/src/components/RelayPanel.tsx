@@ -7,7 +7,7 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
-import { X, Check, Circle, Loader2, FileText, ListChecks, Lightbulb, PencilRuler, Trash2, ShieldCheck, ShieldAlert, FlaskConical } from "lucide-react";
+import { X, Check, Circle, Loader2, FileText, ListChecks, Lightbulb, PencilRuler, Trash2, ShieldCheck, ShieldAlert, FlaskConical, Cpu } from "lucide-react";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from "@/components/ui/dialog";
@@ -219,6 +219,18 @@ export function RelayPanel({ open, onClose, workspace, liveRelay, focusRelayId, 
                       <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-600 dark:text-violet-400">
                         <FlaskConical className="w-3 h-3" />
                         TDD
+                      </span>
+                    )}
+                    {(selected.modelOverrides?.executing || selected.modelOverrides?.review) && (
+                      <span
+                        className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-600 dark:text-sky-400"
+                        title={[
+                          selected.modelOverrides?.executing && `执行：${selected.modelOverrides.executing}`,
+                          selected.modelOverrides?.review && `评审：${selected.modelOverrides.review}`,
+                        ].filter(Boolean).join("　")}
+                      >
+                        <Cpu className="w-3 h-3" />
+                        自定义模型
                       </span>
                     )}
                   </div>

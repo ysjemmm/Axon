@@ -144,6 +144,23 @@ function sanitizeSubAgentFinalText(text: string): string {
   return "子 Agent 已完成执行，但最终结论格式异常，混入了内部调试/工具调用痕迹；请以过程卡片中的实际调研步骤为准，由主 Agent 重新整理结论。";
 }
 
+/** 网络/网关层瞬时错误：值得重试（DNS/连接失败、超时、429、网关 5xx 等） */
+function isTransientNetworkError(err: unknown): boolean {
+  const msg = ((err as Error)?.message || "").toLowerCase();
+  if (!msg) return false;
+  return (
+    /\b429\b/.test(msg) ||
+    /rate limit|quota|too many requests/.test(msg) ||
+    /gateway|upstream|proxy|service unavailable/.test(msg) ||
+    /unexpected eof|connection reset|socket hang up|network error|fetch failed|timeout|timed out|econnreset|econnrefused|enotfound/.test(msg)
+  );
+}
+
+/** 子 Agent 单轮 LLM 调用的最大重试次数（不含首次尝试） */
+const SUBAGENT_TURN_MAX_RETRIES = 3;
+/** 重试退避基础间隔（ms），指数递增：500 / 1000 / 2000 */
+const SUBAGENT_RETRY_BASE_DELAY_MS = 500;
+
 export class SubAgentRunner {
   // 累计本子 Agent 所有回合消耗的 token，run() 返回时上报给父 Agent
   private inputTokensUsed = 0;
@@ -225,7 +242,7 @@ export class SubAgentRunner {
       if (this.deps.signal?.aborted) {
         return { ok: false, text: finalText || "（任务已取消）", inputTokens: this.inputTokensUsed, outputTokens: this.outputTokensUsed, tokens: this.inputTokensUsed + this.outputTokensUsed };
       }
-      const turn = await this.runTurn(messages);
+      const turn = await this.runTurnWithRetry(messages);
       const { content, toolCalls } = turn;
       // 消费归一化后的产品语义结束原因（策略层保证已填充）；协议原始 finishReason 不再在此点直接判断。
       const finishReason: NormalizedFinishReason = turn.normalizedFinishReason;
@@ -303,7 +320,7 @@ export class SubAgentRunner {
             `你已多次尝试（包括重新理清思路、换路重来）仍未能完成。请立即停止重试，` +
             `基于已有信息用中文给出结论：说明你想做什么、卡在哪里、失败原因、你的判断和建议。不要再调用任何工具。`,
         });
-        const summary = await this.runTurn(messages);
+        const summary = await this.runTurnWithRetry(messages);
         finalText = sanitizeSubAgentFinalText(summary.content || "子 Agent 多次工具调用失败，未能完成任务。请检查相关文件或环境。");
         this.deps.emit("stream_end", { elapsed: 0, tokens: finalText.length });
         return { ok: false, text: finalText, inputTokens: this.inputTokensUsed, outputTokens: this.outputTokensUsed, tokens: this.inputTokensUsed + this.outputTokensUsed };
@@ -319,8 +336,34 @@ export class SubAgentRunner {
     return { ok: false, text: sanitizeSubAgentFinalText(finalText), inputTokens: this.inputTokensUsed, outputTokens: this.outputTokensUsed, tokens: this.inputTokensUsed + this.outputTokensUsed };
   }
 
+  /**
+   * 带重试的单轮调用：仅对网络/网关瞬时错误重试（最多 3 次，指数退避），
+   * 其他错误（参数错误/认证失败等）直接抛出，不浪费重试次数。
+   * 每次重试前通过 emit 推一条状态提示，让用户知道发生了什么，而不是静默等待或裸抛 "fetch failed"。
+   */
+  private async runTurnWithRetry(messages: ChatCompletionMessageParam[]): ReturnType<SubAgentRunner["_doRunTurn"]> {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt <= SUBAGENT_TURN_MAX_RETRIES; attempt++) {
+      try {
+        return await this._doRunTurn(messages);
+      } catch (err) {
+        lastErr = err;
+        if (!isTransientNetworkError(err) || attempt === SUBAGENT_TURN_MAX_RETRIES) {
+          throw err;
+        }
+        const delay = SUBAGENT_RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+        this.deps.emit("status", {
+          content: `请求失败（${(err as Error).message}），${delay}ms 后重试（第 ${attempt + 1}/${SUBAGENT_TURN_MAX_RETRIES} 次）...`,
+        });
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+    // 理论上不可达（循环内已 return 或 throw），仅为满足类型检查
+    throw lastErr;
+  }
+
   /** 执行一个 LLM 回合，把流式事件通过 emit 上抛 */
-  private async runTurn(messages: ChatCompletionMessageParam[]) {
+  private _doRunTurn(messages: ChatCompletionMessageParam[]) {
     let streamStarted = false;
     const callbacks: LLMStreamCallbacks = {
       onReasoningDelta: (text) => this.deps.emit("reasoning_delta", { content: text }),

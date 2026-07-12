@@ -1073,6 +1073,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             <div className="flex items-center gap-1">
               <ModelSelector
                 value={session.model}
+                provider={session.provider}
                 onChange={handleModelChange}
                 disabledModels={images.length > 0 ? models.filter((m) => !m.vision).map((m) => m.id) : []}
                 disabled={session.isCompacting}

@@ -25,7 +25,7 @@ import { looksLikeIncompleteReply, LoopGuard, policyForModel, isSoftToolFailure,
 import { McpRegistry } from "./mcp/mcpRegistry.js";
 import { modelContextWindow } from "./llm/modelContext.js";
 import { SYSTEM_PROMPT, QUEST_SYSTEM_PROMPT } from "./systemPrompt.js";
-import { getStrategy, ZHIPU_PROVIDER } from "./providers.js";
+import { getStrategy, ZHIPU_PROVIDER, findProviderForModel } from "./providers.js";
 import { PromptBuilder, messageText } from "./session/promptBuilder.js";
 import {
   resolveToolDispatchRoute,
@@ -547,8 +547,15 @@ export class AgentSession {
 
 
   /** 手动触发上下文压缩（供前端"压缩上下文"按钮调用）。需超过当前模型窗口 35% 才允许。 */
-  /** 手动触发上下文压缩（委托 CompactionController）。 */
-  async compactSession(): Promise<void> {
+  /**
+   * 手动触发上下文压缩（委托 CompactionController）。
+   * model/provider 可选：前端切换了模型选择器但尚未发送消息时，会话内部的
+   * this.model/this.provider 仍是上一条消息用的值；这里先同步再压缩，避免用
+   * 旧 provider 调用摘要 LLM（多 provider 存在同名模型时会调错端点）。
+   */
+  async compactSession(model?: string, provider?: string): Promise<void> {
+    if (model && model !== this.model) this.model = model;
+    if (provider && provider !== this.provider) this.provider = provider;
     await this.compactionController.compactSession();
   }
 
@@ -688,6 +695,27 @@ export class AgentSession {
    */
   /** @internal */ gateCommand(command: string, toolCallId?: string): Promise<GateOutcome> {
     return this.commandGateController.gate(command, toolCallId);
+  }
+
+  /**
+   * 解析子 Agent 执行阶段（delegate_task / parallel_execute）应使用的 provider + model。
+   * 若当前处于某个 Relay 任务的执行上下文（this.activeRelayTask 有值）且该 Relay 配置了
+   * modelOverrides.executing，且该模型能在已配置的 provider 目录中找到 → 用覆盖值；
+   * 否则回退到当前会话的 provider + model（未配置模型覆盖时的默认行为）。
+   */
+  /** @internal */ async resolveExecutingModel(): Promise<{ provider: string; model: string }> {
+    if (this.activeRelayTask) {
+      try {
+        const relay = await this.relayStore.get(this.activeRelayTask.relayId);
+        const overrideModel = relay?.modelOverrides?.executing;
+        if (overrideModel) {
+          const provider = findProviderForModel(overrideModel, this.provider);
+          if (provider) return { provider, model: overrideModel };
+          console.warn(`[relay] 执行阶段模型覆盖 "${overrideModel}" 未在已配置的 provider 中找到（或存在多 provider 歧义），回退到当前会话模型`);
+        }
+      } catch { /* 读取失败不阻塞执行，回退默认 */ }
+    }
+    return { provider: this.provider, model: this.model };
   }
 
   /** 设置当前会话 id（relay 关联用，由 index.ts 在加载/创建会话时调用） */

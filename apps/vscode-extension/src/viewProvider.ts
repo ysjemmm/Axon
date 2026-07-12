@@ -176,6 +176,12 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
+      // 打开 Marketplace 源管理面板
+      if (m.type === "open_marketplace_manager") {
+        vscode.commands.executeCommand("axon.openMarketplaceManager");
+        return;
+      }
+
       // 打开 Relay 详情 Tab（webview panel 渲染完整 Relay 面板）
       if (m.type === "open_relay" && typeof m.relayId === "string") {
         const relayId = m.relayId as string;

@@ -55,9 +55,11 @@ export class DelegateRunner {
       this.s.send("sub_agent_event", { delegateId, event: { type, ...data } });
     };
 
+    // 若处于某个 Relay 任务的执行上下文，用该 Relay 配置的执行阶段模型覆盖（未配置则回退当前会话模型）
+    const { provider: execProvider, model: execModel } = await this.s.resolveExecutingModel();
     const runner = new SubAgentRunner({
-      strategy: getStrategy(this.s.provider, this.s.model),
-      model: this.s.model,
+      strategy: getStrategy(execProvider, execModel),
+      model: execModel,
       cwd: this.s.cwd,
       workspaces: this.s.workspaces,
       host: deriveSubAgentHost(this.s.host),

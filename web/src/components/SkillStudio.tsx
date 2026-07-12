@@ -32,6 +32,7 @@ import {
   Plug,
   Puzzle,
   Settings2,
+  Store,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,6 +45,7 @@ import {
 } from "@/components/ui/select";
 import { CodeEditor } from "@/components/CodeEditor";
 import { SkillCreateDialog } from "@/components/SkillCreateDialog";
+import { MarketplaceDialog } from "@/components/MarketplaceDialog";
 import {
   listSkills,
   getSkillTree,
@@ -83,6 +85,8 @@ export function SkillStudio({ workspace, onBack }: SkillStudioProps) {
   const [activeSkill, setActiveSkill] = useState<SkillInfo | null>(null);
   // 新建 Skill 对话框
   const [createOpen, setCreateOpen] = useState(false);
+  // Marketplace（远程源浏览安装）对话框
+  const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   // Directory 搜索 / 排序 / 筛选
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("name");
@@ -219,6 +223,10 @@ export function SkillStudio({ workspace, onBack }: SkillStudioProps) {
                 <SelectItem value="source">按来源</SelectItem>
               </SelectContent>
             </Select>
+            <Button size="lg" variant="outline" className="h-9 shrink-0" onClick={() => setMarketplaceOpen(true)}>
+              <Store className="w-4 h-4" />
+              从仓库获取
+            </Button>
             <Button size="lg" className="h-9 shrink-0" onClick={() => setCreateOpen(true)}>
               <Plus className="w-4 h-4" />
               新建 Skill
@@ -277,6 +285,12 @@ export function SkillStudio({ workspace, onBack }: SkillStudioProps) {
         onOpenChange={setCreateOpen}
         workspace={workspace}
         onCreated={handleSkillCreated}
+      />
+      <MarketplaceDialog
+        open={marketplaceOpen}
+        onOpenChange={setMarketplaceOpen}
+        workspace={workspace}
+        onInstalled={loadSkills}
       />
     </div>
   );

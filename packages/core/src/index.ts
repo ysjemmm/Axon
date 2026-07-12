@@ -58,5 +58,9 @@ export * from "./web/webSearch.js";
 // Powers 能力扩展包（MCP 服务器 + 文档 + 工作流引导）
 export * from "./powers/powerLoader.js";
 
+// Marketplace（Skill/Power 远程源：团队内部仓库浏览与一键安装）
+export * from "./marketplace/types.js";
+export * from "./marketplace/marketplaceRegistry.js";
+
 // Credits 计费系统（Token → Credits 换算）
 export * from "./credits.js";

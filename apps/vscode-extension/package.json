@@ -286,6 +286,11 @@
         "icon": "$(folder-opened)"
       },
       {
+        "command": "axon.skill.installFromMarketplace",
+        "title": "从仓库安装 Skill",
+        "icon": "$(cloud-download)"
+      },
+      {
         "command": "axon.skill.deleteBatch",
         "title": "批量删除 Skill",
         "icon": "$(trash)"
@@ -338,6 +343,16 @@
         "command": "axon.power.import",
         "title": "导入 Power",
         "icon": "$(folder-opened)"
+      },
+      {
+        "command": "axon.power.installFromMarketplace",
+        "title": "从仓库安装 Power",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "axon.openMarketplaceManager",
+        "title": "Axon: 打开 Marketplace 源管理",
+        "icon": "$(add)"
       },
       {
         "command": "axon.power.importSkills",
@@ -515,6 +530,16 @@
           "group": "navigation"
         },
         {
+          "command": "axon.skill.installFromMarketplace",
+          "when": "view == axon.skills",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.openMarketplaceManager",
+          "when": "view == axon.skills",
+          "group": "navigation"
+        },
+        {
           "command": "axon.skill.deleteBatch",
           "when": "view == axon.skills",
           "group": "navigation"
@@ -526,6 +551,16 @@
         },
         {
           "command": "axon.power.import",
+          "when": "view == axon.powers",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.power.installFromMarketplace",
+          "when": "view == axon.powers",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.openMarketplaceManager",
           "when": "view == axon.powers",
           "group": "navigation"
         },

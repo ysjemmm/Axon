@@ -61,6 +61,35 @@ export function getResolvedProviders(): ResolvedProvider[] {
   return _resolved ? [..._resolved.values()] : [];
 }
 
+/**
+ * 根据模型 id 反查它所属的 provider 名称。用于 Relay 模型覆盖等场景——用户/AI 只给出
+ * 一个模型 id（如 "gpt-5.5"），需要找到对应的 provider 才能调用 getStrategy。
+ *
+ * ⚠️ 同一个模型 id 可能在多个 provider 下都存在（如两个中转站都配了同名的 "gpt-5.5"）。
+ * 为避免"悄悄选中错误 provider（错的 baseUrl/apiKey/协议）导致调用行为不对但不报错"这类
+ * 隐蔽问题，这里要求显式传入 preferredProvider 时优先匹配该 provider；
+ * 不传或该 provider 下未找到时，遍历全部 provider 命中【唯一】匹配则返回，
+ * 命中多个（同名歧义）时保守返回 undefined，由调用方回退默认而不是猜一个。
+ *
+ * @param modelId 模型 id
+ * @param preferredProvider 可选：优先在这个 provider 下查找（如当前会话 provider）
+ */
+export function findProviderForModel(modelId: string, preferredProvider?: string): string | undefined {
+  if (!_resolved) return undefined;
+
+  if (preferredProvider) {
+    const preferred = _resolved.get(normalizeProvider(preferredProvider));
+    if (preferred?.models.some((m) => m.id === modelId)) return preferred.name;
+  }
+
+  const matches = [..._resolved.values()].filter((p) => p.models.some((m) => m.id === modelId));
+  if (matches.length === 1) return matches[0].name;
+  if (matches.length > 1) {
+    console.warn(`[providers] 模型 id "${modelId}" 在多个 provider 中都存在（${matches.map((p) => p.name).join(", ")}），存在歧义，未指定 preferredProvider 时不猜测，返回 undefined`);
+  }
+  return undefined;
+}
+
 /** 取某 provider 的运行时配置：先查已注入的解析结果，再回退到环境变量。 */
 function configFor(name: string): ProviderConfig | undefined {
   const hit = _resolved?.get(name);

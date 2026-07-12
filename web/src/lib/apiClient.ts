@@ -228,6 +228,12 @@ export interface RelayQualityConfig {
   review: boolean;
 }
 
+/** 执行/评审环节的模型覆盖（不填的环节回退到当前会话模型） */
+export interface RelayModelOverrides {
+  executing?: string;
+  review?: string;
+}
+
 export interface RelaySummary {
   id: string;
   title: string;
@@ -246,6 +252,7 @@ export interface RelayData {
   tasks: RelayTask[];
   approvals: Partial<Record<RelayPhase, boolean>>;
   quality?: RelayQualityConfig;
+  modelOverrides?: RelayModelOverrides;
   sessionId?: string;
   createdAt: string;
   updatedAt: string;
@@ -574,4 +581,60 @@ export interface ProbedModelInfo {
  */
 export function probeProviderModels(params: { baseUrl?: string; apiKey?: string; name?: string; level?: ProviderLevel; workspace?: string }): Promise<{ models: ProbedModelInfo[] }> {
   return post("/api/providers/probe-models", params);
+}
+
+// ── Marketplace（Skill/Power 远程源：团队内部仓库浏览与一键安装） ──
+
+export interface MarketplaceSource {
+  name: string;
+  url: string;
+  description?: string;
+}
+
+export interface MarketplaceItem {
+  name: string;
+  description?: string;
+  path: string;
+  kind: "skill" | "power";
+  sourceName: string;
+}
+
+/** 列出所有已配置的源 */
+export function listMarketplaceSources(): Promise<{ sources: MarketplaceSource[] }> {
+  return get("/api/marketplaces");
+}
+
+/** 新增一个源（可视化编辑） */
+export function addMarketplaceSource(source: MarketplaceSource): Promise<{ ok: boolean }> {
+  return post("/api/marketplaces", source);
+}
+
+/** 删除一个源 */
+export function removeMarketplaceSource(name: string): Promise<{ ok: boolean }> {
+  return del(`/api/marketplaces/${encodeURIComponent(name)}`);
+}
+
+/** 读取原始 JSON 配置内容（"JSON 编辑"模式） */
+export function getMarketplaceRawConfig(): Promise<{ content: string }> {
+  return get("/api/marketplaces/config/raw");
+}
+
+/** 覆盖写入原始 JSON 配置（"JSON 编辑"模式保存） */
+export function saveMarketplaceRawConfig(content: string): Promise<{ ok: boolean }> {
+  return put("/api/marketplaces/config/raw", { content });
+}
+
+/** 拉取指定源的可安装条目列表 */
+export function fetchMarketplaceItems(sourceName: string): Promise<{ items: MarketplaceItem[] }> {
+  return get(`/api/marketplaces/${encodeURIComponent(sourceName)}/items`);
+}
+
+/** 从远程源安装一个条目 */
+export function installMarketplaceItem(
+  sourceName: string,
+  itemPath: string,
+  kind: "skill" | "power",
+  workspace?: string,
+): Promise<{ ok: boolean; name: string; dir: string }> {
+  return post(`/api/marketplaces/${encodeURIComponent(sourceName)}/install`, { path: itemPath, kind, workspace });
 }

@@ -8,15 +8,49 @@
  * 通过构造注入的 session 引用访问 relayStore / 活动任务上下文 / 本轮推进标记 / 子 Agent 能力（@internal）。
  */
 
-import { getStrategy } from "../providers.js";
+import { getStrategy, findProviderForModel } from "../providers.js";
 import { deriveSubAgentHost } from "../host/index.js";
-import type { RelayPhase, RelayQualityConfig } from "../relay/types.js";
+import type { RelayPhase, RelayQualityConfig, RelayModelOverrides } from "../relay/types.js";
 import { nextPhase, PHASE_DOC_FILE } from "../relay/types.js";
 import { runTwoStageReview, buildReviewFeedback, type ReviewContext } from "../relay/reviewAgent.js";
 import type { AgentSession } from "../agentSession.js";
 
 export class RelayToolRunner {
   constructor(private readonly s: AgentSession) {}
+
+  /**
+   * 把 relay_create 传入的 modelOverrides 原始参数（未知形状）校验/收窄为合法的 RelayModelOverrides。
+   * 非对象或非字符串字段一律忽略，不抛错——模型覆盖是可选增强，格式不对时静默降级为"不覆盖"。
+   */
+  private parseModelOverrides(raw: unknown): RelayModelOverrides | undefined {
+    if (!raw || typeof raw !== "object") return undefined;
+    const keys: (keyof RelayModelOverrides)[] = ["brainstorm", "design", "plan", "executing", "review"];
+    const out: RelayModelOverrides = {};
+    let hasAny = false;
+    for (const k of keys) {
+      const v = (raw as Record<string, unknown>)[k];
+      if (typeof v === "string" && v.trim()) {
+        out[k] = v.trim();
+        hasAny = true;
+      }
+    }
+    return hasAny ? out : undefined;
+  }
+
+  /**
+   * 解析某个环节（阶段名或 "review"）应使用的 provider + model。
+   * 有覆盖配置且能在已配置的 provider 目录中找到该模型 → 用覆盖值；
+   * 否则回退到当前会话的 provider + model（不覆盖时的默认行为）。
+   */
+  private resolveModelFor(relayModelOverrides: RelayModelOverrides | undefined, slot: keyof RelayModelOverrides): { provider: string; model: string } {
+    const overrideModel = relayModelOverrides?.[slot];
+    if (overrideModel) {
+      const provider = findProviderForModel(overrideModel, this.s.provider);
+      if (provider) return { provider, model: overrideModel };
+      console.warn(`[relay] 模型覆盖 "${overrideModel}"（${slot}）未在已配置的 provider 中找到（或存在多 provider 歧义），回退到当前会话模型`);
+    }
+    return { provider: this.s.provider, model: this.s.model };
+  }
 
   /** 执行 relay_create：创建一个新的 Relay 长任务工作流，通知前端打开/刷新面板。 */
   async create(args: Record<string, unknown>): Promise<string> {
@@ -27,11 +61,15 @@ export class RelayToolRunner {
       tdd: args.tdd === true,
       review: args.review !== false, // 默认开启评审
     };
-    const relay = await this.s.relayStore.create({ title, summary, sessionId: this.s.currentRelaySessionId, quality });
+    const modelOverrides = this.parseModelOverrides(args.modelOverrides);
+    const relay = await this.s.relayStore.create({ title, summary, sessionId: this.s.currentRelaySessionId, quality, modelOverrides });
     this.s.send("relay_updated", { relay });
     const qualityNote = `质量门：评审${quality.review ? "开启" : "关闭"}，TDD ${quality.tdd ? "强制" : "不强制"}。`;
+    const overrideNote = modelOverrides
+      ? ` 模型覆盖：${(["executing", "review"] as const).filter((k) => modelOverrides[k]).map((k) => `${k === "executing" ? "执行" : "评审"}=${modelOverrides[k]}`).join("、") || "无生效项（当前仅执行/评审两个环节支持覆盖）"}。`
+      : "";
     return (
-      `已创建 Relay 长任务工作流「${relay.title}」（id: ${relay.id}），当前处于需求澄清（brainstorm）阶段。${qualityNote}\n` +
+      `已创建 Relay 长任务工作流「${relay.title}」（id: ${relay.id}），当前处于需求澄清（brainstorm）阶段。${qualityNote}${overrideNote}\n` +
       `接下来请与用户澄清需求要点（目标、范围、验收标准），然后用 relay_save_doc(phase="brainstorm") 写入需求文档，` +
       `分段呈现给用户确认。不要跳过澄清直接写文档。`
     );
@@ -203,9 +241,11 @@ export class RelayToolRunner {
     const reviewBatchId = `review-${id}-${taskId}-${Date.now()}`;
     this.s.send("relay_review_start", { batchId: reviewBatchId, relayId: id, taskId });
 
+    // 评审模型覆盖：该 Relay 配置了 modelOverrides.review 则用它，否则回退当前会话模型
+    const { provider: reviewProvider, model: reviewModel } = this.resolveModelFor(relay.modelOverrides, "review");
     const { tokens: reviewTokens, ...review } = await runTwoStageReview(ctx, {
-      strategy: getStrategy(this.s.provider, this.s.model),
-      model: this.s.model,
+      strategy: getStrategy(reviewProvider, reviewModel),
+      model: reviewModel,
       cwd: this.s.cwd,
       workspaces: this.s.workspaces,
       host: deriveSubAgentHost(this.s.host),
