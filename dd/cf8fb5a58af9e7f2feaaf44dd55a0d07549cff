@@ -1,0 +1,19 @@
+web/src/components/chat/useChatSession.ts
+  s_c493d8f40a4aac::t_78246d1adfdb4e 74-89,345,356-360,362-363
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "ddcf8fb5a58af9e7f2feaaf44dd55a0d07549cff",
+  "prompts": {},
+  "sessions": {
+    "s_c493d8f40a4aac": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f555e-5afc-7893-9c8e-3410cf46fa89",
+        "model": "unknown"
+      },
+      "human_author": "码扬 <mayang@tsign.cn>"
+    }
+  }
+}
