@@ -96,7 +96,40 @@ export class PlaywrightBrowser implements HostWebBrowser {
   async screenshot(fullPage = false): Promise<ScreenshotResult | null> {
     if (!this.isOpen()) return null;
     const buf = await this.page!.screenshot({ fullPage, type: "png" });
-    return { dataUrl: `data:image/png;base64,${buf.toString("base64")}` };
+    const rawDataUrl = `data:image/png;base64,${buf.toString("base64")}`;
+    // 截图可能超过多模态模型的尺寸上限（Claude 多图请求限制 2000px，超出会 400）。
+    // 在浏览器页面上下文里用 canvas 等比缩小到 2000px 以内，避免下游报错。
+    const resized = await this.downscaleDataUrl(rawDataUrl, 2000).catch(() => rawDataUrl);
+    return { dataUrl: resized };
+  }
+
+  /** 在页面上下文用 canvas 把超尺寸截图等比缩小（≤maxDim），返回 JPEG data URL。失败则原样返回。 */
+  private async downscaleDataUrl(dataUrl: string, maxDim: number): Promise<string> {
+    if (!this.isOpen()) return dataUrl;
+    // 回调体在浏览器页面上下文执行（有 DOM API）；Node 侧类型库不含 DOM，
+    // 故用 Function 构造 + any 规避编译期的 Image/document 未定义报错。
+    const browserFn = new Function("arg", `
+      return (async () => {
+        const { src, max } = arg;
+        const img = new Image();
+        await new Promise((resolve, reject) => {
+          img.onload = () => resolve(undefined);
+          img.onerror = () => reject(new Error("image load failed"));
+          img.src = src;
+        });
+        const width = img.width, height = img.height;
+        if (width <= max && height <= max) return src;
+        const scale = max / Math.max(width, height);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(width * scale));
+        canvas.height = Math.max(1, Math.round(height * scale));
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return src;
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        return canvas.toDataURL("image/jpeg", 0.85);
+      })();
+    `) as (arg: { src: string; max: number }) => Promise<string>;
+    return await this.page!.evaluate(browserFn, { src: dataUrl, max: maxDim });
   }
 
   async close(): Promise<boolean> {

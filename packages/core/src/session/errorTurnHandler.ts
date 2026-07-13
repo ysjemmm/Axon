@@ -32,6 +32,62 @@ export class ErrorTurnHandler {
     });
   }
 
+  /**
+   * 把本轮已流式出来的内容补录为一条 assistant 消息——仅当它尚未存在于本轮历史时。
+   * 去重：本轮流式内容可能已作为带 tool_calls 的 assistant 消息 content 落在历史里
+   * （工具执行后才中断的场景），此时再 push 一条纯文本会导致内容重复。
+   * 向前扫描到本轮用户消息边界，若已有相同内容的 assistant 消息则跳过。
+   */
+  private recordStreamedContentOnce(streamedContent?: string): void {
+    if (!streamedContent || !streamedContent.trim()) return;
+    const trimmed = streamedContent.trim();
+    for (let i = this.s.messages.length - 1; i >= 0; i--) {
+      const m = this.s.messages[i];
+      if (m.role === "user") break; // 越过本轮边界，不再回溯
+      if (m.role === "assistant") {
+        const c = (m as any).content || (m as any).runtimeContent || "";
+        if (typeof c === "string" && c.trim() === trimmed) return; // 已记录，跳过
+      }
+    }
+    this.s.messages.push({ role: "assistant", content: streamedContent } as any);
+  }
+
+  /**
+   * 丢弃"残缺工具轮"——带 tool_calls 但并非每个 call 都有对应 tool 结果的 assistant 消息，
+   * 连同它已有的部分 tool 结果一起从历史里移除。
+   *
+   * 用于【取消/中断】场景的持久化前清理：与 sanitizeToolPairing（补 error 占位、保证发给 LLM 的
+   * 协议合法）语义相反——这里是直接丢弃，避免残缺工具轮被持久化后 reload"复活"成凭空出现的
+   * 工具卡片。仅清理末尾正在进行的这一轮，不动历史里已完整的工具轮。
+   *
+   * @returns 是否发生了丢弃（用于决定要不要重新落盘）
+   */
+  private dropIncompleteToolTurns(): boolean {
+    const msgs = this.s.messages;
+    let changed = false;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i] as any;
+      if (m.role !== "assistant" || !Array.isArray(m.tool_calls) || m.tool_calls.length === 0) continue;
+      // 收集紧跟其后的 tool 结果
+      const provided = new Set<string>();
+      let j = i + 1;
+      while (j < msgs.length && (msgs[j] as any).role === "tool") {
+        const tcId = (msgs[j] as any).tool_call_id;
+        if (typeof tcId === "string") provided.add(tcId);
+        j++;
+      }
+      const allResolved = m.tool_calls.every(
+        (tc: any) => typeof tc.id === "string" && provided.has(tc.id),
+      );
+      if (!allResolved) {
+        // 残缺：丢弃 assistant + 它后面那段 tool 结果（[i, j)）
+        msgs.splice(i, j - i);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
   /** 判断错误是否来自第三方 provider / 网关 / 基础设施层。 */
   isExternalProviderError(err: Error): boolean {
     const msg = (err.message || "").toLowerCase();
@@ -61,12 +117,10 @@ export class ErrorTurnHandler {
    */
   stampAbortedTurnStats(turnStartTime: number, streamedContent?: string, reason?: "cancelled" | "error"): void {
     const status = reason === "cancelled" ? "cancelled" : "error";
-    if (streamedContent && streamedContent.trim()) {
-      const last = this.s.messages[this.s.messages.length - 1];
-      if (!last || last.role !== "assistant" || !(last as any).content) {
-        this.s.messages.push({ role: "assistant", content: streamedContent } as any);
-      }
-    }
+    // 先丢弃残缺工具轮（取消发生在工具执行中途时会留下 assistant+部分 tool 结果），
+    // 避免持久化后 reload 复活成凭空出现的工具卡片；再补录已流式的文本内容。
+    this.dropIncompleteToolTurns();
+    this.recordStreamedContentOnce(streamedContent);
     const elapsed = Date.now() - turnStartTime;
     const estimatedOutput = this.s.lastTurnOutputTokens || this.s.lastCompletionTokens
       || (streamedContent ? Math.ceil(streamedContent.length * 0.4) : 0);
@@ -91,12 +145,9 @@ export class ErrorTurnHandler {
    * 取消退出时给最后一条 assistant 消息补上 turnStats。
    */
   stampCancelledTurnStats(turnStartTime: number, streamedContent?: string): void {
-    if (streamedContent && streamedContent.trim()) {
-      const last = this.s.messages[this.s.messages.length - 1];
-      if (!last || last.role !== "assistant" || !(last as any).content) {
-        this.s.messages.push({ role: "assistant", content: streamedContent } as any);
-      }
-    }
+    // 先丢弃残缺工具轮，再补录已流式文本（理由同 stampAbortedTurnStats）。
+    this.dropIncompleteToolTurns();
+    this.recordStreamedContentOnce(streamedContent);
     const elapsed = Date.now() - turnStartTime;
     const estimatedOutput = this.s.lastTurnOutputTokens || this.s.lastCompletionTokens
       || (streamedContent ? Math.ceil(streamedContent.length * 0.4) : 0);

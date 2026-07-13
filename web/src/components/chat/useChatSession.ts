@@ -284,6 +284,10 @@ export function useChatSession(opts: UseChatSessionOptions) {
   useEffect(() => {
     if (!connected && isLoading) {
       finishLoading();
+      setStatusText("");
+      setStatusPhase("");
+      // 取消打字机（避免 RAF 空转 + streamEnding 残留）
+      typewriter.cancel();
       setChatHistory((prev) => {
         const updated = [...prev];
         const last = updated[updated.length - 1];
@@ -314,11 +318,12 @@ export function useChatSession(opts: UseChatSessionOptions) {
 
   const sendNow = useCallback((payload: SubmitPayload) => {
     const gen = ++turnGeneration.current;
+    const userMessageId = `user-${Date.now()}`;
     cancelled.current = false;
     setChatHistory((prev) => [
       ...prev,
       {
-        id: `user-${Date.now()}`,
+        id: userMessageId,
         role: "user",
         timestamp: Date.now(),
         content: payload.userBubble.content,
@@ -336,7 +341,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
       finalProvider,
       model: payload.send.model,
     });
-    send({ type: CONTROL_CMD.USER_MESSAGE, ...payload.send, provider: finalProvider });
+    send({ type: CONTROL_CMD.USER_MESSAGE, ...payload.send, clientMessageId: userMessageId, provider: finalProvider });
     setIsLoading(true);
     setReasoning(""); // 新一轮开始：清空上一轮残留的思考过程
     setStatusText("思考中...");
@@ -469,6 +474,15 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const acceptEdits = useCallback((path?: string) => send({ type: "accept_edits", path }), [send]);
   const rejectEdits = useCallback((path?: string) => send({ type: "reject_edits", path }), [send]);
   const undoEdits = useCallback((path: string) => send({ type: "undo_edits", path }), [send]);
+  const editUserMessage = useCallback((messageId: string, content: string, images?: string[], attachedFiles?: AttachedFile[]) => {
+    const userIndex = chatHistory.filter((msg) => msg.role === "user").findIndex((msg) => msg.id === messageId);
+    setChatHistory((prev) => prev.map((msg) => (
+      msg.role === "user" && msg.id === messageId
+        ? { ...msg, content, images: images && images.length > 0 ? images : undefined, attachedFiles: attachedFiles && attachedFiles.length > 0 ? attachedFiles : undefined, userSegments: undefined }
+        : msg
+    )));
+    send({ type: "edit_user_message", messageId, content, userIndex, images, attachedFiles: attachedFiles?.map((f) => ({ name: f.name, size: f.size })) });
+  }, [send, chatHistory]);
 
   const confirmTool = useCallback((confirmed: boolean) => {
     setToolConfirm(null);
@@ -547,7 +561,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     mode, questThink, questWebSearch, setQuestThink, setQuestWebSearch,
     // 动作
     submit, removeFromQueue, cancelTurn,
-    toggleEditMode, acceptEdits, rejectEdits, undoEdits, confirmTool,
+    toggleEditMode, acceptEdits, rejectEdits, undoEdits, editUserMessage, confirmTool,
     approveCommand, dismissCommandBlocked, respondToDangerousCommand,
     setModel, selectWorkspace, selectGroup, groupUpdated,
     listSnapshots: () => send({ type: "list_snapshots" }),

@@ -453,11 +453,61 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     reader.readAsDataURL(file);
   });
 
+  /** data URL 的实际字节数（base64 部分长度 × 3/4，忽略 padding 的微小误差）。 */
+  const dataUrlBytes = (dataUrl: string): number => {
+    const comma = dataUrl.indexOf(",");
+    const b64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+    return Math.floor(b64.length * 0.75);
+  };
+
+  /**
+   * 规范化图片：无条件经 canvas 重编码，保证尺寸与编码后体积都可控。
+   * - 尺寸超过 maxDim(2000px) 时等比缩小
+   * - 统一重编码为 JPEG；若编码后仍超过 maxBytes(1.5MB)，逐级降质量(0.85→0.7→0.55→0.4)重压
+   * - 带透明通道的小 PNG（可能是图标/带 alpha 的截图）尺寸和体积都达标时保留 PNG，避免透明变黑底
+   */
+  const normalizeImage = (dataUrl: string, maxDim = 2000, maxBytes = 1.5 * 1024 * 1024): Promise<string> => new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const { width, height } = img;
+      const isPng = dataUrl.startsWith("data:image/png");
+      const overDim = width > maxDim || height > maxDim;
+      const overBytes = dataUrlBytes(dataUrl) > maxBytes;
+      // 尺寸和体积都达标：小 PNG 直接原样保留（保护透明通道），其余也无需重编码
+      if (!overDim && !overBytes) { resolve(dataUrl); return; }
+
+      const scale = overDim ? maxDim / Math.max(width, height) : 1;
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(width * scale));
+      canvas.height = Math.max(1, Math.round(height * scale));
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { resolve(dataUrl); return; }
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+      // 仅缩了尺寸、未超体积，且原图是 PNG：保留 PNG（不破坏透明）
+      if (isPng && !overBytes) {
+        const png = canvas.toDataURL("image/png");
+        if (dataUrlBytes(png) <= maxBytes) { resolve(png); return; }
+      }
+
+      // 统一 JPEG，逐级降质量直到达标
+      const qualities = [0.85, 0.7, 0.55, 0.4];
+      let out = canvas.toDataURL("image/jpeg", qualities[0]);
+      for (let q = 1; q < qualities.length && dataUrlBytes(out) > maxBytes; q++) {
+        out = canvas.toDataURL("image/jpeg", qualities[q]);
+      }
+      resolve(out);
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+
   const addImages = async (files: FileList | File[]) => {
     if (!currentModelVision) return;
     const imageFiles = Array.from(files).filter((f) => f.type.startsWith("image/"));
     const base64List = await Promise.all(imageFiles.map(fileToBase64));
-    setImages((prev) => [...prev, ...base64List]);
+    const resized = await Promise.all(base64List.map((b) => normalizeImage(b)));
+    setImages((prev) => [...prev, ...resized]);
   };
 
   const captureScreenshot = async () => {
@@ -482,7 +532,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         ctx.drawImage(video, 0, 0);
         const dataUrl = canvas.toDataURL("image/png");
         track.stop();
-        setImages((prev) => [...prev, dataUrl]);
+        const resized = await normalizeImage(dataUrl);
+        setImages((prev) => [...prev, resized]);
         setFileError("");
         return;
       } catch (err) {
@@ -511,7 +562,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             reader.onload = () => resolve(reader.result as string);
             reader.readAsDataURL(blob);
           });
-          setImages((prev) => [...prev, dataUrl]);
+          const resized = await normalizeImage(dataUrl);
+          setImages((prev) => [...prev, resized]);
           found = true;
           break;
         }
@@ -794,6 +846,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                   onAcceptEdit={session.acceptEdits}
                   onRejectEdit={session.rejectEdits}
                   onUndoEdit={session.undoEdits}
+                  onEditUserMessage={session.editUserMessage}
                   onQuoteToInput={(qMsg) => {
                     if (qMsg.userSegments && qMsg.userSegments.length > 0) {
                       editorRef.current?.appendSegments(qMsg.userSegments);

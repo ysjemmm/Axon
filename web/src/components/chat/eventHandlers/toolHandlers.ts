@@ -171,6 +171,15 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
       if (noMatchName === TOOL.READ_FILE) desc = shortName ? `已读取 ${shortName}${lineSuffix ? ` ${lineSuffix}` : ""}` : "已读取文件";
       else if (noMatchName === TOOL.CREATE_FILE) desc = shortName ? `${noMatchArgs.overwrite === true ? "已覆盖" : "已创建"} ${shortName}` : "已创建文件";
       else if (noMatchName === TOOL.STR_REPLACE) desc = shortName ? `已编辑 ${shortName}` : "已编辑文件";
+      else if (noMatchName === TOOL.APPLY_PATCH) {
+        const patchDiffs = (msg as any).fileDiffs as { path: string }[] | undefined;
+        if (patchDiffs && patchDiffs.length > 0) {
+          const names = patchDiffs.map((d) => d.path.split("/").pop()?.split("\\").pop() || d.path).slice(0, 3);
+          desc = `已编辑 ${names.join(", ")}${patchDiffs.length > 3 ? ` 等 ${patchDiffs.length} 个文件` : ""}`;
+        } else {
+          desc = msg.result ? firstLine(msg.result) : "已应用补丁";
+        }
+      }
       else if (isExplore) desc = exploreDisplayText(noMatchName, noMatchArgs);
       else if (noMatchName === TOOL.EXECUTE_COMMAND) desc = "命令已执行";
       else if (isRelayTool(noMatchName)) desc = relayToolLabel(noMatchName);
@@ -262,6 +271,15 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
             finalDesc = exploreDisplayText(seg.name, ((msg as any).args || seg.args) as Record<string, unknown>, seg.query);
           } else if (isRelayTool(msg.name || "")) {
             finalDesc = msg.result ? firstLine(msg.result) : relayToolLabel(msg.name || "");
+          } else if (msg.name === TOOL.APPLY_PATCH) {
+            // apply_patch：从 fileDiffs 提取文件名列表
+            const patchDiffs = (msg as any).fileDiffs as { path: string }[] | undefined;
+            if (patchDiffs && patchDiffs.length > 0) {
+              const names = patchDiffs.map((d) => d.path.split("/").pop()?.split("\\").pop() || d.path).slice(0, 3);
+              finalDesc = `已编辑 ${names.join(", ")}${patchDiffs.length > 3 ? ` 等 ${patchDiffs.length} 个文件` : ""}`;
+            } else {
+              finalDesc = msg.result ? firstLine(msg.result) : "已应用补丁";
+            }
           } else if (fileName) {
             const cfResult = msg.result || "";
             const cfVerb = cfResult.includes("已存在") ? "已存在" : cfResult.startsWith("已覆盖") ? "已覆盖" : "已创建";
@@ -312,6 +330,15 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
         if (noMatchName === TOOL.READ_FILE) desc = shortName ? `已读取 ${shortName}${lineSuffix ? ` ${lineSuffix}` : ""}` : "已读取文件";
         else if (noMatchName === TOOL.CREATE_FILE) desc = shortName ? `${noMatchArgs.overwrite === true ? "已覆盖" : "已创建"} ${shortName}` : "已创建文件";
         else if (noMatchName === TOOL.STR_REPLACE) desc = shortName ? `已编辑 ${shortName}` : "已编辑文件";
+        else if (noMatchName === TOOL.APPLY_PATCH) {
+          const patchDiffs = (msg as any).fileDiffs as { path: string }[] | undefined;
+          if (patchDiffs && patchDiffs.length > 0) {
+            const names = patchDiffs.map((d) => d.path.split("/").pop()?.split("\\").pop() || d.path).slice(0, 3);
+            desc = `已编辑 ${names.join(", ")}${patchDiffs.length > 3 ? ` 等 ${patchDiffs.length} 个文件` : ""}`;
+          } else {
+            desc = msg.result ? firstLine(msg.result) : "已应用补丁";
+          }
+        }
         else if (isExplore) desc = exploreDisplayText(noMatchName, noMatchArgs);
         else if (noMatchName === TOOL.EXECUTE_COMMAND) desc = "命令已执行";
         else if (isRelayTool(noMatchName)) desc = relayToolLabel(noMatchName);

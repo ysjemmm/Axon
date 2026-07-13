@@ -332,6 +332,41 @@ export class AgentSession {
     return this.messages;
   }
 
+  /** 编辑历史用户消息（同步影响后续上下文与持久化）。 */
+  editUserMessage(messageId: string, content: string, userIndex?: number, images?: string[], attachedFiles?: unknown[]): boolean {
+    const normalized = content ?? "";
+    let seen = -1;
+    for (const m of this.messages as any[]) {
+      if (m.role !== "user" || m._screenshotInjection) continue;
+      seen++;
+      const hitById = messageId && m.clientMessageId === messageId;
+      const hitByIndex = typeof userIndex === "number" && seen === userIndex;
+      if (!hitById && !hitByIndex) continue;
+
+      // 重建 content：根据是否保留图片决定 string 还是 array
+      if (images && images.length > 0) {
+        const parts: any[] = [];
+        if (normalized) parts.push({ type: "text", text: normalized });
+        for (const img of images) parts.push({ type: "image_url", image_url: { url: img } });
+        m.content = parts;
+      } else {
+        m.content = normalized;
+      }
+      m.displayText = normalized;
+      // 更新附件元数据
+      if (attachedFiles && (attachedFiles as any[]).length > 0) {
+        m.attachedFiles = attachedFiles;
+      } else {
+        delete m.attachedFiles;
+      }
+      delete m.userSegments;
+      m.editedAt = Date.now();
+      this.persistMessages();
+      return true;
+    }
+    return false;
+  }
+
   /** 注册 pendingEdits 变动回调（外部用于触发持久化） */
   setOnPendingChanged(cb: () => void): void {
     this.onPendingChanged = cb;
@@ -1364,7 +1399,7 @@ export class AgentSession {
     model?: string,
     images?: string[],
     provider?: string,
-    userMeta?: { displayText?: string; attachedFiles?: { name: string; size: number }[]; replyStyle?: string; userSegments?: unknown[] },
+    userMeta?: { displayText?: string; attachedFiles?: { name: string; size: number }[]; replyStyle?: string; userSegments?: unknown[]; clientMessageId?: string },
   ): Promise<void> {
     this.turnCount++;
     this.trace("turn.start", { input: truncateForTrace(input, 2000), model: model || this.model, provider: provider || this.provider }, this.turnCount);
@@ -1409,6 +1444,7 @@ export class AgentSession {
     // 附件元数据（文件名/大小）挂到消息上，用于历史展示。displayText 为 UI 展示正文（不含拼接的文件内容）
     const userExtra: Record<string, unknown> = {};
     if (userMeta?.displayText !== undefined) userExtra.displayText = userMeta.displayText;
+    if (userMeta?.clientMessageId) userExtra.clientMessageId = userMeta.clientMessageId;
     if (userMeta?.attachedFiles && userMeta.attachedFiles.length > 0) userExtra.attachedFiles = userMeta.attachedFiles;
     if (userMeta?.userSegments && userMeta.userSegments.length > 0) userExtra.userSegments = userMeta.userSegments;
 
@@ -1579,6 +1615,15 @@ export class AgentSession {
       pendingTextBuffer = "";
       if (turnStreamStarted) {
         this.send("stream_pause", {});
+      }
+
+      // 工具执行前检查取消：用户在本轮 LLM 流式阶段点了取消，此时不应再执行工具、
+      // 也不应把带 tool_calls 的 assistant 消息 push 进历史（否则会持久化下来，reload 后"复活"）。
+      // 必须在 push assistantMsg 之前 return——一旦 push 了带 tool_calls 的消息，
+      // 就必须配对 tool 结果，否则消息历史残缺。
+      if (this.cancelled) {
+        this.stampCancelledTurnStats(turnStartTime, streamedContentThisRound);
+        return;
       }
 
       // 记录 assistant 消息并执行工具。

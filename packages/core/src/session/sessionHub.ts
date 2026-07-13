@@ -372,6 +372,14 @@ export class SessionHub {
       case "cancel":
         this.getActiveSession(this.resolveSessionId(cmd))?.cancel();
         return;
+      case "edit_user_message": {
+        const sid = this.resolveSessionId(cmd);
+        const s = this.getActiveSession(sid);
+        if (!s) return;
+        s.editUserMessage(cmd.messageId, cmd.content, cmd.userIndex, cmd.images, cmd.attachedFiles);
+        if (sid) await this.storage.updateSession(sid, { messages: this.filterPersistable(s.getMessages()) });
+        return;
+      }
       case "compact_session":
         this.getActiveSession(this.resolveSessionId(cmd))?.compactSession(cmd.model, cmd.provider);
         return;
@@ -842,6 +850,7 @@ export class SessionHub {
 
     try {
       await execSession.handleUserInput(finalContent, cmd.model, cmd.images as string[] | undefined, cmd.provider, {
+        clientMessageId: (cmd as any).clientMessageId as string | undefined,
         displayText: cmd.displayText,
         attachedFiles: cmd.attachedFiles as { name: string; size: number }[] | undefined,
         replyStyle: cmd.replyStyle,

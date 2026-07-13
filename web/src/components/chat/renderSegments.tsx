@@ -222,8 +222,20 @@ export function renderSegments(
   onRejectEdit?: (path: string) => void,
   onUndoEdit?: (path: string) => void,
 ): ReactNode[] {
-  // 过滤掉 hidden 的 tool segment（软失败的前 N 次重试不展示给用户）
-  segments = segments.filter((s) => !(s.type === "tool" && (s as ToolSegment).hidden));
+  // 过滤掉不会被渲染的段，避免它们夹在中间打断"连续同类工具"的合并：
+  // ① hidden 的 tool 段（软失败的前 N 次重试不展示）
+  // ② 空的 / 纯标点的 text 段（模型工具调用间夹带的 "..." 等弱内容）
+  // ③ 空的 reasoning 段
+  segments = segments.filter((s) => {
+    if (s.type === "tool" && (s as ToolSegment).hidden) return false;
+    if (s.type === "text") {
+      const t = s.content.trim();
+      // 与主循环里的弱内容判断保持一致：无字母数字中文即视为不渲染
+      if (!t || !/[A-Za-z0-9\u4e00-\u9fff]/.test(t)) return false;
+    }
+    if (s.type === "reasoning" && !s.content.trim()) return false;
+    return true;
+  });
 
   const nodes: ReactNode[] = [];
   let i = 0;

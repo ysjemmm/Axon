@@ -4,8 +4,8 @@
  */
 
 import { memo, useState } from "react";
-import { ChevronDown, Copy, Feather, FileText } from "lucide-react";
-import type { ChatMessage } from "./types";
+import { Check, ChevronDown, Copy, Feather, FileText, Pencil, X } from "lucide-react";
+import type { AttachedFile, ChatMessage } from "./types";
 import { formatFileSize } from "./format";
 import { AssistantTurn } from "./AssistantTurn";
 import { FileTag } from "./FileTag";
@@ -20,8 +20,12 @@ function userMessageText(message: ChatMessage): string {
   return message.content || "";
 }
 
-function MessageBubbleImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit, onQuoteToInput, onImagePreview }: { message: ChatMessage; onAcceptEdit?: (path: string) => void; onRejectEdit?: (path: string) => void; onUndoEdit?: (path: string) => void; onQuoteToInput?: (message: ChatMessage) => void; onImagePreview?: (src: string) => void }) {
+function MessageBubbleImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit, onQuoteToInput, onEditUserMessage, onImagePreview }: { message: ChatMessage; onAcceptEdit?: (path: string) => void; onRejectEdit?: (path: string) => void; onUndoEdit?: (path: string) => void; onQuoteToInput?: (message: ChatMessage) => void; onEditUserMessage?: (messageId: string, content: string, images?: string[], attachedFiles?: AttachedFile[]) => void; onImagePreview?: (src: string) => void }) {
   const [userExpanded, setUserExpanded] = useState(false);
+  const [editingUser, setEditingUser] = useState(false);
+  const [draftUserText, setDraftUserText] = useState("");
+  const [draftImages, setDraftImages] = useState<string[]>([]);
+  const [draftFiles, setDraftFiles] = useState<AttachedFile[]>([]);
 
   // 系统消息（压缩提示等）：居中浅色文本行
   if ((message as any).role === "system") {
@@ -63,6 +67,18 @@ function MessageBubbleImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit, on
                 <Copy className="w-3.5 h-3.5" />
               </button>
               <button
+                onClick={() => {
+                  setDraftUserText(plainText);
+                  setDraftImages(message.images ? [...message.images] : []);
+                  setDraftFiles(message.attachedFiles ? [...message.attachedFiles] : []);
+                  setEditingUser(true);
+                }}
+                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/80"
+                title="编辑这条消息"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+              <button
                 onClick={() => onQuoteToInput?.(message)}
                 className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/80"
                 title="引用到输入框"
@@ -71,50 +87,122 @@ function MessageBubbleImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit, on
               </button>
             </div>
           )}
-          {message.images && message.images.length > 0 && (
-            <div className="flex gap-2 flex-wrap mb-2">
-              {message.images.map((img, i) => (
-                <img
-                  key={i}
-                  src={img}
-                  alt=""
-                  className="max-w-48 max-h-32 object-contain rounded-lg cursor-zoom-in hover:opacity-90 transition-opacity"
-                  onDoubleClick={() => onImagePreview?.(img)}
-                  title="双击放大"
-                />
-              ))}
-            </div>
-          )}
-          {hasSegments ? (
-            // 富文本：文本 + 内联 tag pill（与输入时一致）
-            <div className="relative">
-              <p className={`text-[13px] whitespace-pre-wrap leading-[1.5] overflow-hidden ${collapsed ? "max-h-40" : ""}`}>
-                {message.userSegments!.map((seg, i) =>
-                  seg.type === "text" ? <span key={i}>{seg.text}</span> : <FileTag key={i} data={{ name: seg.tag.name, path: seg.tag.name, content: seg.tag.content, kind: seg.tag.kind }} />,
-                )}
-              </p>
-              {collapsed && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-muted to-transparent" />}
-            </div>
-          ) : (
-            <>
-              {hasFiles && (
+          {editingUser ? (
+            <div className="min-w-[260px] max-w-[520px]">
+              {/* 编辑态：图片缩略图（可删除） */}
+              {draftImages.length > 0 && (
                 <div className="flex gap-2 flex-wrap mb-2">
-                  {message.attachedFiles!.map((f, i) => (
-                    <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-background/60 border border-border max-w-[200px]">
-                      <FileText className="w-4 h-4 shrink-0 text-muted-foreground" />
-                      <div className="min-w-0">
-                        <div className="text-xs font-medium truncate">{f.name}</div>
-                        <div className="text-[10px] text-muted-foreground">{formatFileSize(f.size)}</div>
-                      </div>
+                  {draftImages.map((img, i) => (
+                    <div key={i} className="relative group/edit-img">
+                      <img src={img} alt="" className="max-w-32 max-h-20 object-contain rounded-lg" />
+                      <button
+                        type="button"
+                        onClick={() => setDraftImages((prev) => prev.filter((_, idx) => idx !== i))}
+                        className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover/edit-img:opacity-100 transition-opacity"
+                      >
+                        <X className="w-2.5 h-2.5" />
+                      </button>
                     </div>
                   ))}
                 </div>
               )}
-              {message.content && (
+              {/* 编辑态：附件 pill（可删除） */}
+              {draftFiles.length > 0 && (
+                <div className="flex gap-2 flex-wrap mb-2">
+                  {draftFiles.map((f, i) => (
+                    <div key={i} className="relative group/edit-file">
+                      <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-background/60 border border-border max-w-[200px] pr-6">
+                        <FileText className="w-4 h-4 shrink-0 text-muted-foreground" />
+                        <div className="min-w-0">
+                          <div className="text-xs font-medium truncate">{f.name}</div>
+                          <div className="text-[10px] text-muted-foreground">{formatFileSize(f.size)}</div>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setDraftFiles((prev) => prev.filter((_, idx) => idx !== i))}
+                        className="absolute top-1 right-1 w-4 h-4 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover/edit-file:opacity-100 transition-opacity"
+                      >
+                        <X className="w-2.5 h-2.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <textarea
+                value={draftUserText}
+                onChange={(e) => setDraftUserText(e.target.value)}
+                className="w-full min-h-[80px] resize-y rounded-lg border border-border bg-background px-2 py-1.5 text-[13px] leading-relaxed outline-none focus:ring-1 focus:ring-primary/40"
+                autoFocus
+              />
+              <div className="mt-1.5 flex justify-end gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setEditingUser(false)}
+                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                >
+                  <X className="w-3 h-3" />取消
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = draftUserText.trimEnd();
+                    onEditUserMessage?.(message.id, next, draftImages, draftFiles);
+                    setEditingUser(false);
+                  }}
+                  className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground hover:opacity-90"
+                >
+                  <Check className="w-3 h-3" />保存
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {message.images && message.images.length > 0 && (
+                <div className="flex gap-2 flex-wrap mb-2">
+                  {message.images.map((img, i) => (
+                    <img
+                      key={i}
+                      src={img}
+                      alt=""
+                      className="max-w-48 max-h-32 object-contain rounded-lg cursor-zoom-in hover:opacity-90 transition-opacity"
+                      onDoubleClick={() => onImagePreview?.(img)}
+                      title="双击放大"
+                    />
+                  ))}
+                </div>
+              )}
+              {hasSegments ? (
                 <div className="relative">
-                  <p className={`text-[13px] whitespace-pre-wrap leading-relaxed overflow-hidden ${collapsed ? "max-h-40" : ""}`}>{message.content}</p>
+                  <p className={`text-[13px] whitespace-pre-wrap leading-[1.5] overflow-hidden ${collapsed ? "max-h-40" : ""}`}>
+                    {message.userSegments!.map((seg, i) =>
+                      seg.type === "text" ? <span key={i}>{seg.text}</span> : <FileTag key={i} data={{ name: seg.tag.name, path: seg.tag.name, content: seg.tag.content, kind: seg.tag.kind }} />,
+                    )}
+                  </p>
                   {collapsed && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-muted to-transparent" />}
                 </div>
+              ) : (
+                <>
+                  {hasFiles && (
+                    <div className="flex gap-2 flex-wrap mb-2">
+                      {message.attachedFiles!.map((f, i) => (
+                        <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-background/60 border border-border max-w-[200px]">
+                          <FileText className="w-4 h-4 shrink-0 text-muted-foreground" />
+                          <div className="min-w-0">
+                            <div className="text-xs font-medium truncate">{f.name}</div>
+                            <div className="text-[10px] text-muted-foreground">{formatFileSize(f.size)}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {message.content && (
+                    <div className="relative">
+                      <p className={`text-[13px] whitespace-pre-wrap leading-relaxed overflow-hidden ${collapsed ? "max-h-40" : ""}`}>{message.content}</p>
+                      {collapsed && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-muted to-transparent" />}
+                    </div>
+                  )}
+                </>
               )}
             </>
           )}

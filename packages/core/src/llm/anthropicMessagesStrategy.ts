@@ -43,6 +43,60 @@ interface AnthropicToolDef {
   input_schema: Record<string, unknown>;
 }
 
+/** 图片尺寸检查结果缓存：key = base64 前缀（截断，避免超长 key）。
+ *  同一张图在多轮请求里只解码一次 header，不重复全量 decode。 */
+const _imageDimCache = new Map<string, { width: number; height: number } | null>();
+
+/** 纯 JS 解析 PNG/JPEG/WebP 的宽高（不依赖外部库，用于检查是否超 2000px）。
+ *  性能：只解码 header 所需的前缀字节，不全量 decode 整张图；并按前缀缓存结果。 */
+function decodeImageDimensions(mediaType: string, base64Data: string): { width: number; height: number } | null {
+  // 缓存 key 用前 128 字符前缀 + 长度（足够区分不同图，又不占内存）
+  const cacheKey = base64Data.length + ":" + base64Data.slice(0, 128);
+  const cached = _imageDimCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const result = decodeImageDimensionsUncached(mediaType, base64Data);
+  // 控制缓存规模：超过 200 条时清空（LLM 会话图片数量有限，简单策略即可）
+  if (_imageDimCache.size > 200) _imageDimCache.clear();
+  _imageDimCache.set(cacheKey, result);
+  return result;
+}
+
+function decodeImageDimensionsUncached(mediaType: string, base64Data: string): { width: number; height: number } | null {
+  try {
+    // PNG / WebP 的尺寸都在文件极前部，只需解码前缀；
+    // JPEG 的 SOF 段可能靠后，但极少超过前 128KB，取前缀足以覆盖绝大多数图片。
+    // 前缀长度按 base64→字节 3/4 比例反推：128KB 字节 ≈ 175000 base64 字符。
+    const prefixLen = Math.min(base64Data.length, 175000);
+    // base64 必须按 4 字符对齐解码，向下取整到 4 的倍数
+    const aligned = prefixLen - (prefixLen % 4);
+    const bin = Buffer.from(base64Data.slice(0, aligned), "base64");
+    if (mediaType === "image/png" && bin.length > 24) {
+      if (bin[0] === 0x89 && bin[1] === 0x50) {
+        return { width: bin.readUInt32BE(16), height: bin.readUInt32BE(20) };
+      }
+    }
+    if ((mediaType === "image/jpeg" || mediaType === "image/jpg") && bin.length > 4) {
+      let i = 2;
+      while (i < bin.length - 9) {
+        if (bin[i] !== 0xFF) { i++; continue; }
+        const marker = bin[i + 1];
+        if (marker >= 0xC0 && marker <= 0xCF && marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC) {
+          return { width: bin.readUInt16BE(i + 7), height: bin.readUInt16BE(i + 5) };
+        }
+        const segLen = bin.readUInt16BE(i + 2);
+        i += 2 + segLen;
+      }
+    }
+    if (mediaType === "image/webp" && bin.length > 30) {
+      if (bin.slice(12, 16).toString("ascii") === "VP8 ") {
+        return { width: bin.readUInt16LE(26) + 1, height: bin.readUInt16LE(28) + 1 };
+      }
+    }
+  } catch { /* ignore parse errors */ }
+  return null;
+}
+
 export class AnthropicMessagesStrategy implements LLMStrategy {
   readonly name = "anthropic_messages";
 
@@ -299,11 +353,20 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
     return { system: systemParts.join("\n\n"), anthropicMessages: result };
   }
 
-  /** data: URL → base64 图片块；普通 http(s) URL → url 图片块 */
+  /** data: URL -> base64 图片块；普通 http(s) URL -> url 图片块.
+   *  超 2000px 的图片降级为文字提示（Anthropic 多图请求限制 2000px，否则 400）。
+   */
   private convertImage(url: string): AnthropicContentBlock {
     const dataMatch = /^data:([^;]+);base64,(.+)$/.exec(url);
     if (dataMatch) {
-      return { type: "image", source: { type: "base64", media_type: dataMatch[1], data: dataMatch[2] } };
+      const mediaType = dataMatch[1];
+      const base64Data = dataMatch[2];
+      const dims = decodeImageDimensions(mediaType, base64Data);
+      if (dims && (dims.width > 2000 || dims.height > 2000)) {
+        console.warn(`[anthropic] image ${dims.width}x${dims.height} exceeds 2000px limit, downgraded`);
+        return { type: "text", text: `[image omitted: ${dims.width}x${dims.height} exceeds 2000px limit]` };
+      }
+      return { type: "image", source: { type: "base64", media_type: mediaType, data: base64Data } };
     }
     return { type: "image", source: { type: "url", url } };
   }

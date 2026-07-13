@@ -83,8 +83,8 @@ md.renderer.rules.fence = function (tokens, idx) {
   // 增强渲染块（svg/mermaid/html）：不渲染标题栏（"svg" + 复制按钮），hydrate 后会注入悬浮三点菜单。
   // 普通代码块：采用更清爽的样式——弱化头部分割、增大内边距、把语言名作为轻量标签。
   if (enableEnhance) {
-    return `<div class="axon-codeblock my-2.5 rounded-xl overflow-hidden" style="background:var(--axon-code-bg,#fafafa);border:1px solid var(--axon-code-border,rgba(0,0,0,0.06));box-shadow:0 1px 3px rgba(0,0,0,0.04)"${enhanceAttr}>
-    <pre class="px-3.5 py-2.5 overflow-auto max-h-96 m-0" style="background:transparent;box-sizing:border-box"><code class="text-[12.5px] leading-[1.7] font-mono hljs" style="color:var(--vscode-editor-foreground,var(--hl-text,#383a42))">${highlightedCode}</code></pre>
+    return `<div class="axon-codeblock my-3 rounded-lg overflow-hidden px-4 py-1.5" style="background:var(--axon-code-bg);border:1px solid var(--axon-code-border)"${enhanceAttr}>
+    <pre class="overflow-auto max-h-[28rem] m-0 p-0" style="background:transparent"><code class="text-[10px] leading-[1.6] font-mono hljs" style="color:var(--vscode-editor-foreground,var(--hl-text,#383a42))">${highlightedCode}</code></pre>
   </div>\n`;
   }
 
@@ -93,10 +93,10 @@ md.renderer.rules.fence = function (tokens, idx) {
         <span>预览</span>
       </button>` : "";
 
-  return `<div class="axon-codeblock my-2.5 rounded-xl overflow-hidden" style="background:var(--axon-code-bg,#fafafa);border:1px solid var(--axon-code-border,rgba(0,0,0,0.06));box-shadow:0 1px 3px rgba(0,0,0,0.04)"${previewAttr}>
-    <div class="flex items-center justify-between px-3.5 py-1.5 text-[11px]" style="background:var(--axon-code-header-bg,rgba(0,0,0,0.02));border-bottom:1px solid var(--axon-code-border,rgba(0,0,0,0.05))">
-      <span class="font-medium" style="color:var(--vscode-descriptionForeground,#8b8b8b)">${displayLang === "code" ? "text" : displayLang}</span>
-      <div class="flex items-center gap-2.5" style="color:var(--vscode-descriptionForeground,#8b8b8b)">
+  return `<div class="axon-codeblock my-3 rounded-lg overflow-hidden relative px-4 pt-1.5 pb-1.5" style="background:var(--axon-code-bg);border:1px solid var(--axon-code-border)"${previewAttr}>
+    <div class="flex items-center justify-between mb-1">
+      <span class="text-[11px] font-medium opacity-50" style="color:var(--vscode-descriptionForeground,#6b7280)">${displayLang === "code" ? "text" : displayLang}</span>
+      <div class="axon-codeblock-actions flex items-center gap-2.5 text-[11px]" style="color:var(--vscode-descriptionForeground,#6b7280)">
         ${previewButton}
         <button data-copy-code class="flex items-center gap-1 hover:text-foreground transition-colors cursor-pointer">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
@@ -104,7 +104,7 @@ md.renderer.rules.fence = function (tokens, idx) {
         </button>
       </div>
     </div>
-    <pre class="px-3.5 pt-2.5 pb-3 overflow-auto max-h-96 m-0" style="background:transparent;box-sizing:border-box"><code class="text-[12.5px] leading-[1.7] font-mono hljs" style="color:var(--vscode-editor-foreground,var(--hl-text,#383a42))">${highlightedCode}</code></pre>
+    <pre class="axon-codeblock-pre overflow-auto max-h-[28rem] m-0 p-0" style="background:transparent"><code class="text-[10px] leading-[1.6] font-mono hljs" style="color:var(--vscode-editor-foreground,var(--hl-text,#383a42))">${highlightedCode}</code></pre>
   </div>\n`;
 };
 

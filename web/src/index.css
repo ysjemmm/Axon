@@ -29,22 +29,23 @@ body.vscode-dark, body.vscode-high-contrast {
 .hljs-title, .hljs-section, .hljs-selector-id { color: var(--hl-title); font-weight: bold; }
 .hljs-symbol, .hljs-number, .hljs-attribute, .hljs-bullet { color: var(--hl-num); }
 
-/* ── 代码块容器调色板 ── */
+/* ── 代码块容器调色板 ──
+   对标 Claude：背景透明，靠圆角边框做区分。 */
 :root {
-  --axon-code-bg: #fafafa;
-  --axon-code-border: rgba(0,0,0,0.06);
-  --axon-code-header-bg: rgba(0,0,0,0.02);
+  --axon-code-bg: transparent;
+  --axon-code-border: rgba(0, 0, 0, 0.13);
+  --axon-code-header-bg: transparent;
 }
 body.vscode-dark, body.vscode-high-contrast {
-  --axon-code-bg: #1e1e1e;
-  --axon-code-border: rgba(255,255,255,0.08);
-  --axon-code-header-bg: rgba(255,255,255,0.03);
+  --axon-code-bg: transparent;
+  --axon-code-border: rgba(255, 255, 255, 0.16);
+  --axon-code-header-bg: transparent;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --axon-code-bg: #1e1e1e;
-    --axon-code-border: rgba(255,255,255,0.08);
-    --axon-code-header-bg: rgba(255,255,255,0.03);
+    --axon-code-bg: transparent;
+    --axon-code-border: rgba(255, 255, 255, 0.16);
+    --axon-code-header-bg: transparent;
   }
 }
 
@@ -75,34 +76,27 @@ code:not(.hljs):not(.prose code) {
   background: transparent;
 }
 
-/* 代码块滚动条：默认隐藏，hover 时显示 */
+/* 代码块操作按钮：默认隐藏，hover 时显示 */
+.axon-codeblock .axon-codeblock-actions {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.axon-codeblock:hover .axon-codeblock-actions {
+  opacity: 0.6;
+}
+.axon-codeblock .axon-codeblock-actions:hover {
+  opacity: 1;
+}
+
+/* 代码块滚动条：非 hover 时完全不占空间（避免横向滚动条撑大底部间距），
+   hover 时才显示细滚动条。 */
 .axon-codeblock pre {
-  scrollbar-width: thin;
+  scrollbar-width: none;
   scrollbar-color: transparent transparent;
 }
 
-/* 代码块深/浅主题背景变量（确保代码块始终与聊天背景有区分度）。
-   主用 VS Code 原生代码块底色 var；webview 暗色信号以 body.vscode-dark 为准，
-   prefers-color-scheme 作浏览器兜底。 */
-:root {
-  --axon-code-bg: rgba(0, 0, 0, 0.04);
-  --axon-code-header: rgba(0, 0, 0, 0.07);
-  --axon-code-border: rgba(0, 0, 0, 0.14);
-}
-body.vscode-dark, body.vscode-high-contrast {
-  --axon-code-bg: rgba(255, 255, 255, 0.08);
-  --axon-code-header: rgba(255, 255, 255, 0.13);
-  --axon-code-border: rgba(255, 255, 255, 0.2);
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --axon-code-bg: rgba(255, 255, 255, 0.08);
-    --axon-code-header: rgba(255, 255, 255, 0.13);
-    --axon-code-border: rgba(255, 255, 255, 0.2);
-  }
-}
-
 .axon-codeblock pre:hover {
+  scrollbar-width: thin;
   scrollbar-color: #d1d5db transparent; /* gray-300 */
 }
 
@@ -113,6 +107,11 @@ body.vscode-dark, body.vscode-high-contrast {
 }
 
 .axon-codeblock pre::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.axon-codeblock pre:hover::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }

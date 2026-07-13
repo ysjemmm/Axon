@@ -19,6 +19,8 @@ export interface UserMessageCommand {
   workspaces?: string[];
   displayText?: string;
   attachedFiles?: unknown[];
+  /** 前端生成的用户消息 id，用于后续编辑历史消息时精确定位 */
+  clientMessageId?: string;
   /** 用户消息的内联片段（文本 + tag），用于富文本气泡的持久化与恢复 */
   userSegments?: unknown[];
   replyStyle?: string;
@@ -55,6 +57,7 @@ export type ControlCommandPayload =
   | { type: "set_workspace_group"; groupId: string }
   // 执行控制
   | { type: "cancel" }
+  | { type: "edit_user_message"; messageId: string; content: string; displayText?: string; userIndex?: number; images?: string[]; attachedFiles?: unknown[] }
   // 上下文压缩。model/provider 可选：前端切换了模型选择器但尚未发送消息时，
   // 会话内部的 model/provider 仍是上一条消息用的值，需要带上前端当前选中值同步。
   | { type: "compact_session"; model?: string; provider?: string }

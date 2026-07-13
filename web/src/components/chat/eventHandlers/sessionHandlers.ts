@@ -75,7 +75,8 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
         ? attached.map((f) => ({ name: f.name, size: f.size, content: "" }))
         : undefined;
       const restoredSegments = (m as any).userSegments as UserSegment[] | undefined;
-      restored.push({ id: `hist-u-${seq++}`, role: "user", timestamp: (m as any).timestamp as number | undefined, content: bodyText, images, attachedFiles, userSegments: restoredSegments });
+      const clientMessageId = (m as any).clientMessageId as string | undefined;
+      restored.push({ id: clientMessageId || `hist-u-${seq++}`, role: "user", timestamp: (m as any).timestamp as number | undefined, content: bodyText, images, attachedFiles, userSegments: restoredSegments });
     } else if (m.role === "assistant") {
       const text = typeof m.content === "string" ? (m.content || "").trim() : "";
       const hasToolCalls = m.tool_calls && m.tool_calls.length > 0;
@@ -120,6 +121,7 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
             case "read_file": desc = shortName ? `已读取 ${readNameWithLines}` : "已读取文件"; break;
             case "create_file": desc = shortName ? `${tcArgs.overwrite === true ? "已覆盖" : "已创建"} ${shortName}` : "已创建文件"; break;
             case "str_replace": desc = shortName ? `已编辑 ${shortName}` : "已编辑文件"; break;
+            case "apply_patch": desc = "正在应用补丁..."; break;
             case "execute_command": desc = "命令已执行"; break;
             case "search":
             case "list_dir": desc = exploreDisplayText(toolName, tcArgs); break;
@@ -172,6 +174,18 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
             if (isRelayTool(seg.name) && toolStatus === "success" && toolContent) {
               seg.description = firstLine(toolContent);
             }
+            if (seg.name === "apply_patch") {
+              const patchDiffs = (m as any).fileDiffs as { path: string }[] | undefined;
+              if (patchDiffs && patchDiffs.length > 0) {
+                const names = patchDiffs.map((d: { path: string }) => d.path.split("/").pop()?.split("\\").pop() || d.path).slice(0, 3);
+                const prefix = toolStatus === "error" ? "部分编辑 " : "已编辑 ";
+                seg.description = `${prefix}${names.join(", ")}${patchDiffs.length > 3 ? ` 等 ${patchDiffs.length} 个文件` : ""}`;
+              } else if (toolStatus === "success") {
+                seg.description = toolContent ? firstLine(toolContent) : "已应用补丁";
+              } else if (toolStatus === "error") {
+                seg.description = (m as any).userMessage || toolContent.slice(0, 120) || "补丁应用失败";
+              }
+            }
             if (seg.name === "create_file" && toolStatus === "success" && toolContent.startsWith("已覆盖")) {
               const cfName = typeof seg.args?.path === "string" ? (seg.args.path as string).split("/").pop()?.split("\\").pop() : "";
               seg.description = cfName ? `已覆盖 ${cfName}` : "已覆盖文件";
@@ -220,6 +234,19 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
     }
     if (currentAssistant.segments && currentAssistant.segments.length > 0) {
       restored.push(currentAssistant);
+    }
+  }
+
+  // 编辑工具段若没有匹配到 tool result（tool 消息被 _transient 过滤），
+  // 说明该次调用失败了——标记 hidden 避免显示误导性的成功状态。
+  for (const msg of restored) {
+    if (msg.role !== "assistant" || !msg.segments) continue;
+    for (const seg of msg.segments) {
+      if (seg.type === "tool" && !seg.diff && !seg.diffs && !seg.output && !seg.diagnostics
+        && (seg.name === "str_replace" || seg.name === "create_file" || seg.name === "apply_patch")
+        && seg.status === "success" && !seg.hidden) {
+        seg.hidden = true;
+      }
     }
   }
 

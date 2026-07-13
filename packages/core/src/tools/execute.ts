@@ -342,8 +342,9 @@ export async function executeToolCall(
         throw new Error((err as Error).message);
       }
       const changed: string[] = [];
-      try {
-        for (const op of ops) {
+      const failed: { path: string; error: string }[] = [];
+      for (const op of ops) {
+        try {
           const filePath = await resolveInWorkspaces(op.path, cwd, host, workspaces);
           assertWithinWorkspaces(filePath, cwd, workspaces, "apply_patch");
           const eff = await host.edits.readEffective(filePath);
@@ -351,7 +352,7 @@ export async function executeToolCall(
 
           if (op.type === "add") {
             if (eff.existsOnDisk || eff.fromPending) {
-              throw new Error(`apply_patch 失败：Add File 目标 ${op.path} 已存在。要改已有文件请用 *** Update File，整文件重写用 create_file(overwrite=true)。`);
+              throw new Error(`Add File 目标 ${op.path} 已存在。要改已有文件请用 *** Update File，整文件重写用 create_file(overwrite=true)。`);
             }
             const content = op.addLines.join("\n");
             await presentEdit(host, meta, op.path, filePath, content, "", diskContent ?? "", true);
@@ -361,7 +362,7 @@ export async function executeToolCall(
 
           // update
           if (!eff.existsOnDisk && !eff.fromPending) {
-            throw new Error(`apply_patch 失败：Update File 目标 ${op.path} 不存在。请先 read_file 确认路径，或用 *** Add File 新建。`);
+            throw new Error(`Update File 目标 ${op.path} 不存在。请先 read_file 确认路径，或用 *** Add File 新建。`);
           }
           const before = eff.content;
           const collectedHunks: EditHunk[] = [];
@@ -369,14 +370,25 @@ export async function executeToolCall(
           if (after === before) continue; // 无实际改动
           await presentEdit(host, meta, op.path, filePath, after, before, diskContent ?? before, !eff.existsOnDisk, collectedHunks);
           changed.push(op.path);
+        } catch (err) {
+          const errMsg = err instanceof PatchError ? err.message : (err as Error).message;
+          failed.push({ path: op.path, error: errMsg });
         }
-      } catch (err) {
-        // PatchError / 业务错误：原样反馈给模型（含定位提示），让它修正后重试
-        if (err instanceof PatchError) throw new Error(err.message);
-        throw err;
       }
-      if (changed.length === 0) return "apply_patch：补丁未产生任何改动（内容已是目标状态）。";
-      return `已应用补丁，修改 ${changed.length} 个文件：${changed.join("、")}`;
+      // 全部失败（没有一个文件成功写入）→ 整体报错让模型重试
+      if (changed.length === 0 && failed.length > 0) {
+        const details = failed.map((f) => `  ${f.path}: ${f.error}`).join("\n");
+        throw new Error(`apply_patch 失败：所有文件均未成功应用。\n${details}`);
+      }
+      // 全部成功
+      if (failed.length === 0) {
+        if (changed.length === 0) return "apply_patch：补丁未产生任何改动（内容已是目标状态）。";
+        return `已应用补丁，修改 ${changed.length} 个文件：${changed.join("、")}`;
+      }
+      // 部分成功：已写入的文件保留（用户可见），同时告知模型哪些失败了
+      const okPart = `已成功应用 ${changed.length} 个文件：${changed.join("、")}`;
+      const failPart = failed.map((f) => `  ${f.path}: ${f.error}`).join("\n");
+      return `${okPart}\n\n⚠️ 以下 ${failed.length} 个文件未能应用（已成功的文件不受影响）：\n${failPart}\n请针对失败的文件修正补丁后重试。`;
     }
     case "execute_command": {
       // 命令在用户可见的 "Axon" 终端里执行（可交互输入），用 Shell Integration 捕获输出。
