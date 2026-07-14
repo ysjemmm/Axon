@@ -89,7 +89,7 @@ function MessageBubbleImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit, on
             </div>
           )}
           {editingUser ? (
-            <div className="min-w-[260px] max-w-[520px]">
+            <div className="min-w-[360px] max-w-[680px]">
               {/* 编辑态：图片缩略图（可删除） */}
               {draftImages.length > 0 && (
                 <div className="flex gap-2 flex-wrap mb-2">
@@ -133,7 +133,7 @@ function MessageBubbleImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit, on
               <textarea
                 value={draftUserText}
                 onChange={(e) => setDraftUserText(e.target.value)}
-                className="w-full h-[200px] resize-none overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-[13px] leading-relaxed outline-none focus:ring-1 focus:ring-primary/40"
+                className="w-full h-[100px] resize-none overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-[13px] leading-relaxed outline-none focus:ring-1 focus:ring-primary/40"
                 autoFocus
               />
               <div className="mt-1.5 flex justify-end gap-1.5">
