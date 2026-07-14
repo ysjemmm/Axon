@@ -25,6 +25,19 @@ const ANTHROPIC_VERSION = "2023-06-01";
 /** 未显式指定时的输出 token 上限（Anthropic max_tokens 是协议必填字段，没有"不限"选项） */
 const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
 
+/** 启用 extended thinking 时的 max_tokens 上限（需大于 budget_tokens） */
+const THINKING_MAX_OUTPUT_TOKENS = 16384;
+
+/** extended thinking 的 budget_tokens（思考预算） */
+const THINKING_BUDGET_TOKENS = 10000;
+
+/** 判断模型是否支持 extended thinking（Opus 4+ / Sonnet 4.5+） */
+function supportsExtendedThinking(model: string): boolean {
+  const m = model.toLowerCase();
+  // Opus 4 系列、Sonnet 4.5+、Claude 4+ 泛化匹配
+  return /opus-4|claude-opus-4|sonnet-4[.-]5|claude-sonnet-4[.-]5|sonnet-5|claude-sonnet-5/.test(m);
+}
+
 /** Anthropic 内容块（请求侧：文本 / 图片 / 工具调用 / 工具结果） */
 type AnthropicContentBlock =
   | { type: "text"; text: string }
@@ -112,14 +125,21 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
     const hasTools = tools.length > 0;
 
     const url = this.baseUrl.replace(/\/+$/, "") + "/messages";
+    const useThinking = supportsExtendedThinking(model);
+    const effectiveMaxTokens = useThinking
+      ? Math.max(maxOutputTokens ?? THINKING_MAX_OUTPUT_TOKENS, THINKING_BUDGET_TOKENS + 1024)
+      : (maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS);
+
     const body: Record<string, unknown> = {
       model,
-      max_tokens: maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+      max_tokens: effectiveMaxTokens,
       messages: anthropicMessages,
       stream: true,
       ...(system ? { system } : {}),
       ...(hasTools ? { tools: this.convertTools(tools) } : {}),
-      ...(temperature !== undefined ? { temperature } : {}),
+      // extended thinking 要求 temperature=1 或不传；启用时忽略外部 temperature
+      ...(useThinking ? {} : (temperature !== undefined ? { temperature } : {})),
+      ...(useThinking ? { thinking: { type: "enabled", budget_tokens: THINKING_BUDGET_TOKENS } } : {}),
     };
 
     const res = await fetch(url, {

@@ -30,13 +30,21 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
   ) {
     // 注册 diff 虚拟文档 provider：用内存 Map 存内容，URI 只携带 key
     const diffContents = new Map<string, string>();
+    const diffChangeEmitter = new vscode.EventEmitter<vscode.Uri>();
     (this as any)._diffContents = diffContents; // 暴露给 open_diff 处理用
+    (this as any)._diffChangeEmitter = diffChangeEmitter;
+    // 当前正在显示的 diff 信息（用于判断是否需要重建）
+    (this as any)._currentDiffKey = "" as string;
+    (this as any)._currentDiffLeftUri = null as vscode.Uri | null;
+    (this as any)._currentDiffRightUri = null as vscode.Uri | null;
     const diffContentProvider: vscode.TextDocumentContentProvider = {
+      onDidChange: diffChangeEmitter.event,
       provideTextDocumentContent: (uri) => {
         return diffContents.get(uri.toString()) ?? "";
       },
     };
     context.subscriptions.push(
+      diffChangeEmitter,
       vscode.workspace.registerTextDocumentContentProvider("axon-diff-old", diffContentProvider),
       vscode.workspace.registerTextDocumentContentProvider("axon-diff-new", diffContentProvider),
     );
@@ -225,26 +233,58 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
           const fileName = path.basename(filePath);
           const diffContents = (this as any)._diffContents as Map<string, string>;
 
-          // 关闭已有的 Axon diff tab：遍历所有 tab group，找到 axon-diff 的 tab 先关闭，
-          // 这样新 diff 会覆盖旧 diff 的位置，而不是不断新开 tab。
+          // 同一 diff 不重复触发：内容完全一致 + tab 还在 → 跳过
+          const diffKey = `${filePath}\n${oldContent.length}:${newContent.length}\n${oldContent}\n${newContent}`;
+          if ((this as any)._currentDiffKey === diffKey) {
+            for (const group of vscode.window.tabGroups.all) {
+              for (const tab of group.tabs) {
+                const input = tab.input as any;
+                const uriStr = input?.original?.toString() || input?.modified?.toString() || "";
+                if (uriStr.startsWith("axon-diff-")) {
+                  return; // tab 还在且内容一样，不操作
+                }
+              }
+            }
+          }
+
+          // 先记住旧 tab 引用（稍后关闭），不提前关
+          const oldTabs: vscode.Tab[] = [];
           for (const group of vscode.window.tabGroups.all) {
             for (const tab of group.tabs) {
               const input = tab.input as any;
               const uriStr = input?.original?.toString() || input?.modified?.toString() || "";
               if (uriStr.startsWith("axon-diff-")) {
-                await vscode.window.tabGroups.close(tab);
+                oldTabs.push(tab);
               }
             }
           }
 
-          // 用唯一 key 存内容到 Map，URI 只携带 key（避免 URI malformed）
+          // 创建新 diff（先打开，用户瞬间看到新内容）
           const ts = Date.now();
-          const leftUri = vscode.Uri.parse(`axon-diff-old:${fileName}?id=${ts}`);
-          const rightUri = vscode.Uri.parse(`axon-diff-new:${fileName}?id=${ts}`);
-          diffContents.set(leftUri.toString(), oldContent);
-          diffContents.set(rightUri.toString(), newContent);
+          const newLeftUri = vscode.Uri.parse(`axon-diff-old:${fileName}?id=${ts}`);
+          const newRightUri = vscode.Uri.parse(`axon-diff-new:${fileName}?id=${ts}`);
+          diffContents.set(newLeftUri.toString(), oldContent);
+          diffContents.set(newRightUri.toString(), newContent);
           const title = `${fileName} ↔ ${fileName} (Axon)`;
-          await vscode.commands.executeCommand("vscode.diff", leftUri, rightUri, title, { preview: false });
+          // 只在用户未主动设置过时才关闭折叠（不覆盖用户主动选择）
+          const diffConfig = vscode.workspace.getConfiguration("diffEditor");
+          const inspected = diffConfig.inspect<boolean>("hideUnchangedRegions.enabled");
+          if (inspected && inspected.globalValue === undefined && inspected.workspaceValue === undefined) {
+            await diffConfig.update("hideUnchangedRegions.enabled", false, vscode.ConfigurationTarget.Global);
+          }
+          await vscode.commands.executeCommand("vscode.diff", newLeftUri, newRightUri, title, {
+            preview: false,
+            renderSideBySide: true,
+          });
+
+          // 新 diff 已打开，再关掉旧 tab（用户无感知）
+          for (const tab of oldTabs) {
+            try { await vscode.window.tabGroups.close(tab); } catch { /* tab 可能已被替换 */ }
+          }
+
+          (this as any)._currentDiffLeftUri = newLeftUri;
+          (this as any)._currentDiffRightUri = newRightUri;
+          (this as any)._currentDiffKey = diffKey;
         } catch {
           // 文件可能不存在（已被拒绝/删除），静默忽略
         }
