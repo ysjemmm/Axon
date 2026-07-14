@@ -84,7 +84,7 @@ md.renderer.rules.fence = function (tokens, idx) {
   // 普通代码块：采用更清爽的样式——弱化头部分割、增大内边距、把语言名作为轻量标签。
   if (enableEnhance) {
     return `<div class="axon-codeblock my-3 rounded-lg overflow-hidden px-4 py-1.5" style="background:var(--axon-code-bg);border:1px solid var(--axon-code-border)"${enhanceAttr}>
-    <pre class="overflow-auto max-h-[28rem] m-0 p-0" style="background:transparent"><code class="text-[10px] leading-[1.6] font-mono hljs" style="color:var(--vscode-editor-foreground,var(--hl-text,#383a42))">${highlightedCode}</code></pre>
+    <pre class="overflow-auto max-h-[28rem] m-0 p-0" style="background:transparent"><code class="text-[11px] leading-[1.6] font-mono hljs" style="color:var(--vscode-editor-foreground,var(--hl-text,#383a42))">${highlightedCode}</code></pre>
   </div>\n`;
   }
 
@@ -104,7 +104,9 @@ md.renderer.rules.fence = function (tokens, idx) {
         </button>
       </div>
     </div>
-    <pre class="axon-codeblock-pre overflow-auto max-h-[28rem] m-0 p-0" style="background:transparent"><code class="text-[10px] leading-[1.6] font-mono hljs" style="color:var(--vscode-editor-foreground,var(--hl-text,#383a42))">${highlightedCode}</code></pre>
+    <div class="axon-codeblock-scroll overflow-x-auto overflow-y-hidden">
+      <pre class="axon-codeblock-pre max-h-[28rem] m-0 p-0" style="background:transparent"><code class="text-[11px] leading-[1.6] font-mono hljs" style="color:var(--vscode-editor-foreground,var(--hl-text,#383a42))">${highlightedCode}</code></pre>
+    </div>
   </div>\n`;
 };
 

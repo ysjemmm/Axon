@@ -88,49 +88,59 @@ code:not(.hljs):not(.prose code) {
   opacity: 1;
 }
 
-/* 代码块滚动条：非 hover 时完全不占空间（避免横向滚动条撑大底部间距），
-   hover 时才显示细滚动条。 */
-.axon-codeblock pre {
-  scrollbar-width: none;
+/* 代码块滚动条：普通代码块由外层滚动槽承载横向滚动，让滚动条落在卡片底部。 */
+.axon-codeblock-scroll {
+  margin-bottom: -6px;
+  scrollbar-width: thin;
   scrollbar-color: transparent transparent;
 }
 
-.axon-codeblock pre:hover {
+.axon-codeblock-scroll > pre {
+  overflow: visible;
+  width: max-content;
+  min-width: 100%;
+}
+
+.axon-codeblock-scroll > pre > code {
+  display: block;
+}
+
+.axon-codeblock:hover .axon-codeblock-scroll {
   scrollbar-width: thin;
   scrollbar-color: #d1d5db transparent; /* gray-300 */
 }
 
 @media (prefers-color-scheme: dark) {
-  .axon-codeblock pre:hover {
+  .axon-codeblock:hover .axon-codeblock-scroll {
     scrollbar-color: #4b5563 transparent; /* gray-600 */
   }
 }
 
-.axon-codeblock pre::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-}
-
-.axon-codeblock pre:hover::-webkit-scrollbar {
+.axon-codeblock-scroll::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
-.axon-codeblock pre::-webkit-scrollbar-track {
+.axon-codeblock:hover .axon-codeblock-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.axon-codeblock-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.axon-codeblock pre::-webkit-scrollbar-thumb {
+.axon-codeblock-scroll::-webkit-scrollbar-thumb {
   border-radius: 9999px;
   background: transparent;
   transition: background 0.2s;
 }
 
-.axon-codeblock pre:hover::-webkit-scrollbar-thumb {
+.axon-codeblock:hover .axon-codeblock-scroll::-webkit-scrollbar-thumb {
   background: #d1d5db; /* gray-300 */
 }
 
-.dark .axon-codeblock pre:hover::-webkit-scrollbar-thumb {
+.dark .axon-codeblock:hover .axon-codeblock-scroll::-webkit-scrollbar-thumb {
   background: #4b5563; /* gray-600 */
 }
 
