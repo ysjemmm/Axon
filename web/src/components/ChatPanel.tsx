@@ -41,6 +41,17 @@ import { CONTROL_CMD } from "@/lib/constants";
 export function ChatPanel({ clientId, sessionId, mode, connected, active, send, onSessionCreated, onCompactionMigrated, onStreamingChange }: ChatPanelProps) {
   const session = useChatSession({ clientId, sessionId, mode, connected, send, onSessionCreated, onCompactionMigrated, onStreamingChange });
 
+  // 正在被 AI 回复的用户消息 ID（回复中不可编辑）
+  const replyingToMessageId = useMemo(() => {
+    if (!session.isLoading || !session.chatHistory) return undefined;
+    for (let i = session.chatHistory.length - 1; i >= 0; i--) {
+      if ((session.chatHistory[i] as any).role === "user") {
+        return (session.chatHistory[i] as any).id as string | undefined;
+      }
+    }
+    return undefined;
+  }, [session.isLoading, session.chatHistory]);
+
   // ── 输入区编排（壳层本地状态） ──────────────────────────────────────────
   const [images, setImages] = useState<string[]>([]);
   const [fileError, setFileError] = useState<string>("");
@@ -870,6 +881,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                   onRejectEdit={session.rejectEdits}
                   onUndoEdit={session.undoEdits}
                   onEditUserMessage={session.editUserMessage}
+                  replyingToMessageId={replyingToMessageId}
                   onQuoteToInput={(qMsg) => {
                     if (qMsg.userSegments && qMsg.userSegments.length > 0) {
                       editorRef.current?.appendSegments(qMsg.userSegments);

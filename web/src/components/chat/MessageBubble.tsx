@@ -20,7 +20,7 @@ function userMessageText(message: ChatMessage): string {
   return message.content || "";
 }
 
-function MessageBubbleImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit, onQuoteToInput, onEditUserMessage, onImagePreview }: { message: ChatMessage; onAcceptEdit?: (path: string) => void; onRejectEdit?: (path: string) => void; onUndoEdit?: (path: string) => void; onQuoteToInput?: (message: ChatMessage) => void; onEditUserMessage?: (messageId: string, content: string, images?: string[], attachedFiles?: AttachedFile[]) => void; onImagePreview?: (src: string) => void }) {
+function MessageBubbleImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit, onQuoteToInput, onEditUserMessage, onImagePreview, replyingToMessageId }: { message: ChatMessage; onAcceptEdit?: (path: string) => void; onRejectEdit?: (path: string) => void; onUndoEdit?: (path: string) => void; onQuoteToInput?: (message: ChatMessage) => void; onEditUserMessage?: (messageId: string, content: string, images?: string[], attachedFiles?: AttachedFile[]) => void; onImagePreview?: (src: string) => void; replyingToMessageId?: string }) {
   const [userExpanded, setUserExpanded] = useState(false);
   const [editingUser, setEditingUser] = useState(false);
   const [draftUserText, setDraftUserText] = useState("");
@@ -73,8 +73,9 @@ function MessageBubbleImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit, on
                   setDraftFiles(message.attachedFiles ? [...message.attachedFiles] : []);
                   setEditingUser(true);
                 }}
-                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/80"
-                title="编辑这条消息"
+                className={`p-1 rounded ${message.id !== replyingToMessageId ? "text-muted-foreground hover:text-foreground hover:bg-muted/80" : "text-muted-foreground/40 cursor-not-allowed"}`}
+                title={message.id === replyingToMessageId ? "AI 正在回复此消息，暂不可编辑" : "编辑这条消息"}
+                disabled={message.id === replyingToMessageId}
               >
                 <Pencil className="w-3.5 h-3.5" />
               </button>
