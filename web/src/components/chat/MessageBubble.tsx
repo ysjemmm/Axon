@@ -133,7 +133,7 @@ function MessageBubbleImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit, on
               <textarea
                 value={draftUserText}
                 onChange={(e) => setDraftUserText(e.target.value)}
-                className="w-full min-h-[80px] resize-y rounded-lg border border-border bg-background px-2 py-1.5 text-[13px] leading-relaxed outline-none focus:ring-1 focus:ring-primary/40"
+                className="w-full h-[200px] resize-none overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-[13px] leading-relaxed outline-none focus:ring-1 focus:ring-primary/40"
                 autoFocus
               />
               <div className="mt-1.5 flex justify-end gap-1.5">
