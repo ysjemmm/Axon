@@ -336,6 +336,11 @@ export class AgentSession {
   editUserMessage(messageId: string, content: string, userIndex?: number, images?: string[], attachedFiles?: unknown[]): boolean {
     const normalized = content ?? "";
     let seen = -1;
+    let totalUserMsgs = 0;
+    for (const m of this.messages as any[]) {
+      if (m.role === "user" && !m._screenshotInjection) totalUserMsgs++;
+    }
+    console.log(`[edit_user_message] messageId=${messageId} userIndex=${userIndex} totalUserMsgs=${totalUserMsgs} images=${images?.length ?? 0} files=${attachedFiles?.length ?? 0}`);
     for (const m of this.messages as any[]) {
       if (m.role !== "user" || m._screenshotInjection) continue;
       seen++;
@@ -343,6 +348,7 @@ export class AgentSession {
       const hitByIndex = typeof userIndex === "number" && seen === userIndex;
       if (!hitById && !hitByIndex) continue;
 
+      console.log(`[edit_user_message] MATCHED at seen=${seen} clientMessageId=${m.clientMessageId || "(none)"} oldContentLen=${typeof m.content === "string" ? m.content.length : Array.isArray(m.content) ? `array(${m.content.length})` : "?"} -> newContentLen=${normalized.length}`);
       // 重建 content：根据是否保留图片决定 string 还是 array
       if (images && images.length > 0) {
         const parts: any[] = [];
@@ -364,6 +370,7 @@ export class AgentSession {
       this.persistMessages();
       return true;
     }
+    console.warn(`[edit_user_message] NO MATCH found for messageId=${messageId} userIndex=${userIndex}`);
     return false;
   }
 

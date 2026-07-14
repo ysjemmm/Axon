@@ -44,6 +44,15 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   // ── 输入区编排（壳层本地状态） ──────────────────────────────────────────
   const [images, setImages] = useState<string[]>([]);
   const [fileError, setFileError] = useState<string>("");
+  const fileErrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 设置文件错误提示，3 秒后自动消失。 */
+  const showFileError = useCallback((msg: string) => {
+    if (fileErrorTimer.current) clearTimeout(fileErrorTimer.current);
+    setFileError(msg);
+    if (msg) {
+      fileErrorTimer.current = setTimeout(() => setFileError(""), 3000);
+    }
+  }, []);
   const [composerEmpty, setComposerEmpty] = useState(true); // 编辑器是否为空（控制发送按钮可用态）
   const [replyStyle, setReplyStyle] = useState<ReplyStyle>("default");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -337,7 +346,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     editorRef.current?.clear();
     setComposerEmpty(true);
     setImages([]);
-    setFileError("");
+    showFileError("");
   };
 
   // ── 输入历史栈（上下箭头切换） ────────────────────────────────────────────
@@ -512,10 +521,15 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
   const captureScreenshot = async () => {
     if (!currentModelVision) {
-      setFileError("当前模型不支持图片，无法使用截图");
+      showFileError("当前模型不支持图片，无法使用截图");
       return;
     }
-    if (navigator.mediaDevices?.getDisplayMedia) {
+
+    // VS Code webview 环境：getDisplayMedia 不可靠（iframe 沙箱限制），
+    // 直接走剪贴板读取（用户用 Win+Shift+S 截图后点此按钮粘贴）。
+    const isVscode = typeof (window as any).acquireVsCodeApi === "function";
+
+    if (!isVscode && navigator.mediaDevices?.getDisplayMedia) {
       let stream: MediaStream | null = null;
       try {
         stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
@@ -534,7 +548,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         track.stop();
         const resized = await normalizeImage(dataUrl);
         setImages((prev) => [...prev, resized]);
-        setFileError("");
+        showFileError("");
         return;
       } catch (err) {
         if ((err as Error).name !== "NotAllowedError") {
@@ -546,37 +560,46 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         stream?.getTracks().forEach((t) => t.stop());
       }
     }
-    if (!navigator.clipboard?.read) {
-      setFileError("当前环境不支持截图（需要 HTTPS 或浏览器剪贴板权限）");
-      return;
-    }
-    try {
-      const items = await navigator.clipboard.read();
-      let found = false;
-      for (const item of items) {
-        const imageType = item.types.find((t) => t.startsWith("image/"));
-        if (imageType) {
-          const blob = await item.getType(imageType);
-          const dataUrl = await new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result as string);
-            reader.readAsDataURL(blob);
-          });
-          const resized = await normalizeImage(dataUrl);
-          setImages((prev) => [...prev, resized]);
-          found = true;
-          break;
+
+    // 剪贴板读取（webview 环境主路径 / 浏览器降级路径）
+    if (navigator.clipboard?.read) {
+      try {
+        const items = await navigator.clipboard.read();
+        let found = false;
+        for (const item of items) {
+          const imageType = item.types.find((t) => t.startsWith("image/"));
+          if (imageType) {
+            const blob = await item.getType(imageType);
+            const dataUrl = await new Promise<string>((resolve) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result as string);
+              reader.readAsDataURL(blob);
+            });
+            const resized = await normalizeImage(dataUrl);
+            setImages((prev) => [...prev, resized]);
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          showFileError("剪贴板中没有图片。请先截图（Windows: Win+Shift+S / macOS: Cmd+Shift+4 / Linux: 选区截图），再点此按钮");
+        } else {
+          showFileError("");
+        }
+      } catch (err) {
+        if ((err as Error).name === "NotAllowedError") {
+          showFileError("浏览器拒绝了剪贴板访问权限，请在权限提示中点击「允许」");
+        } else {
+          showFileError(`读取剪贴板失败：${(err as Error).message}`);
         }
       }
-      if (!found) setFileError("剪贴板中没有图片。请先用 Win+Shift+S 截图，再点此按钮");
-      else setFileError("");
-    } catch (err) {
-      if ((err as Error).name === "NotAllowedError") {
-        setFileError("浏览器拒绝了剪贴板访问权限，请在权限提示中点击「允许」");
-      } else {
-        setFileError(`读取剪贴板失败：${(err as Error).message}`);
-      }
+      return;
     }
+
+    // webview 且无 clipboard.read：引导用户用粘贴
+    showFileError(isVscode
+      ? "请截图（Windows: Win+Shift+S / macOS: Cmd+Shift+4 / Linux: 选区截图）后，直接在输入框 Ctrl+V 粘贴"
+      : "当前环境不支持截图（需要 HTTPS 或浏览器剪贴板权限）");
   };
 
   const handlePaste = (e: React.ClipboardEvent) => {
@@ -608,7 +631,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   });
 
   const addFiles = async (files: FileList | File[]) => {
-    setFileError("");
+    showFileError("");
     const list = Array.from(files);
     const errors: string[] = [];
     let added = 0;
@@ -626,7 +649,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
       }
     }
     if (added > 0) setComposerEmpty(editorRef.current?.isEmpty() ?? false);
-    if (errors.length > 0) setFileError(errors.join("；"));
+    if (errors.length > 0) showFileError(errors.join("；"));
   };
 
   // 接收外部注入的上下文 → 作为内联 tag 插入编辑器。
