@@ -393,11 +393,20 @@ export const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>
         role="textbox"
         aria-multiline="true"
         onInput={() => {
+          const el = editorRef.current;
+          if (el) {
+            // 合并相邻 text node，防止光标卡在节点缝隙处形成"死竖线"
+            el.normalize();
+          }
           refreshEmpty();
           const sel = window.getSelection();
           const node = sel?.focusNode;
           const before = node && node.nodeType === Node.TEXT_NODE ? (node.nodeValue ?? "").slice(0, sel!.focusOffset) : "";
           onChange?.(before);
+        }}
+        onClick={() => {
+          // 点击后合并节点，避免光标卡在 text node 缝隙
+          editorRef.current?.normalize();
         }}
         onKeyDown={onKeyDown}
         onPaste={handlePaste}
