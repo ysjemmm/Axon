@@ -233,71 +233,16 @@ async function generateSummary(
   return turn.content || "（无法生成摘要）";
 }
 
-/**
- * 反思式重启压缩 - 用于 Agent 反复失败、即将投降前的"清空脑子重新审题"。
- *
- * 与 compactMessages 的关键区别：它【不保留】最近的失败原文（那恰恰是要清除的噪声），
- * 而是把整段历史（system 之外）压成一份"失败复盘 + 已确认事实"摘要，让模型带着干净
- * 上下文换一条路重来。失败的教训保留在摘要里，避免重蹈覆辙。
- *
- * 注意：调用方应在本函数之后【重读卡住目标的真实状态】再续上，以补偿被清除的精确现场。
- */
-export async function reflectiveCompact(
-  messages: ChatCompletionMessageParam[],
-  strategy: LLMStrategy,
-  model: string,
-): Promise<ChatCompletionMessageParam[]> {
-  const systemMsg = messages[0]; // system prompt 始终保留
-  const history = messages.slice(1);
-  // 历史过短（没什么可复盘的）→ 原样返回，不浪费一次摘要调用
-  if (history.length < 2) {
-    return messages;
-  }
+// reflectiveCompact / generateFailureSummary 已移除。
+//
+// 原设计：Agent 反复失败时，把整段历史压成"失败复盘摘要"再让模型重来。
+// 问题：复盘需要完整失败细节（哪条命令报了什么错、哪个文件改了几次）才能避免重蹈覆辙，
+//       而压缩恰恰清除了这些关键依据，导致模型"知道失败了但不知道怎么失败的"，重新踩同一个坑。
+//
+// 现设计：反思/深度复盘仅注入引导（ReflectionHandler），不压缩上下文。
+//       上下文压缩只由 CompactionController 在 token 真正接近窗口上限时触发。
 
-  const summary = await generateFailureSummary(history, strategy, model);
 
-  return [
-    systemMsg,
-    { role: "user" as const, content: `[任务复盘 - 之前的多次尝试反复失败，以下是复盘要点]\n${summary}` },
-    { role: "assistant" as const, content: "我已理清思路，准备换一条不同的路径重新开始。" },
-  ];
-}
-
-/**
- * 用 LLM 把"反复失败"的执行过程提炼成复盘摘要：保留目标、已确认事实、试过的不同做法及失败原因、
- * 根因与未尝试的新思路，丢弃失败尝试的冗长原文。
- */
-async function generateFailureSummary(
-  messages: ChatCompletionMessageParam[],
-  strategy: LLMStrategy,
-  model: string,
-): Promise<string> {
-  const historyText = serializeHistory(messages);
-
-  const turn = await strategy.runTurn({
-    model,
-    messages: [
-      {
-        role: "system",
-        content: `你是一个任务复盘助手。下面是一段 Agent 执行对话，它在某个环节反复尝试、屡次失败。请提炼一份简洁复盘，用于让 Agent 清空噪声后换一条思路重新开始。
-
-必须包含：
-1. 用户的原始目标/任务是什么
-2. 已经【确认为真】的事实（哪些文件读过、当前真实状态、已成功完成且不应推翻的改动）
-3. 已经试过哪几种【不同】的做法，每一种【为什么失败】（依据真实报错，不要臆测）
-4. 最可能的根本原因，以及一条尚未尝试过的不同思路（如果能想到）
-
-要求：用要点列表，控制在 400 字以内；只保留对"换路重来"有用的信息，丢弃失败尝试的冗长原文。`,
-      },
-      { role: "user", content: historyText },
-    ],
-    tools: [],
-    callbacks: SILENT_CALLBACKS,
-    maxOutputTokens: 700,
-  });
-
-  return turn.content || "（无法生成复盘摘要）";
-}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // 滚动摘要（rolling summary）—— 每累计一定量新 token 后，异步把"旧消息"压成摘要

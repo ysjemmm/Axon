@@ -54,6 +54,9 @@ export const BUILTIN_PROVIDERS: BuiltinProviderDef[] = [
       { id: "claude-sonnet-5", name: "Claude Sonnet 5", contextWindow: 1_000_000, vision: true, vendor: "anthropic", description: "Sonnet 档最新旗舰，长上下文", group: "Axon 官方", tier: "balanced" },
       { id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", contextWindow: 1_000_000, vision: true, vendor: "anthropic", description: "上一代 Sonnet，长上下文", group: "Axon 官方", tier: "balanced" },
       { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", contextWindow: 200_000, vision: true, vendor: "anthropic", description: "速度最快，成本最低", group: "Axon 官方", tier: "fast" },
+      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", contextWindow: 1_000_000, vision: true, vendor: "openai", protocol: "anthropic", description: "旗舰档，编码能力 SOTA", group: "Axon 官方", tier: "flagship" },
+      { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", contextWindow: 1_000_000, vision: true, vendor: "openai", protocol: "anthropic", description: "均衡档，性价比高", group: "Axon 官方", tier: "balanced" },
+      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", contextWindow: 1_000_000, vision: true, vendor: "openai", protocol: "anthropic", description: "轻量档，速度最快成本最低", group: "Axon 官方", tier: "fast" },
     ],
   },
 ];

@@ -233,18 +233,22 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
           const fileName = path.basename(filePath);
           const diffContents = (this as any)._diffContents as Map<string, string>;
 
-          // 同一 diff 不重复触发：内容完全一致 + tab 还在 → 跳过
+          // 同一 diff 不重复触发：内容完全一致 + tab 激活 → 跳过；
+          // tab 存在但未激活 → 让后续"打开→关旧"逻辑把 diff 拉到当前 group。
           const diffKey = `${filePath}\n${oldContent.length}:${newContent.length}\n${oldContent}\n${newContent}`;
           if ((this as any)._currentDiffKey === diffKey) {
+            let foundActive = false;
             for (const group of vscode.window.tabGroups.all) {
               for (const tab of group.tabs) {
                 const input = tab.input as any;
                 const uriStr = input?.original?.toString() || input?.modified?.toString() || "";
-                if (uriStr.startsWith("axon-diff-")) {
-                  return; // tab 还在且内容一样，不操作
+                if (uriStr.startsWith("axon-diff-") && tab.isActive) {
+                  foundActive = true;
+                  break;
                 }
               }
             }
+            if (foundActive) return;
           }
 
           // 先记住旧 tab 引用（稍后关闭），不提前关

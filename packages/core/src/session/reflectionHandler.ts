@@ -4,14 +4,14 @@
  *
  * 职责：当 agent loop 检测到连续失败（卡住）时，分两级干预--
  * - 反思·换路（轻量）：重读卡住文件的最新内容 + 注入复盘引导，给一次换路机会；
- * - 摘要重启（重量）：把反复失败的过程压成复盘摘要、清除噪声原文，再重读真实状态，换条路重来。
+ * - 深度复盘（重量）：反思后仍失败时，注入更强的复盘引导（逐条排查失败原因），
+ *   保留完整上下文--失败原文是避免重蹈覆辙的关键依据，不压缩、不清除。
  *
  * 状态字段仍留在 session（@internal），本类通过构造注入的 session 引用读写。
  */
 
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import type { LLMStrategy } from "../llm/types.js";
-import { reflectiveCompact } from "../compactor.js";
 import { executeToolCall } from "../tools/index.js";
 import { buildReflectionPrompt, buildSummaryRestartPrompt, type StuckTarget, type LoopGuard } from "../agentGuards.js";
 import type { AgentSession } from "../agentSession.js";
@@ -29,10 +29,9 @@ export class ReflectionHandler {
     this.s.persistMessages();
   }
 
-  /** 摘要重启（重量层）。 */
+  /** 深度复盘（重量层）。不压缩上下文--注入更强的复盘引导，保留完整历史作为判断依据。 */
   async injectSummaryRestart(stuck: StuckTarget | null, guard: LoopGuard, strategy: LLMStrategy): Promise<void> {
-    this.s.send("status", { content: "整理思路，换个方式重来...", phase: "thinking" });
-    this.s.messages = await reflectiveCompact(this.s.messages, strategy, this.s.model);
+    this.s.send("status", { content: "深度复盘，逐条排查...", phase: "thinking" });
     const freshState = await this.readStuckTargetState(stuck);
     this.s.messages.push({ role: "system", content: buildSummaryRestartPrompt(stuck) + freshState, _tailInjected: true, _ephemeralInjected: true } as ChatCompletionMessageParam);
     guard.noteSummaryRestart();

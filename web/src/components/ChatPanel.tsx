@@ -1025,7 +1025,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             </div>
           )}
           {/* 压缩选择弹窗：自动压缩触发时（>=75%），给用户选择继续或新会话 */}
-          {session.compactionNeeded && (
+          {session.compactionNeeded && !session.isLoading && (
             <div className="flex flex-col gap-2 px-3 py-3 bg-primary/5 border border-primary/30 rounded-lg mb-2">
               <div className="flex items-start gap-2">
                 <span className="text-sm">⚠️</span>
@@ -1329,7 +1329,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="top" align="end" className="max-w-[220px] border-zinc-700 bg-zinc-900 text-white shadow-xl">
-                    <p className="text-xs text-zinc-200">{session.isCompacting ? (session.compactingMessage || "压缩进行中，不可操作") : session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35 ? "上下文未超过 35%，禁止手动压缩" : "压缩上下文"}</p>
+                    <p className="text-xs text-zinc-200">{session.isCompacting ? (session.compactingMessage || "压缩进行中，不可操作") : session.isLoading ? "当前 AI 会话正在继续，不能压缩" : session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35 ? "上下文未超过 35%，禁止手动压缩" : "压缩上下文"}</p>
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>

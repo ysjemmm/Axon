@@ -10,7 +10,7 @@ import { executeToolCall, toolContentLimit, ToolError, ToolName, ToolCallStatus,
 import { calculateCredits, buildCreditDetail } from "./credits.js";
 import type { AgentHost } from "./host/index.js";
 import type { AgentChannel, AgentEvent } from "./channel/index.js";
-import { needsCompaction, compactMessages, reflectiveCompact, pruneOldToolResults, DEFAULT_COMPACTION_CONFIG, setPruneKeepChars } from "./compactor.js";
+import { needsCompaction, compactMessages, pruneOldToolResults, DEFAULT_COMPACTION_CONFIG, setPruneKeepChars } from "./compactor.js";
 import type { CompactionUserConfig } from "./compactor.js";
 import type { CreditBudgetUserConfig } from "./credits.js";
 import type { SerializedPendingEdit } from "./storage/types.js";
@@ -182,7 +182,7 @@ export class AgentSession {
   private readonly noToolTurnDecider: NoToolTurnDecider;
   /** 异常/取消 turn 统计兜底（解耦自本类）。 */
   private readonly errorTurnHandler: ErrorTurnHandler;
-  /** 反思/摘要重启（解耦自本类）。 */
+  /** 反思/深度复盘（解耦自本类）。 */
   private readonly reflectionHandler: ReflectionHandler;
   /** 工具调用执行链（拆薄 dispatchToolCall/executeSingleToolCall/recordToolOutcome/runToolDispatch）。 */
   private readonly toolCallExecutor: ToolCallExecutor;
@@ -1024,7 +1024,7 @@ export class AgentSession {
   }
 
 
-    /** 摘要重启（委托 ReflectionHandler）。 */
+    /** 深度复盘（重量层）。不压缩上下文--注入更强的复盘引导，保留完整历史作为判断依据。 */
   private async injectSummaryRestart(stuck: StuckTarget | null, guard: LoopGuard, strategy: LLMStrategy): Promise<void> {
     await this.reflectionHandler.injectSummaryRestart(stuck, guard, strategy);
   }
@@ -1426,7 +1426,7 @@ export class AgentSession {
 
     // 新一轮用户输入开始前，清理上一轮遗留的临时诊断/纠偏注入。
     // _tailInjected 只表示“为 prompt cache 友好而放到尾部”，不代表必须跨轮删除；
-    // 只有 _ephemeralInjected 才是单轮临时消息（反思、摘要重启、空回复/SSE 纠偏、预算提醒等）。
+    // 只有 _ephemeralInjected 才是单轮临时消息（反思、深度复盘、空回复/SSE 纠偏、预算提醒等）。
     const beforeInjectedCleanup = this.messages.length;
     this.messages = this.messages.filter((m) => !(m as any)._ephemeralInjected);
     if (this.messages.length !== beforeInjectedCleanup) {
@@ -1684,7 +1684,7 @@ export class AgentSession {
         return;
       }
 
-      // 卡住升级阶梯：反思·换路 → 摘要重启 → 投降。在硬投降前，先给模型"理清思路、换条路重来"的机会。
+      // 卡住升级阶梯：反思·换路 → 深度复盘 → 投降。在硬投降前，先给模型"理清思路、换条路重来"的机会。
       if (guard.isStuck()) {
         const stuck = guard.getStuckTarget();
         if (guard.canReflect()) {
@@ -1693,7 +1693,7 @@ export class AgentSession {
           continue;
         }
         if (guard.canSummaryRestart()) {
-          console.debug(`[agent] 反思仍无效（${stuck?.key ?? "连续失败"}）→ 摘要重启`);
+          console.debug(`[agent] 反思仍无效（${stuck?.key ?? "连续失败"}）→ 深度复盘`);
           await this.injectSummaryRestart(stuck, guard, strategy);
           continue;
         }

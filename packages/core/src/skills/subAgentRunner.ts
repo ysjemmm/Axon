@@ -17,7 +17,6 @@ import type { LLMStrategy, ToolDef, LLMStreamCallbacks } from "../llm/types.js";
 import type { LoadedSkill } from "./skillLoader.js";
 import type { AgentHost } from "../host/index.js";
 import { looksLikeIncompleteReply, parseToolArguments, LoopGuard, policyForSubAgent, isSoftToolFailure, buildReflectionPrompt, buildSummaryRestartPrompt, type StuckTarget } from "../agentGuards.js";
-import { reflectiveCompact } from "../compactor.js";
 import type { NormalizedFinishReason } from "../llm/finishReasonMapper.js";
 
 const SUB_AGENT_SYSTEM_PROMPT = `你是一个子 Agent（subagent），由主 Agent 委派来独立完成一个具体任务。
@@ -302,7 +301,7 @@ export class SubAgentRunner {
 
       await this.executeToolCalls(toolCalls, messages, guard);
 
-      // 卡住升级阶梯：反思·换路 → 摘要重启 → 投降（与主 Agent 同源，投降前先给"换路重来"的机会）
+      // 卡住升级阶梯：反思·换路 → 深度复盘 → 投降（与主 Agent 同源，投降前先给"换路重来"的机会）
       if (guard.isStuck()) {
         const stuck = guard.getStuckTarget();
         if (guard.canReflect()) {
@@ -310,7 +309,7 @@ export class SubAgentRunner {
           continue;
         }
         if (guard.canSummaryRestart()) {
-          messages = await this.injectSummaryRestart(messages, stuck, guard);
+          await this.injectSummaryRestart(messages, stuck, guard);
           continue;
         }
         // 阶梯耗尽仍卡住 → 强制收尾，给出失败结论
@@ -404,15 +403,13 @@ export class SubAgentRunner {
   }
 
   /**
-   * 摘要重启（重量层）：把反复失败的过程压成复盘摘要、清除噪声原文，再重读真实状态后换路重来。
-   * 返回重建后的消息列表（调用方需用它替换原列表）。
+   * 深度复盘（重量层）：反思后仍反复失败时，注入更强的复盘引导。
+   * 不压缩上下文--失败原文是避免重蹈覆辙的依据。
    */
-  private async injectSummaryRestart(messages: ChatCompletionMessageParam[], stuck: StuckTarget | null, guard: LoopGuard): Promise<ChatCompletionMessageParam[]> {
-    const compacted = await reflectiveCompact(messages, this.deps.strategy, this.deps.model);
+  private async injectSummaryRestart(messages: ChatCompletionMessageParam[], stuck: StuckTarget | null, guard: LoopGuard): Promise<void> {
     const freshState = await this.readStuckTargetState(stuck);
-    compacted.push({ role: "system", content: buildSummaryRestartPrompt(stuck) + freshState } as ChatCompletionMessageParam);
+    messages.push({ role: "system", content: buildSummaryRestartPrompt(stuck) + freshState } as ChatCompletionMessageParam);
     guard.noteSummaryRestart();
-    return compacted;
   }
 
   /** 重读卡住目标的最新真实内容（仅当卡在某个文件上时）；失败不阻塞，返回空串。 */
