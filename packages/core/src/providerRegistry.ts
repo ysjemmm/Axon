@@ -61,9 +61,9 @@ export class ProviderRegistry {
     const file = await this.readMergedConfig();
     const byName = new Map<string, ResolvedProvider>();
 
-    // 1) 内置目录（apiKey 由 builtinApiKeys 覆盖，否则取 env）
+    // 1) 内置目录（apiKey 由 builtinApiKeys 覆盖，baseUrl 由 builtinBaseUrls 覆盖）
     for (const def of BUILTIN_PROVIDERS) {
-      byName.set(def.name, this.fromBuiltin(def, file.builtinApiKeys?.[def.name]));
+      byName.set(def.name, this.fromBuiltin(def, file.builtinApiKeys?.[def.name], file.builtinBaseUrls?.[def.name]));
     }
 
     // 2) 自定义 provider（保留名不可占用）
@@ -84,18 +84,20 @@ export class ProviderRegistry {
 
   /** 合并读取用户级 + 各工作区级 providers.json，同时追踪每个自定义 provider 的来源层级 */
   private async readMergedConfig(): Promise<ProviderConfigFile & { _providerLevels?: Record<string, "user" | "workspace"> }> {
-    const merged: ProviderConfigFile = { providers: {}, builtinApiKeys: {} };
+    const merged: ProviderConfigFile = { providers: {}, builtinApiKeys: {}, builtinBaseUrls: {} };
     const levels: Record<string, "user" | "workspace"> = {};
 
     const userCfg = await this.readFile(userProviderConfigPath(this.homeDir));
     Object.assign(merged.providers!, userCfg.providers || {});
     Object.assign(merged.builtinApiKeys!, userCfg.builtinApiKeys || {});
+    Object.assign(merged.builtinBaseUrls!, userCfg.builtinBaseUrls || {});
     for (const name of Object.keys(userCfg.providers || {})) levels[name] = "user";
 
     for (const ws of this.workspaces) {
       const wsCfg = await this.readFile(workspaceProviderConfigPath(ws));
       Object.assign(merged.providers!, wsCfg.providers || {});
       Object.assign(merged.builtinApiKeys!, wsCfg.builtinApiKeys || {});
+      Object.assign(merged.builtinBaseUrls!, wsCfg.builtinBaseUrls || {});
       for (const name of Object.keys(wsCfg.providers || {})) levels[name] = "workspace";
     }
 
@@ -114,12 +116,13 @@ export class ProviderRegistry {
   }
 
   /** 内置定义 → ResolvedProvider */
-  private fromBuiltin(def: BuiltinProviderDef, keyOverride?: string): ResolvedProvider {
+  private fromBuiltin(def: BuiltinProviderDef, keyOverride?: string, baseUrlOverride?: string): ResolvedProvider {
     const apiKey = (keyOverride || envApiKey(def.name)).trim();
+    const baseUrl = (baseUrlOverride?.trim() || def.baseUrl);
     return {
       name: def.name,
       label: def.label,
-      baseUrl: def.baseUrl,
+      baseUrl,
       apiKey,
       apiKeyHeader: def.apiKeyHeader || "bearer",
       protocol: def.protocol,

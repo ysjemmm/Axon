@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrig
 import {
   getProviders,
   setBuiltinProviderKey,
+  setBuiltinProviderBaseUrl,
   addCustomProvider,
   removeCustomProvider,
   setCustomProviderModels,
@@ -138,15 +139,17 @@ function LevelButton({ active, onClick, label, disabled }: { active: boolean; on
   );
 }
 
-/** 内置 provider 卡片：只暴露 API Key，模型列表只读 */
+/** 内置 provider 卡片：API Key + Base URL 可编辑，模型列表只读 */
 function BuiltinCard({ provider, level, workspace, onChanged }: { provider: ResolvedProviderInfo; level: ProviderLevel; workspace?: string; onChanged: () => void }) {
   const [apiKey, setApiKey] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [baseUrl, setBaseUrl] = useState(provider.baseUrl || "");
+  const [savingKey, setSavingKey] = useState(false);
+  const [savingUrl, setSavingUrl] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
-  const save = async () => {
-    setSaving(true);
+  const saveKey = async () => {
+    setSavingKey(true);
     setErrorMessage("");
     try {
       await setBuiltinProviderKey(level, provider.name, apiKey, workspace);
@@ -155,7 +158,19 @@ function BuiltinCard({ provider, level, workspace, onChanged }: { provider: Reso
     } catch (e) {
       setErrorMessage(`保存失败: ${(e as Error).message}`);
     }
-    setSaving(false);
+    setSavingKey(false);
+  };
+
+  const saveBaseUrl = async () => {
+    setSavingUrl(true);
+    setErrorMessage("");
+    try {
+      await setBuiltinProviderBaseUrl(level, provider.name, baseUrl.trim(), workspace);
+      onChanged();
+    } catch (e) {
+      setErrorMessage(`保存失败: ${(e as Error).message}`);
+    }
+    setSavingUrl(false);
   };
 
   return (
@@ -172,7 +187,7 @@ function BuiltinCard({ provider, level, workspace, onChanged }: { provider: Reso
           {provider.models.length} 模型 · {provider.protocol}
         </button>
       </div>
-      <div className="flex gap-2">
+      <div className="flex gap-2 mb-2">
         <Input
           type="password"
           placeholder={provider.configured ? "已配置（留空保留，输入则覆盖）" : "输入 API Key"}
@@ -180,8 +195,19 @@ function BuiltinCard({ provider, level, workspace, onChanged }: { provider: Reso
           onChange={(e) => setApiKey(e.target.value)}
           className="h-8 text-sm flex-1"
         />
-        <Button size="sm" onClick={save} disabled={saving || !apiKey.trim()}>
-          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <KeyRound className="w-3.5 h-3.5" />}保存
+        <Button size="sm" onClick={saveKey} disabled={savingKey || !apiKey.trim()}>
+          {savingKey ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <KeyRound className="w-3.5 h-3.5" />}保存
+        </Button>
+      </div>
+      <div className="flex gap-2">
+        <Input
+          placeholder="Base URL（留空使用默认）"
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+          className="h-8 text-sm flex-1"
+        />
+        <Button size="sm" variant="outline" onClick={saveBaseUrl} disabled={savingUrl || !baseUrl.trim()}>
+          {savingUrl ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}更新
         </Button>
       </div>
       {errorMessage && <div className="mt-2 text-xs text-red-600 dark:text-red-400">{errorMessage}</div>}

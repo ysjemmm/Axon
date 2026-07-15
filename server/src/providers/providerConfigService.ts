@@ -15,7 +15,7 @@ import { RESERVED_PROVIDER_NAMES, type ProviderConfigFile, type ProviderModel, t
 
 export type ProviderLevel = "user" | "workspace";
 
-const EMPTY: ProviderConfigFile = { providers: {}, builtinApiKeys: {} };
+const EMPTY: ProviderConfigFile = { providers: {}, builtinApiKeys: {}, builtinBaseUrls: {} };
 
 export class ProviderConfigService {
   /** 解析某 level 的 providers.json 绝对路径 */
@@ -32,9 +32,9 @@ export class ProviderConfigService {
     try {
       const raw = await fs.readFile(this.configPath(level, workspace), "utf8");
       const parsed = JSON.parse(raw) as ProviderConfigFile;
-      return { providers: parsed.providers || {}, builtinApiKeys: parsed.builtinApiKeys || {} };
+      return { providers: parsed.providers || {}, builtinApiKeys: parsed.builtinApiKeys || {}, builtinBaseUrls: parsed.builtinBaseUrls || {} };
     } catch {
-      return { providers: {}, builtinApiKeys: {} };
+      return { providers: {}, builtinApiKeys: {}, builtinBaseUrls: {} };
     }
   }
 
@@ -54,6 +54,7 @@ export class ProviderConfigService {
     const normalized: ProviderConfigFile = {
       providers: config.providers || {},
       builtinApiKeys: config.builtinApiKeys || {},
+      builtinBaseUrls: config.builtinBaseUrls || {},
     };
     const path = this.configPath(level, workspace);
     await fs.mkdir(dirname(path), { recursive: true });

@@ -43,7 +43,7 @@ export const BUILTIN_PROVIDERS: BuiltinProviderDef[] = [
     // apiKey 默认空，前期由官方分发给用户手动粘贴，后续接入登录系统后自动注入。
     name: AXON_PROVIDER,
     label: "Axon 官方",
-    baseUrl: "https://ai.xn--djrq4gl4hvoi.top:8443/v1",
+    baseUrl: "https://ai.sunnorthgod.top:8443/v1",
     protocol: "anthropic",
     locked: true,
     apiKeyHeader: "x-api-key",

@@ -226,4 +226,4 @@ function MessageBubbleImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit, on
   return <AssistantTurn message={message} onAcceptEdit={onAcceptEdit} onRejectEdit={onRejectEdit} onUndoEdit={onUndoEdit} />;
 }
 
-export const MessageBubble = memo(MessageBubbleImpl, (prev, next) => prev.message === next.message);
+export const MessageBubble = memo(MessageBubbleImpl, (prev, next) => prev.message === next.message && prev.replyingToMessageId === next.replyingToMessageId);

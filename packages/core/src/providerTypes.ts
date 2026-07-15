@@ -97,4 +97,6 @@ export interface ProviderConfigFile {
   providers?: Record<string, RawProviderEntry>;
   /** 覆盖内置 provider 的 apiKey（esign 只认这个，其它字段锁定） */
   builtinApiKeys?: Record<string, string>;
+  /** 覆盖内置 provider 的 baseUrl（默认取 providerCatalog 定义） */
+  builtinBaseUrls?: Record<string, string>;
 }

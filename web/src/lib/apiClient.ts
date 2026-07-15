@@ -514,6 +514,8 @@ export interface RawProviderEntry {
 export interface ProviderConfigFile {
   providers?: Record<string, RawProviderEntry>;
   builtinApiKeys?: Record<string, string>;
+  /** 覆盖内置 provider 的 baseUrl */
+  builtinBaseUrls?: Record<string, string>;
 }
 
 function providerQuery(workspace?: string): string {
@@ -553,6 +555,11 @@ export function moveCustomProvider(fromLevel: ProviderLevel, toLevel: ProviderLe
 /** 设置内置 provider 的 apiKey 覆盖 */
 export function setBuiltinProviderKey(level: ProviderLevel, name: string, apiKey: string, workspace?: string): Promise<{ ok: boolean }> {
   return put(`/api/providers/${level}/builtin-key${providerQuery(workspace)}`, { name, apiKey });
+}
+
+/** 设置内置 provider 的 baseUrl 覆盖 */
+export function setBuiltinProviderBaseUrl(level: ProviderLevel, name: string, baseUrl: string, workspace?: string): Promise<{ ok: boolean }> {
+  return put(`/api/providers/${level}/builtin-baseurl${providerQuery(workspace)}`, { name, baseUrl });
 }
 
 /** 请求 VS Code 宿主在原生编辑器打开 providers.json */

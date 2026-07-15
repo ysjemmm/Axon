@@ -619,6 +619,18 @@ export class RequestRouter {
       }
       return { ok: true };
     }
+    const providerBaseUrlMatch = path.match(/^\/api\/providers\/(user|workspace)\/builtin-baseurl$/);
+    if (providerBaseUrlMatch && method === "PUT") {
+      const level = providerBaseUrlMatch[1] as "user" | "workspace";
+      const ws = query.get("workspace") || d.defaultWorkspace;
+      const { name, baseUrl } = (body || {}) as { name?: string; baseUrl?: string };
+      await setBuiltinProviderBaseUrl(level, name || "", baseUrl || "", ws);
+      await resolveProviders(ws);
+      if (name === "axon") {
+        void vscode.commands.executeCommand("axon.usage.refresh");
+      }
+      return { ok: true };
+    }
     if (path === "/api/open-provider-config" && method === "POST") {
       const { level: lv, workspace: ws } = (body || {}) as { level?: string; workspace?: string };
       const configPath = providerConfigPath(lv === "workspace" ? "workspace" : "user", ws);
@@ -697,9 +709,9 @@ async function readProviderConfig(level: "user" | "workspace", workspace?: strin
   const { readFile } = await import("node:fs/promises");
   try {
     const parsed = JSON.parse(await readFile(providerConfigPath(level, workspace), "utf-8")) as ProviderConfigFile;
-    return { providers: parsed.providers || {}, builtinApiKeys: parsed.builtinApiKeys || {} };
+    return { providers: parsed.providers || {}, builtinApiKeys: parsed.builtinApiKeys || {}, builtinBaseUrls: parsed.builtinBaseUrls || {} };
   } catch {
-    return { providers: {}, builtinApiKeys: {} };
+    return { providers: {}, builtinApiKeys: {}, builtinBaseUrls: {} };
   }
 }
 
@@ -707,7 +719,7 @@ async function readProviderConfig(level: "user" | "workspace", workspace?: strin
 async function writeProviderConfig(level: "user" | "workspace", config: ProviderConfigFile, workspace?: string): Promise<void> {
   const { mkdir, writeFile } = await import("node:fs/promises");
   const { dirname } = await import("node:path");
-  const normalized: ProviderConfigFile = { providers: config.providers || {}, builtinApiKeys: config.builtinApiKeys || {} };
+  const normalized: ProviderConfigFile = { providers: config.providers || {}, builtinApiKeys: config.builtinApiKeys || {}, builtinBaseUrls: config.builtinBaseUrls || {} };
   const p = providerConfigPath(level, workspace);
   await mkdir(dirname(p), { recursive: true });
   await writeFile(p, JSON.stringify(normalized, null, 2), "utf-8");
@@ -773,6 +785,16 @@ async function setBuiltinProviderKey(level: "user" | "workspace", name: string, 
   config.builtinApiKeys = config.builtinApiKeys || {};
   if (apiKey.trim()) config.builtinApiKeys[name] = apiKey.trim();
   else delete config.builtinApiKeys[name];
+  await writeProviderConfig(level, config, workspace);
+}
+
+/** 设置内置 provider 的 baseUrl 覆盖 */
+async function setBuiltinProviderBaseUrl(level: "user" | "workspace", name: string, baseUrl: string, workspace?: string): Promise<void> {
+  if (!RESERVED_PROVIDER_NAMES.includes(name)) throw new Error(`「${name}」不是内置 provider`);
+  const config = await readProviderConfig(level, workspace);
+  config.builtinBaseUrls = config.builtinBaseUrls || {};
+  if (baseUrl.trim()) config.builtinBaseUrls[name] = baseUrl.trim();
+  else delete config.builtinBaseUrls[name];
   await writeProviderConfig(level, config, workspace);
 }
 

@@ -102,6 +102,29 @@ function readAxonApiKey(): string {
 	return process.env.PROVIDER_AXON_API_KEY?.trim() || "";
 }
 
+/** 从 providers.json 读取 Axon 官方中转站地址，默认 sunnorthgod.top */
+function readAxonBaseUrl(): string {
+	try {
+		const raw = readFileSync(join(homedir(), ".axon", "settings", "providers.json"), "utf8");
+		const config = JSON.parse(raw) as { builtinBaseUrls?: Record<string, unknown> };
+		const url = config.builtinBaseUrls?.axon;
+		if (typeof url === "string" && url.trim()) return url.trim();
+	} catch {
+		/* 配置不存在时用默认值 */
+	}
+	return "https://ai.sunnorthgod.top:8443/v1";
+}
+
+/** 从 baseUrl 提取域名:端口（如 https://ai.sunnorthgod.top:8443/v1 → https://ai.sunnorthgod.top:8443） */
+function usageApiOrigin(baseUrl: string): string {
+	try {
+		const u = new URL(baseUrl);
+		return `${u.protocol}//${u.host}`;
+	} catch {
+		return "https://ai.sunnorthgod.top:8443";
+	}
+}
+
 let currentUsageSnapshot: AxonUsageStats = { usedCredits: 0, totalCredits: 0, updatedAt: null };
 
 function updateUsageCommand(item: vscode.StatusBarItem): void {
@@ -196,8 +219,9 @@ export function registerAxonUsageStatusBar(context: vscode.ExtensionContext): Ax
 				updateUsageCommand(item);
 				return;
 			}
+			const origin = usageApiOrigin(readAxonBaseUrl());
 			try {
-				const response = await fetch("https://ai.xn--djrq4gl4hvoi.top:8443/api/user/usage", {
+				const response = await fetch(`${origin}/api/user/usage`, {
 					headers: {
 						accept: "application/json",
 						"x-api-key": apiKey,
@@ -217,7 +241,6 @@ export function registerAxonUsageStatusBar(context: vscode.ExtensionContext): Ax
 				currentUsageSnapshot = usage;
 				item.tooltip = usageTooltip(usage, true);
 				updateUsageCommand(item);
-				console.warn(`[axon] 获取官方 Credits 用量失败：${(error as Error).message}`);
 			}
 		},
 		dispose() {
