@@ -18,6 +18,7 @@ import {
 } from "@/components/ToolCallItem";
 import type { Segment, ToolSegment, SubAgentSegment } from "./types";
 import { ReasoningBlock } from "./ReasoningBlock";
+import { RetryBlock } from "./RetryBlock";
 import { isRelayTool, relayToolLabel } from "./relayUtils";
 
 /** 从展示串行号区间（如 "1300-1415" / "2-EOF"）解析起始行号 */
@@ -313,6 +314,13 @@ export function renderSegments(
     // 子 Agent 委托段：折叠卡片（委托用的 skill 显示在卡片标题，不再外层单独飘一个）
     if (seg.type === "subagent") {
       nodes.push(<SubAgentCard key={`sub-${seg.id}`} seg={seg} />);
+      i++;
+      continue;
+    }
+
+    // 接口重试段
+    if (seg.type === "retry") {
+      nodes.push(<RetryBlock key={`retry-${i}`} attempt={seg.attempt} maxRetries={seg.maxRetries} error={seg.error} status={seg.status} />);
       i++;
       continue;
     }

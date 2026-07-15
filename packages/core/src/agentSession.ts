@@ -1176,41 +1176,101 @@ export class AgentSession {
     requestMessages: ChatCompletionMessageParam[],
     callbacks: LLMStreamCallbacks,
   ): Promise<LLMTurnResult> {
-    const turnSource = new StrategyTurnSource({
-      strategy,
-      model: this.model,
-      tools: this.getToolDefs(),
-      temperature: 0.2,
-      signal: this.abortController?.signal,
-      // 关键：把新链路的流式增量实时接到主循环 callbacks 上，让前端看到正常的思考/打字效果。
-      onReasoningDelta: (text, partIndex, itemId) => callbacks.onReasoningDelta(text, partIndex, itemId),
-      onTextDelta: (text) => callbacks.onTextDelta(text),
-    });
-    const handler = new DefaultLLMHandler(turnSource);
-    const draft = await handler.handle({
-      requestId: `req-${this.turnCount}`,
-      turnId: `turn-${this.turnCount}-${Date.now()}`,
-      effectiveMessages: requestMessages,
-    });
-    console.log(`[pipeline] 新链路驱动本回合，stage=${draft.stage}，toolDrafts=${draft.toolDrafts.length}`);
+    const MAX_RETRIES = 5;
+    let lastError: Error | null = null;
 
-    // 把新链路草案回填成老循环消费的 LLMTurnResult 形状。
-    // 工具草案 → NormalizedToolCall：id/name/arguments 与老协议一一对应，rawArgsText 即原始参数串。
-    const toolCalls: NormalizedToolCall[] = draft.toolDrafts.map((td) => ({
-      id: td.callId,
-      name: td.toolName,
-      arguments: td.rawArgsText ?? "",
-    }));
-    const normalized: NormalizedFinishReason = draft.finishReason ?? "complete";
-    return {
-      content: draft.contentDraft ?? "",
-      toolCalls,
-      // finishReason 是历史遗留的原始协议值字段；下游只消费 normalizedFinishReason，
-      // 这里用归一化值填充即可（不再有消费方读原始值做逻辑判断）。
-      finishReason: normalized,
-      normalizedFinishReason: normalized,
-      usage: draft.usage,
-    };
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const turnSource = new StrategyTurnSource({
+          strategy,
+          model: this.model,
+          tools: this.getToolDefs(),
+          temperature: 0.2,
+          signal: this.abortController?.signal,
+          // 关键：把新链路的流式增量实时接到主循环 callbacks 上，让前端看到正常的思考/打字效果。
+          onReasoningDelta: (text, partIndex, itemId) => callbacks.onReasoningDelta(text, partIndex, itemId),
+          onTextDelta: (text) => callbacks.onTextDelta(text),
+        });
+        const handler = new DefaultLLMHandler(turnSource);
+        const draft = await handler.handle({
+          requestId: `req-${this.turnCount}`,
+          turnId: `turn-${this.turnCount}-${Date.now()}`,
+          effectiveMessages: requestMessages,
+        });
+        console.log(`[pipeline] 新链路驱动本回合，stage=${draft.stage}，toolDrafts=${draft.toolDrafts.length}`);
+
+        // 把新链路草案回填成老循环消费的 LLMTurnResult 形状。
+        // 工具草案 → NormalizedToolCall：id/name/arguments 与老协议一一对应，rawArgsText 即原始参数串。
+        const toolCalls: NormalizedToolCall[] = draft.toolDrafts.map((td) => ({
+          id: td.callId,
+          name: td.toolName,
+          arguments: td.rawArgsText ?? "",
+        }));
+        const normalized: NormalizedFinishReason = draft.finishReason ?? "complete";
+        return {
+          content: draft.contentDraft ?? "",
+          toolCalls,
+          finishReason: normalized,
+          normalizedFinishReason: normalized,
+          usage: draft.usage,
+        };
+      } catch (err) {
+        const error = err as Error;
+        // 取消/中止：不重试，直接上抛
+        if (error.name === "AbortError" || error.message?.includes("aborted") || this.cancelled) {
+          throw err;
+        }
+        // 判断是否为可重试的瞬态错误（网络错误、429 限流、5xx 服务端错误）
+        if (!this.isRetryableError(error) || attempt >= MAX_RETRIES) {
+          if (this.isRetryableError(error)) {
+            // 重试耗尽
+            this.send("retry", { attempt: MAX_RETRIES, maxRetries: MAX_RETRIES, error: error.message, status: "failed" });
+          }
+          throw err;
+        }
+        lastError = error;
+        // 指数退避：1s, 2s, 4s, 8s, 16s
+        const delay = Math.min(1000 * Math.pow(2, attempt), 16000);
+        console.warn(`[pipeline] 接口失败（${error.message}），${delay / 1000}s 后第 ${attempt + 1} 次重试...`);
+        this.send("retry", { attempt: attempt + 1, maxRetries: MAX_RETRIES, error: error.message, status: "retrying" });
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        // 等待期间检查取消
+        if (this.cancelled) {
+          throw lastError;
+        }
+      }
+    }
+    // 不应到达这里（循环内已 return 或 throw），兜底上抛最后一个错误
+    throw lastError!;
+  }
+
+  /** 判断错误是否为可重试的瞬态错误 */
+  private isRetryableError(error: Error): boolean {
+    const msg = error.message || "";
+    // 网络错误
+    if (/ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|socket hang up|network|fetch failed/i.test(msg)) {
+      return true;
+    }
+    // HTTP 状态码判断（OpenAI SDK 的错误通常包含 status code）
+    const statusMatch = msg.match(/\b(\d{3})\b/);
+    if (statusMatch) {
+      const status = parseInt(statusMatch[1], 10);
+      // 429 限流、5xx 服务端错误可重试
+      if (status === 429 || (status >= 500 && status <= 599)) return true;
+    }
+    // 限流 / 过载
+    if (/rate.?limit|too many requests|overloaded|capacity|temporarily unavailable/i.test(msg)) {
+      return true;
+    }
+    // 服务端错误
+    if (/server error|internal error|bad gateway|service unavailable|gateway timeout/i.test(msg)) {
+      return true;
+    }
+    // 连接错误
+    if (/connection.*(?:reset|refused|error)|recv failure/i.test(msg)) {
+      return true;
+    }
+    return false;
   }
 
   /**

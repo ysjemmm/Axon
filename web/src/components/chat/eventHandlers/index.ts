@@ -16,7 +16,7 @@ import {
   handleCreditBudgetPaused,
 } from "./sessionHandlers";
 import {
-  handleStatus, handleTokenUsage, handleReasoningDelta,
+  handleStatus, handleRetry, handleTokenUsage, handleReasoningDelta,
   handleEditsUpdated, handleEditUndoResult,
   handleWorkspaceSet, handleEditModeSet, handleWorkspaceError,
   handleConfirmToolRequest, handleToolWaitingInput,
@@ -98,6 +98,9 @@ export function createEventHandler(ctx: EventHandlerCtx): (msg: WsMessage) => vo
       // ── 状态 ──
       case AGENT_EVENT.STATUS:
         handleStatus(msg, ctx);
+        return;
+      case AGENT_EVENT.RETRY:
+        handleRetry(msg, ctx);
         return;
       case AGENT_EVENT.REASONING_DELTA:
         handleReasoningDelta(msg, ctx);

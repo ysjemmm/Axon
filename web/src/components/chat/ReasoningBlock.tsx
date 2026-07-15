@@ -4,7 +4,7 @@
  */
 
 import { useState, useRef, useEffect, useMemo } from "react";
-import { ChevronRight } from "lucide-react";
+import { Brain } from "lucide-react";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 
 export function ReasoningBlock({ content, streaming }: { content: string; streaming?: boolean }) {
@@ -36,7 +36,7 @@ export function ReasoningBlock({ content, streaming }: { content: string; stream
         onClick={() => setExpanded(true)}
         className="flex items-center gap-1.5 py-0.5 text-[11px] text-muted-foreground/60 hover:text-muted-foreground transition-colors cursor-pointer"
       >
-        <ChevronRight className="w-3 h-3 shrink-0" />
+        <Brain className="w-3.5 h-3.5 shrink-0" />
         <span>思考过程</span>
       </button>
     );
@@ -49,7 +49,7 @@ export function ReasoningBlock({ content, streaming }: { content: string; stream
         onClick={() => setExpanded(false)}
         className="flex items-center gap-1.5 py-0.5 mb-1 text-[11px] text-muted-foreground/70 hover:text-muted-foreground transition-colors cursor-pointer"
       >
-        <ChevronRight className="w-3 h-3 shrink-0 rotate-90 transition-transform" />
+        <Brain className="w-3.5 h-3.5 shrink-0" />
         <span>思考过程</span>
       </button>
       <div

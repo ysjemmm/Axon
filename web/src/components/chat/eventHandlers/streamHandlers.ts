@@ -27,15 +27,17 @@ export function handleStreamStart(_msg: WsMessage, ctx: EventHandlerCtx): void {
           break;
         }
       }
-      const lastSeg = segs[segs.length - 1];
+      // 重试成功：移除 retry segment（重连已成功，不再需要展示）
+      const cleaned = segs.filter((s) => s.type !== "retry");
+      const lastSeg = cleaned[cleaned.length - 1];
       // 自动续写（finish_reason=length）时，现有 text segment 已有内容，
       // 新建一个 text segment 以区分两段内容，避免前后拼接导致时序混乱。
       if (lastSeg?.type === "text" && (lastSeg as any).content?.length > 0) {
-        segs.push({ type: "text", content: "" });
+        cleaned.push({ type: "text", content: "" });
       } else if (!lastSeg || lastSeg.type !== "text") {
-        segs.push({ type: "text", content: "" });
+        cleaned.push({ type: "text", content: "" });
       }
-      updated[updated.length - 1] = { ...last, segments: segs, streaming: true, turnStatus: "running", turnGen: ctx.turnGeneration.current };
+      updated[updated.length - 1] = { ...last, segments: cleaned, streaming: true, turnStatus: "running", turnGen: ctx.turnGeneration.current };
       return updated;
     }
     // 无符合条件的 assistant 消息 → 新建

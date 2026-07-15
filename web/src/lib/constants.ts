@@ -72,6 +72,7 @@ export const AGENT_EVENT = {
   CREDIT_BUDGET_PAUSED: "credit_budget_paused",
   // ── 状态 ──
   STATUS: "status",
+  RETRY: "retry",
   TOKEN_USAGE: "token_usage",
   EDITS_UPDATED: "edits_updated",
   EDIT_UNDO_RESULT: "edit_undo_result",

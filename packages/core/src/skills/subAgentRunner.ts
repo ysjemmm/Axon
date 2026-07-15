@@ -156,7 +156,7 @@ function isTransientNetworkError(err: unknown): boolean {
 }
 
 /** 子 Agent 单轮 LLM 调用的最大重试次数（不含首次尝试） */
-const SUBAGENT_TURN_MAX_RETRIES = 3;
+const SUBAGENT_TURN_MAX_RETRIES = 5;
 /** 重试退避基础间隔（ms），指数递增：500 / 1000 / 2000 */
 const SUBAGENT_RETRY_BASE_DELAY_MS = 500;
 

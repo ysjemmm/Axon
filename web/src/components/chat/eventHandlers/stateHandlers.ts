@@ -21,6 +21,39 @@ export function handleStatus(msg: WsMessage, ctx: EventHandlerCtx): void {
   ctx.setStatusPhase((msg as any).phase as string || "thinking");
 }
 
+export function handleRetry(msg: WsMessage, ctx: EventHandlerCtx): void {
+  const attempt = (msg as any).attempt as number;
+  const maxRetries = (msg as any).maxRetries as number;
+  const error = (msg as any).error as string;
+  const status = (msg as any).status as "retrying" | "failed";
+
+  ctx.setStatusText(status === "retrying" ? `正在重新连接 ${attempt}/${maxRetries}...` : "连接失败");
+  ctx.setStatusPhase("thinking");
+
+  ctx.setChatHistory((prev) => {
+    const updated = [...prev];
+    let last = updated[updated.length - 1];
+    // 确保有 assistant 消息
+    if (!last || last.role !== "assistant") {
+      last = { id: `assistant-${Date.now()}`, role: "assistant", segments: [], streaming: true, turnStatus: "running", turnGen: ctx.turnGeneration.current };
+      updated.push(last);
+    } else {
+      last = { ...last, segments: [...(last.segments || [])] };
+      updated[updated.length - 1] = last;
+    }
+    const segs = last.segments!;
+    // 找现有 retry segment 并更新，或新建一个
+    const retryIdx = segs.findIndex((s) => s.type === "retry");
+    const retrySeg = { type: "retry" as const, attempt, maxRetries, error, status };
+    if (retryIdx >= 0) {
+      segs[retryIdx] = retrySeg;
+    } else {
+      segs.push(retrySeg);
+    }
+    return updated;
+  });
+}
+
 export function handleTokenUsage(msg: WsMessage, ctx: EventHandlerCtx): void {
   ctx.setTokenUsage({
     used: msg.used as number,
