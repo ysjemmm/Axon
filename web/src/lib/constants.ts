@@ -73,6 +73,7 @@ export const AGENT_EVENT = {
   // ── 状态 ──
   STATUS: "status",
   RETRY: "retry",
+  CONTEXT_OVERFLOW: "context_overflow",
   TOKEN_USAGE: "token_usage",
   EDITS_UPDATED: "edits_updated",
   EDIT_UNDO_RESULT: "edit_undo_result",

@@ -601,6 +601,13 @@ export class AgentSession {
     await this.compactionController.compactSession();
   }
 
+  /** 强制压缩上下文（不检查阈值，用于上下文超限场景）。 */
+  async forceCompactSession(model?: string, provider?: string): Promise<void> {
+    if (model && model !== this.model) this.model = model;
+    if (provider && provider !== this.provider) this.provider = provider;
+    await this.compactionController.forceCompactSession();
+  }
+
   /**
    * 滚动摘要：异步把旧消息压成摘要，控制上下文体积。
    *
@@ -1224,7 +1231,7 @@ export class AgentSession {
         if (!this.isRetryableError(error) || attempt >= MAX_RETRIES) {
           if (this.isRetryableError(error)) {
             // 重试耗尽
-            this.send("retry", { attempt: MAX_RETRIES, maxRetries: MAX_RETRIES, error: error.message, status: "failed" });
+            this.send("retry", { attempt: MAX_RETRIES, maxRetries: MAX_RETRIES, error: this.formatUserFacingError(error), status: "failed" });
           }
           throw err;
         }
@@ -1232,7 +1239,7 @@ export class AgentSession {
         // 指数退避：1s, 2s, 4s, 8s, 16s
         const delay = Math.min(1000 * Math.pow(2, attempt), 16000);
         console.warn(`[pipeline] 接口失败（${error.message}），${delay / 1000}s 后第 ${attempt + 1} 次重试...`);
-        this.send("retry", { attempt: attempt + 1, maxRetries: MAX_RETRIES, error: error.message, status: "retrying" });
+        this.send("retry", { attempt: attempt + 1, maxRetries: MAX_RETRIES, error: this.formatUserFacingError(error), status: "retrying" });
         await new Promise((resolve) => setTimeout(resolve, delay));
         // 等待期间检查取消
         if (this.cancelled) {
@@ -1242,6 +1249,63 @@ export class AgentSession {
     }
     // 不应到达这里（循环内已 return 或 throw），兜底上抛最后一个错误
     throw lastError!;
+  }
+
+  /** 裁剪对用户展示的错误：保留有用摘要，避免把 HTML/堆栈整段塞进 UI。 */
+  private formatUserFacingError(error: Error): string {
+    const raw = error.message || String(error);
+    const firstLine = raw.split(/\r?\n/)[0]?.trim() || raw.trim();
+
+    // OpenAI SDK 常见格式："401 status code (no body)" / "502 status code"
+    const sdkStatus = firstLine.match(/^(\d{3})\s+status code(?:\s*\(([^)]*)\))?/i);
+    if (sdkStatus) {
+      const code = Number(sdkStatus[1]);
+      const reason = this.httpStatusText(code);
+      const noBody = /no body/i.test(sdkStatus[2] || firstLine);
+      return `HTTP ${code}${reason ? ` ${reason}` : ""}${noBody ? "（无响应体）" : ""}`;
+    }
+
+    // 常见 HTTP 错误：保留到 status text 为止，例如：HTTP 502 Bad Gateway / 429 Too Many Requests
+    const http = firstLine.match(/^(.*?HTTP\s+\d{3}\s+[^-:<\{\[]+)/i);
+    if (http?.[1]) return http[1].trim();
+
+    // JSON 错误体：尽量提取 error.message
+    const jsonStart = raw.indexOf("{");
+    if (jsonStart >= 0) {
+      try {
+        const obj = JSON.parse(raw.slice(jsonStart));
+        const msg = obj?.error?.message || obj?.message;
+        if (msg) return `${firstLine.slice(0, jsonStart).replace(/[-:\s]+$/, "").trim()} - ${String(msg).trim()}`.trim();
+      } catch {
+        // ignore parse failure
+      }
+    }
+
+    // HTML 错误页：只保留 HTML 前的摘要
+    const htmlIdx = firstLine.search(/<!DOCTYPE|<html|<body/i);
+    if (htmlIdx > 0) return firstLine.slice(0, htmlIdx).replace(/[-:\s]+$/, "").trim();
+
+    // 兜底：单行截断
+    return firstLine.length > 240 ? `${firstLine.slice(0, 240)}...` : firstLine;
+  }
+
+  private httpStatusText(code: number): string {
+    const map: Record<number, string> = {
+      400: "Bad Request",
+      401: "Unauthorized",
+      403: "Forbidden",
+      404: "Not Found",
+      408: "Request Timeout",
+      409: "Conflict",
+      413: "Payload Too Large",
+      422: "Unprocessable Entity",
+      429: "Too Many Requests",
+      500: "Internal Server Error",
+      502: "Bad Gateway",
+      503: "Service Unavailable",
+      504: "Gateway Timeout",
+    };
+    return map[code] || "";
   }
 
   /** 判断错误是否为可重试的瞬态错误 */
@@ -1271,6 +1335,12 @@ export class AgentSession {
       return true;
     }
     return false;
+  }
+
+  /** 判断错误是否为上下文窗口超限 */
+  private isContextOverflowError(error: Error): boolean {
+    const msg = error.message || "";
+    return /context.*(?:length|window|limit)|maximum.*context|token.*(?:limit|exceed)|too many tokens|exceed.*(?:context|window|token)|input.*too.*long/i.test(msg);
   }
 
   /**
@@ -1795,8 +1865,12 @@ export class AgentSession {
       }
       // 非取消异常：统一只展示给用户，不写入长期消息历史。
       // 这些内容属于异常态提示，不是任务事实；写入 messages 会污染后续轮次上下文。
-      const errMsg = `❌ 出错了: ${error.message}`;
+      const errMsg = `❌ 出错了: ${this.formatUserFacingError(error)}`;
       this.emitTransientError(errMsg, turnStartTime, streamedContentThisRound);
+      // 检测上下文超限：发专门事件，让前端显示"压缩上下文"引导
+      if (this.isContextOverflowError(error)) {
+        this.send("context_overflow", {});
+      }
       throw err; // 继续上抛让 sessionHub 做清理（runningSessions.delete 等）
     }
   }

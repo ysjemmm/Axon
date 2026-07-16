@@ -21,6 +21,10 @@ export function handleStatus(msg: WsMessage, ctx: EventHandlerCtx): void {
   ctx.setStatusPhase((msg as any).phase as string || "thinking");
 }
 
+export function handleContextOverflow(_msg: WsMessage, ctx: EventHandlerCtx): void {
+  ctx.setContextOverflow(true);
+}
+
 export function handleRetry(msg: WsMessage, ctx: EventHandlerCtx): void {
   const attempt = (msg as any).attempt as number;
   const maxRetries = (msg as any).maxRetries as number;

@@ -19,10 +19,13 @@ export function RetryBlock({ attempt, maxRetries, error, status }: RetryBlockPro
 
   if (status === "failed") {
     return (
-      <div className="flex items-start gap-2 py-1.5 px-2.5 rounded-md bg-destructive/10 text-destructive text-xs">
-        <CircleAlert className="w-4 h-4 shrink-0 mt-0.5" />
-        <div className="min-w-0">
-          <p className="font-medium">exceeded retry limit, last status: {error}</p>
+      <div className="flex flex-col gap-1 py-1.5 text-xs text-destructive">
+        <div className="flex items-center gap-2">
+          <CircleAlert className="w-4 h-4 shrink-0" />
+          <span className="font-medium">重试次数已用尽</span>
+        </div>
+        <div className="ml-6 max-h-24 overflow-y-auto rounded-md bg-destructive/10 px-2 py-1.5 text-destructive/90 break-words">
+          {error}
         </div>
       </div>
     );
@@ -39,7 +42,9 @@ export function RetryBlock({ attempt, maxRetries, error, status }: RetryBlockPro
         <ChevronDown className={`w-3 h-3 shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`} />
       </button>
       {expanded && (
-        <p className="pl-6 text-muted-foreground/70 break-all">{error}</p>
+        <div className="ml-6 max-h-24 overflow-y-auto rounded-md bg-muted/40 px-2 py-1.5 text-muted-foreground/70 break-words">
+          {error}
+        </div>
       )}
     </div>
   );

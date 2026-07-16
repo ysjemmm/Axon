@@ -420,12 +420,12 @@ input[type="file"],
 
 
 /* 等宽字体覆盖：对齐 VS Code / Kiro 的编辑器字体体验。
-   Cascadia Code 是微软为编程设计的等宽字体（Windows 11 自带），
-   回退到 Consolas（Windows）/ Menlo（macOS）/ DejaVu Sans Mono（Linux）。
+   JetBrains Mono 是高辨识度编程字体（需用户安装或 CDN 引入），
+   回退到 Cascadia Code（Windows 11 自带）/ Consolas / Menlo / DejaVu Sans Mono。
    Tailwind 的 font-mono 全局引用 --font-mono，这里一处改所有 font-mono 都生效：
    markdown 代码块、diff 面板、工具卡片路径标签等。 */
 :root {
-  --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace;
+  --font-mono: "JetBrains Mono", "JetBrains Mono Variable", "Cascadia Code", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace;
 }
 
 

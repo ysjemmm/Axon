@@ -16,7 +16,7 @@ import {
   handleCreditBudgetPaused,
 } from "./sessionHandlers";
 import {
-  handleStatus, handleRetry, handleTokenUsage, handleReasoningDelta,
+  handleStatus, handleRetry, handleContextOverflow, handleTokenUsage, handleReasoningDelta,
   handleEditsUpdated, handleEditUndoResult,
   handleWorkspaceSet, handleEditModeSet, handleWorkspaceError,
   handleConfirmToolRequest, handleToolWaitingInput,
@@ -101,6 +101,9 @@ export function createEventHandler(ctx: EventHandlerCtx): (msg: WsMessage) => vo
         return;
       case AGENT_EVENT.RETRY:
         handleRetry(msg, ctx);
+        return;
+      case AGENT_EVENT.CONTEXT_OVERFLOW:
+        handleContextOverflow(msg, ctx);
         return;
       case AGENT_EVENT.REASONING_DELTA:
         handleReasoningDelta(msg, ctx);

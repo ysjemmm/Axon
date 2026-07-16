@@ -27,6 +27,17 @@ export class CompactionController {
       this.s.send("compacting_end", { success: false, message: "当前上下文未超过模型窗口的 35%，无需压缩" });
       return;
     }
+    await this.doCompact("上下文已手动压缩");
+  }
+
+  /** 强制压缩上下文（不检查阈值，用于上下文超限场景）。 */
+  async forceCompactSession(): Promise<void> {
+    if (this.s.isCompacting) return;
+    await this.doCompact("上下文已压缩（因超出模型窗口限制）");
+  }
+
+  /** 实际执行压缩的内部方法 */
+  private async doCompact(successMessage: string): Promise<void> {
     this.s.isCompacting = true;
     this.s.send("compacting_start", {});
     try {
@@ -34,8 +45,8 @@ export class CompactionController {
       this.s.send("status", { content: "整理上下文..." });
       this.s.messages = await compactMessages(this.s.messages, strategy, this.s.model);
       this.s.isCompacting = false;
-      this.s.lastPromptTokens = 0; // 重置缓存，让 updateAndSendTokenUsage 从压缩后的 messages 重新估算
-      this.s.send("compacting_end", { success: true, message: "上下文已手动压缩" });
+      this.s.lastPromptTokens = 0;
+      this.s.send("compacting_end", { success: true, message: successMessage });
       this.s.persistMessages();
       this.s.updateAndSendTokenUsage();
     } catch (err) {

@@ -137,6 +137,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const [waitingInputIds, setWaitingInputIds] = useState<Set<string>>(new Set());
   const [commandApprovals, setCommandApprovals] = useState<Record<string, CommandApproval>>({});
   const [commandBlocked, setCommandBlocked] = useState<{ requestId?: string; command: string; reason: string; dangerous?: boolean } | null>(null);
+  const [contextOverflow, setContextOverflow] = useState(false);
   const [messageQueue, setMessageQueue] = useState<Array<{ id: string; payload: SubmitPayload }>>([]);
 
   // ── refs ───────────────────────────────────────────────────────────
@@ -194,6 +195,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     setCreditBudgetPaused,
     setPendingPaths, setPendingDiffs, setPendingExpanded, setUndoNotice,
     setToolConfirm, setWaitingInputIds, setCommandApprovals, setCommandBlocked,
+    setContextOverflow,
     cancelled, cancelledTurnMsgId, turnGeneration,
     modelRef, statusPhaseRef, toolResultResetTimer,
     compactionMigratedRef, onSessionCreatedRef, onCompactionMigratedRef,
@@ -522,6 +524,15 @@ export function useChatSession(opts: UseChatSessionOptions) {
   /** 单纯关闭危险提示（无 requestId 的旧版硬拦） */
   const dismissCommandBlocked = useCallback(() => setCommandBlocked(null), []);
 
+  /** 关闭上下文超限提示条 */
+  const dismissContextOverflow = useCallback(() => setContextOverflow(false), []);
+
+  /** 强制压缩上下文（不检查阈值，用于上下文超限场景） */
+  const forceCompact = useCallback(() => {
+    setContextOverflow(false);
+    send({ type: "force_compact_session", model, provider: providerState });
+  }, [send, model, providerState]);
+
   /** 选择模型：持久化 + 更新 token 上下文窗口 */
   const selectWorkspace = useCallback((path: string) => {
     setWorkspace(path);
@@ -554,6 +565,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     messageQueue, toolConfirm,
     waitingInputIds,
     commandApprovals, commandBlocked,
+    contextOverflow, dismissContextOverflow, forceCompact,
     editMode, workspace, workspaces, workspacesLoaded, currentGroupId, hasRelay, model, provider: providerState,
     // 撤销轻提示
     undoNotice, setUndoNotice,

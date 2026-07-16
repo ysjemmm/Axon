@@ -8,7 +8,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Send, Loader2, Copy, ImagePlus, X, Paperclip, Plus, Camera, Feather, Check, ChevronDown, ListChecks, Sparkles, Globe, ShieldAlert, Undo2, Minimize2 } from "lucide-react";
+import { Send, Loader2, Copy, ImagePlus, X, Paperclip, Plus, Camera, Feather, Check, ChevronDown, ListChecks, Sparkles, Globe, ShieldAlert, Undo2, Minimize2, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -344,7 +344,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   };
 
   const handleSend = () => {
-    if (session.isCompacting) return;
+    if (session.isCompacting || session.contextOverflow) return;
     // 无工作区时不允许发送——引导用户先添加工作区
     if (mode !== "quest" && session.workspacesLoaded && !session.workspace && session.workspaces.length === 0) {
       setPickerOpen(true);
@@ -1141,6 +1141,26 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             </div>
           )}
           {/* 命令信任授权改为内联在对应命令卡片下方（无感模式），见 ToolCallItem。此处不再用模态弹窗 */}
+          {/* 上下文超限提示：引导用户压缩上下文 */}
+          {session.contextOverflow && (
+            <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded-lg mb-2">
+              <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
+              <p className="flex-1 text-xs text-foreground">上下文超出模型窗口限制，无法继续对话</p>
+              <button
+                onClick={session.forceCompact}
+                className="px-2.5 py-1 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shrink-0"
+              >
+                压缩上下文
+              </button>
+              <button
+                onClick={session.dismissContextOverflow}
+                className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors shrink-0"
+                title="关闭"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
           {/* 输入框：contentEditable 富文本，tag 内联在光标处（MentionEditor） */}
           <div className="px-3 pr-10 pt-2 pb-1">
             <MentionEditor
@@ -1164,8 +1184,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                 provider={session.provider}
                 onChange={handleModelChange}
                 disabledModels={images.length > 0 ? models.filter((m) => !m.vision).map((m) => m.id) : []}
-                disabled={session.isCompacting}
-                disabledTooltip="压缩期间不可切换模型"
+                disabled={session.isCompacting || session.contextOverflow}
+                disabledTooltip={session.contextOverflow ? "上下文超限，请先压缩" : "压缩期间不可切换模型"}
               />
 
               <Popover open={menuOpen} onOpenChange={setMenuOpen}>
@@ -1322,14 +1342,14 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                   <TooltipTrigger asChild>
                     <button
                       onClick={() => session.compactSession()}
-                      disabled={session.isCompacting || session.isLoading || session.chatHistory.length < 6 || (session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35)}
+                      disabled={session.isCompacting || session.contextOverflow || session.isLoading || session.chatHistory.length < 6 || (session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35)}
                       className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                     >
                       {session.isCompacting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Minimize2 className="w-3.5 h-3.5" />}
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="top" align="end" className="max-w-[220px] border-zinc-700 bg-zinc-900 text-white shadow-xl">
-                    <p className="text-xs text-zinc-200">{session.isCompacting ? (session.compactingMessage || "压缩进行中，不可操作") : session.isLoading ? "当前 AI 会话正在继续，不能压缩" : session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35 ? "上下文未超过 35%，禁止手动压缩" : "压缩上下文"}</p>
+                    <p className="text-xs text-zinc-200">{session.isCompacting ? (session.compactingMessage || "压缩进行中，不可操作") : session.contextOverflow ? "请使用上方的压缩按钮" : session.isLoading ? "当前 AI 会话正在继续，不能压缩" : session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35 ? "上下文未超过 35%，禁止手动压缩" : "压缩上下文"}</p>
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
@@ -1346,7 +1366,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                 <Button
                   size="sm"
                   onClick={handleSend}
-                  disabled={!connected || (composerEmpty && images.length === 0) || !!session.compactionMigrated || session.isCompacting}
+                  disabled={!connected || (composerEmpty && images.length === 0) || !!session.compactionMigrated || session.isCompacting || session.contextOverflow}
                   className="h-7 w-7 rounded-full shrink-0"
                 >
                   <Send className="w-3.5 h-3.5" />

@@ -44,6 +44,7 @@ export interface EventHandlerCtx {
   setWaitingInputIds: (s: Set<string> | ((prev: Set<string>) => Set<string>)) => void;
   setCommandApprovals: (c: Record<string, CommandApproval> | ((prev: Record<string, CommandApproval>) => Record<string, CommandApproval>)) => void;
   setCommandBlocked: (c: { requestId?: string; command: string; reason: string; dangerous?: boolean } | null) => void;
+  setContextOverflow: (b: boolean) => void;
 
   // ── refs（跨事件共享的可变状态） ──
   cancelled: MutableRefObject<boolean>;

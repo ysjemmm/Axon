@@ -61,6 +61,7 @@ export type ControlCommandPayload =
   // 上下文压缩。model/provider 可选：前端切换了模型选择器但尚未发送消息时，
   // 会话内部的 model/provider 仍是上一条消息用的值，需要带上前端当前选中值同步。
   | { type: "compact_session"; model?: string; provider?: string }
+  | { type: "force_compact_session"; model?: string; provider?: string }
   | { type: "compaction_choice"; choice: "continue" | "new_session" }
   // Credits 预算门：硬暂停触发时用户的继续/停止决策
   | { type: "credit_budget_choice"; choice: "continue" | "stop" }

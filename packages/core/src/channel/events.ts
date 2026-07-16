@@ -37,6 +37,7 @@ export type AgentEventPayload =
   | { type: "reasoning_delta"; content: string; partIndex?: number; itemId?: string }
   | { type: "status"; content: string }
   | { type: "retry"; attempt: number; maxRetries: number; error: string; status: "retrying" | "failed" }
+  | { type: "context_overflow" }
   | { type: "compacted"; message: string }
   | { type: "compacting_start" }
   | { type: "compacting_end"; success: boolean; message: string }

@@ -383,6 +383,9 @@ export class SessionHub {
       case "compact_session":
         this.getActiveSession(this.resolveSessionId(cmd))?.compactSession(cmd.model, cmd.provider);
         return;
+      case "force_compact_session":
+        this.getActiveSession(this.resolveSessionId(cmd))?.forceCompactSession((cmd as any).model, (cmd as any).provider);
+        return;
       case "compaction_choice": {
         const sid = this.resolveSessionId(cmd);
         const session = this.getActiveSession(sid);
