@@ -129,6 +129,8 @@ export const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>
         e.preventDefault();
         e.stopPropagation();
         dataMap.current.delete(cid);
+        if (hideTimer.current) window.clearTimeout(hideTimer.current);
+        setPreview(null);
         span.remove();
         refreshEmpty();
         onChange?.("");

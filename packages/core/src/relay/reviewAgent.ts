@@ -75,23 +75,20 @@ export function parseVerdict(text: string): ReviewVerdict {
   // 归一化：去掉 markdown 强调符与全角冒号，便于匹配
   const norm = text.replace(/[*_`]/g, "").replace(/：/g, ":");
 
-  // 多重信号识别 PASS / FAIL
+  // 多重信号识别 PASS / FAIL（仅作为参考；最终是否阻塞以 critical 问题为准）
   const failSignal = /VERDICT:\s*FAIL|结论:\s*(不通过|未通过|失败|拒绝)|评审(不通过|未通过|失败)|\b(REJECT(ED)?|FAILED)\b/i.test(norm);
   const passSignal = /VERDICT:\s*PASS|结论:\s*(通过|合格|无问题)|评审通过|\b(APPROVED?|PASSED)\b/i.test(norm);
 
-  let passed: boolean;
-  if (failSignal && !passSignal) {
-    passed = false;
-  } else if (passSignal && !failSignal) {
-    passed = true;
-  } else {
-    // 信号缺失或冲突：用 critical 兜底——无 critical 视为通过，有 critical 判否。
-    // 这样即使模型没输出机器标记，也能依据它列出的问题做合理判定，而不是一律保守判否。
-    passed = !hasCritical;
-  }
+  // Relay 需要尽量自动化：只有 critical 级别问题才阻断执行。
+  // major/minor 作为评审建议保留在反馈中，但不要求人工介入或反复重审。
+  // 若模型给了 FAIL 但没有按要求列出 critical，则将其视为非阻塞建议，避免评审过严导致流水线停住。
+  let passed = !hasCritical;
 
-  // critical 一票否决：无论信号如何，有 critical 必不通过
-  if (hasCritical) passed = false;
+  // 对完全无结构化问题、但文本明确描述灾难性失败的情况做保守兜底。
+  if (!hasCritical && failSignal && !passSignal && /严重|致命|破坏|无法运行|未实现|假实现|核心功能缺失|critical/i.test(norm)) {
+    passed = false;
+    issues.push({ severity: "critical", description: "评审文本指出存在严重阻断问题，但未按格式列出 [critical] 条目。" });
+  }
 
   const summary = norm.replace(/VERDICT:\s*(PASS|FAIL)/i, "").trim().slice(0, 600);
   return { passed, issues, summary };
@@ -114,7 +111,8 @@ function buildSpecPrompt(ctx: ReviewContext): string {
     `3. 有没有"看起来做了但实际是占位/TODO/假实现"的情况？\n\n` +
     `输出：先给简明评审小结，逐条列出问题（用 [critical]/[major]/[minor] 前缀），` +
     `最后【单独一行】输出机器标记：VERDICT: PASS 或 VERDICT: FAIL。` +
-    `只有"本子任务内容完整、未跑偏、无假实现"才 PASS。`
+    `只有会导致本子任务核心目标未达成、假实现、严重跑偏的 [critical] 问题才 FAIL；` +
+    `普通遗漏、可后续优化、风格或边界建议标 [major]/[minor]，不得阻断自动执行。`
   );
 }
 
@@ -134,7 +132,8 @@ function buildQualityPrompt(ctx: ReviewContext): string {
     `4. 命名、风格是否与项目现有约定一致？\n\n` +
     `输出：先给简明评审小结，逐条列出问题（用 [critical]/[major]/[minor] 前缀），` +
     `最后【单独一行】输出机器标记：VERDICT: PASS 或 VERDICT: FAIL。` +
-    `结构性缺陷（破坏现有逻辑、严重坏味道）判 critical → FAIL；纯风格小问题判 minor 可 PASS。`
+    `只有会破坏现有逻辑、导致无法运行、数据损坏、安全风险、严重架构错误的 [critical] 问题才 FAIL；` +
+    `普通坏味道、重复、命名/风格、可改进边界处理标 [major]/[minor]，不得阻断自动执行。`
   );
 }
 

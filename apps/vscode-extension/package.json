@@ -238,6 +238,16 @@
         "title": "Axon: 聚焦对话面板"
       },
       {
+        "command": "axon.addResourceToChat",
+        "title": "Axon: 添加到对话上下文",
+        "icon": "$(comment-add)"
+      },
+      {
+        "command": "axon.relay.refresh",
+        "title": "刷新 Relay 列表",
+        "icon": "$(refresh)"
+      },
+      {
         "command": "axon.openRelay",
         "title": "Axon: 打开 Relay"
       },
@@ -410,6 +420,12 @@
       }
     ],
     "menus": {
+      "explorer/context": [
+        {
+          "command": "axon.addResourceToChat",
+          "group": "navigation@9"
+        }
+      ],
       "editor/lineNumber/context": [
         {
           "command": "axon.git.toggleBlameAnnotation",
@@ -504,6 +520,11 @@
         }
       ],
       "view/title": [
+        {
+          "command": "axon.relay.refresh",
+          "when": "view == axon.relay",
+          "group": "navigation"
+        },
         {
           "command": "axon.skill.create",
           "when": "view == axon.customSkills",

@@ -93,8 +93,10 @@ export class ToolDefBuilder {
             "3. plan：拆成小颗粒可独立验证任务清单（2-5min/项），relay_save_doc(phase=\"plan\") 写 plan.md【必须用复选框格式】。\n" +
             "   拆任务铁律：按纵向功能单元拆（导航栏/表单/图表等），严禁按\"HTML一个任务、CSS一个任务\"横切。\n" +
             "4. executing（用户确认后 relay_advance 推进）：逐项 relay_update_task(in_progress) → 实现 → 自测 → relay_review_task 评审 → relay_update_task(completed)，一口气跑完。\n\n" +
-            "【确认门】每阶段写完文档后必须停下来等用户确认（relay_advance 在下一条消息里调），一条消息最多推一个阶段。\n" +
-            "【评审门】任务未通过 relay_review_task 不能标 completed，被打回必须逐条修复后重审。\n" +
+            "【执行模式】创建时须问用户偏好（如果用户没提前说明的话）：\n" +
+            "- strict（默认）：每阶段写完文档后停下等用户确认再推进。用户说\"继续\"\"可以\"即视为确认。\n" +
+            "- auto：全自动推进，不等每阶段确认。简要呈现文档要点后直接连续推进到执行。\n\n" +
+            "【评审门】只有 critical 级别问题才阻断任务完成，major/minor 作为建议不阻断。\n" +
             "【连续执行】进入 executing 后连续推进所有任务，仅评审打回/环境阻塞/全部完成时停下。\n" +
             "【parallel_research】并发布多个只读子 Agent 调研互不依赖的子问题。\n\n" +
             "【模型选择】默认所有阶段和评审都用当前会话模型。仅当用户明确提出\"评审用更强的模型\"" +
@@ -104,6 +106,7 @@ export class ToolDefBuilder {
             properties: {
               title: { type: "string", description: "任务标题（简短，作为 relay 标识，如\"用户登录功能\"）" },
               summary: { type: "string", description: "一句话目标摘要" },
+              mode: { type: "string", enum: ["strict", "auto"], description: "执行模式：strict=每阶段等用户确认（默认），auto=全自动连续推进。创建前应询问用户偏好" },
               tdd: { type: "boolean", description: "是否强制 TDD（先写失败测试→实现→测试通过）。默认 false。用户明确要求测试驱动时设 true" },
               review: { type: "boolean", description: "是否启用两阶段评审（规格符合性+代码质量）。默认 true，强烈建议保持开启" },
               modelOverrides: {
@@ -135,7 +138,7 @@ export class ToolDefBuilder {
             "- [ ] 1. 顶层任务标题\n" +
             "  - [ ] 1.1 子任务，说明涉及哪些文件、怎么验证\n" +
             "- [ ] 2. 下一个任务\n\n" +
-            "写完文档后【停下来】把要点分段呈现给用户，等用户确认后再用 relay_advance 推进。不要自己直接推进。",
+            "写完文档后把要点简洁呈现给用户。strict 模式等用户确认再推进；auto 模式可直接推进。",
           parameters: {
             type: "object",
             properties: {

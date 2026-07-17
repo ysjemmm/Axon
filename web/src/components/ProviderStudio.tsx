@@ -18,6 +18,7 @@ import {
   getProviders,
   setBuiltinProviderKey,
   setBuiltinProviderBaseUrl,
+  setBuiltinProviderModels,
   addCustomProvider,
   removeCustomProvider,
   setCustomProviderModels,
@@ -213,7 +214,21 @@ function BuiltinCard({ provider, level, workspace, onChanged }: { provider: Reso
       {errorMessage && <div className="mt-2 text-xs text-red-600 dark:text-red-400">{errorMessage}</div>}
       {expanded && (
         <div className="mt-2 pt-2 border-t border-border/60">
-          <ModelManager models={provider.models} editable={false} />
+          <ModelManager
+            models={provider.models}
+            editable={true}
+            providerName={provider.name}
+            level={level}
+            workspace={workspace}
+            onSave={async (models) => {
+              try {
+                await setBuiltinProviderModels(level, provider.name, models, workspace);
+                onChanged();
+              } catch (e) {
+                setErrorMessage(`保存模型失败: ${(e as Error).message}`);
+              }
+            }}
+          />
         </div>
       )}
     </div>

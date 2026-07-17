@@ -420,6 +420,12 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.commands.executeCommand("workbench.action.focusAuxiliaryBar");
       vscode.commands.executeCommand("axon.chat.focus");
     }),
+    vscode.commands.registerCommand("axon.addResourceToChat", async (uri?: vscode.Uri) => {
+      if (!uri) return;
+      await vscode.commands.executeCommand("workbench.action.focusAuxiliaryBar");
+      await vscode.commands.executeCommand("axon.chat.focus");
+      await provider.addResourceContextFromCommand(uri);
+    }),
     // 终端选区 → 添加到 Axon 对话（由 workbench 终端浮动按钮触发）
     vscode.commands.registerCommand("axon.addTerminalSelectionToChat", async (payload?: { text?: string; lineCount?: number; terminalName?: string }) => {
       if (!payload || typeof payload.text !== "string" || !payload.text.trim()) return;
@@ -511,6 +517,15 @@ export function activate(context: vscode.ExtensionContext): void {
       } catch (err) {
         vscode.window.showErrorMessage(`删除失败：${(err as Error).message}`);
       }
+    }),
+    vscode.commands.registerCommand("axon.relay.refresh", async () => {
+      try {
+        const { RelayStore } = await import("@axon/core");
+        const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+        const store = new RelayStore(defaultWorkspace, createHost());
+        const relays = await store.list();
+        relayTree.refresh(relays.map((r) => ({ id: r.id, title: r.title, phase: r.phase })));
+      } catch { /* ignore */ }
     }),
     vscode.commands.registerCommand("axon.openSkill", async (arg?: { name?: string; source?: string; skillFile?: string; create?: boolean }) => {
       // builtin skill：无实体文件，正文在内存常量里。提示用户这是内置 skill

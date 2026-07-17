@@ -83,12 +83,15 @@ export interface RelayQualityConfig {
   tdd: boolean;
   /** 是否启用两阶段评审（规格符合性 + 代码质量）。默认 true */
   review: boolean;
+  /** 执行模式：strict=每阶段等用户确认再推进，auto=连续推进不等确认。默认 strict */
+  mode?: "strict" | "auto";
 }
 
 /** 默认质量门配置 */
 export const DEFAULT_QUALITY_CONFIG: RelayQualityConfig = {
   tdd: false,
   review: true,
+  mode: "strict",
 };
 
 /**

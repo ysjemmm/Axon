@@ -196,6 +196,16 @@ export class RelayStore {
     return this.get(id);
   }
 
+  /** 更新质量门配置（如切换 mode） */
+  async updateQuality(id: string, patch: Partial<RelayQualityConfig>): Promise<RelayData | null> {
+    const meta = await this.readMeta(id);
+    if (!meta) return null;
+    meta.quality = { ...(meta.quality || { tdd: false, review: true, mode: "strict" }), ...patch };
+    meta.updatedAt = new Date().toISOString();
+    await this.writeMeta(meta);
+    return this.get(id);
+  }
+
   /**
    * 更新单个任务状态，同时回写 plan.md 复选框与 relay.json.tasks。
    * @returns 更新后的完整 relay

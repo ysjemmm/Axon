@@ -99,4 +99,6 @@ export interface ProviderConfigFile {
   builtinApiKeys?: Record<string, string>;
   /** 覆盖内置 provider 的 baseUrl（默认取 providerCatalog 定义） */
   builtinBaseUrls?: Record<string, string>;
+  /** 覆盖内置 provider 的模型列表（增删后整存；不设则取 providerCatalog 默认模型） */
+  builtinModels?: Record<string, unknown[]>;
 }

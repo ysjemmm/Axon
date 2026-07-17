@@ -79,7 +79,7 @@ export type ControlCommandPayload =
   // Relay
   | { type: "delete_relay"; relayId: string; workspace?: string }
   // 工具确认（用户确认/拒绝创建 Relay 等需要确认的操作）
-  | { type: "confirm_tool"; confirmed: boolean }
+  | { type: "confirm_tool"; confirmed: boolean; mode?: "strict" | "auto" }
   // 命令信任授权（用户对未信任命令的三档决策）
   | {
       type: "confirm_command";

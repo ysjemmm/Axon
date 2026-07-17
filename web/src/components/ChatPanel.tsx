@@ -624,15 +624,66 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    // 1) 操作系统文件拖入（dataTransfer.files）
     const files = Array.from(e.dataTransfer.files);
-    if (files.length === 0) return;
-    const imgs = files.filter((f) => f.type.startsWith("image/"));
-    const docs = files.filter((f) => !f.type.startsWith("image/"));
-    if (imgs.length > 0 && currentModelVision) addImages(imgs);
-    if (docs.length > 0) addFiles(docs);
+    if (files.length > 0) {
+      const imgs = files.filter((f) => f.type.startsWith("image/"));
+      const docs = files.filter((f) => !f.type.startsWith("image/"));
+      if (imgs.length > 0 && currentModelVision) addImages(imgs);
+      if (docs.length > 0) addFiles(docs);
+      return;
+    }
+    // 2) VS Code 文件树拖入（text/uri-list 或 text/plain 含 file:// URI）
+    const uriList = e.dataTransfer.getData("text/uri-list") || e.dataTransfer.getData("text/plain") || "";
+    if (uriList) {
+      const uris = uriList.split(/\r?\n/).map((s) => s.trim()).filter((s) => s && !s.startsWith("#"));
+      const filePaths: string[] = [];
+      for (const uri of uris) {
+        try {
+          if (uri.startsWith("file://")) {
+            const decoded = decodeURIComponent(uri.replace(/^file:\/\/\/?/, ""));
+            const path = /^\/[A-Za-z]:/.test(decoded) ? decoded.slice(1) : decoded;
+            filePaths.push(path);
+          } else if (/^[A-Za-z]:[\\/]/.test(uri) || uri.startsWith("/")) {
+            filePaths.push(uri);
+          }
+        } catch { /* ignore malformed URI */ }
+      }
+      if (filePaths.length > 0) {
+        // 通过扩展后端读取文件内容后注入 tag
+        session.send({ type: "read_dropped_files", paths: filePaths });
+      }
+    }
   };
 
   const removeImage = (index: number) => setImages((prev) => prev.filter((_, i) => i !== index));
+
+  // 监听 IDE Shell 原生 drop 转发的 explorer_drop 消息（从文件树拖文件到 Axon webview 容器）
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      const data = e.data;
+      if (!data || typeof data !== "object" || data.type !== "explorer_drop") return;
+      const uris = data.uris as string[] | undefined;
+      if (!Array.isArray(uris) || uris.length === 0) return;
+      const filePaths: string[] = [];
+      for (const uri of uris) {
+        try {
+          if (uri.startsWith("file://")) {
+            const decoded = decodeURIComponent(uri.replace(/^file:\/\/\/?/, ""));
+            const path = /^\/[A-Za-z]:/.test(decoded) ? decoded.slice(1) : decoded;
+            filePaths.push(path);
+          } else if (/^[A-Za-z]:[\\/]/.test(uri) || uri.startsWith("/")) {
+            filePaths.push(uri);
+          }
+        } catch { /* ignore */ }
+      }
+      if (filePaths.length > 0) {
+        session.send({ type: "read_dropped_files", paths: filePaths });
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, [session]);
 
   const readFileAsText = (file: File): Promise<string> => new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -996,12 +1047,31 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                   ? `AI 请求调用 MCP 工具「${session.toolConfirm.title}」`
                   : `AI 建议创建 Relay 工作流「${session.toolConfirm.title}」`}
               </span>
-              <button
-                onClick={() => session.confirmTool(true)}
-                className="px-2.5 py-1 rounded text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-              >
-                确认
-              </button>
+              {session.toolConfirm.kind === "relay" ? (
+                <>
+                  <button
+                    onClick={() => session.confirmTool(true, { mode: "strict" })}
+                    className="px-2.5 py-1 rounded text-xs font-medium bg-amber-500/80 text-white hover:bg-amber-500 transition-colors"
+                    title="每阶段等用户确认再推进"
+                  >
+                    严格模式
+                  </button>
+                  <button
+                    onClick={() => session.confirmTool(true, { mode: "auto" })}
+                    className="px-2.5 py-1 rounded text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                    title="全自动连续推进，不等确认"
+                  >
+                    全自动
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => session.confirmTool(true)}
+                  className="px-2.5 py-1 rounded text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                >
+                  确认
+                </button>
+              )}
               <button
                 onClick={() => session.confirmTool(false)}
                 className="px-2.5 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"

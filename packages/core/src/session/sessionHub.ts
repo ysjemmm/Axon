@@ -416,7 +416,8 @@ export class SessionHub {
       case "delete_relay":
         return this.handleDeleteRelay(cmd, clientId, primaryWorkspace);
       case "confirm_tool":
-        this.getActiveSession(this.resolveSessionId(cmd))?.resolveToolConfirmation(cmd.confirmed);
+        this.getActiveSession(this.resolveSessionId(cmd))?.resolveToolConfirmation(cmd.confirmed, (cmd as any).mode);
+        return;
         return;
       case "confirm_command":
         this.getActiveSession(this.resolveSessionId(cmd))?.resolveCommandApproval(cmd.requestId, { choice: cmd.choice, pattern: cmd.pattern, target: cmd.target, editedCommand: cmd.editedCommand });

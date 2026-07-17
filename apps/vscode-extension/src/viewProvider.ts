@@ -169,6 +169,16 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
+      // 从文件树拖入文件：读取内容后作为上下文注入输入框
+      if (m.type === "read_dropped_files" && Array.isArray(m.paths)) {
+        const clientId = typeof m.clientId === "string" ? (m.clientId as string) : undefined;
+        for (const p of m.paths as string[]) {
+          if (typeof p !== "string") continue;
+          await this.pushResourceContext(p, "file", clientId);
+        }
+        return;
+      }
+
       // 把“当前文件的问题/诊断”作为上下文加入输入框
       if (m.type === "add_diagnostics_context") {
         await this.pushDiagnosticsContext(
@@ -345,6 +355,12 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
 
   postToWebview(message: unknown): void {
     void this.view?.webview.postMessage(message);
+  }
+
+  /** 从扩展命令把资源加入聊天输入框（用于资源管理器右键菜单）。 */
+  async addResourceContextFromCommand(uri: vscode.Uri): Promise<void> {
+    const stat = await vscode.workspace.fs.stat(uri);
+    await this.pushResourceContext(uri.fsPath, stat.type === vscode.FileType.Directory ? "folder" : "file");
   }
 
   /** 资源条目（回传给 webview 斜杠命令菜单） */

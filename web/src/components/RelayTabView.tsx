@@ -182,6 +182,9 @@ export function RelayTabView({ workspace, relayId }: RelayTabViewProps) {
         </div>
         {/* 质量门标识 */}
         <div className="flex items-center gap-2 mt-2">
+          <span className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded ${relay.quality?.mode === "auto" ? "bg-blue-500/10 text-blue-600 dark:text-blue-400" : "bg-amber-500/10 text-amber-600 dark:text-amber-400"}`}>
+            {relay.quality?.mode === "auto" ? "全自动" : "严格模式"}
+          </span>
           <span className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded ${relay.quality?.review !== false ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-muted text-muted-foreground"}`}>
             <ShieldCheck className="w-3 h-3" />
             评审{relay.quality?.review !== false ? "开启" : "关闭"}

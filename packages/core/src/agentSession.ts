@@ -660,12 +660,16 @@ export class AgentSession {
   }
 
   /** 外部 resolve 工具确认门（由 SessionHub.dispatch confirm_tool 调用） */
-  resolveToolConfirmation(confirmed: boolean): void {
+  resolveToolConfirmation(confirmed: boolean, mode?: "strict" | "auto"): void {
+    if (mode) this.pendingRelayMode = mode;
     if (this.toolConfirmResolve) {
       this.toolConfirmResolve(confirmed);
       this.toolConfirmResolve = null;
     }
   }
+
+  /** 用户在确认门选择的 Relay 模式（创建后清空） */
+  /** @internal */ pendingRelayMode?: "strict" | "auto";
 
   /** 外部 resolve 压缩选择门（由 SessionHub.dispatch compaction_choice 调用） */
   resolveCompactionChoice(choice: "continue" | "new_session"): void {

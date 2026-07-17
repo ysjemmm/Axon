@@ -7,7 +7,7 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
-import { X, Check, Circle, Loader2, FileText, ListChecks, Lightbulb, PencilRuler, Trash2, ShieldCheck, ShieldAlert, FlaskConical, Cpu } from "lucide-react";
+import { X, Check, Circle, Loader2, FileText, ListChecks, Lightbulb, PencilRuler, Trash2, ShieldCheck, ShieldAlert, FlaskConical, Cpu, RefreshCw } from "lucide-react";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from "@/components/ui/dialog";
@@ -15,6 +15,7 @@ import {
   listRelays,
   getRelay,
   updateRelayTask,
+  updateRelayMode,
   type RelaySummary,
   type RelayData,
   type RelayPhase,
@@ -156,7 +157,10 @@ export function RelayPanel({ open, onClose, workspace, liveRelay, focusRelayId, 
         <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
           <ListChecks className="w-4 h-4 text-primary" />
           <span className="font-medium text-sm">Relay 长任务</span>
-          <button onClick={onClose} className="ml-auto p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground" title="关闭">
+          <button onClick={() => refreshList()} className="ml-auto p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground" title="刷新列表">
+            <RefreshCw className="w-3.5 h-3.5" />
+          </button>
+          <button onClick={onClose} className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground" title="关闭">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -211,9 +215,23 @@ export function RelayPanel({ open, onClose, workspace, liveRelay, focusRelayId, 
                   </div>
                   {/* 质量门标识 */}
                   <div className="flex items-center gap-2 mt-1.5">
+                    <button
+                      onClick={async () => {
+                        if (!selected || !workspace) return;
+                        const next = selected.quality?.mode === "auto" ? "strict" : "auto";
+                        try {
+                          const updated = await updateRelayMode(selected.id, next, workspace);
+                          setSelected(updated);
+                        } catch { /* ignore */ }
+                      }}
+                      className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded cursor-pointer hover:opacity-80 transition-opacity ${selected.quality?.mode === "auto" ? "bg-blue-500/10 text-blue-600 dark:text-blue-400" : "bg-amber-500/10 text-amber-600 dark:text-amber-400"}`}
+                      title="点击切换模式"
+                    >
+                      {selected.quality?.mode === "auto" ? "全自动" : "严格模式"}
+                    </button>
                     <span className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded ${selected.quality?.review !== false ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-muted text-muted-foreground"}`}>
                       <ShieldCheck className="w-3 h-3" />
-                      两阶段评审{selected.quality?.review !== false ? "开启" : "关闭"}
+                      评审{selected.quality?.review !== false ? "开启" : "关闭"}
                     </span>
                     {selected.quality?.tdd && (
                       <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-600 dark:text-violet-400">

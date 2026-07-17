@@ -226,6 +226,7 @@ export interface RelayTask {
 export interface RelayQualityConfig {
   tdd: boolean;
   review: boolean;
+  mode?: "strict" | "auto";
 }
 
 /** 执行/评审环节的模型覆盖（不填的环节回退到当前会话模型） */
@@ -289,6 +290,11 @@ export function updateRelayTask(
 /** 删除 relay */
 export function deleteRelay(id: string, workspace?: string): Promise<{ ok: boolean }> {
   return del(`/api/relays/${id}${relayQuery(workspace)}`);
+}
+
+/** 切换 relay 执行模式（strict/auto） */
+export function updateRelayMode(id: string, mode: "strict" | "auto", workspace?: string): Promise<RelayData> {
+  return patch(`/api/relays/${id}${relayQuery(workspace)}`, { quality: { mode } });
 }
 
 // ── Powers 能力扩展包 ──
@@ -560,6 +566,11 @@ export function setBuiltinProviderKey(level: ProviderLevel, name: string, apiKey
 /** 设置内置 provider 的 baseUrl 覆盖 */
 export function setBuiltinProviderBaseUrl(level: ProviderLevel, name: string, baseUrl: string, workspace?: string): Promise<{ ok: boolean }> {
   return put(`/api/providers/${level}/builtin-baseurl${providerQuery(workspace)}`, { name, baseUrl });
+}
+
+/** 覆盖内置 provider 的模型列表（增删整存） */
+export function setBuiltinProviderModels(level: ProviderLevel, name: string, models: ProviderModelInfo[], workspace?: string): Promise<{ ok: boolean }> {
+  return put(`/api/providers/${level}/builtin-models${providerQuery(workspace)}`, { name, models });
 }
 
 /** 请求 VS Code 宿主在原生编辑器打开 providers.json */

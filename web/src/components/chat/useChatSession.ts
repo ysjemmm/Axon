@@ -486,9 +486,9 @@ export function useChatSession(opts: UseChatSessionOptions) {
     send({ type: "edit_user_message", messageId, content, userIndex, images, attachedFiles: attachedFiles?.map((f) => ({ name: f.name, size: f.size })) });
   }, [send, chatHistory]);
 
-  const confirmTool = useCallback((confirmed: boolean) => {
+  const confirmTool = useCallback((confirmed: boolean, options?: { mode?: "strict" | "auto" }) => {
     setToolConfirm(null);
-    send({ type: "confirm_tool", confirmed });
+    send({ type: "confirm_tool", confirmed, ...options });
   }, [send]);
 
   const approveCommand = useCallback((toolCallId: string, decision: CommandDecision) => {
@@ -578,5 +578,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     setModel, selectWorkspace, selectGroup, groupUpdated,
     listSnapshots: () => send({ type: "list_snapshots" }),
     restoreSnapshot: (id: string) => send({ type: "restore_snapshot", snapshotId: id }),
+    // 底层发送通道（供拖入文件等特殊场景直接发命令）
+    send,
   };
 }

@@ -57,21 +57,28 @@ export class RelayToolRunner {
     const title = typeof args.title === "string" ? args.title.trim() : "";
     const summary = typeof args.summary === "string" ? args.summary.trim() : "";
     if (!title) throw new Error("relay_create 需要非空的 title");
+    const mode = (this.s.pendingRelayMode || (args.mode === "auto" ? "auto" : "strict")) as "strict" | "auto";
+    this.s.pendingRelayMode = undefined; // 消费后清空
     const quality: RelayQualityConfig = {
       tdd: args.tdd === true,
       review: args.review !== false, // 默认开启评审
+      mode,
     };
     const modelOverrides = this.parseModelOverrides(args.modelOverrides);
     const relay = await this.s.relayStore.create({ title, summary, sessionId: this.s.currentRelaySessionId, quality, modelOverrides });
     this.s.send("relay_updated", { relay });
-    const qualityNote = `质量门：评审${quality.review ? "开启" : "关闭"}，TDD ${quality.tdd ? "强制" : "不强制"}。`;
+    const modeNote = mode === "auto" ? "全自动模式（连续推进，不等每阶段确认）" : "严格模式（每阶段等用户确认）";
+    const qualityNote = `${modeNote}，评审${quality.review ? "开启" : "关闭"}，TDD ${quality.tdd ? "强制" : "不强制"}。`;
     const overrideNote = modelOverrides
       ? ` 模型覆盖：${(["executing", "review"] as const).filter((k) => modelOverrides[k]).map((k) => `${k === "executing" ? "执行" : "评审"}=${modelOverrides[k]}`).join("、") || "无生效项（当前仅执行/评审两个环节支持覆盖）"}。`
       : "";
+    const adviceNote = mode === "auto"
+      ? `全自动模式下，你可以直接依次完成需求→设计→计划→执行，无需每阶段停下等用户确认。简要呈现文档要点后即可推进。`
+      : `严格模式下，每个阶段写完文档后请简要呈现给用户，等用户回复确认（如"继续""可以"）后再推进到下一阶段。`;
     return (
       `已创建 Relay 长任务工作流「${relay.title}」（id: ${relay.id}），当前处于需求澄清（brainstorm）阶段。${qualityNote}${overrideNote}\n` +
-      `接下来请与用户澄清需求要点（目标、范围、验收标准），然后用 relay_save_doc(phase="brainstorm") 写入需求文档，` +
-      `分段呈现给用户确认。不要跳过澄清直接写文档。`
+      `${adviceNote}\n` +
+      `接下来请与用户澄清需求要点（目标、范围、验收标准），然后用 relay_save_doc(phase="brainstorm") 写入需求文档。`
     );
   }
 
@@ -88,10 +95,19 @@ export class RelayToolRunner {
     this.s.send("relay_updated", { relay });
     const fileName = PHASE_DOC_FILE[phase];
     const taskNote = phase === "plan" ? `已解析出 ${relay.tasks.length} 个任务。` : "";
+    const isAuto = relay.quality?.mode === "auto";
+    const phaseLabel = phase === "brainstorm" ? "需求" : phase === "design" ? "设计" : "计划";
+    if (isAuto) {
+      return (
+        `已写入 ${fileName}。${taskNote}\n` +
+        `全自动模式：简要呈现${phaseLabel}要点后，直接调用 relay_advance(phase="${phase}") 推进到下一阶段。`
+      );
+    }
     return (
       `已写入 ${fileName}。${taskNote}\n` +
-      `现在请把这份${phase === "brainstorm" ? "需求" : phase === "design" ? "设计" : "计划"}的要点分段、简洁地呈现给用户，` +
-      `请用户确认。用户认可后再调用 relay_advance(phase="${phase}") 推进到下一阶段。不要自己直接推进。`
+      `现在请把这份${phaseLabel}的要点简洁地呈现给用户。` +
+      `用户回复确认（如"继续""可以"）后，调用 relay_advance(phase="${phase}") 推进；` +
+      `如果用户有修改意见，按意见修改后重新 relay_save_doc。`
     );
   }
 
@@ -116,14 +132,14 @@ export class RelayToolRunner {
       );
     }
 
-    // 确认门铁律（硬门）：一条用户消息最多推进一个文档阶段。若本轮已经推进过，拒绝再次推进——
-    // 强制模型把文档呈现给用户、等用户【下一条消息】明确确认后才能继续。这从根上杜绝
-    // "一次确认被模型连跨需求→设计→计划多个阶段"。
-    if (this.s.relayAdvancedThisTurn) {
+    // 确认门：strict 模式下，一条用户消息最多推进一个阶段；auto 模式下无限制。
+    // strict 模式也非死等——用户说"继续/可以"时 AI 会主动推进，不需要用户知道特殊关键词。
+    const isAutoMode = cur.quality?.mode === "auto";
+    if (!isAutoMode && this.s.relayAdvancedThisTurn) {
       throw new Error(
-        `本轮已经推进过一个阶段了。Relay 确认门要求：每个阶段的产出必须分别经过用户确认。` +
-        `请先把当前阶段的文档要点呈现给用户，停下来等用户在【下一条消息】里明确认可后，再推进下一阶段。` +
-        `不要在同一回合里连续跨多个阶段。`,
+        `当前 Relay 为严格模式，本轮已推进过一个阶段。` +
+        `请把当前阶段的文档要点呈现给用户，等用户回复确认后再推进下一阶段。` +
+        `用户说"继续"或"可以"即视为确认。`,
       );
     }
     this.s.relayAdvancedThisTurn = true;

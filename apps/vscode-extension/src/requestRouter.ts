@@ -157,6 +157,16 @@ export class RequestRouter {
         await store.remove(id);
         return { ok: true };
       }
+      if (method === "PATCH") {
+        const patch = body as { quality?: { mode?: string } } | undefined;
+        const mode = patch?.quality?.mode;
+        if (mode && (mode === "strict" || mode === "auto")) {
+          const relay = await store.updateQuality(id, { mode });
+          if (!relay) throw new Error("relay 不存在");
+          return relay;
+        }
+        throw new Error("PATCH 仅支持 quality.mode 字段");
+      }
     }
     const relayTaskMatch = path.match(/^\/api\/relays\/([^/]+)\/tasks\/([^/]+)$/);
     if (relayTaskMatch && method === "PATCH") {
@@ -631,6 +641,15 @@ export class RequestRouter {
       }
       return { ok: true };
     }
+    const providerBuiltinModelsMatch = path.match(/^\/api\/providers\/(user|workspace)\/builtin-models$/);
+    if (providerBuiltinModelsMatch && method === "PUT") {
+      const level = providerBuiltinModelsMatch[1] as "user" | "workspace";
+      const ws = query.get("workspace") || d.defaultWorkspace;
+      const { name, models } = (body || {}) as { name?: string; models?: ProviderModel[] };
+      await setBuiltinProviderModels(level, name || "", models || [], ws);
+      await resolveProviders(ws);
+      return { ok: true };
+    }
     if (path === "/api/open-provider-config" && method === "POST") {
       const { level: lv, workspace: ws } = (body || {}) as { level?: string; workspace?: string };
       const configPath = providerConfigPath(lv === "workspace" ? "workspace" : "user", ws);
@@ -800,11 +819,24 @@ async function setBuiltinProviderBaseUrl(level: "user" | "workspace", name: stri
 
 /** 覆盖某自定义 provider 的模型数组（增/删/改/禁用整存；apiKey 等其它字段保留） */
 async function setCustomProviderModels(level: "user" | "workspace", name: string, models: ProviderModel[], workspace?: string): Promise<void> {
-  if (RESERVED_PROVIDER_NAMES.includes(name)) throw new Error(`「${name}」是内置 provider，模型不可修改`);
+  if (RESERVED_PROVIDER_NAMES.includes(name)) throw new Error(`「${name}」是内置 provider，请用 builtin-models 接口`);
   const config = await readProviderConfig(level, workspace);
   const entry = (config.providers || {})[name] as RawProviderEntry | undefined;
   if (!entry) throw new Error(`provider 不存在：${name}`);
   entry.models = Array.isArray(models) ? models : [];
+  await writeProviderConfig(level, config, workspace);
+}
+
+/** 覆盖内置 provider 的模型数组（增/删整存；与 builtinApiKeys/builtinBaseUrls 同级持久化） */
+async function setBuiltinProviderModels(level: "user" | "workspace", name: string, models: ProviderModel[], workspace?: string): Promise<void> {
+  if (!RESERVED_PROVIDER_NAMES.includes(name)) throw new Error(`「${name}」不是内置 provider`);
+  const config = await readProviderConfig(level, workspace);
+  config.builtinModels = config.builtinModels || {};
+  if (Array.isArray(models) && models.length > 0) {
+    config.builtinModels[name] = models;
+  } else {
+    delete config.builtinModels[name];
+  }
   await writeProviderConfig(level, config, workspace);
 }
 
