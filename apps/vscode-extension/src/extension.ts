@@ -280,6 +280,25 @@ export function activate(context: vscode.ExtensionContext): void {
   // 所有工作区文件夹（多根工作区场景）
   const allWorkspaces = vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath) || [defaultWorkspace];
 
+  /** 扫描所有工作区的 relay 列表（relay 可能落盘到任意工作区的 .axon/relays/） */
+  async function listAllRelays(): Promise<Array<{ id: string; title: string; phase: string }>> {
+    const { RelayStore } = await import("@axon/core");
+    const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+    const seen = new Set<string>();
+    const result: Array<{ id: string; title: string; phase: string }> = [];
+    for (const ws of allWorkspaces) {
+      const store = new RelayStore(ws, createHost());
+      const relays = await store.list();
+      for (const r of relays) {
+        if (!seen.has(r.id)) {
+          seen.add(r.id);
+          result.push({ id: r.id, title: r.title, phase: r.phase });
+        }
+      }
+    }
+    return result;
+  }
+
   const isValidDir = async (p: string): Promise<boolean> => {
     try {
       const st = await vscode.workspace.fs.stat(vscode.Uri.file(p));
@@ -509,22 +528,16 @@ export function activate(context: vscode.ExtensionContext): void {
         // 通过 SessionHub dispatch 走 session 层删除：会取消正在运行的子 Agent，让 AI 感知
         await hub.dispatch({ type: "delete_relay", relayId, workspace: defaultWorkspace } as any);
         // 刷新树（relay_deleted 事件也会触发刷新，这里兜底）
-        const { RelayStore } = await import("@axon/core");
-        const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
-        const store = new RelayStore(defaultWorkspace, createHost());
-        const relays = await store.list();
-        relayTree.refresh(relays.map((r) => ({ id: r.id, title: r.title, phase: r.phase })));
+        const relays = await listAllRelays();
+        relayTree.refresh(relays);
       } catch (err) {
         vscode.window.showErrorMessage(`删除失败：${(err as Error).message}`);
       }
     }),
     vscode.commands.registerCommand("axon.relay.refresh", async () => {
       try {
-        const { RelayStore } = await import("@axon/core");
-        const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
-        const store = new RelayStore(defaultWorkspace, createHost());
-        const relays = await store.list();
-        relayTree.refresh(relays.map((r) => ({ id: r.id, title: r.title, phase: r.phase })));
+        const relays = await listAllRelays();
+        relayTree.refresh(relays);
       } catch { /* ignore */ }
     }),
     vscode.commands.registerCommand("axon.openSkill", async (arg?: { name?: string; source?: string; skillFile?: string; create?: boolean }) => {
@@ -1143,11 +1156,8 @@ export function activate(context: vscode.ExtensionContext): void {
   channel.onEmit(async (event: any) => {
     if (event.type === "relay_updated" || event.type === "relay_deleted") {
       try {
-        const { RelayStore } = await import("@axon/core");
-        const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
-        const relayStore = new RelayStore(defaultWorkspace, createHost());
-        const relays = await relayStore.list();
-        relayTree.refresh(relays.map((r) => ({ id: r.id, title: r.title, phase: r.phase })));
+        const relays = await listAllRelays();
+        relayTree.refresh(relays);
 
         // 转发 relay 事件到已打开的 Relay Tab 面板，驱动自动刷新
         if (event.type === "relay_updated" && event.relay?.id) {
@@ -1167,11 +1177,8 @@ export function activate(context: vscode.ExtensionContext): void {
       await refreshProviderTree();
 
       // Relay 列表
-      const { RelayStore } = await import("@axon/core");
-      const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
-      const relayStore = new RelayStore(defaultWorkspace, createHost());
-      const relays = await relayStore.list();
-      relayTree.refresh(relays.map((r) => ({ id: r.id, title: r.title, phase: r.phase })));
+      const relays = await listAllRelays();
+      relayTree.refresh(relays);
 
       // Skills 列表
       const { SkillRegistry } = await import("@axon/core");
