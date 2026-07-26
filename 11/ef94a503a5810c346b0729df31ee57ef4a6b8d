@@ -1,0 +1,51 @@
+packages/core/scripts/diagnose-anthropic-usage.mjs
+  s_8ff1a48226fad6::t_07b274dcb50191 1-254
+packages/core/src/llm/anthropicMessagesStrategy.ts
+  s_8ff1a48226fad6::t_11bf7c14183a38 21-26,119-131,145-148,162,184,188-192,199-201,236-237,244-245,293-311
+packages/core/src/llm/anthropicUsage.ts
+  s_8ff1a48226fad6::t_74364a697cb951 1-243
+packages/core/src/llm/strategyTurnSource.ts
+  s_8ff1a48226fad6::t_f39848328d337b 40-48,93-97
+packages/core/src/session/genericToolExecutor.ts
+  s_8ff1a48226fad6::t_22a7beb31b86be 80-85
+packages/core/src/session/toolCallExecutor.ts
+  s_8ff1a48226fad6::t_e920a8a6517930 104-117,119
+packages/core/src/session/toolOutcomeRecorder.ts
+  s_8ff1a48226fad6::t_5a38c0f2cd6c12 1-2,90-94
+packages/core/test/anthropicUsage.test.ts
+  s_8ff1a48226fad6::t_848026a0c60625 1-225
+web/src/components/ChatPanel.tsx
+  s_8ff1a48226fad6::t_73a2a74150a96c 26,45-53,934-941,945,949,983
+web/src/components/UnifiedStatusBar.tsx
+  s_8ff1a48226fad6::t_c819a8db03d036 2,4,6-8,64-65,69-70
+web/src/components/chat/AssistantTurn.tsx
+  s_8ff1a48226fad6::t_2de205498982d0 1,8-37,40,46-47,74,84,143-148
+web/src/components/chat/MessageBubble.tsx
+  s_8ff1a48226fad6::t_48a434779ed9ab 23,226,229
+web/src/components/chat/eventHandlers/streamHandlers.ts
+  s_8ff1a48226fad6::t_a3b69bc37e5154 10-14,60-68
+web/src/components/chat/eventHandlers/toolHandlers.ts
+  s_8ff1a48226fad6::t_461c73ed082f09 38-39,41
+web/src/components/chat/useChatSession.ts
+  s_8ff1a48226fad6::t_cb7a81f7615a66 207,209
+web/src/components/chat/useToolCallQueue.ts
+  s_8ff1a48226fad6::t_ed5bc7f16ac871 5,11-15,21-37,40,68-76,88,90-96
+web/src/components/chat/useTypewriter.ts
+  s_8ff1a48226fad6::t_e78fabbfcdd6ec 5,11-25,36-37,39-40,47-121,126-151,156,159,161-162,171,180-222,226-228,245-246,248-249,251
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "11ef94a503a5810c346b0729df31ee57ef4a6b8d",
+  "prompts": {},
+  "sessions": {
+    "s_8ff1a48226fad6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8c817665-b007-4e79-920f-01f8fc40aee5",
+        "model": "unknown"
+      },
+      "human_author": "码扬 <mayang@tsign.cn>"
+    }
+  }
+}
