@@ -62,7 +62,6 @@ export interface EventHandlerCtx {
   ownedSessionId: MutableRefObject<string | null>;
   onSessionCreatedRef: MutableRefObject<(id: string) => void>;
   onCompactionMigratedRef: MutableRefObject<((id: string) => void) | undefined>;
-  reasoningParts: MutableRefObject<Map<string, string>>;
 
   // ── 打字机 API ──
   typewriter: TypewriterApi;

@@ -1,7 +1,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { MODELS, findModel, getModels, useModels } from "@/components/ModelSelector";
-import type { ToolStatus } from "@/components/ToolCallItem";
+import { isToolInFlight, type ToolStatus } from "@/components/ToolCallItem";
 import { listRelays, type RelayData } from "@/lib/apiClient";
 import { useSessionEvents } from "@/hooks/useSessionEvents";
 import type { AttachedFile, ChatMessage, CreditDetail, TextSegment, UserSegment } from "./types";
@@ -149,7 +149,6 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const statusPhaseRef = useRef(statusPhase); statusPhaseRef.current = statusPhase;
   const editModeRef = useRef(editMode); editModeRef.current = editMode;
   const toolResultResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reasoningParts = useRef<Map<string, string>>(new Map());
   const typewriter = useTypewriter();
   // ── tool_call 渲染队列 hook（卡片按序逐个入场） ──
   const toolCallQueueApi = useToolCallQueue();
@@ -199,19 +198,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
     cancelled, cancelledTurnMsgId, turnGeneration,
     modelRef, statusPhaseRef, toolResultResetTimer,
     compactionMigratedRef, onSessionCreatedRef, onCompactionMigratedRef,
-    ownedSessionId, reasoningParts,
-    typewriter: {
-      buffer: typewriter.buffer,
-      raf: typewriter.raf,
-      streamEnding: typewriter.streamEnding,
-      draining: typewriter.draining,
-      start: typewriter.start,
-      drain: typewriter.drain,
-      flush: typewriter.flush,
-      cancel: typewriter.cancel,
-      pause: typewriter.pause,
-      reset: typewriter.reset,
-    },
+    ownedSessionId,
+    typewriter,
     clientId, send, finishLoading,
   };
 
@@ -442,10 +430,11 @@ export function useChatSession(opts: UseChatSessionOptions) {
         const segments = (last.segments || []).map((seg) => {
           if (seg.type === "subagent" && seg.status === "running") {
             const inner = seg.inner.map((s) =>
-              s.type === "tool" && s.status === "pending" ? { ...s, status: "error" as ToolStatus } : s);
+              s.type === "tool" && isToolInFlight(s.status) ? { ...s, status: "error" as ToolStatus } : s);
             return { ...seg, status: "done" as const, innerStreaming: false, inner };
           }
-          if (seg.type === "tool" && seg.status === "pending") {
+          // 排队中的卡片同样要收掉：用户取消后它们永远不会再被执行
+          if (seg.type === "tool" && isToolInFlight(seg.status)) {
             return { ...seg, status: "error" as ToolStatus };
           }
           return seg;

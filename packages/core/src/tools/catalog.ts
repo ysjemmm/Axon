@@ -70,10 +70,20 @@ export enum ToolName {
 /**
  * 工具调用卡片的状态机（前后端共享的协议值）。
  * 经 JSON 跨进程传输，后端 agentSession 产出、前端按此渲染：
- *   Pending（准备/等待执行）→ Executing（执行中）→ Success / Error / Cancelled（终态）
- * 前端有对应的镜像常量（web/src/.../toolStatus.ts），两侧字符串值必须一致。
+ *   Queued（已规划、排队等待）→ Executing（正在执行）→ Success / Error / Cancelled（终态）
+ * 前端对应类型是 web/src/components/ToolCallItem.tsx 的 ToolStatus，两侧字符串值必须一致。
+ * 注意两边词表并不完全相同：本枚举的 Executing 对应前端的 "pending"（前端用 pending 表示
+ * "正在执行"），而两边的 "queued" 含义一致。前端不存在 Pending 这个协议值。
+ *
+ * Queued 与 Executing 必须是两个值：本轮工具由 DefaultToolDispatchHandler **串行**执行
+ * （for + await，一个跑完才轮到下一个），但流式阶段 onToolCallDetected 会为每个工具提前发卡
+ * 以消除等待感。此时一个都还没开始跑，若与 Executing 共用一个值，前端只能把"排队"画成
+ * "执行中"——多工具轮里几张卡一起转圈、都写着"执行命令中..."，而实际只有第一个在跑。
+ *
+ * Pending 保留但不再用于 tool_call 事件（执行前卡片一律 Executing，提前卡一律 Queued）。
  */
 export enum ToolCallStatus {
+  Queued = "queued",
   Pending = "pending",
   Executing = "executing",
   Success = "success",

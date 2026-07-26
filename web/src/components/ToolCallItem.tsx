@@ -10,7 +10,7 @@
  */
 
 import { useState, useContext } from "react";
-import { CheckCircle2, Loader2, Terminal, Eye, EyeOff, FileX, Search, GitCompare, Bug, ChevronRight, Check, X, Globe, ShieldCheck, Pencil, Plug, Undo2, Server, ScrollText, Power, ExternalLink, FolderTree } from "lucide-react";
+import { CheckCircle2, Loader2, Terminal, Eye, EyeOff, FileX, Search, GitCompare, Bug, ChevronRight, Check, X, Globe, ShieldCheck, Pencil, Plug, Undo2, Server, ScrollText, Power, ExternalLink, FolderTree, Clock } from "lucide-react";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCommandApproval, CommandApprovalContext, type CommandTrustOption, type CommandDecision } from "@/components/chat/commandApprovalContext";
@@ -55,7 +55,65 @@ export function ClickableFileName({ fileName, absPath, startLine, endLine, class
   );
 }
 
-export type ToolStatus = "pending" | "success" | "error" | "cancelled";
+/**
+ * 工具卡片状态。
+ *
+ * · queued  已被模型规划、排在队列里等前面的工具跑完（后端串行执行，见 DefaultToolDispatchHandler）
+ * · pending 宿主正在真正执行这一个
+ * · success / error / cancelled 终态
+ *
+ * queued 与 pending 必须分开：后端在流式阶段（onToolCallDetected，工具名刚确定、参数还在累加）
+ * 就为每个工具提前发卡以消除等待感，此时工具一个都还没开始跑。早先两者共用 pending，
+ * 于是一轮多工具时几张卡一起转圈、都写着"执行命令中..."，而实际只有第一个在执行——
+ * 动画和文案同时在说谎。
+ */
+export type ToolStatus = "queued" | "pending" | "success" | "error" | "cancelled";
+
+/**
+ * 是否尚未跑完（排队中或执行中）。
+ * 分组卡片的"组内还有进行中的调用"之类的汇总判断一律用这个，
+ * 只有需要**区分**排队与执行的展示位（图标/边框/文案）才单独判 queued。
+ */
+export function isToolInFlight(status: ToolStatus): boolean {
+  return status === "queued" || status === "pending";
+}
+
+/**
+ * 排队中卡片的动作文案。
+ * 此刻只有工具名、没有参数，不能用 formatToolDescription 的占位文案
+ * （那些写的是"执行命令中..."，会把"还没开始"说成"正在进行"）。
+ */
+export function queuedActionText(name: string): string {
+  if (name.startsWith("mcp__")) return `调用 ${parseMcpToolName(name).toolName}`;
+  switch (name) {
+    case "read_file": return "读取文件";
+    case "create_file": return "创建文件";
+    case "str_replace": return "编辑文件";
+    case "apply_patch": return "应用补丁";
+    case "execute_command": return "执行命令";
+    case "start_process": return "启动进程";
+    case "search": return "搜索";
+    case "list_dir": return "浏览目录";
+    case "check_diagnostics": return "检查诊断";
+    case "web_search": return "联网搜索";
+    case "web_fetch": return "抓取网页";
+    case "use_skill": return "加载 Skill";
+    case "activate_power": return "激活 Power";
+    default: return name;
+  }
+}
+
+/**
+ * "排队中"徽标。统一所有卡片对排队态的表达，避免各处自己拼样式又拼歪。
+ * 刻意做得比正在执行的卡片弱：无动画、弱对比、小字号——它的作用是"预告"，不是"吸引注意"。
+ */
+export function QueuedBadge() {
+  return (
+    <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground/70 border border-border/60">
+      排队中
+    </span>
+  );
+}
 
 /** check_diagnostics 单文件结果 */
 export interface DiagnosticFileResult {
@@ -412,14 +470,17 @@ function CommandCardItem({ tool, approval }: { tool: ToolCallData; approval: Ret
   const isEditing = !!approval && editing;
 
   return (
-    <div className={`my-2 rounded-lg border bg-popover overflow-hidden tool-card-enter ${approval?.danger ? "border-red-500/80 animate-danger-pulse" : approval ? "border-amber-400/70" : (isWaitingInput && tool.status === "pending") ? "border-primary/50 animate-pulse" : "border-border"}`}>
+    <div className={`my-2 rounded-lg border bg-popover overflow-hidden tool-card-enter ${approval?.danger ? "border-red-500/80 animate-danger-pulse" : approval ? "border-amber-400/70" : (isWaitingInput && tool.status === "pending") ? "border-primary/50 animate-pulse" : tool.status === "queued" ? "border-border/50 opacity-60" : "border-border"}`}>
       {/* 标题栏 */}
       <div className="flex items-center gap-2 py-1.5 px-2.5 text-xs border-b border-border/60 bg-foreground/[0.04]">
+        {/* 排队中用静态时钟：转圈只属于真正在执行的那一个（后端串行，同一时刻只有一个在跑） */}
+        {tool.status === "queued" && <Clock className="w-3.5 h-3.5 shrink-0 text-muted-foreground/50" />}
         {tool.status === "pending" && isWaitingInput && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-primary" />}
         {tool.status === "pending" && !isWaitingInput && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-muted-foreground" />}
         {tool.status === "success" && <Terminal className="w-3.5 h-3.5 text-green-600 shrink-0" />}
         {tool.status === "error" && <Terminal className="w-3.5 h-3.5 text-red-500 shrink-0" />}
         <span className="text-muted-foreground flex-1">Command</span>
+        {tool.status === "queued" && <QueuedBadge />}
         {isWaitingInput && tool.status === "pending" && (
           <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary/10 text-primary border border-primary/30 animate-pulse">
             等待用户输入
@@ -489,7 +550,14 @@ export interface BrowserSessionData {
   steps: ToolCallData[];
   closed: boolean;
   hasError: boolean;
+  /** 组内是否还有没跑完的（排队中或执行中）→ 控制边框与文案 */
   pending: boolean;
+  /**
+   * 组内**全都还在排队**、没有任何一个真正在执行 → 显示静态时钟而非转圈。
+   * 取"全员排队"而非"是否在执行"作为字段语义，是为了让缺省值安全：
+   * 未设置时按旧行为转圈，新增构造点漏设也只是少一个优化，不会把执行中的说成排队中。
+   */
+  queuedOnly?: boolean;
 }
 
 /** 浏览器会话大卡片：把连续的浏览器操作折叠合并 */
@@ -507,7 +575,7 @@ export function BrowserSessionGroup({ group }: { group: BrowserSessionData }) {
         onClick={() => setExpanded(!expanded)}
       >
         {group.pending
-          ? <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-muted-foreground" />
+          ? <GroupInFlightIcon queuedOnly={group.queuedOnly} />
           : group.closed
             ? <CheckCircle2 className="w-3.5 h-3.5 text-green-600 shrink-0" />
             : <Globe className="w-3.5 h-3.5 text-blue-500 shrink-0" />}
@@ -534,7 +602,9 @@ export function BrowserSessionGroup({ group }: { group: BrowserSessionData }) {
 /** 浏览器分组内的单步行（精简一行） */
 function BrowserStepRow({ step }: { step: ToolCallData }) {
   const [showOutput, setShowOutput] = useState(false);
-  const icon = step.status === "pending"
+  const icon = step.status === "queued"
+    ? <Clock className="w-3 h-3 text-muted-foreground/50 shrink-0" />
+    : step.status === "pending"
     ? <Loader2 className="w-3 h-3 animate-spin text-muted-foreground shrink-0" />
     : step.status === "error"
       ? <X className="w-3 h-3 text-red-500 shrink-0" />
@@ -587,11 +657,22 @@ function browserStepLabel(step: ToolCallData): string {
   }
 }
 
-/** 卡片状态图标（统一 pending/success/error 三态） */
+/** 卡片状态图标（queued/pending/success/error） */
 function CardStatusIcon({ status, Icon }: { status: ToolStatus; Icon: typeof Server }) {
+  if (status === "queued") return <Clock className="w-3.5 h-3.5 shrink-0 text-muted-foreground/50" />;
   if (status === "pending") return <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-muted-foreground" />;
   if (status === "error") return <Icon className="w-3.5 h-3.5 text-red-500 shrink-0" />;
   return <Icon className="w-3.5 h-3.5 text-green-600 shrink-0" />;
+}
+
+/**
+ * 分组卡片"进行中"图标：组内有真正在执行的才转圈，全员排队时用静态时钟。
+ * queuedOnly 缺省（undefined）按旧行为转圈——见 queuedOnly 字段注释里的缺省安全考虑。
+ */
+function GroupInFlightIcon({ queuedOnly }: { queuedOnly?: boolean }) {
+  return queuedOnly
+    ? <Clock className="w-3.5 h-3.5 shrink-0 text-muted-foreground/50" />
+    : <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-muted-foreground" />;
 }
 
 /** 卡片标题栏（工具个人信息层） */
@@ -803,6 +884,11 @@ export function ToolCallItem({ tool, onAcceptEdit, onRejectEdit, onUndoEdit }: T
 
   // 根据工具类型和状态选择图标
   const renderIcon = () => {
+    // 排队中：静态时钟图标，不转圈。转圈是"正在执行"的专属信号，
+    // 排队卡也转就等于骗人——后端严格串行，同一时刻只有一个工具真在跑。
+    if (tool.status === "queued") {
+      return <Clock className="w-3.5 h-3.5 shrink-0 text-muted-foreground/50" />;
+    }
     if (tool.status === "pending") {
       return <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-muted-foreground" />;
     }
@@ -833,9 +919,12 @@ export function ToolCallItem({ tool, onAcceptEdit, onRejectEdit, onUndoEdit }: T
     return <FileEditItem tool={tool} action={action} fileName={tool.displayName || fileName || diffBase} icon={renderIcon()} onAcceptEdit={onAcceptEdit} onRejectEdit={onRejectEdit} onUndoEdit={onUndoEdit} />;
   }
 
-  // 根据状态决定边框样式（pending/rejected/error）
+  // 根据状态决定边框样式（queued/pending/rejected/error）
   let borderClass = "border-border bg-muted/20";
-  if (tool.status === "pending") {
+  if (tool.status === "queued") {
+    // 排队中：不用琥珀色高亮，整卡压暗后退，让正在执行的那张自然凸显
+    borderClass = "border-border/50 bg-muted/10 opacity-60";
+  } else if (tool.status === "pending") {
     borderClass = "border-amber-300/60 bg-amber-50 dark:bg-amber-950/20";
   } else if (tool.rejected) {
     borderClass = "border-red-300/60 bg-red-50 dark:bg-red-950/20";
@@ -854,12 +943,16 @@ export function ToolCallItem({ tool, onAcceptEdit, onRejectEdit, onUndoEdit }: T
             : "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
         }`}>{tool.mcpServer}</span>
       )}
-      {tool.name === "read_file" && typeof tool.args?.path === "string" && tool.args.path.trim()
-        ? <ClickableFileName fileName={String(tool.args.path)} absPath={String(tool.args.path)} startLine={toLineNumber(tool.args?.startLine)} endLine={toLineNumber(tool.args?.endLine)} className={`font-mono truncate min-w-0 ${tool.status === "error" ? "text-red-600" : "text-foreground"}`} />
-        : (tool.mcpTool && tool.status === "success")
-          ? <span className="text-muted-foreground truncate min-w-0">调用 <span className="font-medium text-foreground">{tool.mcpTool}</span></span>
-          : <TruncatedText text={action} className="text-muted-foreground" />}
-      {fileName && (
+      {/* 排队中：只说"要做什么"，不用 description 的占位文案（那些写着"执行命令中..."，
+          会把还没开始的事说成正在进行）。参数此刻通常还没到，也就没有文件名可展示。 */}
+      {tool.status === "queued"
+        ? <><TruncatedText text={queuedActionText(tool.name)} className="text-muted-foreground/70" /><QueuedBadge /></>
+        : tool.name === "read_file" && typeof tool.args?.path === "string" && tool.args.path.trim()
+          ? <ClickableFileName fileName={String(tool.args.path)} absPath={String(tool.args.path)} startLine={toLineNumber(tool.args?.startLine)} endLine={toLineNumber(tool.args?.endLine)} className={`font-mono truncate min-w-0 ${tool.status === "error" ? "text-red-600" : "text-foreground"}`} />
+          : (tool.mcpTool && tool.status === "success")
+            ? <span className="text-muted-foreground truncate min-w-0">调用 <span className="font-medium text-foreground">{tool.mcpTool}</span></span>
+            : <TruncatedText text={action} className="text-muted-foreground" />}
+      {tool.status !== "queued" && fileName && (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-muted/40 text-xs font-mono shrink-0" title={String(tool.diff?.absPath || tool.diff?.path || tool.args?.path || fileName)}>
           <FileTypeIcon fileName={fileName} />
           <ClickableFileName fileName={fileName} absPath={String(tool.diff?.absPath || tool.diff?.path || tool.args?.path || "")} className="text-foreground" />
@@ -965,7 +1058,7 @@ function FileEditItem({
  */
 function DiagnosticsItem({ tool }: { tool: ToolCallData }) {
   const files = tool.diagnostics || [];
-  const pending = tool.status === "pending";
+  const pending = isToolInFlight(tool.status);
   const hasErrors = files.some((f) => !f.ok);
   // 消歧展示：同名文件补最短区分路径
   const displayNames = disambiguatePaths(files.map((f) => f.path));
@@ -1039,8 +1132,8 @@ export function EditGroupItem({
   const [expanded, setExpanded] = useState(false);
   const editPath = group.edits[0]?.diff?.path || group.fileName;
 
-  // 组内是否有正在执行中的编辑（status 还是 pending）
-  const hasExecuting = group.edits.some((e) => e.status === "pending");
+  // 组内是否有还没跑完的编辑（排队中或执行中）
+  const hasExecuting = group.edits.some((e) => isToolInFlight(e.status));
   // 总 diff（仅单文件分组有意义）：第一次编辑前 → 最后一次编辑后
   const firstDiff = group.edits[0]?.diff;
   const lastDiff = group.edits[group.edits.length - 1]?.diff;
@@ -1153,7 +1246,8 @@ export function EditGroupItem({
 /** 一组连续探索（search / list_dir）的数据 */
 export interface SearchGroupData {
   id: string;          // 用第一个调用的 id
-  pending: boolean;    // 组内是否还有进行中的调用
+  pending: boolean;    // 组内是否还有没跑完的（排队中或执行中）
+  queuedOnly?: boolean; // 组内全在排队、无一在执行 → 静态时钟（缺省按旧行为转圈）
   queries: (string | { name: string; args?: Record<string, unknown>; label?: string })[];   // 每次调用展示的意图文案（intent）
 }
 
@@ -1173,7 +1267,7 @@ export function SearchGroupItem({ group }: { group: SearchGroupData }) {
       {/* 第一层：图标 + 标题（前景色叠加 + 底分隔线，跨主题与下层分明） */}
       <div className="flex items-center gap-2 py-1.5 px-3 text-xs border-b border-border/60 bg-foreground/[0.04]">
         {group.pending
-          ? <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-muted-foreground" />
+          ? <GroupInFlightIcon queuedOnly={group.queuedOnly} />
           : <Search className="w-3.5 h-3.5 text-green-600 shrink-0" />}
         <span className="text-muted-foreground">搜索工作区</span>
       </div>
@@ -1199,7 +1293,8 @@ export function SearchGroupItem({ group }: { group: SearchGroupData }) {
 /** 一组连续 read_file 的数据 */
 export interface ReadFileGroupData {
   id: string;          // 用第一个 read_file 的 id
-  pending: boolean;    // 组内是否还有进行中的读取
+  pending: boolean;    // 组内是否还有没跑完的（排队中或执行中）
+  queuedOnly?: boolean; // 组内全在排队、无一在执行 → 静态时钟（缺省按旧行为转圈）
   hasError: boolean;   // 组内是否有失败
   /** 每个文件：文件名 + 可选行号区间（如 "1-10" / "2-EOF"）+ 完整路径（点击打开用）+ 起止行号（点击跳转选中用） */
   files: { name: string; range?: string; path?: string; startLine?: number; endLine?: number }[];
@@ -1216,12 +1311,12 @@ export function ReadFileGroupItem({ group }: { group: ReadFileGroupData }) {
       {/* 单行：状态图标 + 标题 + 文件名标签（同一行，文件多时自动换行） */}
       <div className="flex items-center gap-2 py-1.5 px-2.5 text-xs flex-wrap">
         {group.pending
-          ? <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-muted-foreground" />
+          ? <GroupInFlightIcon queuedOnly={group.queuedOnly} />
           : group.hasError
             ? <EyeOff className="w-3.5 h-3.5 text-red-500 shrink-0" />
             : <Eye className="w-3.5 h-3.5 text-green-600 shrink-0" />}
         <span className="text-muted-foreground shrink-0">
-          {group.pending ? "读取中" : "已读取"}
+          {group.pending ? (group.queuedOnly ? "待读取" : "读取中") : "已读取"}
         </span>
         {group.files.map((f, i) => (
           <span
@@ -1280,7 +1375,7 @@ function SiteFavicon({ domain }: { domain: string }) {
 function WebSearchItem({ tool }: { tool: ToolCallData }) {
   const [expanded, setExpanded] = useState(false);
   const sr = tool.searchResults;
-  const pending = tool.status === "pending";
+  const pending = isToolInFlight(tool.status);
   const resultCount = sr?.results?.length || 0;
 
   return (
@@ -1333,7 +1428,7 @@ function WebSearchItem({ tool }: { tool: ToolCallData }) {
  */
 function WebFetchItem({ tool }: { tool: ToolCallData }) {
   const fr = tool.fetchResult;
-  const pending = tool.status === "pending";
+  const pending = isToolInFlight(tool.status);
   const failed = tool.status === "error" || (fr && !fr.success);
 
   if (failed && fr?.error) {
@@ -1382,7 +1477,7 @@ function WebFetchItem({ tool }: { tool: ToolCallData }) {
  * 点击名称打开 PowerStudio Tab
  */
 function PowerActivatedItem({ tool }: { tool: ToolCallData }) {
-  const pending = tool.status === "pending";
+  const pending = isToolInFlight(tool.status);
   const pa = tool.powerActivated;
   const name = pa?.displayName || pa?.name || (tool.args?.name as string) || "power";
 

@@ -225,8 +225,13 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
             const rec = toolByIndex.get(data.index);
             if (rec) rec.arguments += delta.partial_json;
           } else if (delta?.type === "thinking_delta" && delta.thinking) {
-            // 扩展思考模式（extended thinking）：Anthropic 的思考内容独立于正文
-            callbacks.onReasoningDelta(delta.thinking);
+            // 扩展思考模式（extended thinking）：Anthropic 的思考内容独立于正文。
+            //
+            // 必须把 data.index（content block 索引）作为 partIndex 透传：一次响应里可以有
+            // 多个 thinking 块（thinking → tool_use → thinking），块号是协议原生的身份标识。
+            // 丢掉它，前端就只能靠"谁还在 streaming"猜某段增量属于哪个思考块——任何提前到达
+            // 的事件（如流式阶段就发出的工具卡片）都会把这个推断打翻，表现为一排并列的空"思考过程"。
+            callbacks.onReasoningDelta(delta.thinking, data.index);
           }
           break;
         }

@@ -12,7 +12,7 @@
  */
 
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { executeToolCall, getToolDefinitions, getReadOnlyToolDefinitions, toolContentLimit, type ToolMeta, type SkillLoaderFn, type WebCapability, type GateOutcome } from "../tools/index.js";
+import { executeToolCall, getToolDefinitions, getReadOnlyToolDefinitions, toolContentLimit, ToolCallStatus, type ToolMeta, type SkillLoaderFn, type WebCapability, type GateOutcome } from "../tools/index.js";
 import type { LLMStrategy, ToolDef, LLMStreamCallbacks } from "../llm/types.js";
 import type { LoadedSkill } from "./skillLoader.js";
 import type { AgentHost } from "../host/index.js";
@@ -373,7 +373,8 @@ export class SubAgentRunner {
         }
         this.deps.emit("stream_delta", { content: text });
       },
-      onToolCallDetected: (name, id) => this.deps.emit("tool_call", { name, id, args: {}, cwd: this.deps.cwd, status: "pending" }),
+      // 与主会话一致：流式阶段检测到工具只代表"已排队"，此刻还没开始跑（子 agent 同样串行执行）
+      onToolCallDetected: (name, id) => this.deps.emit("tool_call", { name, id, args: {}, cwd: this.deps.cwd, status: ToolCallStatus.Queued }),
     };
 
     return this.deps.strategy.runTurn({

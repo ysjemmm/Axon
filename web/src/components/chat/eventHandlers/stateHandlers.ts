@@ -10,10 +10,33 @@ import { MODELS, findModel } from "@/components/ModelSelector";
 import { getRelay, type RelayData } from "@/lib/apiClient";
 import { segEditUnits, extractBasename } from "../utils";
 import type { CommandApproval } from "../useChatSession";
+import type { ReasoningSegment } from "../types";
 import type { EventHandlerCtx, WsMessage } from "./types";
 
-function normalizeReasoningDelta(content: string): string {
-  return content;
+/**
+ * 计算思考块的身份 key：`轮次:协议块号`。
+ *
+ * 这是 reasoning 段归属的**唯一**依据。早先靠"从后往前找 streaming=true 的 reasoning 段"
+ * 来推断归属，那是一个可被任何提前到达的事件推翻的全局可变状态——工具卡片一提前出、
+ * stream_start 一到，段就被关掉，后续思考增量只能新建段，于是出现一排并列的"思考过程"。
+ *
+ * 三段身份信息的来源与回退：
+ * · round —— 后端 agent 循环的轮序号。协议里没有"新一轮 LLM 调用开始"的事件
+ *   （stream_start 只在本轮有正文时才发，纯工具轮不发），所以轮边界必须由后端显式给出，
+ *   前端无法可靠推断。缺失时退化为 0，表现为整条消息共用一段，不会串轮。
+ * · itemId —— Responses API 的 reasoning item id。
+ * · partIndex —— Anthropic 的 content block 索引 / Responses 的 summary_index。
+ *   Anthropic 一轮内可以有多个 thinking 块（thinking → tool_use → thinking），
+ *   块号让它们各自独立成段；块号在每轮内从 0 重新开始，所以必须与 round 组合。
+ * · 两者都没有（Chat Completions 的 reasoning_content 是单一无分块流）→ 固定 "0"，
+ *   本轮所有思考增量并入同一段，正是期望行为。
+ */
+function reasoningKeyOf(msg: WsMessage): string {
+  const round = (msg as any).round as number | undefined;
+  const itemId = (msg as any).itemId as string | undefined;
+  const partIndex = (msg as any).partIndex as number | undefined;
+  const block = itemId ? `i${itemId}` : (partIndex !== undefined && partIndex !== null ? `p${partIndex}` : "0");
+  return `r${round ?? 0}:${block}`;
 }
 
 export function handleStatus(msg: WsMessage, ctx: EventHandlerCtx): void {
@@ -67,57 +90,54 @@ export function handleTokenUsage(msg: WsMessage, ctx: EventHandlerCtx): void {
 }
 
 export function handleReasoningDelta(msg: WsMessage, ctx: EventHandlerCtx): void {
-  const content = normalizeReasoningDelta((msg as any).content || "");
+  const content = (msg as any).content as string || "";
   if (!content) return;
+  const key = reasoningKeyOf(msg);
 
-  // 将 reasoning 内容追加到当前 assistant 消息的最后一个 reasoning segment。
-  // 如果最后一个 segment 不是 reasoning（或还没有 assistant 消息），新建一个。
-  let action: string = "append";
   ctx.setChatHistory((prev) => {
     const updated = [...prev];
     const last = updated[updated.length - 1];
-    if (last?.role === "assistant" && last.segments) {
-      const segs = [...last.segments];
-      // 从后往前找正在 streaming 的 reasoning 段（不一定在末尾：stream_start 可能已在末尾
-      // 压了一个空 text 占位段，此时 reasoning 段在它前面，必须按内容而非位置来定位）。
-      let reasoningIdx = -1;
-      for (let i = segs.length - 1; i >= 0; i--) {
-        if (segs[i].type === "reasoning" && (segs[i] as any).streaming) { reasoningIdx = i; break; }
-      }
-      if (reasoningIdx >= 0) {
-        // 追加到已有的 streaming reasoning segment
-        const seg = segs[reasoningIdx] as any;
-        segs[reasoningIdx] = { ...seg, content: seg.content + content };
-      } else {
-        action = "new";
-        // 新建一个 reasoning segment。
-        // 如果末尾是 stream_start 预先创建的空 text 段，将 reasoning 插到它前面，
-        // 保证思考内容始终显示在正文之前。
-        const lastSeg = segs[segs.length - 1];
-        if (lastSeg && lastSeg.type === "text" && !(lastSeg as any).content?.trim()) {
-          segs.splice(segs.length - 1, 0, { type: "reasoning", content, streaming: true });
-        } else {
-          segs.push({ type: "reasoning", content, streaming: true });
-        }
-      }
-      updated[updated.length - 1] = { ...last, segments: segs };
-    } else {
-      action = "new";
-      // 还没有 assistant 消息，创建一个（理论上 stream_start 应该先到，这里兜底）
+
+    // 还没有 assistant 消息（reasoning 先于 stream_start 到达，纯工具轮的常态）→ 建一条
+    if (last?.role !== "assistant" || !last.segments) {
       updated.push({
         id: `assistant-${Date.now()}`,
         role: "assistant",
-        segments: [{ type: "reasoning", content, streaming: true }],
+        segments: [{ type: "reasoning", key, content, streaming: true } as ReasoningSegment],
         streaming: true,
+        turnStatus: "running",
         turnGen: ctx.turnGeneration.current,
       });
+      return updated;
     }
+
+    const segs = [...last.segments];
+    // 按 key 精确定位本思考块。不看 streaming 标志——那只表达 UI 折叠状态，
+    // 会被工具卡片/stream_start 提前置 false，用它定位就会把同一个块拆成多段。
+    let idx = -1;
+    for (let i = segs.length - 1; i >= 0; i--) {
+      const s = segs[i];
+      if (s.type === "reasoning" && (s as ReasoningSegment).key === key) { idx = i; break; }
+    }
+
+    if (idx >= 0) {
+      const seg = segs[idx] as ReasoningSegment;
+      // 重新置 streaming：本块还在继续吐，若之前被提前折叠过则重新展开
+      segs[idx] = { ...seg, content: seg.content + content, streaming: true };
+    } else {
+      const newSeg: ReasoningSegment = { type: "reasoning", key, content, streaming: true };
+      // 末尾若是 stream_start 预留的空 text 占位段，把思考插到它前面，
+      // 保证思考内容显示在本轮正文之前。
+      const lastSeg = segs[segs.length - 1];
+      if (lastSeg?.type === "text" && !lastSeg.content.trim()) {
+        segs.splice(segs.length - 1, 0, newSeg);
+      } else {
+        segs.push(newSeg);
+      }
+    }
+    updated[updated.length - 1] = { ...last, segments: segs };
     return updated;
   });
-
-  if (action === "new") {
-    console.log(`[reasoning] 新建段: preview="${content.slice(0, 60)}"`);
-  }
 
   if (ctx.statusPhaseRef.current === "thinking") {
     ctx.setStatusText("正在推理...");

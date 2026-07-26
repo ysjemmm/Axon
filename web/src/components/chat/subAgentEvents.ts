@@ -3,7 +3,7 @@
  * 从原 ChatPanel.tsx 拆出：把子 Agent 内部事件应用到对应 delegateId 卡片的 inner segments。
  */
 
-import { formatToolDescription, exploreDisplayText, type ToolStatus } from "@/components/ToolCallItem";
+import { formatToolDescription, exploreDisplayText, isToolInFlight, type ToolStatus } from "@/components/ToolCallItem";
 import type { WsMessage } from "@/hooks/useWebSocket";
 import type { ChatMessage, SubAgentSegment, ToolSegment } from "./types";
 
@@ -59,7 +59,7 @@ export function applyEventToSubAgent(sub: SubAgentSegment, event: WsMessage): Su
     if (status === "executing" && eventId) {
       for (let i = inner.length - 1; i >= 0; i--) {
         const seg = inner[i];
-        if (seg.type === "tool" && seg.status === "pending" && (seg.id === eventId || (!seg.boundId && seg.name === event.name))) {
+        if (seg.type === "tool" && isToolInFlight(seg.status) && (seg.id === eventId || (!seg.boundId && seg.name === event.name))) {
           inner[i] = {
             ...seg,
             id: eventId, // 绑定后端真实 id，后续 tool_result 按此精确匹配
@@ -81,7 +81,8 @@ export function applyEventToSubAgent(sub: SubAgentSegment, event: WsMessage): Su
       id: eventId || `subtool-${Date.now()}-${event.name}-${inner.length}`,
       boundId: !!eventId,
       name: event.name || "",
-      status: "pending",
+      // 与主 agent 一致：流式阶段的提前卡是"排队中"，不是"执行中"
+      status: status === "queued" ? "queued" : "pending",
       description: formatToolDescription(event.name || "", undefined, args),
       args,
       command: event.name === "execute_command" ? (args.command as string) : undefined,
@@ -111,7 +112,7 @@ export function applyEventToSubAgent(sub: SubAgentSegment, event: WsMessage): Su
     if (matchIdx < 0) {
       for (let i = inner.length - 1; i >= 0; i--) {
         const seg = inner[i];
-        if (seg.type === "tool" && seg.name === event.name && seg.status === "pending") {
+        if (seg.type === "tool" && seg.name === event.name && isToolInFlight(seg.status)) {
           matchIdx = i;
           break;
         }

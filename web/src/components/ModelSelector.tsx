@@ -5,7 +5,7 @@
  * 内置 MODELS 仅作离线兜底与 autoSelectModel 依据。打开下拉时会重新拉取，配置改动即时反映。
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, Settings } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -220,6 +220,7 @@ function ModelRow({ model, selected, disabled, disabledHint, onPick }: { model: 
   const sub = model.contextWindow > 0 ? `${model.description} · ${win}` : model.description;
   const btn = (
     <button
+      data-selected={selected ? "true" : undefined}
       disabled={disabled}
       onClick={onPick}
       className={`flex items-center justify-between w-full gap-3 py-1.5 pl-2 pr-3 rounded-md text-xs text-left transition-colors ${selected ? "bg-muted/60" : "hover:bg-muted/50"} disabled:opacity-40 disabled:cursor-not-allowed`}
@@ -267,6 +268,22 @@ export function ModelSelector({ value, provider, onChange, disabledModels = [], 
   useEffect(() => {
     if (provider) setLastProvider(provider);
   }, [provider]);
+
+  // 展开 provider 时自动滚动到当前选中模型
+  const scrollRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  useEffect(() => {
+    if (!expanded) return;
+    // Radix Popover 有 ~150ms 入场动画，容器尺寸稳定后才能滚。
+    const timer = setTimeout(() => {
+      const el = scrollRefs.current[expanded];
+      if (!el) return;
+      const selected = el.querySelector('[data-selected="true"]') as HTMLElement | null;
+      if (selected && el.scrollHeight > el.clientHeight) {
+        el.scrollTop = selected.offsetTop - el.clientHeight / 3;
+      }
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [expanded]);
 
   /** 按 value 找模型：优先 lastProvider，回退到任意匹配 */
   const allModels = getModels();
@@ -352,7 +369,10 @@ export function ModelSelector({ value, provider, onChange, disabledModels = [], 
                 <ChevronRight className={`w-3 h-3 opacity-60 shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
               </div>
               {isExpanded && (
-                <div className="pl-2 border-l border-border/40 ml-2 mb-1">
+                <div
+                  ref={(el) => { scrollRefs.current[g.name] = el; }}
+                  className="pl-2 border-l border-border/40 ml-2 mb-1 max-h-[280px] overflow-y-auto"
+                >
                   {g.models.map((m) => (
                     <ModelRow
                       key={m.id}

@@ -8,12 +8,12 @@
  */
 
 import { useState, useRef, useEffect, type ReactNode } from "react";
-import { Loader2, Boxes, ListChecks, ChevronRight, ChevronDown, Check, X, Bot } from "lucide-react";
+import { Loader2, Boxes, ListChecks, ChevronRight, ChevronDown, Check, X, Bot, Clock } from "lucide-react";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import {
   ToolCallItem, SearchGroupItem, ReadFileGroupItem, EditGroupItem,
   BrowserSessionGroup, BROWSER_TOOL_NAMES,
-  exploreDisplayText, disambiguatePaths, toLineNumber,
+  exploreDisplayText, disambiguatePaths, toLineNumber, isToolInFlight,
   type ToolStatus, type SearchGroupData, type ReadFileGroupData, type EditGroupData,
 } from "@/components/ToolCallItem";
 import type { Segment, ToolSegment, SubAgentSegment } from "./types";
@@ -37,14 +37,16 @@ function parseRangeEnd(range?: string): number | undefined {
  * Skill 触发卡片：独立、简洁，展示图标 + 一个或多个触发的 skill 名称。
  * 用于 use_skill 工具调用（连续多次会合并到一张卡片），以及子 agent 委托加载 skill 时。
  */
-export function SkillBadgeCard({ skills, pending }: { skills: string[]; pending?: boolean }) {
+export function SkillBadgeCard({ skills, pending, queuedOnly }: { skills: string[]; pending?: boolean; queuedOnly?: boolean }) {
   const names = skills.filter(Boolean);
   return (
-    <div className="my-2 flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-2.5 py-1.5 flex-wrap">
+    <div className={`my-2 flex items-center gap-2 rounded-lg border px-2.5 py-1.5 flex-wrap ${queuedOnly ? "border-border/50 bg-muted/10 opacity-60" : "border-primary/30 bg-primary/5"}`}>
       {pending
-        ? <Loader2 className="w-3.5 h-3.5 shrink-0 text-primary animate-spin" />
+        ? (queuedOnly
+            ? <Clock className="w-3.5 h-3.5 shrink-0 text-muted-foreground/50" />
+            : <Loader2 className="w-3.5 h-3.5 shrink-0 text-primary animate-spin" />)
         : <Boxes className="w-3.5 h-3.5 shrink-0 text-green-600" />}
-      <span className="text-xs text-muted-foreground shrink-0">{pending ? "加载 Skill" : "使用 Skill"}</span>
+      <span className="text-xs text-muted-foreground shrink-0">{queuedOnly ? "待加载 Skill" : pending ? "加载 Skill" : "使用 Skill"}</span>
       {names.map((n) => (
         <span key={n} className="px-1.5 py-0.5 rounded bg-primary/10 text-xs font-mono font-medium text-primary">{n}</span>
       ))}
@@ -57,7 +59,7 @@ export function SkillBadgeCard({ skills, pending }: { skills: string[]; pending?
  * 折叠态只显示最新一步（一行，省空间）；展开看完整步骤。
  * 完整可视化（阶段进度条/任务清单/评审）在右侧 Relay 面板，这里只是对话流里的轻量提示。
  */
-export function RelayProgressCard({ steps, pending }: { steps: { name: string; description: string; status: ToolStatus; relayId?: string }[]; pending?: boolean }) {
+export function RelayProgressCard({ steps, pending, queuedOnly }: { steps: { name: string; description: string; status: ToolStatus; relayId?: string }[]; pending?: boolean; queuedOnly?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   if (steps.length === 0) return null;
   const last = steps[steps.length - 1];
@@ -77,7 +79,9 @@ export function RelayProgressCard({ steps, pending }: { steps: { name: string; d
         className="flex items-center gap-2 w-full py-1.5 px-2.5 text-xs text-left hover:bg-primary/10 transition-colors"
       >
         {pending
-          ? <Loader2 className="w-3.5 h-3.5 shrink-0 text-primary animate-spin" />
+          ? (queuedOnly
+              ? <Clock className="w-3.5 h-3.5 shrink-0 text-muted-foreground/50" />
+              : <Loader2 className="w-3.5 h-3.5 shrink-0 text-primary animate-spin" />)
           : <ListChecks className={`w-3.5 h-3.5 shrink-0 ${hasError ? "text-red-500" : "text-primary"}`} />}
         <span className="text-muted-foreground shrink-0">Relay</span>
         <span className="text-foreground truncate flex-1 min-w-0">{last.description}</span>
@@ -94,9 +98,11 @@ export function RelayProgressCard({ steps, pending }: { steps: { name: string; d
             <div key={idx} className="flex items-center gap-2 text-xs">
               {s.status === "error"
                 ? <X className="w-3 h-3 shrink-0 text-red-500" />
-                : s.status === "pending"
-                  ? <Loader2 className="w-3 h-3 shrink-0 animate-spin text-muted-foreground" />
-                  : <Check className="w-3 h-3 shrink-0 text-green-600" />}
+                : s.status === "queued"
+                  ? <Clock className="w-3 h-3 shrink-0 text-muted-foreground/50" />
+                  : s.status === "pending"
+                    ? <Loader2 className="w-3 h-3 shrink-0 animate-spin text-muted-foreground" />
+                    : <Check className="w-3 h-3 shrink-0 text-green-600" />}
               <span className="text-muted-foreground/80 truncate">{s.description}</span>
             </div>
           ))}
@@ -331,6 +337,7 @@ export function renderSegments(
       const groupStart = i;
       const steps: { name: string; description: string; status: ToolStatus; relayId?: string }[] = [];
       let pending = false;
+      let executing = false;
       while (i < segments.length) {
         const s = segments[i];
         if (s.type === "tool" && isRelayTool(s.name)) {
@@ -345,14 +352,15 @@ export function renderSegments(
             relayId = s.args.id;
           }
           steps.push({ name: s.name, description: s.description || relayToolLabel(s.name), status: s.status, relayId });
-          if (s.status === "pending") pending = true;
+          if (isToolInFlight(s.status)) pending = true;
+          if (s.status === "pending") executing = true;
           i++;
         } else {
           break;
         }
       }
       const groupSeg = segments[groupStart] as ToolSegment;
-      nodes.push(<RelayProgressCard key={`relay-${groupSeg.id}`} steps={steps} pending={pending} />);
+      nodes.push(<RelayProgressCard key={`relay-${groupSeg.id}`} steps={steps} pending={pending} queuedOnly={pending && !executing} />);
       continue;
     }
 
@@ -361,18 +369,20 @@ export function renderSegments(
       const groupStart = i;
       const queries: SearchGroupData["queries"] = [];
       let pending = false;
+      let executing = false;
       while (i < segments.length) {
         const s = segments[i];
         if (s.type === "tool" && (s.name === "search" || s.name === "list_dir")) {
           queries.push({ name: s.name, args: s.args, label: exploreDisplayText(s.name, s.args, s.query) });
-          if (s.status === "pending") pending = true;
+          if (isToolInFlight(s.status)) pending = true;
+          if (s.status === "pending") executing = true;
           i++;
         } else {
           break;
         }
       }
       const groupSeg = segments[groupStart] as ToolSegment;
-      const group: SearchGroupData = { id: groupSeg.id, pending, queries };
+      const group: SearchGroupData = { id: groupSeg.id, pending, queuedOnly: pending && !executing, queries };
       nodes.push(<SearchGroupItem key={`search-${groupSeg.id}`} group={group} />);
       continue;
     }
@@ -383,6 +393,7 @@ export function renderSegments(
       // 先收集每个文件的完整路径 + 行号区间，最后统一做消歧展示
       const raw: { fullPath: string; range?: string; startLine?: number; endLine?: number }[] = [];
       let pending = false;
+      let executing = false;
       let hasError = false;
       while (i < segments.length) {
         const s = segments[i];
@@ -402,7 +413,8 @@ export function renderSegments(
           const startLine = toLineNumber(s.args?.startLine) ?? parseRangeStart(rm ? rm[1] : undefined);
           const endLine = toLineNumber(s.args?.endLine) ?? parseRangeEnd(rm ? rm[1] : undefined);
           raw.push({ fullPath, range: rm ? rm[1] : undefined, startLine, endLine });
-          if (s.status === "pending") pending = true;
+          if (isToolInFlight(s.status)) pending = true;
+          if (s.status === "pending") executing = true;
           if (s.status === "error") hasError = true;
           i++;
         } else {
@@ -413,7 +425,7 @@ export function renderSegments(
       const displayNames = disambiguatePaths(raw.map((r) => r.fullPath));
       const files = raw.map((r, idx) => ({ name: displayNames[idx], range: r.range, path: r.fullPath, startLine: r.startLine, endLine: r.endLine }));
       const groupSeg = segments[groupStart] as ToolSegment;
-      const group: ReadFileGroupData = { id: groupSeg.id, pending, hasError, files };
+      const group: ReadFileGroupData = { id: groupSeg.id, pending, queuedOnly: pending && !executing, hasError, files };
       nodes.push(<ReadFileGroupItem key={`read-${groupSeg.id}`} group={group} />);
       continue;
     }
@@ -516,19 +528,21 @@ export function renderSegments(
       const groupStart = i;
       const skillNames: string[] = [];
       let pending = false;
+      let executing = false;
       while (i < segments.length) {
         const s = segments[i];
         if (s.type === "tool" && s.name === "use_skill") {
           const n = (s.args?.name as string) || "";
           if (n && !skillNames.includes(n)) skillNames.push(n);
-          if (s.status === "pending") pending = true;
+          if (isToolInFlight(s.status)) pending = true;
+          if (s.status === "pending") executing = true;
           i++;
         } else {
           break;
         }
       }
       const groupSeg = segments[groupStart] as ToolSegment;
-      nodes.push(<SkillBadgeCard key={`useskill-${groupSeg.id}`} skills={skillNames} pending={pending} />);
+      nodes.push(<SkillBadgeCard key={`useskill-${groupSeg.id}`} skills={skillNames} pending={pending} queuedOnly={pending && !executing} />);
       continue;
     }
 
@@ -556,6 +570,7 @@ export function renderSegments(
       let closed = false;
       let hasError = false;
       let pending = false;
+      let executing = false;
       while (i < segments.length) {
         const s = segments[i];
         if (s.type === "tool" && BROWSER_TOOL_NAMES.has(s.name)) {
@@ -566,7 +581,8 @@ export function renderSegments(
           if (s.name === "open_browser" && typeof s.args?.url === "string") url = s.args.url as string;
           if (s.name === "close_browser" && s.status === "success") closed = true;
           if (s.status === "error") hasError = true;
-          if (s.status === "pending") pending = true;
+          if (isToolInFlight(s.status)) pending = true;
+          if (s.status === "pending") executing = true;
           i++;
         } else {
           break;
@@ -576,7 +592,7 @@ export function renderSegments(
       nodes.push(
         <BrowserSessionGroup
           key={`browser-session-${firstSeg.id}`}
-          group={{ id: firstSeg.id, url, steps, closed, hasError, pending }}
+          group={{ id: firstSeg.id, url, steps, closed, hasError, pending, queuedOnly: pending && !executing }}
         />
       );
       continue;

@@ -55,11 +55,17 @@ export interface ToolSegment {
 
 export type Segment = TextSegment | ToolSegment | SubAgentSegment | ReasoningSegment | RetrySegment;
 
-/** 思考过程段：每轮 LLM 调用的 reasoning 独立为一个 segment，时序上紧跟在对应工具调用前 */
+/** 思考过程段：每个思考块（轮次 + 协议块号）独立为一个 segment，时序上紧跟在对应工具调用前 */
 export interface ReasoningSegment {
   type: "reasoning";
   content: string;
-  /** 是否仍在流式追加中 */
+  /**
+   * 思考块身份 `r<轮次>:<块号>`，由 reasoning_delta 的 round/itemId/partIndex 计算（见 stateHandlers）。
+   * 流式增量**只**按此 key 归属到已有段，不依赖 streaming 标志——后者随时会被工具卡片提前置 false。
+   * 历史消息回放的段没有 key（不再接收增量），故为可选。
+   */
+  key?: string;
+  /** 是否仍在流式追加中（纯 UI 语义：控制展开/折叠，不参与归属判断） */
   streaming?: boolean;
 }
 

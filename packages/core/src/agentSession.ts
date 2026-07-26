@@ -1697,7 +1697,12 @@ export class AgentSession {
               this.send("status", { content: "正在构思图形...", phase: "thinking" });
             }
           }
-          this.send("reasoning_delta", { content: text, partIndex, itemId });
+          // round 是"这是第几轮 LLM 调用"的唯一权威来源。
+          // 协议里没有"新一轮开始"的事件——stream_start 只在本轮真的产出正文时才发，
+          // 纯工具轮压根不发，所以前端无法自己推断轮边界。不带 round，前端就只能靠
+          // "谁还在 streaming"这类全局可变状态猜思考块归属，一被提前到达的事件打翻
+          // 就拆成多段。partIndex 是协议块号、每轮从 0 重新开始，必须与 round 组合才唯一。
+          this.send("reasoning_delta", { content: text, partIndex, itemId, round: rounds });
         },
         onTextDelta: (text) => {
           this.trace("text.delta", { text: truncateForTrace(text, 2000) }, this.turnCount);
@@ -1718,7 +1723,10 @@ export class AgentSession {
           // 此刻拿不到参数，卡片先以占位文案出现（前端在 shortName 为空时会显示
           // "修改文件中..."/"创建文件中..."）；执行循环发出带 args 的 executing 事件后按 id 回填。
           if (!id) return; // 没拿到调用 id 就没法与后续 executing 事件配对，宁可不发
-          this.send("tool_call", { id, name, args: {}, cwd: this.cwd, status: "pending", ...this.mcpMetaFor(name) });
+          // status=queued 而非 pending：此刻一个工具都还没开始跑（本轮工具由 ToolDispatchHandler
+          // 串行执行）。发 pending 会让前端把"排队等待"画成"正在执行"——多工具轮里几张卡一起
+          // 转圈、都写着"执行命令中..."。真正开始执行时 toolCallExecutor 会按同一个 id 发 executing。
+          this.send("tool_call", { id, name, args: {}, cwd: this.cwd, status: ToolCallStatus.Queued, ...this.mcpMetaFor(name) });
         },
       };
 

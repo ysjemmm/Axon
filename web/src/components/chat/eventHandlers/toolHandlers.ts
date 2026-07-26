@@ -9,7 +9,7 @@ import {
   formatToolDescription, exploreDisplayText, formatLineSuffix,
   isRelayTool, relayToolLabel, firstLine, OUTPUT_TOOLS, toolPhaseText, extractBasename,
 } from "../utils";
-import type { ToolStatus } from "@/components/ToolCallItem";
+import { isToolInFlight, type ToolStatus } from "@/components/ToolCallItem";
 import type { ToolSegment } from "../types";
 import type { EventHandlerCtx, WsMessage } from "./types";
 import { TOOL, TIMEOUT } from "@/lib/constants";
@@ -17,13 +17,20 @@ import { TOOL, TIMEOUT } from "@/lib/constants";
 export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
   if (ctx.cancelled.current) return;
   if (msg.name === TOOL.DELEGATE_TASK) return;
-  // 工具到来意味着本轮 reasoning 已结束，标记所有 streaming reasoning segment 完结（触发自动折叠）
+  // 工具卡片出现 → 该思考块已经讲完，标记 streaming=false 让它自动折叠。
+  //
+  // ⚠️ 这里只表达"折叠"这一 UI 意图。reasoning 段的**归属**绝不能依赖这个标志：
+  // onToolCallDetected 现在在流式阶段（tool_use 块刚开头）就发 pending 卡片，
+  // 而 Claude extended thinking 一轮里的块序列是 thinking → tool_use → thinking → tool_use，
+  // 每张提前卡都会走到这里。早先 handleReasoningDelta 靠"找 streaming=true 的段"定位，
+  // 段一被关掉，后面的 thinking 增量就只能新建段——一排空的"思考过程"标题就是这么来的。
+  // 现在归属由 segment.key（轮次 + 协议块号）决定，与折叠状态彻底解耦。
   ctx.setChatHistory((prev) => {
     const last = prev[prev.length - 1];
     if (!last || last.role !== "assistant" || !last.segments) return prev;
     let changed = false;
     const segs = last.segments.map((s) => {
-      if (s.type === "reasoning" && (s as any).streaming) {
+      if (s.type === "reasoning" && s.streaming) {
         changed = true;
         return { ...s, streaming: false };
       }
@@ -34,11 +41,12 @@ export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
     updated[updated.length - 1] = { ...last, segments: segs };
     return updated;
   });
-  // 兜底：如果打字机 buffer 还有残留（后端漏发 stream_pause），加速排空。
-  // 用 drain 而非借 streamEnding 提速——后者会让打字机排空后把消息标记为 success，
-  // 可工具轮根本还没结束，消息会提前"完结"。drain 只排空、不收尾。
+  // 兜底：还有积压未出字（后端漏发 stream_pause）时加速排空，让文字赶在卡片之前讲完。
+  // 只能用 drain——它只排空、不碰终态。借 streamEnding/finish 提速会把整条消息标成
+  // success 并 finishLoading()，而此刻工具一个都还没执行，消息就提前"完结"了：
+  // 头部停转、输入框解锁，后续 executing/tool_result/下一轮正文却继续往这条消息里追加。
   const tw = ctx.typewriter;
-  if (tw.buffer.current) tw.drain(ctx);
+  if (tw.hasPending()) tw.drain(ctx);
   ctx.setStatusText(toolPhaseText(msg.name || ""));
   ctx.setStatusPhase("tool");
   ctx.setChatHistory((prev) => {
@@ -55,20 +63,21 @@ export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
       return prev;
     }
 
-    // status="executing"：尝试更新已有的 pending 段（匹配 id 或 name）
+    // status="executing"：宿主真正开始跑这一个 → 把它从"排队中"转成"执行中"并回填参数。
+    // 匹配用 isToolInFlight（queued 或 pending）：绝大多数情况命中的是流式阶段那张 queued 卡。
     if (last?.role === "assistant" && last.segments && msgStatus === "executing") {
       const segs = [...last.segments];
       let idx = -1;
       if (eventId) {
         for (let i = segs.length - 1; i >= 0; i--) {
           const s = segs[i];
-          if (s.type === "tool" && s.status === "pending" && (s.id === eventId || (!s.boundId && s.name === msg.name))) {
+          if (s.type === "tool" && isToolInFlight(s.status) && (s.id === eventId || (!s.boundId && s.name === msg.name))) {
             idx = i; break;
           }
         }
       } else {
         const lastSeg = segs[segs.length - 1];
-        if (lastSeg?.type === "tool" && lastSeg.name === msg.name && lastSeg.status === "pending") {
+        if (lastSeg?.type === "tool" && lastSeg.name === msg.name && isToolInFlight(lastSeg.status)) {
           idx = segs.length - 1;
         }
       }
@@ -108,7 +117,10 @@ export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
       id: eventId || `tool-${Date.now()}-${msg.name}`,
       boundId: !!eventId,
       name: msg.name || "",
-      status: "pending",
+      // 流式阶段的提前卡（后端 onToolCallDetected 发 status="queued"）只是"已规划、排队等执行"，
+      // 此刻工具一个都没开始跑，必须落成 queued 而不是 pending——否则卡片会转圈+写"执行命令中..."，
+      // 而后端是严格串行的，同一时刻只有一个工具真在执行。
+      status: msgStatus === "queued" ? "queued" : "pending",
       description: formatToolDescription(msg.name || "", undefined, args),
       args,
       command: (msg.name === TOOL.EXECUTE_COMMAND || msg.name === TOOL.START_PROCESS) ? (args.command as string) : undefined,
@@ -225,7 +237,7 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
       if (matchIdx < 0) {
         for (let i = segs.length - 1; i >= 0; i--) {
           const s = segs[i];
-          if (s.type === "tool" && s.name === msg.name && s.status === "pending") { matchIdx = i; break; }
+          if (s.type === "tool" && s.name === msg.name && isToolInFlight(s.status)) { matchIdx = i; break; }
         }
       }
       if (matchIdx >= 0) {

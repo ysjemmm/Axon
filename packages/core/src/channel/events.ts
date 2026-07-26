@@ -55,7 +55,8 @@ export type AgentEventPayload =
       name: string;
       args: Json;
       cwd: string;
-      status: "pending" | "executing";
+      /** queued=已规划排队（流式阶段提前出卡）；executing=宿主正在真正执行这一个 */
+      status: "queued" | "pending" | "executing";
       /** MCP 工具专用：真实 server 名 / 工具名（前端卡片展示用） */
       mcpServer?: string;
       mcpTool?: string;

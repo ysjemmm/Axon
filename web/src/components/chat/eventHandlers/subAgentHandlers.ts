@@ -3,7 +3,7 @@
  * sub_agent_start / sub_agent_event / sub_agent_end / error
  */
 
-import type { ToolStatus } from "@/components/ToolCallItem";
+import { isToolInFlight, type ToolStatus } from "@/components/ToolCallItem";
 import { updateSubAgentInner } from "../subAgentEvents";
 import type { EventHandlerCtx, WsMessage } from "./types";
 
@@ -93,8 +93,9 @@ export function handleSubAgentEnd(msg: WsMessage, ctx: EventHandlerCtx): void {
       if (m.role !== "assistant" || !m.segments) return m;
       const segs = m.segments.map((s) => {
         if (s.type !== "subagent" || s.id !== delegateId) return s;
+        // 子 agent 已结束：内部还没跑完的卡片（排队中/执行中）一并收成 success
         const inner = s.inner.map((seg) =>
-          seg.type === "tool" && seg.status === "pending"
+          seg.type === "tool" && isToolInFlight(seg.status)
             ? { ...seg, status: "success" as ToolStatus }
             : seg);
         return { ...s, status: "done" as const, innerStreaming: false, conclusion: result, inner };
