@@ -77,8 +77,12 @@ export class GenericToolExecutor {
         const turnId = `turn-${req.runtime.turnCount}`;
         const created = await this.deps.snapshotMgr.beforeEdit(turnId, filesToSnapshot).catch(() => false);
         if (created) {
-          const snapshots = await this.deps.snapshotMgr.list().catch(() => []);
-          this.deps.sendSnapshotsListed(snapshots);
+          // 刷新左侧快照面板：与"这次编辑能否执行"无关，不该 await 在写文件之前。
+          // list() 是一次全量 git for-each-ref（本仓库实测约 150ms），而 beforeEdit 内部的
+          // prune() 刚刚已经跑过一遍——串行 await 只是白白推迟工具真正开始执行。
+          void this.deps.snapshotMgr.list()
+            .then((snapshots) => this.deps.sendSnapshotsListed(snapshots))
+            .catch(() => { /* 面板刷新失败不影响编辑 */ });
         }
       }
     }

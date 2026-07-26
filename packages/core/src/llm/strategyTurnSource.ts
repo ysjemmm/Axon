@@ -37,6 +37,15 @@ export interface StrategyTurnSourceOptions {
   onReasoningDelta?: (text: string, partIndex?: number, itemId?: string) => void;
   /** 可选：正文流式回调。语义同上：提供才回调，用于 canary 边生成边推前端；shadow 不传即静默。 */
   onTextDelta?: (text: string) => void;
+  /**
+   * 可选：首次检测到工具调用（工具名已确定、参数还在流式累加）时回调。语义同上：提供才回调。
+   *
+   * 这是"卡片能多早出现"的唯一信号源。工具参数体（create_file 的 content、str_replace 的
+   * new_str）往往就是模型输出的主体，几百到几千 token；等 run() 返回再发卡片，用户要盯着
+   * 空白等好几秒。子 Agent 一直是对的（skills/subAgentRunner.ts 在此回调里直接发 pending 卡），
+   * 主会话在迁移到本适配器时漏了透传，才退化成"流完才出卡"。
+   */
+  onToolCallDetected?: (name: string, id?: string) => void;
 }
 
 /** 把工具调用的原始 JSON 参数尽力解析为对象；失败返回 undefined（保留 rawArgsText 供排查）。 */
@@ -81,8 +90,11 @@ export class StrategyTurnSource implements LLMTurnSource {
           if (text) content += text;
           this.opts.onTextDelta?.(text);
         },
-        // 工具检测在最终结果里统一处理，这里无需额外动作。
-        onToolCallDetected: () => { /* no-op：草案在 run 结束时从 turn.toolCalls 统一归一化 */ },
+        // 工具草案仍在 run 结束时从 turn.toolCalls 统一归一化；这里只把"检测到了"这个
+        // 时间点转发给上层，供其提前渲染 loading 卡片。不提供回调时保持静默（shadow 零副作用）。
+        onToolCallDetected: (name, id) => {
+          this.opts.onToolCallDetected?.(name, id);
+        },
       },
     });
 

@@ -1,17 +1,50 @@
-import { memo, useMemo, useState } from "react";
+import { memo, useMemo, useState, type ReactNode } from "react";
 import { Code } from "lucide-react";
 import { AxonLogo } from "@/components/AxonLogo";
 import type { ChatMessage, TextSegment } from "./types";
 import { formatElapsed } from "./format";
 import { renderSegments } from "./renderSegments";
 
+/**
+ * AI 回复的头部：品牌图标 + 名称 +（本轮进行中时）实时状态文字。
+ *
+ * 单独导出是为了让"AI 还没开始输出"的那一小段（用户消息刚发出、stream_start 未到）
+ * 也能用同一个头部渲染在消息流末尾，视觉上与真正的回复无缝衔接——
+ * 而不是像早先那样把状态挤在输入框上方的状态条里。
+ */
+export function AssistantTurnHeader({
+  streaming,
+  liveStatus,
+  children,
+}: {
+  streaming?: boolean;
+  liveStatus?: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-2 mb-2.5">
+      <AxonLogo size={22} animate={!!streaming} />
+      <span className="text-sm font-semibold text-foreground">Axon</span>
+      {liveStatus && (
+        <span className="text-xs text-muted-foreground animate-pulse truncate max-w-[240px]">
+          {liveStatus}
+        </span>
+      )}
+      {children}
+    </div>
+  );
+}
+
 function AssistantTurnImpl({
   message,
+  liveStatus,
   onAcceptEdit,
   onRejectEdit,
   onUndoEdit,
 }: {
   message: ChatMessage;
+  /** 本轮进行中的状态文字；仅最后一条 assistant 消息在流式期间会收到 */
+  liveStatus?: string;
   onAcceptEdit?: (path: string) => void;
   onRejectEdit?: (path: string) => void;
   onUndoEdit?: (path: string) => void;
@@ -38,9 +71,7 @@ function AssistantTurnImpl({
 
   return (
     <div className="flex flex-col">
-      <div className="flex items-center gap-2 mb-2.5">
-        <AxonLogo size={22} animate={!!message.streaming} />
-        <span className="text-sm font-semibold text-foreground">Axon</span>
+      <AssistantTurnHeader streaming={message.streaming} liveStatus={liveStatus}>
         {!message.streaming && rawContent && (
           <button
             onClick={() => setShowRaw(!showRaw)}
@@ -50,7 +81,7 @@ function AssistantTurnImpl({
             {showRaw ? "Rendered" : "Raw"}
           </button>
         )}
-      </div>
+      </AssistantTurnHeader>
 
       <div className="min-w-0">
         {showRaw ? (
@@ -109,4 +140,9 @@ function AssistantTurnImpl({
   );
 }
 
-export const AssistantTurn = memo(AssistantTurnImpl, (prev, next) => prev.message === next.message);
+// liveStatus 也要参与比较，否则状态文字变化（思考中→正在读取文件…）不会重渲染。
+// 只有最后一条 assistant 消息会拿到非 undefined 的 liveStatus，历史消息不受影响。
+export const AssistantTurn = memo(
+  AssistantTurnImpl,
+  (prev, next) => prev.message === next.message && prev.liveStatus === next.liveStatus,
+);

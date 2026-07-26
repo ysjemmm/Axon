@@ -1201,6 +1201,9 @@ export class AgentSession {
           // 关键：把新链路的流式增量实时接到主循环 callbacks 上，让前端看到正常的思考/打字效果。
           onReasoningDelta: (text, partIndex, itemId) => callbacks.onReasoningDelta(text, partIndex, itemId),
           onTextDelta: (text) => callbacks.onTextDelta(text),
+          // 工具检测信号也要接上：否则主循环的 onToolCallDetected 永远收不到调用，
+          // 卡片只能等整条 SSE 流消费完才发得出来（工具参数体常常就是模型输出的主体）。
+          onToolCallDetected: (name, id) => callbacks.onToolCallDetected(name, id),
         });
         const handler = new DefaultLLMHandler(turnSource);
         const draft = await handler.handle({
@@ -1705,13 +1708,17 @@ export class AgentSession {
           },
         onToolCallDetected: (name, id) => {
           this.trace("tool.detected", { name, id }, this.turnCount);
-          // ⚠️ 不在这里发 tool_call(pending)！
-          // onToolCallDetected 在流式输出阶段被调用，此时 LLM 可能一次返回多个 tool_calls，
-          // 每个都会触发此回调。如果在这里全发 pending 卡片，用户会同时看到 N 张"准备执行"卡片，
-          // 而后端实际还在串行执行第一个。pending 卡片改到串行执行循环中按序发送。
-          // delegate_task / parallel_execute / parallel_research 有专门的 sub_agent 卡片，也跳过。
+          // delegate_task / parallel_execute / parallel_research 有专门的 sub_agent 卡片，跳过。
           if (name === "delegate_task" || name === "parallel_execute" || name === "parallel_research") return;
-          // 仅记录检测到工具，不发事件（pending 事件在执行循环中发）
+          // 这个回调在流式阶段就会触发（工具名已定、参数还在逐 chunk 累加），是卡片能出现的
+          // 最早时机。而工具参数体往往就是模型输出的主体（create_file 的 content、str_replace
+          // 的 new_str，几百到几千 token），等整条流消费完再发卡，用户要盯着空白等好几秒。
+          //
+          // 所有工具都提前发卡，前端 useToolCallQueue 的 80ms 间隔确保不会"同时弹出 N 张"。
+          // 此刻拿不到参数，卡片先以占位文案出现（前端在 shortName 为空时会显示
+          // "修改文件中..."/"创建文件中..."）；执行循环发出带 args 的 executing 事件后按 id 回填。
+          if (!id) return; // 没拿到调用 id 就没法与后续 executing 事件配对，宁可不发
+          this.send("tool_call", { id, name, args: {}, cwd: this.cwd, status: "pending", ...this.mcpMetaFor(name) });
         },
       };
 
@@ -1732,10 +1739,11 @@ export class AgentSession {
       // 记录本回合 API 返回的真实 token 用量（用于精确驱动压缩与进度条）
       this.recordTurnUsage(turn.usage);
 
-      // 推送 token 用量
-      if (contentBuffer) {
-        this.updateAndSendTokenUsage();
-      }
+      // 推送 token 用量。
+      // 不能用 contentBuffer 当门槛：纯工具轮（模型只发工具调用、没输出文字）同样消耗上下文，
+      // 挡掉后圆环在整条工具链期间保持滞后，直到某轮出现文字才一次性跳一大格——看起来像"重复累加"。
+      // 每轮都推，前端只是覆盖同一个数值，成本可忽略。
+      this.updateAndSendTokenUsage();
 
       // 无工具调用 → 候选最终回复。交由专门方法处理（截断续写 / 内心 OS 重试 / 空回复兜底 /
       // 自动诊断 / 正常收尾），返回 "continue"=进入下一轮，"done"=本轮结束。

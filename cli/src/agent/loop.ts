@@ -62,9 +62,6 @@ export class AgentLoop {
       for (const toolCall of assistantMessage.tool_calls) {
         const toolName = toolCall.function.name;
         const toolArgs = JSON.parse(toolCall.function.arguments);
-
-        console.log(`  🔧 调用工具: ${toolName}`);
-
         const tool = getToolByName(toolName);
         let result: string;
 

@@ -280,23 +280,13 @@ export function activate(context: vscode.ExtensionContext): void {
   // 所有工作区文件夹（多根工作区场景）
   const allWorkspaces = vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath) || [defaultWorkspace];
 
-  /** 扫描所有工作区的 relay 列表（relay 可能落盘到任意工作区的 .axon/relays/） */
+  /** 列出全局 relay（relay 统一落盘到 <homeDir>/.axon/relays/，不跟工作区绑定） */
   async function listAllRelays(): Promise<Array<{ id: string; title: string; phase: string }>> {
     const { RelayStore } = await import("@axon/core");
     const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
-    const seen = new Set<string>();
-    const result: Array<{ id: string; title: string; phase: string }> = [];
-    for (const ws of allWorkspaces) {
-      const store = new RelayStore(ws, createHost());
-      const relays = await store.list();
-      for (const r of relays) {
-        if (!seen.has(r.id)) {
-          seen.add(r.id);
-          result.push({ id: r.id, title: r.title, phase: r.phase });
-        }
-      }
-    }
-    return result;
+    const store = new RelayStore(homedir(), createHost());
+    const relays = await store.list();
+    return relays.map((r) => ({ id: r.id, title: r.title, phase: r.phase }));
   }
 
   const isValidDir = async (p: string): Promise<boolean> => {

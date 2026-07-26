@@ -18,7 +18,7 @@ export interface SearchResult {
 export interface SearchResponse {
   query: string;
   results: SearchResult[];
-  source: "tavily" | "duckduckgo"; // 实际用了哪个引擎
+  source: "tavily" | "bing"; // 实际用了哪个引擎
 }
 
 /** 简单 HTTPS GET/POST 请求封装 */
@@ -83,35 +83,25 @@ async function searchTavily(query: string, apiKey: string): Promise<SearchResult
   return results;
 }
 
-/** DuckDuckGo HTML 搜索（兜底） */
-async function searchDuckDuckGo(query: string): Promise<SearchResult[]> {
+/** Bing 搜索（兜底，中国大陆可用） */
+async function searchBing(query: string): Promise<SearchResult[]> {
   const encoded = encodeURIComponent(query);
-  const url = `https://html.duckduckgo.com/html/?q=${encoded}`;
+  const url = `https://cn.bing.com/search?q=${encoded}&setlang=zh-cn`;
   const html = await httpRequest(url, {
-    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
   });
 
   const results: SearchResult[] = [];
-  // 解析 DuckDuckGo HTML 结果（每个结果在 class="result" 的 div 中）
-  const resultBlocks = html.split(/class="result\s/g).slice(1);
-
-  for (const block of resultBlocks) {
+  const blocks = html.split(/<li class="b_algo"[^>]*>/g).slice(1);
+  for (const block of blocks) {
     if (results.length >= 10) break;
-    // 提取标题和 URL
-    const linkMatch = block.match(/class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/);
+    const linkMatch = block.match(/<a[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
     if (!linkMatch) continue;
-    let href = linkMatch[1];
-    // DuckDuckGo 的链接可能是重定向 URL，提取实际 URL
-    const uddgMatch = href.match(/uddg=([^&]+)/);
-    if (uddgMatch) href = decodeURIComponent(uddgMatch[1]);
+    const href = linkMatch[1].replace(/&amp;/g, "&");
     const title = linkMatch[2].replace(/<[^>]*>/g, "").trim();
     if (!title || !href) continue;
-
-    // 提取摘要
-    const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/);
-    const snippet = snippetMatch
-      ? snippetMatch[1].replace(/<[^>]*>/g, "").trim()
-      : "";
+    const capMatch = block.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
+    const snippet = capMatch ? capMatch[1].replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim() : "";
 
     results.push({
       title,
@@ -124,7 +114,7 @@ async function searchDuckDuckGo(query: string): Promise<SearchResult[]> {
 }
 
 /**
- * 执行 web 搜索：Tavily 为主，失败时降级到 DuckDuckGo
+ * 执行 web 搜索：Tavily 为主，失败时降级到 Bing
  */
 export async function webSearch(query: string): Promise<SearchResponse> {
   const tavilyKey = process.env.TAVILY_API_KEY?.trim();
@@ -137,16 +127,16 @@ export async function webSearch(query: string): Promise<SearchResponse> {
         return { query, results, source: "tavily" };
       }
     } catch (err) {
-      console.warn("[web_search] Tavily 失败，降级到 DuckDuckGo:", (err as Error).message);
+      console.warn("[web_search] Tavily 失败，降级到 Bing:", (err as Error).message);
     }
   }
 
-  // 降级到 DuckDuckGo
+  // 降级到 Bing
   try {
-    const results = await searchDuckDuckGo(query);
-    return { query, results, source: "duckduckgo" };
+    const results = await searchBing(query);
+    return { query, results, source: "bing" };
   } catch (err) {
-    throw new Error(`搜索失败：Tavily 和 DuckDuckGo 均不可用。${(err as Error).message}`);
+    throw new Error(`搜索失败：Tavily 和 Bing 均不可用。${(err as Error).message}`);
   }
 }
 

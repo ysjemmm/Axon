@@ -35,11 +35,10 @@ export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
     return updated;
   });
   // 兜底：如果打字机 buffer 还有残留（后端漏发 stream_pause），加速排空。
-  // 不瞬间 flush，让打字机以加速模式在几帧内自然排完，保持视觉连贯。
+  // 用 drain 而非借 streamEnding 提速——后者会让打字机排空后把消息标记为 success，
+  // 可工具轮根本还没结束，消息会提前"完结"。drain 只排空、不收尾。
   const tw = ctx.typewriter;
-  if (tw.buffer.current) {
-    tw.streamEnding.current = tw.streamEnding.current || { elapsed: 0, tokens: 0 };
-  }
+  if (tw.buffer.current) tw.drain(ctx);
   ctx.setStatusText(toolPhaseText(msg.name || ""));
   ctx.setStatusPhase("tool");
   ctx.setChatHistory((prev) => {

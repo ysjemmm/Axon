@@ -1,11 +1,11 @@
 /**
- * UnifiedStatusBar —— 输入框上方的紧凑状态条
+ * UnifiedStatusBar —— 输入框上方的文件改动汇总条
  *
- * 将 Loading 指示器与文件改动汇总合并为一行：
- * - 左侧：AI 执行状态（呼吸灯动画 + 状态文字），不执行时隐藏
- * - 右侧：文件改动汇总（如 "4 changes · View all"），点击展开 AppliedChangesBar
+ * 只负责文件改动汇总（如 "4 changes · View all"），点击展开 AppliedChangesBar。
  *
- * Loading 始终保持 DOM 存在（hidden 控制），避免 CSS animation 被打断。
+ * AI 执行状态（图标 + "思考中…"）曾经也在这里（左半边），现已移到 AI 回复消息的头部
+ * ——见 chat/AssistantTurn.tsx 的 AssistantTurnHeader。状态贴着回复本身更符合直觉，
+ * 也避免了"消息在上方、状态在输入框上方"的割裂感。
  */
 
 import { useState, useMemo } from "react";
@@ -14,8 +14,6 @@ import { AppliedChangesBar } from "./AppliedChangesBar";
 import type { ChatMessage } from "./chat/types";
 
 interface UnifiedStatusBarProps {
-  isLoading: boolean;
-  statusText: string;
   mode: "agent" | "quest";
   chatHistory: ChatMessage[];
   pendingPaths: string[];
@@ -28,8 +26,6 @@ interface UnifiedStatusBarProps {
 }
 
 export function UnifiedStatusBar({
-  isLoading,
-  statusText,
   mode,
   chatHistory,
   pendingPaths,
@@ -65,25 +61,13 @@ export function UnifiedStatusBar({
   const isQuestMode = mode === "quest";
   const hasChanges = !isQuestMode && totalChanges > 0;
 
-  // 两侧都没内容时不渲染
-  if (!isLoading && !hasChanges) return null;
+  // 没有改动时整条不渲染
+  if (!hasChanges) return null;
 
   return (
     <div className="mb-1">
-      {/* 紧凑状态条：一行 flex 布局 */}
-      <div className="flex items-center justify-between px-2 py-1.5 min-h-[34px]">
-        {/* 左侧：Loading 状态指示（DOM 始终存在，hidden 控制显隐，CSS animation 不中断） */}
-        <div className={`flex items-center gap-2.5 text-muted-foreground text-sm ${isLoading ? "" : "invisible"}`}>
-          <svg width="24" height="24" viewBox="0 0 40 40" className="shrink-0">
-            <circle cx="20" cy="20" r="17" fill="#6366f1" className="breath-origin" style={{ animation: "breath 2.5s ease-in-out infinite" }} />
-            <circle cx="20" cy="20" r="13" fill="white" stroke="#1e1b4b" strokeWidth="1.5" />
-            <ellipse cx="15" cy="19" rx="2" ry="2.5" fill="#6366f1" style={{ transformOrigin: "15px 19px", animation: "blink 3s ease-in-out infinite" }} />
-            <ellipse cx="25" cy="19" rx="2" ry="2.5" fill="#6366f1" style={{ transformOrigin: "25px 19px", animation: "blink 3s ease-in-out 0.12s infinite" }} />
-          </svg>
-          <span className="animate-pulse truncate max-w-[200px]">{statusText}</span>
-        </div>
-
-        {/* 右侧：文件改动汇总 */}
+      {/* 一行 flex 布局，改动汇总右对齐 */}
+      <div className="flex items-center justify-end px-2 py-1.5 min-h-[34px]">
         {hasChanges && (
           <button
             onClick={() => setExpanded((v) => !v)}

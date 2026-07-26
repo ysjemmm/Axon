@@ -72,21 +72,37 @@ export function handleReasoningDelta(msg: WsMessage, ctx: EventHandlerCtx): void
 
   // 将 reasoning 内容追加到当前 assistant 消息的最后一个 reasoning segment。
   // 如果最后一个 segment 不是 reasoning（或还没有 assistant 消息），新建一个。
+  let action: string = "append";
   ctx.setChatHistory((prev) => {
     const updated = [...prev];
     const last = updated[updated.length - 1];
     if (last?.role === "assistant" && last.segments) {
       const segs = [...last.segments];
-      const lastSeg = segs[segs.length - 1];
-      if (lastSeg && lastSeg.type === "reasoning" && lastSeg.streaming) {
+      // 从后往前找正在 streaming 的 reasoning 段（不一定在末尾：stream_start 可能已在末尾
+      // 压了一个空 text 占位段，此时 reasoning 段在它前面，必须按内容而非位置来定位）。
+      let reasoningIdx = -1;
+      for (let i = segs.length - 1; i >= 0; i--) {
+        if (segs[i].type === "reasoning" && (segs[i] as any).streaming) { reasoningIdx = i; break; }
+      }
+      if (reasoningIdx >= 0) {
         // 追加到已有的 streaming reasoning segment
-        segs[segs.length - 1] = { ...lastSeg, content: lastSeg.content + content };
+        const seg = segs[reasoningIdx] as any;
+        segs[reasoningIdx] = { ...seg, content: seg.content + content };
       } else {
-        // 新建一个 reasoning segment
-        segs.push({ type: "reasoning", content, streaming: true });
+        action = "new";
+        // 新建一个 reasoning segment。
+        // 如果末尾是 stream_start 预先创建的空 text 段，将 reasoning 插到它前面，
+        // 保证思考内容始终显示在正文之前。
+        const lastSeg = segs[segs.length - 1];
+        if (lastSeg && lastSeg.type === "text" && !(lastSeg as any).content?.trim()) {
+          segs.splice(segs.length - 1, 0, { type: "reasoning", content, streaming: true });
+        } else {
+          segs.push({ type: "reasoning", content, streaming: true });
+        }
       }
       updated[updated.length - 1] = { ...last, segments: segs };
     } else {
+      action = "new";
       // 还没有 assistant 消息，创建一个（理论上 stream_start 应该先到，这里兜底）
       updated.push({
         id: `assistant-${Date.now()}`,
@@ -98,6 +114,10 @@ export function handleReasoningDelta(msg: WsMessage, ctx: EventHandlerCtx): void
     }
     return updated;
   });
+
+  if (action === "new") {
+    console.log(`[reasoning] 新建段: preview="${content.slice(0, 60)}"`);
+  }
 
   if (ctx.statusPhaseRef.current === "thinking") {
     ctx.setStatusText("正在推理...");

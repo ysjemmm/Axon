@@ -18,6 +18,12 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 import type { LLMStrategy, RunTurnParams, LLMTurnResult, NormalizedToolCall, ToolDef } from "./types.js";
 import { sanitizeToolPairing } from "../messageSanitizer.js";
 import { normalizeFinishReason } from "./finishReasonMapper.js";
+import {
+  emptyRawUsage,
+  mergeRawUsage,
+  normalizeAnthropicUsage,
+  estimateAnthropicPromptTokens,
+} from "./anthropicUsage.js";
 
 /** Anthropic Messages API 版本号（协议必填请求头） */
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -110,6 +116,19 @@ function decodeImageDimensionsUncached(mediaType: string, base64Data: string): {
   return null;
 }
 
+/** 只提示一次：端点在 message_start 报了缓存却给 input_tokens=0，说明它的 input_tokens 不是 prompt 大小 */
+let _warnedUsageSemantics = false;
+function warnUsageSemanticsOnce(raw: unknown, estimate: number): void {
+  if (_warnedUsageSemantics) return;
+  _warnedUsageSemantics = true;
+  console.warn(
+    "[anthropic-usage] 端点在 message_start 报了缓存字段却给 input_tokens=0，" +
+      "说明其 input_tokens 不代表 prompt 大小（疑似网关自己的计费口径）；" +
+      "上下文占用已改用 cache_read + cache_creation，否则会随缓存命中量虚高。" +
+      `raw=${JSON.stringify(raw)} 本地粗估（仅供参考）=${estimate}`,
+  );
+}
+
 export class AnthropicMessagesStrategy implements LLMStrategy {
   readonly name = "anthropic_messages";
 
@@ -123,6 +142,10 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
 
     const { system, anthropicMessages } = this.convertMessages(messages);
     const hasTools = tools.length > 0;
+    const anthropicTools = hasTools ? this.convertTools(tools) : [];
+    // 本地粗估本次请求的 prompt 规模：用于识别中转站返回的 usage 是"原生相加"还是"已含缓存"语义
+    // （见 anthropicUsage.ts）。只做判别，不参与计费。
+    const estimatedPromptTokens = estimateAnthropicPromptTokens(system, anthropicMessages, anthropicTools);
 
     const url = this.baseUrl.replace(/\/+$/, "") + "/messages";
     const useThinking = supportsExtendedThinking(model);
@@ -136,7 +159,7 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
       messages: anthropicMessages,
       stream: true,
       ...(system ? { system } : {}),
-      ...(hasTools ? { tools: this.convertTools(tools) } : {}),
+      ...(hasTools ? { tools: anthropicTools } : {}),
       // extended thinking 要求 temperature=1 或不传；启用时忽略外部 temperature
       ...(useThinking ? {} : (temperature !== undefined ? { temperature } : {})),
       ...(useThinking ? { thinking: { type: "enabled", budget_tokens: THINKING_BUDGET_TOKENS } } : {}),
@@ -158,18 +181,24 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
       throw new Error(`Anthropic Messages API 请求失败：HTTP ${res.status} ${res.statusText}${errText ? ` - ${errText}` : ""}`);
     }
 
-    return this.parseStream(res.body, callbacks);
+    return this.parseStream(res.body, callbacks, estimatedPromptTokens);
   }
 
   /** 解析 Anthropic Messages API 的 SSE 流，产出标准化 LLMTurnResult */
-  private async parseStream(body: ReadableStream<Uint8Array>, callbacks: RunTurnParams["callbacks"]): Promise<LLMTurnResult> {
+  private async parseStream(
+    body: ReadableStream<Uint8Array>,
+    callbacks: RunTurnParams["callbacks"],
+    estimatedPromptTokens = 0,
+  ): Promise<LLMTurnResult> {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
 
     let content = "";
     let stopReason: string | null = null;
-    let usage: LLMTurnResult["usage"];
+    // 原始 usage 字段逐事件累积，语义解释统一放到流结束后做一次
+    // （中途"边合并边解释"正是上下文占比被重复累加的根因，见 anthropicUsage.ts）
+    const rawUsage = emptyRawUsage();
     // 按内容块 index 累积（text 块合并进 content；tool_use 块单独累积参数 JSON 片段）
     const toolByIndex = new Map<number, { id: string; name: string; arguments: string; announced: boolean }>();
 
@@ -204,24 +233,16 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
         case "message_delta": {
           if (data.delta?.stop_reason) stopReason = data.delta.stop_reason;
           if (data.usage) {
-            usage = {
-              promptTokens: (data.usage.input_tokens ?? usage?.promptTokens ?? 0) + (data.usage.cache_read_input_tokens ?? 0),
-              completionTokens: data.usage.output_tokens ?? 0,
-              totalTokens: (data.usage.input_tokens ?? usage?.promptTokens ?? 0) + (data.usage.cache_read_input_tokens ?? 0) + (data.usage.output_tokens ?? 0),
-              cachedTokens: data.usage.cache_read_input_tokens ?? 0,
-            };
+            if (process.env["AXON_LLM_DEBUG"]) console.log("[anthropic-usage] message_delta.usage =", JSON.stringify(data.usage));
+            mergeRawUsage(rawUsage, data.usage);
           }
           break;
         }
         case "message_start": {
           const msgUsage = data.message?.usage;
           if (msgUsage) {
-            usage = {
-              promptTokens: (msgUsage.input_tokens ?? 0) + (msgUsage.cache_read_input_tokens ?? 0),
-              completionTokens: msgUsage.output_tokens ?? 0,
-              totalTokens: (msgUsage.input_tokens ?? 0) + (msgUsage.cache_read_input_tokens ?? 0) + (msgUsage.output_tokens ?? 0),
-              cachedTokens: msgUsage.cache_read_input_tokens ?? 0,
-            };
+            if (process.env["AXON_LLM_DEBUG"]) console.log("[anthropic-usage] message_start.usage =", JSON.stringify(msgUsage));
+            mergeRawUsage(rawUsage, msgUsage, true);
           }
           break;
         }
@@ -268,6 +289,25 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
     // stop_reason 映射到 Chat Completions 词表，复用同一套归一化规则
     const rawFinishReason = this.mapStopReason(stopReason, toolCalls.length > 0);
     const normalizedFinishReason = normalizeFinishReason(rawFinishReason);
+
+    // 判别只看 usage 自身的确定性特征，不掺入 estimatedPromptTokens——后者仅用于日志诊断
+    const normalized = normalizeAnthropicUsage(rawUsage);
+    if (normalized?.semantics === "cache_only") {
+      warnUsageSemanticsOnce(rawUsage, estimatedPromptTokens);
+    }
+    if (normalized && process.env["AXON_LLM_DEBUG"]) {
+      console.log(
+        `[anthropic-usage] raw=${JSON.stringify(rawUsage)} 本地粗估=${estimatedPromptTokens} → 语义=${normalized.semantics} 上下文=${normalized.promptTokens}`,
+      );
+    }
+    const usage: LLMTurnResult["usage"] = normalized
+      ? {
+          promptTokens: normalized.promptTokens,
+          completionTokens: normalized.completionTokens,
+          totalTokens: normalized.totalTokens,
+          cachedTokens: normalized.cachedTokens,
+        }
+      : undefined;
 
     return { content, toolCalls, finishReason: rawFinishReason, normalizedFinishReason, usage };
   }

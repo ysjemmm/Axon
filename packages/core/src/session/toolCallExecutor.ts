@@ -18,7 +18,6 @@ import {
   ToolName,
   ToolCallStatus,
   statusForTool,
-  SOFT_FAIL_TOOLS,
   REQUIRED_ARGS_TOOLS,
   type ToolMeta,
 } from "../tools/index.js";
@@ -102,12 +101,22 @@ export class ToolCallExecutor {
       return;
     }
 
+    // 执行前发出带真实参数的卡片，并让它一直停在执行中，直到 tool_result 到达。
+    //
+    // 这里**不再**发 Pending：那一条紧跟着 Executing 同步发出，两者之间没有任何等待，
+    // 对前端只是徒增一次事件（卡片队列还要为它留 80ms 间隔，反而推迟带参数的卡片）。
+    // 真正的"提前出卡"由流式阶段的 onToolCallDetected 负责（见 agentSession 主循环），
+    // 那张卡的 id 与这里一致，前端 executing 分支会按 id 匹配上并回填参数。
+    // 没有早期卡时（非本轮第一个工具 / provider 未给出调用 id），前端 executing 分支
+    // 找不到匹配会自动新建一张执行中卡片，行为不变。
+    //
+    // 也**不再**跳过 SOFT_FAIL_TOOLS（read_file / str_replace / apply_patch）。
+    // 早先为了"编辑失败不闪红卡"，把这三个工具的执行前卡片整体跳过，卡片改由
+    // toolOutcomeRecorder 在执行完成后以 Success 补发——代价是最常用的编辑工具在
+    // 整个执行期间一张卡片都没有，完成瞬间才凭空落下一张终态卡。
+    // 现在改为：照常出执行中卡片，失败时由前端依据 tool_result 的 hidden 标记撤卡。
     const displayCwd = this.s.commandToolExecutor.displayCwd(toolName, toolArgs);
-    // 前 2 次软失败不发 tool_call（不闪卡片），直接发带 hidden 的 tool_result。
-    if (!SOFT_FAIL_TOOLS.has(toolName)) {
-      this.s.send("tool_call", { id: toolCall.id, name: toolName, args: {}, cwd: displayCwd, status: ToolCallStatus.Pending, ...this.s.mcpMetaFor(toolName) });
-      this.s.send("tool_call", { id: toolCall.id, name: toolName, args: toolArgs, cwd: displayCwd, status: ToolCallStatus.Executing, ...this.s.mcpMetaFor(toolName) });
-    }
+    this.s.send("tool_call", { id: toolCall.id, name: toolName, args: toolArgs, cwd: displayCwd, status: ToolCallStatus.Executing, ...this.s.mcpMetaFor(toolName) });
 
     // 推送细化状态（给前端展示具体动作）
     const toolStatus = statusForTool(toolName);

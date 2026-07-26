@@ -48,6 +48,7 @@ export const BUILTIN_PROVIDERS: BuiltinProviderDef[] = [
     locked: true,
     apiKeyHeader: "x-api-key",
     models: [
+      { id: "claude-opus-5", name: "Claude Opus 5", contextWindow: 1_000_000, vision: true, vendor: "anthropic", description: "最新 Opus 旗舰，长上下文", group: "Axon 官方", tier: "flagship" },
       { id: "claude-opus-4-8", name: "Claude Opus 4.8", contextWindow: 1_000_000, vision: true, vendor: "anthropic", description: "最强 Opus 档，长上下文", group: "Axon 官方", tier: "flagship" },
       { id: "claude-opus-4-7", name: "Claude Opus 4.7", contextWindow: 1_000_000, vision: true, vendor: "anthropic", description: "上一代 Opus，长上下文", group: "Axon 官方", tier: "flagship" },
       { id: "claude-opus-4-6", name: "Claude Opus 4.6", contextWindow: 1_000_000, vision: true, vendor: "anthropic", description: "较早 Opus，长上下文", group: "Axon 官方", tier: "flagship" },

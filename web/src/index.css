@@ -186,13 +186,13 @@ code:not(.hljs):not(.prose code) {
    .axon-path-link 排除在外：它需要 inline-flex 让图标+文件名保持水平对齐。 */
 .prose :not(pre) > code:not(.axon-path-link) {
   display: inline-block;
-  white-space: nowrap;        /* 不在 code 内部断行：整块作为一个单位 */
+  white-space: pre-wrap;      /* 短 token 不断行；超长内容（如长句/长参数说明）自动换行，不横向滚动 */
+  word-break: break-word;     /* 单个超长无空格片段（如长 URL）也能强制断行，避免撑破容器 */
   padding: 0.08em 0.38em !important;
   margin: 0 0.16em !important;
   line-height: 1.25 !important;
   vertical-align: middle;
   max-width: 100%;
-  overflow-x: auto;           /* 超长单 token 内部滚动，不溢出容器 */
 }
 
 /* 表格：外层 .axon-table-wrap 负责横向滚动，table 自身宽度自适应内容并铺满容器。

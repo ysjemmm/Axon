@@ -18,6 +18,7 @@ interface AgentJSON {
   skills: string[];
   mcpServers: string[];
   powers: string[];
+  tools: string[];
 }
 
 const DEFAULT_TEMPLATE: AgentJSON = {
@@ -27,6 +28,7 @@ const DEFAULT_TEMPLATE: AgentJSON = {
   skills: [],
   mcpServers: [],
   powers: [],
+  tools: [],
 };
 
 /** 从任意对象规范化为 AgentJSON（供 Untitled JSON 文档解析使用） */
@@ -38,8 +40,19 @@ function normalizeAgentJSON(obj: Record<string, unknown>): AgentJSON {
     skills: Array.isArray(obj.skills) ? obj.skills.filter((v): v is string => typeof v === "string") : [],
     mcpServers: Array.isArray(obj.mcpServers) ? obj.mcpServers.filter((v): v is string => typeof v === "string") : [],
     powers: Array.isArray(obj.powers) ? obj.powers.filter((v): v is string => typeof v === "string") : [],
+    tools: Array.isArray(obj.tools) ? obj.tools.filter((v): v is string => typeof v === "string") : [],
   };
 }
+
+/** 自定义 Agent 可用的工具列表（按分类组织，供前端权限控制下拉） */
+const AGENT_TOOL_CATEGORIES = [
+  "文件操作:read_file,create_file,str_replace,apply_patch,search,list_dir",
+  "命令执行:execute_command,start_process,get_process_output,stop_process,list_processes",
+  "浏览器:open_browser,close_browser,browser_click,browser_type,browser_press,browser_select,browser_scroll,browser_reload,browser_back,browser_forward,get_browser_logs,screenshot_page,get_browser_network,get_browser_storage,browser_eval,browser_hover,browser_wait,browser_get_html,browser_set_viewport",
+  "诊断:check_diagnostics",
+  "联网:web_search,web_fetch",
+  "Skills & Powers:use_skill,activate_power",
+];
 
 export class AgentEditor {
   private panel: vscode.WebviewPanel | undefined;
@@ -213,7 +226,7 @@ export class AgentEditor {
   private async postMessage() {
     // 扫描全局目录获取可用的 Skills / MCP Servers / Powers 列表
     const homeDir = os.homedir();
-    const available: Record<string, string[]> = { skills: [], mcpServers: [], powers: [] };
+    const available: Record<string, string[]> = { skills: [], mcpServers: [], powers: [], toolCategories: [] };
     for (const [key, dirName] of [["skills", "skills"], ["mcpServers", "mcp"], ["powers", "powers"]] as const) {
       try {
         const d = path.join(homeDir, ".axon", dirName);
@@ -223,6 +236,8 @@ export class AgentEditor {
           .map((e) => e.name.replace(/\.(md|json)$/i, ""));
       } catch { /* ignore */ }
     }
+    // 可用工具列表（按分类组织），传给前端下拉
+    available.toolCategories = AGENT_TOOL_CATEGORIES;
     this.panel?.webview.postMessage({ type: "init", data: this.agent, available });
   }
 
@@ -234,276 +249,473 @@ export class AgentEditor {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Agent Editor</title>
   <style>
+    :root {
+      --radius: 10px;
+      --radius-sm: 6px;
+      --card-bg: color-mix(in srgb, var(--vscode-foreground, #ccc) 4%, var(--vscode-editor-background, #1e1e1e));
+      --card-border: color-mix(in srgb, var(--vscode-foreground, #ccc) 8%, transparent);
+      --accent: var(--vscode-focusBorder, #007acc);
+      --accent-soft: color-mix(in srgb, var(--vscode-focusBorder, #007acc) 15%, transparent);
+      --text-primary: var(--vscode-foreground, #ccc);
+      --text-secondary: var(--vscode-descriptionForeground, #888);
+      --input-bg: var(--vscode-input-background, #2a2a2a);
+      --input-border: var(--vscode-input-border, rgba(255,255,255,0.1));
+      --surface: var(--vscode-editor-background, #1e1e1e);
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: var(--vscode-font-family, -apple-system, 'Segoe UI', sans-serif);
       font-size: 13px;
-      color: var(--vscode-foreground, #ccc);
-      background: var(--vscode-editor-background, #1e1e1e);
-      padding: 28px 32px;
+      color: var(--text-primary);
+      background: var(--surface);
+      padding: 0;
       line-height: 1.6;
+      overflow-y: auto;
     }
-    .container { max-width: 780px; margin: 0 auto; }
+
+    /* Layout */
+    .page { display: flex; flex-direction: column; min-height: 100vh; }
+    .scroll-area { flex: 1; overflow-y: auto; padding: 32px 40px 100px; }
+    .container { max-width: 720px; margin: 0 auto; width: 100%; }
 
     /* Header */
     .header {
       display: flex;
       align-items: center;
-      gap: 10px;
-      margin-bottom: 28px;
-      padding-bottom: 16px;
-      border-bottom: 1px solid var(--vscode-panel-border, #333);
+      gap: 14px;
+      margin-bottom: 32px;
     }
-    .header-icon { font-size: 20px; line-height: 1; }
-    .header-title { font-size: 17px; font-weight: 600; flex: 1; }
-    .header-actions { display: flex; gap: 8px; }
+    .header-avatar {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #a855f7));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      color: #fff;
+      flex-shrink: 0;
+      box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 30%, transparent);
+    }
+    .header-text { flex: 1; min-width: 0; }
+    .header-title {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      color: var(--text-primary);
+    }
+    .header-sub {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-top: 1px;
+    }
+    .header-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+    /* Card */
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-bottom: 16px;
+    }
+    .card-title {
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-primary);
+    }
+    .card-title-icon {
+      width: 18px;
+      height: 18px;
+      border-radius: 5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
 
     /* Form fields */
-    .field { margin-bottom: 20px; }
+    .field { margin-bottom: 18px; }
+    .field:last-child { margin-bottom: 0; }
     .field-label {
-      display: block;
+      display: flex;
+      align-items: center;
+      gap: 4px;
       font-size: 12px;
-      font-weight: 600;
-      color: var(--vscode-foreground, #ccc);
+      font-weight: 500;
+      color: var(--text-secondary);
       margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
     }
-    .field-required { color: var(--vscode-errorForeground, #f44); margin-left: 2px; }
+    .field-required { color: var(--vscode-errorForeground, #f44); font-size: 14px; line-height: 1; }
     .field-hint {
       font-size: 11px;
-      color: var(--vscode-descriptionForeground, #888);
-      margin-top: 5px;
+      color: var(--text-secondary);
+      margin-top: 6px;
       line-height: 1.5;
+      opacity: 0.8;
     }
 
     /* Inputs */
     input[type="text"], textarea {
       width: 100%;
-      padding: 8px 12px;
-      background: var(--vscode-input-background, #2a2a2a);
-      color: var(--vscode-input-foreground, #ccc);
-      border: 1px solid var(--vscode-input-border, transparent);
-      border-radius: 5px;
+      padding: 10px 14px;
+      background: var(--input-bg);
+      color: var(--text-primary);
+      border: 1px solid var(--input-border);
+      border-radius: var(--radius-sm);
       font-family: inherit;
       font-size: 13px;
       outline: none;
-      transition: border-color 0.15s;
+      transition: border-color 0.2s, box-shadow 0.2s;
     }
     input[type="text"]:focus, textarea:focus {
-      border-color: var(--vscode-focusBorder, #007acc);
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    input[type="text"]::placeholder, textarea::placeholder {
+      color: var(--text-secondary);
+      opacity: 0.6;
     }
     textarea {
-      min-height: 200px;
+      min-height: 220px;
       resize: vertical;
       font-family: var(--vscode-editor-font-family, 'Consolas', 'Courier New', monospace);
       font-size: 12px;
-      line-height: 1.6;
-    }
-
-    /* Section */
-    .section {
-      margin-top: 28px;
-      padding-top: 20px;
-      border-top: 1px solid var(--vscode-panel-border, #333);
-    }
-    .section-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
-    .section-desc {
-      font-size: 12px;
-      color: var(--vscode-descriptionForeground, #888);
-      margin-bottom: 16px;
-    }
-
-    /* Permission card */
-    .perm-card {
-      background: var(--vscode-textBlockQuote-background, rgba(255,255,255,0.04));
-      border: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.08));
-      border-radius: 8px;
+      line-height: 1.7;
       padding: 14px 16px;
-      margin-bottom: 14px;
     }
-    .perm-card-label { font-size: 12px; font-weight: 600; margin-bottom: 8px; display: block; }
+
+    /* Permission grid */
+    .perm-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    @media (max-width: 640px) { .perm-grid { grid-template-columns: 1fr; } }
+    .perm-card {
+      background: var(--input-bg);
+      border: 1px solid var(--input-border);
+      border-radius: var(--radius-sm);
+      padding: 14px 16px;
+      transition: border-color 0.2s;
+    }
+    .perm-card:hover { border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+    .perm-card-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .perm-card-icon {
+      width: 22px;
+      height: 22px;
+      border-radius: 5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+    }
+    .perm-card-icon.skills { background: #dbeafe20; color: #60a5fa; }
+    .perm-card-icon.mcp { background: #d1fae520; color: #34d399; }
+    .perm-card-icon.powers { background: #fef3c720; color: #fbbf24; }
+    .perm-card-icon.tools { background: #ede9fe20; color: #a78bfa; }
+    .perm-card-label { font-size: 12px; font-weight: 600; color: var(--text-primary); }
 
     /* Tags */
     .tag-list {
       display: flex;
       flex-wrap: wrap;
-      gap: 6px;
-      margin-bottom: 8px;
-      min-height: 26px;
+      gap: 5px;
+      margin-bottom: 10px;
+      min-height: 24px;
       align-items: center;
     }
     .tag {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
-      padding: 3px 4px 3px 10px;
-      background: var(--vscode-badge-background, #4a4a4a);
-      color: var(--vscode-badge-foreground, #fff);
-      border-radius: 12px;
+      gap: 4px;
+      padding: 2px 4px 2px 9px;
+      background: color-mix(in srgb, var(--accent) 15%, transparent);
+      color: var(--text-primary);
+      border-radius: 4px;
       font-size: 11px;
       line-height: 1.4;
+      border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
     }
     .tag-remove {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 16px;
-      height: 16px;
-      border-radius: 50%;
+      width: 15px;
+      height: 15px;
+      border-radius: 3px;
       cursor: pointer;
-      opacity: 0.6;
-      font-size: 13px;
+      opacity: 0.5;
+      font-size: 12px;
       transition: opacity 0.15s, background 0.15s;
     }
-    .tag-remove:hover { opacity: 1; background: rgba(255,255,255,0.15); }
+    .tag-remove:hover { opacity: 1; background: rgba(255,255,255,0.1); }
     .empty-state {
       display: inline-flex;
       align-items: center;
-      padding: 3px 12px;
-      color: var(--vscode-descriptionForeground, #888);
-      border-radius: 12px;
+      padding: 2px 10px;
+      color: var(--text-secondary);
+      border-radius: 4px;
       font-size: 11px;
-      border: 1px dashed var(--vscode-input-border, #555);
+      border: 1px dashed var(--input-border);
       background: transparent;
+      opacity: 0.7;
     }
 
-    /* Combobox */
+    /* Combobox — shadcn-style popover */
     .combo-wrapper { position: relative; }
     .combo-input {
-      width: 240px !important;
-      padding: 5px 10px !important;
+      width: 100% !important;
+      padding: 7px 32px 7px 10px !important;
       font-size: 12px !important;
+      border-radius: 4px !important;
+      background: var(--surface) !important;
+      border: 1px solid var(--input-border) !important;
+      transition: border-color 0.2s, box-shadow 0.2s !important;
+    }
+    .combo-input:focus {
+      border-color: var(--accent) !important;
+      box-shadow: 0 0 0 3px var(--accent-soft) !important;
+    }
+    .combo-wrapper::after {
+      content: '⌄';
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 14px;
+      color: var(--text-secondary);
+      pointer-events: none;
+      opacity: 0.6;
     }
     .combo-dropdown {
       display: none;
-      position: absolute;
-      top: calc(100% + 2px);
-      left: 0;
+      position: fixed;
       width: 260px;
-      max-height: 180px;
+      max-height: 240px;
       overflow-y: auto;
+      overflow-x: hidden;
       background: var(--vscode-dropdown-background, #252526);
       border: 1px solid var(--vscode-dropdown-border, #454545);
-      border-radius: 0 0 5px 5px;
-      z-index: 10;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      border-radius: 8px;
+      z-index: 9999;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.3);
+      padding: 4px;
+      animation: popIn 0.12s ease-out;
+    }
+    @keyframes popIn {
+      from { opacity: 0; transform: translateY(-4px) scale(0.97); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
     }
     .combo-item {
-      padding: 6px 12px;
+      padding: 7px 10px;
       font-size: 12px;
       cursor: pointer;
       color: var(--vscode-dropdown-foreground, #ccc);
-      transition: background 0.1s;
+      border-radius: 5px;
+      transition: background 0.08s;
+      margin: 1px 0;
     }
-    .combo-item:hover { background: var(--vscode-list-hoverBackground, #2a2d2e); }
+    .combo-item:hover, .combo-item.active {
+      background: var(--accent-soft);
+      color: var(--text-primary);
+    }
+    .combo-cat {
+      padding: 8px 10px 4px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      letter-spacing: 0.5px;
+      pointer-events: none;
+      opacity: 0.7;
+    }
+    .combo-cat:not(:first-child) {
+      margin-top: 4px;
+      padding-top: 8px;
+      border-top: 1px solid var(--input-border);
+    }
+    .combo-empty {
+      padding: 12px 10px;
+      font-size: 11px;
+      color: var(--text-secondary);
+      text-align: center;
+      opacity: 0.7;
+    }
 
     /* Buttons */
     .btn {
-      padding: 6px 16px;
+      padding: 8px 18px;
       border: none;
-      border-radius: 5px;
+      border-radius: var(--radius-sm);
       cursor: pointer;
       font-size: 12px;
-      font-weight: 500;
+      font-weight: 600;
       font-family: inherit;
-      transition: opacity 0.15s;
+      transition: all 0.15s;
       display: inline-flex;
       align-items: center;
-      gap: 5px;
+      gap: 6px;
     }
-    .btn:hover { opacity: 0.85; }
+    .btn:hover { transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
     .btn-primary {
-      background: var(--vscode-button-background, #0e639c);
-      color: var(--vscode-button-foreground, #fff);
+      background: var(--accent);
+      color: #fff;
+      box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 30%, transparent);
     }
+    .btn-primary:hover { box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 40%, transparent); }
     .btn-secondary {
       background: var(--vscode-button-secondaryBackground, #3a3a3a);
       color: var(--vscode-button-secondaryForeground, #ccc);
     }
     .btn-ghost {
       background: transparent;
-      color: var(--vscode-foreground, #ccc);
-      border: 1px solid var(--vscode-button-border, #555);
+      color: var(--text-secondary);
+      border: 1px solid var(--input-border);
+      font-weight: 500;
     }
+    .btn-ghost:hover { border-color: var(--accent); color: var(--text-primary); }
 
     /* Footer */
     .footer {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
       display: flex;
-      gap: 8px;
-      margin-top: 28px;
-      padding-top: 20px;
-      border-top: 1px solid var(--vscode-panel-border, #333);
+      gap: 10px;
+      padding: 16px 40px;
+      background: var(--surface);
+      border-top: 1px solid var(--card-border);
+      backdrop-filter: blur(8px);
+      z-index: 50;
     }
+
     code {
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 11px;
-      background: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.08));
-      padding: 1px 5px;
+      background: color-mix(in srgb, var(--accent) 10%, transparent);
+      color: var(--accent);
+      padding: 1px 6px;
       border-radius: 3px;
     }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="header">
-      <span class="header-icon">🤖</span>
-      <span class="header-title">Agent 配置</span>
-      <div class="header-actions">
-        <button class="btn btn-ghost" id="btnJson">JSON 源码</button>
-      </div>
-    </div>
+  <div class="page">
+    <div class="scroll-area">
+      <div class="container">
+        <div class="header">
+          <div class="header-avatar">✦</div>
+          <div class="header-text">
+            <div class="header-title">Agent 配置</div>
+            <div class="header-sub">创建并配置自定义子 Agent</div>
+          </div>
+          <div class="header-actions">
+            <button class="btn btn-ghost" id="btnJson">{ } JSON</button>
+          </div>
+        </div>
 
-    <div class="field">
-      <label class="field-label" for="name">名称<span class="field-required">*</span></label>
-      <input type="text" id="name" placeholder="my-agent" />
-      <div class="field-hint">唯一标识，用于 <code>@AgentName</code> 调用。只允许字母、数字、短横线。</div>
-    </div>
+        <!-- 基本信息 -->
+        <div class="card">
+          <div class="card-title"><span class="card-title-icon">①</span> 基本信息</div>
+          <div class="field">
+            <label class="field-label">名称 <span class="field-required">*</span></label>
+            <input type="text" id="name" placeholder="my-agent" />
+            <div class="field-hint">唯一标识，用于 <code>@AgentName</code> 调用。只允许字母、数字、短横线。</div>
+          </div>
+          <div class="field">
+            <label class="field-label">描述</label>
+            <input type="text" id="description" placeholder="一句话描述这个 Agent 的职责" />
+          </div>
+        </div>
 
-    <div class="field">
-      <label class="field-label" for="description">描述</label>
-      <input type="text" id="description" placeholder="一句话描述这个 Agent 的职责" />
-    </div>
+        <!-- 系统提示词 -->
+        <div class="card">
+          <div class="card-title"><span class="card-title-icon">②</span> 系统提示词</div>
+          <div class="field">
+            <textarea id="systemPrompt" placeholder="描述 Agent 的角色、工作方式、输出格式..."></textarea>
+            <div class="field-hint">支持 Markdown。这是子 Agent 的核心指令，决定它的行为模式。</div>
+          </div>
+        </div>
 
-    <div class="field">
-      <label class="field-label" for="systemPrompt">系统提示词</label>
-      <textarea id="systemPrompt" placeholder="描述 Agent 的角色、工作方式、输出格式..."></textarea>
-      <div class="field-hint">支持 Markdown 格式。这是子 Agent 的核心指令。</div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">权限控制</div>
-      <div class="section-desc">限制此 Agent 可使用的 Skills、MCP 服务器和 Powers。留空表示全部可用。</div>
-
-      <div class="perm-card">
-        <span class="perm-card-label">Skills</span>
-        <div class="tag-list" id="skillsTags"></div>
-        <div class="combo-wrapper">
-          <input type="text" id="skillsInput" class="combo-input" placeholder="搜索并添加 skill..." autocomplete="off" />
-          <div class="combo-dropdown" id="skillsDropdown"></div>
+        <!-- 权限控制 -->
+        <div class="card">
+          <div class="card-title"><span class="card-title-icon">③</span> 权限控制</div>
+          <div class="field-hint" style="margin-bottom:16px;margin-top:-8px;">限制此 Agent 可使用的资源和工具。留空表示全部可用（不限制）。</div>
+          <div class="perm-grid">
+            <div class="perm-card">
+              <div class="perm-card-header">
+                <span class="perm-card-icon skills">⚡</span>
+                <span class="perm-card-label">Skills</span>
+              </div>
+              <div class="tag-list" id="skillsTags"></div>
+              <div class="combo-wrapper">
+                <input type="text" id="skillsInput" class="combo-input" placeholder="添加 Skill..." autocomplete="off" />
+                <div class="combo-dropdown" id="skillsDropdown"></div>
+              </div>
+            </div>
+            <div class="perm-card">
+              <div class="perm-card-header">
+                <span class="perm-card-icon mcp">⬡</span>
+                <span class="perm-card-label">MCP 服务器</span>
+              </div>
+              <div class="tag-list" id="mcpServersTags"></div>
+              <div class="combo-wrapper">
+                <input type="text" id="mcpServersInput" class="combo-input" placeholder="添加 MCP..." autocomplete="off" />
+                <div class="combo-dropdown" id="mcpServersDropdown"></div>
+              </div>
+            </div>
+            <div class="perm-card">
+              <div class="perm-card-header">
+                <span class="perm-card-icon powers">⚙</span>
+                <span class="perm-card-label">Powers</span>
+              </div>
+              <div class="tag-list" id="powersTags"></div>
+              <div class="combo-wrapper">
+                <input type="text" id="powersInput" class="combo-input" placeholder="添加 Power..." autocomplete="off" />
+                <div class="combo-dropdown" id="powersDropdown"></div>
+              </div>
+            </div>
+            <div class="perm-card">
+              <div class="perm-card-header">
+                <span class="perm-card-icon tools">🔧</span>
+                <span class="perm-card-label">可用工具</span>
+              </div>
+              <div class="tag-list" id="toolsTags"></div>
+              <div class="combo-wrapper">
+                <input type="text" id="toolsInput" class="combo-input" placeholder="添加工具..." autocomplete="off" />
+                <div class="combo-dropdown" id="toolsDropdown"></div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
-
-      <div class="perm-card">
-        <span class="perm-card-label">MCP Servers</span>
-        <div class="tag-list" id="mcpServersTags"></div>
-        <div class="combo-wrapper">
-          <input type="text" id="mcpServersInput" class="combo-input" placeholder="搜索并添加 MCP..." autocomplete="off" />
-          <div class="combo-dropdown" id="mcpServersDropdown"></div>
-        </div>
-      </div>
-
-      <div class="perm-card">
-        <span class="perm-card-label">Powers</span>
-        <div class="tag-list" id="powersTags"></div>
-        <div class="combo-wrapper">
-          <input type="text" id="powersInput" class="combo-input" placeholder="搜索并添加 Power..." autocomplete="off" />
-          <div class="combo-dropdown" id="powersDropdown"></div>
-        </div>
-      </div>
-    </div>
     </div>
 
     <div class="footer">
-      <button class="btn btn-primary" id="btnSave">保存</button>
+      <button class="btn btn-primary" id="btnSave">保存 Agent</button>
       <button class="btn btn-secondary" id="btnCancel">取消</button>
     </div>
   </div>
@@ -557,6 +769,7 @@ export class AgentEditor {
         skills: Array.isArray(obj.skills) ? obj.skills.filter(v => typeof v === 'string') : [],
         mcpServers: Array.isArray(obj.mcpServers) ? obj.mcpServers.filter(v => typeof v === 'string') : [],
         powers: Array.isArray(obj.powers) ? obj.powers.filter(v => typeof v === 'string') : [],
+        tools: Array.isArray(obj.tools) ? obj.tools.filter(v => typeof v === 'string') : [],
       };
     }
 
@@ -564,7 +777,7 @@ export class AgentEditor {
       document.getElementById('name').value = data.name || '';
       document.getElementById('description').value = data.description || '';
       document.getElementById('systemPrompt').value = data.systemPrompt || '';
-      ['skills','mcpServers','powers'].forEach(key => { renderField(key); });
+      ['skills','mcpServers','powers','tools'].forEach(key => { renderField(key); });
     }
 
     function renderField(key) {
@@ -587,6 +800,20 @@ export class AgentEditor {
 
     function getAvailable(key, filter) {
       const f = filter.toLowerCase();
+      if (key === 'tools') {
+        // 工具列表按分类组织（每项格式：分类名:tool1,tool2,tool3）
+        const cats = available.toolCategories || [];
+        const used = new Set(data[key] || []);
+        const result = [];
+        for (const cat of cats) {
+          const colon = cat.indexOf(':');
+          const catName = cat.slice(0, colon);
+          const tools = cat.slice(colon + 1).split(',');
+          const matches = tools.filter(t => t.toLowerCase().includes(f) && !used.has(t));
+          if (matches.length > 0) result.push({ cat: catName, tools: matches });
+        }
+        return result;
+      }
       const all = available[key] || [];
       const used = new Set(data[key] || []);
       return all.filter(v => v.toLowerCase().includes(f) && !used.has(v));
@@ -594,12 +821,35 @@ export class AgentEditor {
 
     function renderDropdown(key, filter) {
       const dd = document.getElementById(key + 'Dropdown');
+      if (key === 'tools') {
+        const groups = getAvailable(key, filter);
+        if (groups.length === 0) {
+          dd.innerHTML = '<div class="combo-empty">' + (filter ? '无匹配项' : '已全部添加') + '</div>';
+          // 只有当前激活的 key 才显示下拉框
+          dd.style.display = (key === activeKey) ? 'block' : 'none';
+          return;
+        }
+        let html = '';
+        for (const g of groups) {
+          html += '<div class="combo-cat">' + esc(g.cat) + '</div>';
+          for (const t of g.tools) {
+            html += '<div class="combo-item" data-key="' + key + '" data-value="' + esc(t) + '">' + esc(t) + '</div>';
+          }
+        }
+        dd.innerHTML = html;
+        dd.style.display = (key === activeKey) ? 'block' : 'none';
+        return;
+      }
       const items = getAvailable(key, filter);
-      if (items.length === 0) { dd.style.display = 'none'; return; }
+      if (items.length === 0) {
+        dd.innerHTML = '<div class="combo-empty">' + (filter ? '无匹配项' : '已全部添加') + '</div>';
+        dd.style.display = (key === activeKey) ? 'block' : 'none';
+        return;
+      }
       dd.innerHTML = items.slice(0, 50).map(v =>
         '<div class="combo-item" data-key="' + key + '" data-value="' + esc(v) + '">' + esc(v) + '</div>'
       ).join('');
-      dd.style.display = 'block';
+      dd.style.display = (key === activeKey) ? 'block' : 'none';
     }
 
     // 事件委托：tag 删除 + combo 选择
@@ -612,7 +862,7 @@ export class AgentEditor {
           data[key].splice(idx, 1);
           markDirty();
           renderTags(key);
-          renderDropdown(key, document.getElementById(key + 'Input').value);
+          // 删除 tag 时不触发下拉框，只更新 tags 显示
         }
         return;
       }
@@ -626,21 +876,105 @@ export class AgentEditor {
           markDirty();
           const input = document.getElementById(key + 'Input');
           input.value = '';
+          // 刷新列表（已选项自动排除），保持下拉框打开继续选
           renderTags(key);
-          renderDropdown(key, '');
+          showDropdown(key);
           input.focus();
         }
       }
     });
 
-    // combobox 输入交互
-    ['skills','mcpServers','powers'].forEach(key => {
+    // combobox 输入交互（shadcn-style: fixed positioning + keyboard nav）
+    let activeKey = null;
+    let activeIdx = -1;
+    let blurTimer = null;
+
+    function positionDropdown(key) {
       const input = document.getElementById(key + 'Input');
       const dd = document.getElementById(key + 'Dropdown');
-      input.addEventListener('input', () => { renderDropdown(key, input.value); });
-      input.addEventListener('focus', () => { renderDropdown(key, input.value); });
-      input.addEventListener('blur', () => { setTimeout(() => { dd.style.display = 'none'; }, 150); });
+      const rect = input.getBoundingClientRect();
+      const maxH = 200; // combo-dropdown max-height
+      const spaceBelow = window.innerHeight - rect.bottom - 8;
+      const spaceAbove = rect.top - 8;
+      const width = Math.max(rect.width, 220);
+      dd.style.left = rect.left + 'px';
+      dd.style.width = width + 'px';
+      if (spaceBelow >= maxH || spaceBelow >= spaceAbove) {
+        // 向下弹出
+        dd.style.top = (rect.bottom + 4) + 'px';
+        dd.style.bottom = 'auto';
+        dd.style.maxHeight = Math.min(maxH, spaceBelow) + 'px';
+      } else {
+        // 向上翻转
+        dd.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+        dd.style.top = 'auto';
+        dd.style.maxHeight = Math.min(maxH, spaceAbove) + 'px';
+      }
+    }
+
+    function showDropdown(key) {
+      if (blurTimer) { clearTimeout(blurTimer); blurTimer = null; }
+      const dd = document.getElementById(key + 'Dropdown');
+      renderDropdown(key, document.getElementById(key + 'Input').value);
+      if (dd.innerHTML) {
+        positionDropdown(key);
+        dd.style.display = 'block';
+        activeKey = key;
+        activeIdx = -1;
+        highlightItem(key);
+      }
+    }
+
+    function hideDropdown(key) {
+      const dd = document.getElementById(key + 'Dropdown');
+      dd.style.display = 'none';
+      activeKey = null;
+      activeIdx = -1;
+    }
+
+    function highlightItem(key) {
+      const dd = document.getElementById(key + 'Dropdown');
+      const items = dd.querySelectorAll('.combo-item');
+      items.forEach((el, i) => el.classList.toggle('active', i === activeIdx));
+      if (activeIdx >= 0 && items[activeIdx]) {
+        items[activeIdx].scrollIntoView({ block: 'nearest' });
+      }
+    }
+
+    ['skills','mcpServers','powers','tools'].forEach(key => {
+      const input = document.getElementById(key + 'Input');
+      input.addEventListener('input', () => { showDropdown(key); });
+      input.addEventListener('focus', () => { showDropdown(key); });
+      input.addEventListener('blur', () => { blurTimer = setTimeout(() => hideDropdown(key), 180); });
+      input.addEventListener('focus', () => { if (blurTimer) { clearTimeout(blurTimer); blurTimer = null; } });
+      input.addEventListener('keydown', (e) => {
+        const dd = document.getElementById(key + 'Dropdown');
+        if (dd.style.display === 'none') return;
+        const items = dd.querySelectorAll('.combo-item');
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          activeIdx = Math.min(activeIdx + 1, items.length - 1);
+          highlightItem(key);
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          activeIdx = Math.max(activeIdx - 1, 0);
+          highlightItem(key);
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          if (activeIdx >= 0 && items[activeIdx]) {
+            items[activeIdx].click();
+          }
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          hideDropdown(key);
+          input.blur();
+        }
+      });
     });
+
+    // 滚动/resize 时重定位已打开的 dropdown
+    window.addEventListener('scroll', () => { if (activeKey) positionDropdown(activeKey); }, true);
+    window.addEventListener('resize', () => { if (activeKey) positionDropdown(activeKey); });
 
     // 字段实时同步
     ['name','description','systemPrompt'].forEach(id => {

@@ -7,7 +7,11 @@ import type { EventHandlerCtx, WsMessage } from "./types";
 export function handleStreamStart(_msg: WsMessage, ctx: EventHandlerCtx): void {
   const tw = ctx.typewriter;
   ctx.cancelled.current = false;
-  tw.buffer.current = "";
+  // 不能直接 `buffer.current = ""`：截断续写（finish_reason=length）等场景下后端会再发一次
+  // stream_start，此时上一轮可能还有没出完的字，清空就是吞字。
+  // 改为先把残余写进**当前**（也就是上一轮的）text segment，再往下新建本轮的空 segment——
+  // 两个 setChatHistory updater 按调用顺序执行，所以残余落在新段之前，顺序是对的。
+  tw.flush(ctx);
   // 不再清空全局 reasoning 状态（已改为 segment 内联渲染）
   ctx.setStatusText("正在回复...");
   ctx.setStatusPhase("responding");
@@ -53,16 +57,15 @@ export function handleStreamDelta(msg: WsMessage, ctx: EventHandlerCtx): void {
 
 export function handleStreamPause(_msg: WsMessage, ctx: EventHandlerCtx): void {
   if (ctx.cancelled.current) return;
-  const tw = ctx.typewriter;
-  // stream_pause 意味着即将调工具，需要把 buffer 排空后再插入工具卡片。
-  // 但不能瞬间 flush（破坏打字机体验），也不能慢慢排（工具卡片需要尽快出现）。
-  // 策略：停掉 RAF，直接 flush 残余文本。打字机在正常速度下每帧已经在逐步出字，
-  // pause 时 buffer 里残留的通常很少（几十个字符），用户感知不到瞬间出完。
-  if (tw.raf.current) {
-    cancelAnimationFrame(tw.raf.current);
-    tw.raf.current = null;
-  }
-  tw.flush(ctx);
+  // stream_pause 意味着即将出工具卡片，需要把 buffer 排空后再插卡片。
+  //
+  // 早先是"停掉 RAF + 瞬间 flush"，前提假设是"pause 时 buffer 残留通常只有几十个字符"。
+  // 这个假设不成立：模型的 text block 和 tool_use block 是紧挨着来的，几百字可能在
+  // 一两百毫秒内吐完，RAF 还没消化几帧，于是残余"啪"地一次性冒出、紧接着卡片弹出。
+  //
+  // 改为加速逐帧排空（400ms 封顶）。排空期间事件队列会暂缓放行后续卡片事件，
+  // 卡片自然接在文字讲完之后出现。
+  ctx.typewriter.drain(ctx);
 }
 
 export function handleStreamEnd(msg: WsMessage, ctx: EventHandlerCtx): void {

@@ -20,7 +20,7 @@ function userMessageText(message: ChatMessage): string {
   return message.content || "";
 }
 
-function MessageBubbleImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit, onQuoteToInput, onEditUserMessage, onImagePreview, replyingToMessageId }: { message: ChatMessage; onAcceptEdit?: (path: string) => void; onRejectEdit?: (path: string) => void; onUndoEdit?: (path: string) => void; onQuoteToInput?: (message: ChatMessage) => void; onEditUserMessage?: (messageId: string, content: string, images?: string[], attachedFiles?: AttachedFile[]) => void; onImagePreview?: (src: string) => void; replyingToMessageId?: string }) {
+function MessageBubbleImpl({ message, liveStatus, onAcceptEdit, onRejectEdit, onUndoEdit, onQuoteToInput, onEditUserMessage, onImagePreview, replyingToMessageId }: { message: ChatMessage; liveStatus?: string; onAcceptEdit?: (path: string) => void; onRejectEdit?: (path: string) => void; onUndoEdit?: (path: string) => void; onQuoteToInput?: (message: ChatMessage) => void; onEditUserMessage?: (messageId: string, content: string, images?: string[], attachedFiles?: AttachedFile[]) => void; onImagePreview?: (src: string) => void; replyingToMessageId?: string }) {
   const [userExpanded, setUserExpanded] = useState(false);
   const [editingUser, setEditingUser] = useState(false);
   const [draftUserText, setDraftUserText] = useState("");
@@ -223,7 +223,7 @@ function MessageBubbleImpl({ message, onAcceptEdit, onRejectEdit, onUndoEdit, on
   }
 
   // AI 回复：品牌头 + segments 混排
-  return <AssistantTurn message={message} onAcceptEdit={onAcceptEdit} onRejectEdit={onRejectEdit} onUndoEdit={onUndoEdit} />;
+  return <AssistantTurn message={message} liveStatus={liveStatus} onAcceptEdit={onAcceptEdit} onRejectEdit={onRejectEdit} onUndoEdit={onUndoEdit} />;
 }
 
-export const MessageBubble = memo(MessageBubbleImpl, (prev, next) => prev.message === next.message && prev.replyingToMessageId === next.replyingToMessageId);
+export const MessageBubble = memo(MessageBubbleImpl, (prev, next) => prev.message === next.message && prev.replyingToMessageId === next.replyingToMessageId && prev.liveStatus === next.liveStatus);

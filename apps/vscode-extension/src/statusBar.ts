@@ -221,10 +221,10 @@ export function registerAxonUsageStatusBar(context: vscode.ExtensionContext): Ax
 			}
 			const origin = usageApiOrigin(readAxonBaseUrl());
 			try {
-				const response = await fetch(`${origin}/api/user/usage`, {
+				const response = await fetch(`${origin}/user/api/usage`, {
 					headers: {
 						accept: "application/json",
-						"x-api-key": apiKey,
+						authorization: `Bearer ${apiKey}`,
 					},
 				});
 				if (!response.ok) {

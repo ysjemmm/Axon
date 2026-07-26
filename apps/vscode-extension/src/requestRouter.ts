@@ -38,7 +38,7 @@ async function cleanupSnapshotRefs(workspace: string): Promise<void> {
     if (refs.length === 0) return;
     // 批量删除：git update-ref -d ref1 ref2 ...
     await execFileAsync("git", ["update-ref", "-d", ...refs], { cwd: workspace, timeout: 5000, maxBuffer: 256 * 1024 });
-    console.log(`[snapshot] cleanup: deleted ${refs.length} refs from ${workspace}`);
+    console.debug(`[snapshot] cleanup: deleted ${refs.length} refs from ${workspace}`);
   } catch {
     // 清理失败不影响删除流程
   }
@@ -87,10 +87,8 @@ export class RequestRouter {
           const wsList = s.workspaces?.length ? s.workspaces : (s.workspace ? [s.workspace] : []);
           for (const ws of wsList) {
             await cleanupSnapshotRefs(ws);
-            // 直接删除 relay 目录，不再依赖 RelayStore.open 静态方法（RelayStore 构造函数需要 AgentHost）
-            const relayDir = require("path").join(ws, ".axon", "relays", id);
-            await vscode.workspace.fs.delete(vscode.Uri.file(relayDir), { recursive: true, useTrash: false }).then(undefined, () => {});
           }
+          // 注：relay 已改为全局落盘且独立于 session，删除会话不再连带删除 relay
         }
         await d.storage.deleteSession(id);
         return { ok: true };
@@ -139,15 +137,14 @@ export class RequestRouter {
 
     // ── Relay ──
     if (path === "/api/relays" && method === "GET") {
-      const ws = query.get("workspace") || d.defaultWorkspace;
-      const store = new RelayStore(ws, createVSCodeAgentHost());
+      // relay 全局落盘到 <homeDir>/.axon/relays，不再跟工作区绑定
+      const store = new RelayStore(homedir(), createVSCodeAgentHost());
       return { relays: await store.list() };
     }
     const relayIdMatch = path.match(/^\/api\/relays\/([^/]+)$/);
     if (relayIdMatch) {
       const id = decodeURIComponent(relayIdMatch[1]);
-      const ws = query.get("workspace") || d.defaultWorkspace;
-      const store = new RelayStore(ws, createVSCodeAgentHost());
+      const store = new RelayStore(homedir(), createVSCodeAgentHost());
       if (method === "GET") {
         const relay = await store.get(id);
         if (!relay) throw new Error("relay 不存在");
@@ -172,12 +169,11 @@ export class RequestRouter {
     if (relayTaskMatch && method === "PATCH") {
       const id = decodeURIComponent(relayTaskMatch[1]);
       const taskId = decodeURIComponent(relayTaskMatch[2]);
-      const ws = query.get("workspace") || d.defaultWorkspace;
       const status = (body as { status?: string } | undefined)?.status;
       if (!status || !["pending", "in_progress", "completed"].includes(status)) {
         throw new Error("status 非法");
       }
-      const store = new RelayStore(ws, createVSCodeAgentHost());
+      const store = new RelayStore(homedir(), createVSCodeAgentHost());
       const relay = await store.setTaskStatus(id, taskId, status as "pending" | "in_progress" | "completed");
       if (!relay) throw new Error("relay 不存在");
       return relay;
@@ -505,9 +501,9 @@ export class RequestRouter {
         const { readFile, writeFile, unlink } = await import("node:fs/promises");
         const { existsSync } = await import("node:fs");
         if (!existsSync(filePath)) throw new Error("Agent 不存在");
-        const { name: newName, description, systemPrompt, skills, mcpServers, powers } = (body || {}) as {
+        const { name: newName, description, systemPrompt, skills, mcpServers, powers, tools } = (body || {}) as {
           name?: string; description?: string; systemPrompt?: string;
-          skills?: string[]; mcpServers?: string[]; powers?: string[];
+          skills?: string[]; mcpServers?: string[]; powers?: string[]; tools?: string[];
         };
         if (!newName || !newName.trim()) throw new Error("name 为必填");
         const sanitized = newName.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 50);
@@ -519,6 +515,7 @@ export class RequestRouter {
           skills: skills ?? [],
           mcpServers: mcpServers ?? [],
           powers: powers ?? [],
+          tools: tools ?? [],
         }, null, 2), "utf-8");
         // 改名时删除旧文件
         if (newPath !== filePath && existsSync(filePath)) {
@@ -541,7 +538,7 @@ export class RequestRouter {
       if (existsSync(filePath)) throw new Error("同名 Agent 已存在");
       await writeFile(filePath, JSON.stringify({
         name: sanitized, description: description || "", systemPrompt: systemPrompt || "",
-        skills: [], mcpServers: [], powers: [],
+        skills: [], mcpServers: [], powers: [], tools: [],
       }, null, 2), "utf-8");
       vscode.commands.executeCommand("axon.agent.refresh");
       return { ok: true, name: sanitized };

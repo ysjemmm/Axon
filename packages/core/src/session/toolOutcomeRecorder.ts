@@ -1,5 +1,5 @@
-import { toolContentLimit, ToolCallStatus, type ToolMeta } from "../tools/index.js";
-import { EDIT_PERSIST_TOOLS, SOFT_FAIL_TOOLS } from "../tools/index.js";
+import { toolContentLimit, type ToolMeta } from "../tools/index.js";
+import { EDIT_PERSIST_TOOLS } from "../tools/index.js";
 import type { LoopGuard } from "../agentGuards.js";
 
 /** ToolOutcomeRecorder 输入：把 agentSession.recordToolOutcome 所需的运行时依赖显式化。 */
@@ -87,17 +87,11 @@ export class ToolOutcomeRecorder {
     if (meta.fileDiff || (meta.fileDiffs && meta.fileDiffs.length > 0)) mutated = true;
     if (toolName === "check_diagnostics") diagnosed = true;
 
-    // 软失败工具延迟展示：成功前不发 tool_call，现在确认可见才补发
-    if (SOFT_FAIL_TOOLS.has(toolName) && !meta.hidden) {
-      this.deps.send("tool_call", {
-        id: toolCallId,
-        name: toolName,
-        args: toolArgs,
-        cwd: displayCwd,
-        status: ToolCallStatus.Success,
-        ...(mcpMeta || {}),
-      });
-    }
+    // 这里曾经为 SOFT_FAIL_TOOLS 补发一条 status=Success 的 tool_call（"延迟展示"：
+    // 执行前不出卡，执行完确认没失败才补一张）。现已移除——toolCallExecutor 会在执行前
+    // 就发出执行中卡片，卡片全程可见；失败时靠下面 tool_result 的 hidden 标记让前端撤卡。
+    // 保留补发反而会与已存在的执行中卡片打架（前端对 status=success 的 tool_call 不建段，
+    // 那条事件只会白跑一趟）。
 
     this.deps.send("tool_result", {
       id: toolCallId,

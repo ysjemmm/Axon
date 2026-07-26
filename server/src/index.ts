@@ -20,7 +20,7 @@ import { registerMcpRoutes } from "./mcp/mcpRoutes.js";
 import { registerPowerRoutes } from "./powers/powerRoutes.js";
 import { registerMarketplaceRoutes } from "./marketplace/marketplaceRoutes.js";
 import { registerProviderRoutes } from "./providers/providerRoutes.js";
-import { RelayStore, SessionHub, ZHIPU_PROVIDER, ProviderRegistry, refreshProviders, DEFAULT_COMPACTION_CONFIG, type AgentEvent, type ControlCommand, type CompactionUserConfig } from "@axon/core";
+import { RelayStore, SessionHub, AXON_PROVIDER, ProviderRegistry, refreshProviders, DEFAULT_COMPACTION_CONFIG, type AgentEvent, type ControlCommand, type CompactionUserConfig } from "@axon/core";
 import { createNodeAgentHost, FileCommandTrustStore, createNodeMcpCapability } from "@axon/host-node";
 import { WsChannel } from "./wsChannel.js";
 import { webSearch, webFetch } from "./webSearch.js";
@@ -106,7 +106,7 @@ app.post("/api/sessions", async (req, res) => {
     id: "",
     title: title || "新对话",
     model: model || "auto",
-    provider: provider || ZHIPU_PROVIDER,
+    provider: provider || AXON_PROVIDER,
     workspace: workspace || DEFAULT_WORKSPACE,
     messages: [],
     totalTokens: 0,
@@ -198,13 +198,12 @@ void refreshProviders(new ProviderRegistry([DEFAULT_WORKSPACE], createNodeAgentH
   .catch((err) => console.warn("[axon] provider 初次注入失败（将回退 env）:", (err as Error).message));
 
 // ── Relay 长任务工作流 API ────────────────────────────────────────────────
-// Relay 产物落盘在 <workspace>/.axon/relays/，按工作区读取。
+// Relay 产物全局落盘在 <homeDir>/.axon/relays/，不跟工作区绑定（任务级产物，跨项目共享）。
 
-/** 列出某工作区下所有 relay 摘要 */
-app.get("/api/relays", async (req, res) => {
-  const workspace = typeof req.query.workspace === "string" ? req.query.workspace : DEFAULT_WORKSPACE;
+/** 列出全局所有 relay 摘要 */
+app.get("/api/relays", async (_req, res) => {
   try {
-    const store = new RelayStore(workspace, createNodeAgentHost());
+    const store = new RelayStore(homedir(), createNodeAgentHost());
     const relays = await store.list();
     res.json({ relays });
   } catch (err) {
@@ -214,9 +213,8 @@ app.get("/api/relays", async (req, res) => {
 
 /** 获取单个 relay 完整数据（含三份文档正文） */
 app.get("/api/relays/:id", async (req, res) => {
-  const workspace = typeof req.query.workspace === "string" ? req.query.workspace : DEFAULT_WORKSPACE;
   try {
-    const store = new RelayStore(workspace, createNodeAgentHost());
+    const store = new RelayStore(homedir(), createNodeAgentHost());
     const relay = await store.get(req.params.id);
     if (!relay) return res.status(404).json({ error: "relay 不存在" });
     res.json(relay);
@@ -227,13 +225,12 @@ app.get("/api/relays/:id", async (req, res) => {
 
 /** 更新单个任务状态（前端面板手动勾选用） */
 app.patch("/api/relays/:id/tasks/:taskId", async (req, res) => {
-  const workspace = typeof req.query.workspace === "string" ? req.query.workspace : DEFAULT_WORKSPACE;
   const status = req.body?.status;
   if (!["pending", "in_progress", "completed"].includes(status)) {
     return res.status(400).json({ error: "status 非法" });
   }
   try {
-    const store = new RelayStore(workspace, createNodeAgentHost());
+    const store = new RelayStore(homedir(), createNodeAgentHost());
     const relay = await store.setTaskStatus(req.params.id, req.params.taskId, status);
     if (!relay) return res.status(404).json({ error: "relay 不存在" });
     res.json(relay);
@@ -244,9 +241,8 @@ app.patch("/api/relays/:id/tasks/:taskId", async (req, res) => {
 
 /** 删除 relay */
 app.delete("/api/relays/:id", async (req, res) => {
-  const workspace = typeof req.query.workspace === "string" ? req.query.workspace : DEFAULT_WORKSPACE;
   try {
-    const store = new RelayStore(workspace, createNodeAgentHost());
+    const store = new RelayStore(homedir(), createNodeAgentHost());
     await store.remove(req.params.id);
     res.json({ ok: true });
   } catch (err) {

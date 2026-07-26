@@ -42,8 +42,6 @@ const options = {
 if (watch) {
 	const ctx = await context(options);
 	await ctx.watch();
-	console.log("[esbuild] watching...");
 } else {
 	await build(options);
-	console.log("[esbuild] build done");
 }

@@ -22,7 +22,6 @@ service.interceptors.request.use(
     if (token && config.headers) {
       config.headers.Authorization = `Bearer ${token}`
     }
-    console.log(`[Request] ${config.method?.toUpperCase()} ${config.url}`)
     return config
   },
   (error) => {

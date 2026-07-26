@@ -23,6 +23,7 @@ import type { AttachedFile, ChatPanelProps, ReplyStyle, UserSegment } from "./ch
 import { REPLY_STYLES } from "./chat/types";
 import { FILE_MAX_SIZE, isAllowedTextFile, looksBinary } from "./chat/fileUtils";
 import { MessageBubble } from "./chat/MessageBubble";
+import { AssistantTurnHeader } from "./chat/AssistantTurn";
 import { UnifiedStatusBar } from "./UnifiedStatusBar";
 import { MentionEditor, type MentionEditorHandle } from "./chat/MentionEditor";
 import { TokenIndicator } from "./chat/TokenIndicator";
@@ -40,6 +41,15 @@ import { CONTROL_CMD } from "@/lib/constants";
 
 export function ChatPanel({ clientId, sessionId, mode, connected, active, send, onSessionCreated, onCompactionMigrated, onStreamingChange }: ChatPanelProps) {
   const session = useChatSession({ clientId, sessionId, mode, connected, send, onSessionCreated, onCompactionMigrated, onStreamingChange });
+
+  // ── AI 回复状态的落位 ─────────────────────────────────────────────────
+  // 状态（图标 + "思考中…"）跟着 AI 回复走，不再挂在输入框上方：
+  // · AI 已建好 assistant 消息 → 由该消息自己的头部显示（liveAssistantStatus）
+  // · 还没建（用户刚发出、stream_start 未到）→ 由列表 footer 用同一个头部占位
+  const lastMessage = session.chatHistory[session.chatHistory.length - 1];
+  const assistantTurnStarted = lastMessage?.role === "assistant" && !!lastMessage.streaming;
+  const liveAssistantStatus = session.isLoading && assistantTurnStarted ? session.statusText : undefined;
+  const showPendingAssistantHeader = session.isLoading && !assistantTurnStarted;
 
   // 正在被 AI 回复的用户消息 ID（回复中不可编辑）
   const replyingToMessageId = useMemo(() => {
@@ -921,13 +931,22 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             }
             footer={
               <>
+                {/* AI 还没开始输出的那一小段（用户消息已发出、stream_start 未到）：
+                    用与真正回复相同的头部占位，让"图标 + 状态"出现在 AI 消息该出现的位置。
+                    一旦 assistant 消息建好，改由它自己的头部显示（见下方 liveStatus）。 */}
+                {showPendingAssistantHeader && (
+                  <div className="py-1 animate-fade-in">
+                    <AssistantTurnHeader streaming liveStatus={session.statusText} />
+                  </div>
+                )}
                 <div ref={bottomRef} />
               </>
             }
-            renderMessage={(msg, _idx) => (
+            renderMessage={(msg, idx) => (
               <CommandApprovalContext.Provider value={commandApprovalCtx}>
                 <MessageBubble
                   message={msg as any}
+                  liveStatus={idx === session.chatHistory.length - 1 ? liveAssistantStatus : undefined}
                   onAcceptEdit={session.acceptEdits}
                   onRejectEdit={session.rejectEdits}
                   onUndoEdit={session.undoEdits}
@@ -961,10 +980,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
       {/* 输入区域 */}
       <div className="px-3 py-4">
-        {/* 统一状态条：左侧 Loading 指示 + 右侧文件改动汇总，一行紧凑布局 */}
+        {/* 文件改动汇总条（AI 执行状态已移到回复消息头部） */}
         <UnifiedStatusBar
-          isLoading={session.isLoading}
-          statusText={session.statusText}
           mode={mode}
           chatHistory={session.chatHistory}
           pendingPaths={session.pendingPaths}
