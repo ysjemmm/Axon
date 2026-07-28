@@ -21,7 +21,12 @@ export const STORAGE = {
   ACTIVE_KEYS: "axon-active-keys",
   LAST_MODEL: "axon-last-model",
   EDIT_MODE: "axon-edit-mode",
-  QUEST_THINK: "axon-quest-think",
+  /**
+   * 思考开关（agent / quest 通用）。用新 key 而不是沿用旧的 axon-quest-think：
+   * 旧 key 存的是"要不要展示思考过程"（默认关），新语义是"要不要请求思考"（默认开），
+   * 沿用会把老用户的"不展示"误读成"不要思考"。
+   */
+  THINK: "axon-think",
   QUEST_WEBSEARCH: "axon-quest-websearch",
   PARALLEL_MODEL: "axon-parallel-model",
   PARALLEL_PROVIDER: "axon-parallel-provider",

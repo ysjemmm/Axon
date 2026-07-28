@@ -69,16 +69,29 @@ export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
       const segs = [...last.segments];
       let idx = -1;
       if (eventId) {
+        // ① 先按 id 精确匹配。id 唯一，扫描方向无所谓。
         for (let i = segs.length - 1; i >= 0; i--) {
           const s = segs[i];
-          if (s.type === "tool" && isToolInFlight(s.status) && (s.id === eventId || (!s.boundId && s.name === msg.name))) {
-            idx = i; break;
+          if (s.type === "tool" && s.id === eventId) { idx = i; break; }
+        }
+        // ② 再按工具名回退（该段还没绑定过 id）。必须**正向**扫，取最早的那个：
+        //    后端严格串行、按模型给出的顺序执行，事件是 FIFO 到达的。
+        //    早先这里和 ① 合在一个倒序循环里，同名工具一轮出现多次时会认领到最后那个，
+        //    于是后来的卡片被提前改成执行中，而最早那张永远等不到自己的事件、
+        //    卡在"排队中/执行中"不动——表现就是"某张卡的完成态没渲染出来"。
+        if (idx < 0) {
+          for (let i = 0; i < segs.length; i++) {
+            const s = segs[i];
+            if (s.type === "tool" && !s.boundId && s.name === msg.name && isToolInFlight(s.status)) {
+              idx = i; break;
+            }
           }
         }
       } else {
-        const lastSeg = segs[segs.length - 1];
-        if (lastSeg?.type === "tool" && lastSeg.name === msg.name && isToolInFlight(lastSeg.status)) {
-          idx = segs.length - 1;
+        // 无 id：同样取最早的未完成同名段，而不是列表末尾那个
+        for (let i = 0; i < segs.length; i++) {
+          const s = segs[i];
+          if (s.type === "tool" && s.name === msg.name && isToolInFlight(s.status)) { idx = i; break; }
         }
       }
       if (idx >= 0) {
@@ -234,8 +247,13 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
           if (s.type === "tool" && s.id === eventId) { matchIdx = i; break; }
         }
       }
+      // 按 id 没匹配上时才按工具名回退，且**正向**扫描取最早的未完成段：
+      // 后端串行执行、结果 FIFO 到达，所以第一条 tool_result 属于最早那个调用。
+      // 早先这里倒序扫描取最后一个，一轮里出现多次同名工具（如连续 create_file）时，
+      // 第一个结果会被记到最后那张卡上，最早那张卡则永远停在未完成态——
+      // 用户看到的就是"排队/执行中的卡都在，成功的卡没出现"。
       if (matchIdx < 0) {
-        for (let i = segs.length - 1; i >= 0; i--) {
+        for (let i = 0; i < segs.length; i++) {
           const s = segs[i];
           if (s.type === "tool" && s.name === msg.name && isToolInFlight(s.status)) { matchIdx = i; break; }
         }

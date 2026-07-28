@@ -1,6 +1,6 @@
 import { memo, useMemo, useState, type ReactNode } from "react";
 import { Code } from "lucide-react";
-import { AxonLogo } from "@/components/AxonLogo";
+import { AxonSpark } from "@/components/AxonSpark";
 import type { ChatMessage, TextSegment } from "./types";
 import { formatElapsed } from "./format";
 import { renderSegments } from "./renderSegments";
@@ -23,10 +23,19 @@ export function AssistantTurnHeader({
 }) {
   return (
     <div className="flex items-center gap-2 mb-2.5">
-      <AxonLogo size={22} animate={!!streaming} />
-      <span className="text-sm font-semibold text-foreground">Axon</span>
+      <AxonSpark size={20} animate={!!streaming} />
+      {/* 品牌名只在终态出现。进行中那一栏的位置留给状态文字（"思考中…"/"正在回复…"），
+          两者都摆上去就是一行三段并列，信息密度高而没多给信息——进行中用户要看的是进度，
+          不是"这是谁在说话"（会话里只有一个 AI）。 */}
+      {!streaming && (
+        <span className="text-sm font-semibold text-foreground">Axon</span>
+      )}
+      {/* 状态文字用"高光扫过"，而不是早先的 animate-pulse。
+          pulse 拉的是整段文字的 opacity（1↔0.5），属于全局明暗振荡，与图标动画周期错相时
+          会周期性地一起变暗——那就是最初"隔一段时间闪一下"的来源之一。
+          扫光只让一条窄高光带平移过去，底色恒定，因此不与图标叠出节拍。配色见 index.css。 */}
       {liveStatus && (
-        <span className="text-xs text-muted-foreground animate-pulse truncate max-w-[240px]">
+        <span className="text-xs truncate max-w-[240px] axon-text-shimmer">
           {liveStatus}
         </span>
       )}

@@ -70,7 +70,8 @@ export enum ToolName {
 /**
  * 工具调用卡片的状态机（前后端共享的协议值）。
  * 经 JSON 跨进程传输，后端 agentSession 产出、前端按此渲染：
- *   Queued（已规划、排队等待）→ Executing（正在执行）→ Success / Error / Cancelled（终态）
+ *   Queued（还没开始执行：排队等待，或参数仍在流式生成）→ Executing（正在执行）
+ *   → Success / Error / Cancelled（终态）
  * 前端对应类型是 web/src/components/ToolCallItem.tsx 的 ToolStatus，两侧字符串值必须一致。
  * 注意两边词表并不完全相同：本枚举的 Executing 对应前端的 "pending"（前端用 pending 表示
  * "正在执行"），而两边的 "queued" 含义一致。前端不存在 Pending 这个协议值。

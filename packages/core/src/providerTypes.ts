@@ -23,6 +23,15 @@ export type ApiKeyHeader = "bearer" | "x-api-key";
 
 /** provider 名常量（唯一真源，避免字面量散落） */
 export const ZHIPU_PROVIDER = "zhipu";
+
+/**
+ * 兜底模型 id：仅在调用方没有显式指定模型时使用（正常路径下前端总会带上）。
+ *
+ * 收口成常量是因为它原本散落在多处，且会话创建/迁移处曾用 "auto" 兜底——
+ * 那是模型选择器里"按任务自动挑模型"的伪 id，Auto 移除后它不对应任何真实模型，
+ * 真走到兜底分支就会拿着 "auto" 去调接口。兜底值必须是一个真的能跑的模型。
+ */
+export const FALLBACK_MODEL_ID = "gpt-5.5";
 /** Axon 官方 provider：出厂内置 Claude 模型目录，apiKey 默认空，由官方分发或后续登录系统注入 */
 export const AXON_PROVIDER = "axon";
 
@@ -39,6 +48,15 @@ export interface ProviderModel {
   contextWindow: number;
   /** 是否多模态（支持图片） */
   vision?: boolean;
+  /**
+   * 是否支持"思考"（extended thinking / reasoning）。与 vision 同级的能力声明。
+   *
+   * 缺省（undefined）时按模型名启发式推断（见 llm/thinkingSupport.ts）。中转站的模型名
+   * 是任意的，启发式必然覆盖不全——想要确定的行为就在这里显式声明：
+   * - true：请求思考。请先确认该端点真支持，否则不认的参数会让中转网关直接断流。
+   * - false：不请求。用于名字看着像推理模型、但该端点实际不支持的情况。
+   */
+  thinking?: boolean;
   /** LLM 调用协议：chat（通用）/ responses（OpenAI Responses API）。未填则回退 provider.protocol 或 chat */
   protocol?: ProviderProtocol;
   /** 一句话描述（下拉里展示） */
@@ -51,8 +69,6 @@ export interface ProviderModel {
   free?: boolean;
   /** 是否禁用（禁用后不出现在模型选择器，但仍保留配置，可重新启用） */
   disabled?: boolean;
-  /** Auto 自动选择用的档位：fast=便宜快(简单问答) / balanced=均衡 / flagship=旗舰(复杂代码)。未标默认按 balanced 处理 */
-  tier?: "fast" | "balanced" | "flagship";
 }
 
 /** 归一化后的 provider（registry 产出，运行时与 UI 都用它） */

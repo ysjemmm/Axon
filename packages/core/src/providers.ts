@@ -90,6 +90,31 @@ export function findProviderForModel(modelId: string, preferredProvider?: string
   return undefined;
 }
 
+/**
+ * 查某模型在 provider 目录 / providers.json 里**声明**的思考能力。
+ *
+ * 返回 undefined 表示"没声明"，调用方据此回退到 supportsThinking 的兜底启发式；
+ * 返回 true/false 都是用户/目录的明确意图，策略层直接采信。
+ *
+ * 解析规则与 findProviderForModel 保持一致（优先 preferredProvider，其次全局唯一命中，
+ * 同名歧义时不猜）：同一个模型 id 可能在多个中转站下都配着，而它们对思考的支持情况
+ * 完全可能不同，猜错的代价是断流。
+ */
+export function declaredThinkingFor(modelId: string, preferredProvider?: string): boolean | undefined {
+  if (!_resolved) return undefined;
+
+  if (preferredProvider) {
+    const preferred = _resolved.get(normalizeProvider(preferredProvider));
+    const hit = preferred?.models.find((m) => m.id === modelId);
+    if (hit) return hit.thinking;
+  }
+
+  const matches = [..._resolved.values()]
+    .map((p) => p.models.find((m) => m.id === modelId))
+    .filter((m): m is NonNullable<typeof m> => !!m);
+  return matches.length === 1 ? matches[0].thinking : undefined;
+}
+
 /** 取某 provider 的运行时配置：先查已注入的解析结果，再回退到环境变量。 */
 function configFor(name: string): ProviderConfig | undefined {
   const hit = _resolved?.get(name);

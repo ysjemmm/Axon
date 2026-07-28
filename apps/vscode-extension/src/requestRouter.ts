@@ -11,7 +11,7 @@ import * as vscode from "vscode";
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { RelayStore, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry } from "@axon/core";
+import { RelayStore, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, supportsThinking, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry } from "@axon/core";
 import { createVSCodeAgentHost } from "@axon/host-vscode";
 
 const execFileAsync = promisify(execFile);
@@ -859,7 +859,11 @@ function flattenProviderModels(providers: ResolvedProvider[]) {
         .map((m) => ({
           id: m.id, name: m.name, contextWindow: m.contextWindow, vision: !!m.vision,
           description: m.description || "", group: m.group || p.label, free: !!m.free,
-          provider: p.name, builtin: p.builtin, tier: m.tier || "balanced",
+          provider: p.name, builtin: p.builtin,
+          // 下发**已解析**的思考能力（声明优先、启发式兜底），而不是原始声明：
+          // web 是独立工程引用不到 @axon/core，判定逻辑只能留在后端一处，
+          // 否则前端得照抄一份启发式，两边迟早不一致。
+          thinking: supportsThinking(m.id, m.thinking),
         })),
     );
 }

@@ -89,7 +89,13 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
 
       if ((m as any).turnStats) {
         currentAssistant.turnStats = (m as any).turnStats;
-        currentAssistant.turnStatus = "success";
+        // 尊重后端落盘的终止状态。早先这里无条件写 "success"，把 errorTurnHandler 特意持久化的
+        // turnStatus（"cancelled" / "error"）直接抹掉——于是一轮失败的回复在刷新后显示为正常完成，
+        // 连 Credits 后面的 (?) 不确定标记都没了，用户无从得知那轮其实中断了。
+        // 只认这两个终态值：正常完成的轮次压根不写 turnStatus（只有 turnStats），走 "success"；
+        // "running"/"pending" 是运行中状态，即便意外落盘也不能还原，否则 UI 会以为本轮仍在进行。
+        const persisted = (m as any).turnStatus;
+        currentAssistant.turnStatus = persisted === "cancelled" || persisted === "error" ? persisted : "success";
       }
 
       if (hasToolCalls) {

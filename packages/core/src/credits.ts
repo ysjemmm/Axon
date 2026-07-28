@@ -46,6 +46,12 @@ export interface TurnTokenBreakdown {
   questionTokens: number;
   /** 输出 */
   outputTokens: number;
+  /**
+   * 端点报告的提示缓存命中 token（可选，仅用于明细展示）。
+   * 不参与 calculateCredits：四段系数里"记忆"档已经按"绝大部分命中缓存"打过折了，
+   * 再按命中量二次打折会重复计算。这里只是把端点报的事实透出去给用户看。
+   */
+  cachedTokens?: number;
 }
 
 /** 每档计费系数（credits）：每次请求基础 + 四段每 1K token 的单价 */
@@ -157,7 +163,10 @@ export function buildCreditDetail(model: string, b: TurnTokenBreakdown): CreditD
   return {
     inputTokens: b.memoryTokens + b.systemTokens + b.questionTokens,
     outputTokens: b.outputTokens,
-    cachedInputTokens: 0,
+    // 端点报的缓存命中量。早先这里硬编码 0，于是 tooltip 永远显示"缓存 0"，
+    // 连排查都被误导（trace 里全是 cachedInputTokens=0，看起来像端点不支持缓存，
+    // 实测那个端点其实报得很规范）。
+    cachedInputTokens: Math.max(0, b.cachedTokens ?? 0),
     inputRate: c.inputPer1K,
     outputRate: c.outputPer1K,
     tier: rate.tier,

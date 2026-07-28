@@ -26,8 +26,16 @@ export interface UserMessageCommand {
   replyStyle?: string;
   /** 会话模式：agent（默认）、quest（纯问答）或 parallel（多 Agent 并行） */
   mode?: "agent" | "quest" | "parallel";
-  /** Quest 模式选项 */
-  quest?: { think?: boolean; webSearch?: boolean };
+  /**
+   * 是否启用思考（缺省视为开启）。
+   *
+   * 顶层字段而非 quest 子对象：它对 agent / quest 两种模式都生效。
+   * 早先只有 Quest 有个同名开关，且仅控制 reasoning 要不要转发给前端——
+   * 模型照样思考、照样计费，关掉省不下任何东西。现在它同时决定"是否向模型请求思考"。
+   */
+  think?: boolean;
+  /** Quest 模式专属选项（联网搜索；思考开关见顶层 think） */
+  quest?: { webSearch?: boolean };
 }
 
 /**

@@ -1,5 +1,6 @@
 import { calculateCredits, buildCreditDetail } from "../credits.js";
 import { pruneOldToolResults } from "../compactor.js";
+import { estimateTokensFromText } from "../llm/tokenEstimator.js";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 
 /** 收尾器输入：把 finalizeAssistantReply 所需的会话状态显式化。 */
@@ -12,7 +13,7 @@ export interface TurnFinalizerInput {
   lastTurnTokens: number;
   lastTurnOutputTokens: number;
   lastCompletionTokens: number;
-  buildTokenBreakdown: () => { memoryTokens: number; systemTokens: number; questionTokens: number };
+  buildTokenBreakdown: () => { memoryTokens: number; systemTokens: number; questionTokens: number; cachedTokens?: number };
   compactionEnabled: boolean;
   toolResultKeepTurns: number;
   rollingSummaryAccumulated: number;
@@ -43,7 +44,11 @@ export class TurnFinalizer {
     const elapsed = Date.now() - input.turnStartTime;
     const turnTokens = input.lastTurnTokens || input.contentBuffer.length;
     const realOutput = input.lastTurnOutputTokens || input.lastCompletionTokens;
-    const estimatedOutput = realOutput > 0 ? realOutput : Math.ceil((input.contentBuffer.length + input.streamedContentThisRound.length) * 0.4);
+    // 端点没报 usage 时按文本估算。走统一的 estimateTokensFromText（CJK 0.7 / 其余 3.6 字符每 token），
+    // 而非早先的 0.4/字符一刀切——后者对中文低估、对代码高估，同一段输出在不同代码路径能差一倍。
+    const estimatedOutput = realOutput > 0
+      ? realOutput
+      : estimateTokensFromText(input.contentBuffer + input.streamedContentThisRound);
     const breakdown = { ...input.buildTokenBreakdown(), outputTokens: estimatedOutput };
     const credits = calculateCredits(input.model, breakdown);
     const creditDetail = buildCreditDetail(input.model, breakdown);

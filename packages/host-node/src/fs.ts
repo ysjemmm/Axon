@@ -5,7 +5,7 @@
  * read/stat 对“不存在”返回 null（把缺失从异常路径变成正常返回值）。
  */
 
-import { readFile, writeFile, mkdir, readdir, stat, rm } from "node:fs/promises";
+import { readFile, writeFile, appendFile, mkdir, readdir, stat, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { HostFileSystem, DirChild, StatInfo } from "@axon/core";
 
@@ -21,6 +21,11 @@ export class NodeFileSystem implements HostFileSystem {
   async write(absPath: string, content: string): Promise<void> {
     await mkdir(dirname(absPath), { recursive: true });
     await writeFile(absPath, content, "utf-8");
+  }
+
+  async append(absPath: string, content: string): Promise<void> {
+    await mkdir(dirname(absPath), { recursive: true });
+    await appendFile(absPath, content, "utf-8");
   }
 
   async stat(absPath: string): Promise<StatInfo | null> {

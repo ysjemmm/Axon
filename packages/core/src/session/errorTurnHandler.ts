@@ -11,6 +11,7 @@
 
 import type { AgentSession } from "../agentSession.js";
 import { calculateCredits, buildCreditDetail } from "../credits.js";
+import { estimateTokensFromText } from "../llm/tokenEstimator.js";
 
 export class ErrorTurnHandler {
   constructor(private readonly s: AgentSession) {}
@@ -29,6 +30,8 @@ export class ErrorTurnHandler {
       model: this.s.model,
       credits,
       creditDetail,
+      // 这条路径是 cancel() 的兜底，语义上确实是"用户取消"
+      reason: "cancelled",
     });
   }
 
@@ -123,7 +126,7 @@ export class ErrorTurnHandler {
     this.recordStreamedContentOnce(streamedContent);
     const elapsed = Date.now() - turnStartTime;
     const estimatedOutput = this.s.lastTurnOutputTokens || this.s.lastCompletionTokens
-      || (streamedContent ? Math.ceil(streamedContent.length * 0.4) : 0);
+      || (streamedContent ? estimateTokensFromText(streamedContent) : 0);
     const breakdown = { ...this.s.buildTokenBreakdown(), outputTokens: estimatedOutput };
     const turnTokens = this.s.lastTurnTokens
       || (this.s.turnStartCumulative > 0 ? this.s.cumulativeTokens - this.s.turnStartCumulative : 0)
@@ -138,7 +141,9 @@ export class ErrorTurnHandler {
       }
     }
     this.s.persistMessages();
-    this.s.send("turn_cancelled", { elapsed, tokens: turnTokens, model: this.s.model, credits, creditDetail });
+    // reason 必须跟着 status 一起发：落盘的消息记了 error，事件却不带原因的话，
+    // 前端只能一律按 "cancelled" 渲染——于是"网关挂了"和"用户点了停止"在界面上无从区分。
+    this.s.send("turn_cancelled", { elapsed, tokens: turnTokens, model: this.s.model, credits, creditDetail, reason: status });
   }
 
   /**
@@ -150,7 +155,7 @@ export class ErrorTurnHandler {
     this.recordStreamedContentOnce(streamedContent);
     const elapsed = Date.now() - turnStartTime;
     const estimatedOutput = this.s.lastTurnOutputTokens || this.s.lastCompletionTokens
-      || (streamedContent ? Math.ceil(streamedContent.length * 0.4) : 0);
+      || (streamedContent ? estimateTokensFromText(streamedContent) : 0);
     const breakdown = { ...this.s.buildTokenBreakdown(), outputTokens: estimatedOutput };
     const turnTokens = this.s.lastTurnTokens
       || (this.s.turnStartCumulative > 0 ? this.s.cumulativeTokens - this.s.turnStartCumulative : 0)
@@ -165,6 +170,6 @@ export class ErrorTurnHandler {
       }
     }
     this.s.persistMessages();
-    this.s.send("turn_cancelled", { elapsed, tokens: turnTokens, model: this.s.model, credits, creditDetail });
+    this.s.send("turn_cancelled", { elapsed, tokens: turnTokens, model: this.s.model, credits, creditDetail, reason: "cancelled" });
   }
 }

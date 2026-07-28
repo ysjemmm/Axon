@@ -17,6 +17,7 @@ import {
   type ToolStatus, type SearchGroupData, type ReadFileGroupData, type EditGroupData,
 } from "@/components/ToolCallItem";
 import type { Segment, ToolSegment, SubAgentSegment } from "./types";
+import { resolveQueuedWaitingIds } from "./toolCardPhase";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { RetryBlock } from "./RetryBlock";
 import { isRelayTool, relayToolLabel } from "./relayUtils";
@@ -247,6 +248,10 @@ export function renderSegments(
   const nodes: ReactNode[] = [];
   let i = 0;
 
+  // 「排队中」vs「生成中」的判定（判定规则与其理由见 toolCardPhase.ts）。
+  // 抽成纯函数是因为它不该藏在这个几百行的渲染函数里——它是可独立验证的协议推断逻辑。
+  const queuedWaitingIds = resolveQueuedWaitingIds(segments);
+
   // turn 级文件名消歧：收集本轮所有编辑过的文件完整路径，统一算一份"路径→展示名"映射，
   // 让分散在多张编辑卡片里的同名文件（如多个 SKILL.md）也能补路径区分，而不是各自只显示文件名。
   // 同时纳入 apply_patch 的多文件路径（s.diffs）。
@@ -295,7 +300,7 @@ export function renderSegments(
       }
       if (streaming && isLast) {
         nodes.push(
-          <div key={`text-${i}`} className="relative streaming-text-fade">
+          <div key={`text-${i}`} className="relative">
             <MarkdownRenderer content={seg.content} />
             <StreamingCursor />
           </div>
@@ -307,13 +312,34 @@ export function renderSegments(
       continue;
     }
 
-    // 思考过程段：每轮 LLM 的 reasoning 独立为一个可折叠区块
+    // 思考过程段：把**连续相邻**的思考块合并成一个可折叠区块。
+    //
+    // 为什么会相邻：reasoning 段的粒度是"协议块"（轮次 + content block 索引 / Responses item），
+    // 一次回答里天然会有多块——Anthropic 一轮内可以 thinking → tool_use → thinking，
+    // agent loop 的每一轮也各有自己的思考块。块之间原本夹着工具/正文段，但上面的过滤会摘掉
+    // hidden 工具段与弱内容 text 段，于是"中间那一步不展示"的两块思考就贴到了一起。
+    //
+    // 合并只发生在渲染层：chatHistory 里的段结构与 key 一个都不动。reasoning 增量靠 key 归属
+    // （见 stateHandlers.reasoningKeyOf），要是在数据层并段，后续增量就找不到自己的段了。
     if (seg.type === "reasoning") {
-      // 有内容才渲染（避免空白折叠区）
-      if (seg.content.trim()) {
-        nodes.push(<ReasoningBlock key={`reasoning-${i}`} content={seg.content} streaming={seg.streaming} />);
+      const groupStart = i;
+      const parts: string[] = [];
+      let anyStreaming = false;
+      while (i < segments.length) {
+        const s = segments[i];
+        if (s.type !== "reasoning") break;
+        if (s.content.trim()) parts.push(s.content);
+        // 任一块仍在流式 → 整个合并块算"进行中"（保持展开，末块结束后才折叠）
+        if (s.streaming) anyStreaming = true;
+        i++;
       }
-      i++;
+      if (parts.length > 0) {
+        // 单块时原样透传，保持与合并前完全一致的行为；多块之间补空行，避免上块末尾与下块开头粘连
+        const content = parts.length === 1
+          ? parts[0]
+          : parts.map((p) => p.replace(/\s+$/, "")).join("\n\n");
+        nodes.push(<ReasoningBlock key={`reasoning-${groupStart}`} content={content} streaming={anyStreaming} />);
+      }
       continue;
     }
 
@@ -577,6 +603,7 @@ export function renderSegments(
           steps.push({
             id: s.id, name: s.name, status: s.status, description: s.description,
             command: s.command, output: s.output, args: s.args,
+            queuedWaiting: queuedWaitingIds.has(s.id),
           });
           if (s.name === "open_browser" && typeof s.args?.url === "string") url = s.args.url as string;
           if (s.name === "close_browser" && s.status === "success") closed = true;
@@ -602,7 +629,7 @@ export function renderSegments(
     nodes.push(
       <ToolCallItem
         key={seg.id}
-        tool={{ id: seg.id, name: seg.name, status: seg.status, description: seg.description, command: seg.command, cwd: seg.cwd, output: seg.output, query: seg.query, args: seg.args, diff: seg.diff, diffs: seg.diffs, diagnostics: seg.diagnostics, searchResults: seg.searchResults, fetchResult: seg.fetchResult, powerActivated: seg.powerActivated, pending: seg.pending, rejected: seg.rejected, mcpServer: seg.mcpServer, mcpTool: seg.mcpTool }}
+        tool={{ id: seg.id, name: seg.name, status: seg.status, description: seg.description, command: seg.command, cwd: seg.cwd, output: seg.output, query: seg.query, args: seg.args, diff: seg.diff, diffs: seg.diffs, diagnostics: seg.diagnostics, searchResults: seg.searchResults, fetchResult: seg.fetchResult, powerActivated: seg.powerActivated, pending: seg.pending, rejected: seg.rejected, mcpServer: seg.mcpServer, mcpTool: seg.mcpTool, queuedWaiting: queuedWaitingIds.has(seg.id) }}
         onAcceptEdit={onAcceptEdit}
         onRejectEdit={onRejectEdit}
       />

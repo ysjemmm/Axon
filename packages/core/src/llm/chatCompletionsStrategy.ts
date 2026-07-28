@@ -9,6 +9,7 @@ import OpenAI from "openai";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { LLMStrategy, RunTurnParams, LLMTurnResult, NormalizedToolCall } from "./types.js";
 import { normalizeFinishReason } from "./finishReasonMapper.js";
+import { supportsThinking } from "./thinkingSupport.js";
 
 export class ChatCompletionsStrategy implements LLMStrategy {
   readonly name = "chat_completions";
@@ -16,7 +17,7 @@ export class ChatCompletionsStrategy implements LLMStrategy {
   constructor(private client: OpenAI) {}
 
   async runTurn(params: RunTurnParams): Promise<LLMTurnResult> {
-    const { model, messages, tools, signal, callbacks, temperature, maxOutputTokens } = params;
+    const { model, messages, tools, signal, callbacks, temperature, maxOutputTokens, think, modelSupportsThinking } = params;
 
     // 🔍 调试：检查最后一条 user 消息的 content 格式（排查图片是否到达 LLM）
     // 仅在设置 AXON_LLM_DEBUG 环境变量时输出，避免污染 Extension Host 控制台。
@@ -74,15 +75,23 @@ export class ChatCompletionsStrategy implements LLMStrategy {
     const isQwen37Plus = /qwen(?:3\.7|37)/i.test(model);
     const isDeepSeek4Plus = /deepseek(?:-?v?4|4)/i.test(model);
     const isGLM52Plus = /glm(?:-?5\.[2-9]|-?[6-9]|52)/i.test(model);
-    // GLM-5 系列思考模型（glm-5 / glm-5.1 / glm-5.2 / glm-5-turbo ...）：必须显式下发
-    // thinking:{type:"enabled"}，API 才会把思考内容单独放进 reasoning_content 字段。
-    // 否则思考过程会混进普通 content 返回，被上层当作正文流式输出。glm-4-flash 等非思考模型不匹配。
-    const isGLM5Thinking = /glm-?5/i.test(model);
+    // ── 思考：能力判定与参数编码是两件事，分开处理 ──
+    //
+    // 能力（这个模型到底支不支持思考）统一走 supportsThinking：声明优先、启发式兜底。
+    // 本文件不再自己猜——早先这里是 /glm-?5/ 之类的散装正则，每加一个模型要改三个 strategy。
+    // think 省略时按 true 处理：内部调用（压缩摘要 / Relay 评审）不传，行为与开关引入前一致。
+    const canThink = think !== false && supportsThinking(model, modelSupportsThinking);
+    // 编码（这家 API 要哪个参数名）仍然是厂商相关的，只能按厂商分支：
+    // · 智谱 GLM 家族要 thinking:{type:"enabled"}，否则思考会混进 content 被当成正文输出
+    // · qwen/deepseek/glm5.2+ 要 reasoning_effort
+    // ⚠️ 已声明支持思考、但厂商不在下列任何分支里的模型（如中转站自定义名）不会下发任何
+    // 思考参数——宁可少一个能力，也不猜一个可能让网关断流的参数名。要支持新厂商请在此加分支。
+    const isGLM5Thinking = canThink && isGLM;
     // stream_options（include_usage）是 OpenAI 专有参数。经中转网关的非 OpenAI 原生模型
     // （deepseek / glm 等）收到后可能断流或返回格式异常的 chunk，故仅对原生 OpenAI（GPT 系）
     // 及确认兼容的 provider 下发。
     const isNativeOpenAI = /^(gpt|o1|o3|o4)/i.test(model);
-    const enableReasoningEffort = isQwen37Plus || isDeepSeek4Plus || isGLM52Plus;
+    const enableReasoningEffort = canThink && (isQwen37Plus || isDeepSeek4Plus || isGLM52Plus);
     const stream: any = await this.client.chat.completions.create(
       {
         model,

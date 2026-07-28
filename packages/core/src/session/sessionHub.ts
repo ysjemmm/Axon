@@ -17,6 +17,7 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 import { AgentSession } from "../agentSession.js";
 import { CommandGate } from "../tools/index.js";
 import { ZHIPU_PROVIDER } from "../providers.js";
+import { DEFAULT_MODEL_ID } from "../providerCatalog.js";
 import { RelayStore } from "../relay/relayStore.js";
 import { SnapshotManager } from "../snapshot/snapshotManager.js";
 import type { Snapshot } from "../snapshot/types.js";
@@ -618,7 +619,7 @@ export class SessionHub {
     const created = await this.storage.createSession({
       id: cmd.sessionId || "",
       title: "新对话",
-      model: cmd.model || "auto",
+      model: cmd.model || DEFAULT_MODEL_ID,
       provider: cmd.provider || ZHIPU_PROVIDER,
       workspace: ws_dir,
       mode,
@@ -668,7 +669,7 @@ export class SessionHub {
     const created = await this.storage.createSession({
       id: "",
       title,
-      model: migrateData.userInput.model || "auto",
+      model: migrateData.userInput.model || DEFAULT_MODEL_ID,
       provider: migrateData.userInput.provider || ZHIPU_PROVIDER,
       workspace: ws_dir,
       workspaces: ws_dirs.length > 1 ? ws_dirs : undefined,
@@ -722,7 +723,7 @@ export class SessionHub {
         const errMsg = `❌ ${error.message}`;
         session.getMessages().push({ role: "assistant", content: errMsg } as any);
         this.sendTo(created.id, clientId, { type: "stream_delta", content: errMsg } as AgentEvent);
-        this.sendTo(created.id, clientId, { type: "stream_end", elapsed: 0, tokens: 0, model: migrateData.userInput.model || "auto" } as AgentEvent);
+        this.sendTo(created.id, clientId, { type: "stream_end", elapsed: 0, tokens: 0, model: migrateData.userInput.model || DEFAULT_MODEL_ID } as AgentEvent);
       }
     } finally {
       this.runningSessions.delete(created.id);
@@ -804,7 +805,7 @@ export class SessionHub {
       const created = await this.storage.createSession({
         id: cmd.sessionId || "",
         title: "新对话",
-        model: cmd.model || "auto",
+        model: cmd.model || DEFAULT_MODEL_ID,
         provider: cmd.provider || ZHIPU_PROVIDER,
         workspace: ws_dir,
         workspaces: ws_dirs.length > 1 ? ws_dirs : undefined,
@@ -830,7 +831,10 @@ export class SessionHub {
       });
     }
 
-    // Quest 模式：每轮注入思考/联网开关（决定工具集与 reasoning 转发）
+    // 思考开关：agent / quest 都生效，每轮注入（决定是否向模型请求思考 + 是否转发 reasoning）。
+    // 缺省视为开启——老客户端不带该字段时保持原有行为。
+    session.setThink(cmd.think !== false);
+    // Quest 模式：每轮注入联网开关（决定工具集）
     if (mode === "quest") {
       session.setQuestOptions(cmd.quest || {});
     }

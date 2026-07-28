@@ -1,0 +1,161 @@
+[
+  {
+    "protocol": "anthropic",
+    "hasUsage": true,
+    "inputTokens": 1,
+    "outputTokens": 9,
+    "totalTokens": 10,
+    "source": "message_start,message_delta",
+    "ms": 2027
+  },
+  {
+    "protocol": "anthropic",
+    "hasUsage": true,
+    "inputTokens": 1,
+    "outputTokens": 8,
+    "totalTokens": 9,
+    "source": "message_start,message_delta",
+    "ms": 1639
+  },
+  {
+    "protocol": "anthropic",
+    "hasUsage": true,
+    "inputTokens": 1,
+    "outputTokens": 8,
+    "totalTokens": 9,
+    "source": "message_start,message_delta",
+    "ms": 2199
+  },
+  {
+    "protocol": "anthropic",
+    "hasUsage": true,
+    "inputTokens": 1,
+    "outputTokens": 8,
+    "totalTokens": 9,
+    "source": "message_start,message_delta",
+    "ms": 3314
+  },
+  {
+    "protocol": "anthropic",
+    "hasUsage": true,
+    "inputTokens": 1,
+    "outputTokens": 40,
+    "totalTokens": 41,
+    "source": "message_start,message_delta",
+    "ms": 5734
+  },
+  {
+    "protocol": "anthropic",
+    "hasUsage": true,
+    "inputTokens": 1,
+    "outputTokens": 9,
+    "totalTokens": 10,
+    "source": "message_start,message_delta",
+    "ms": 2560
+  },
+  {
+    "protocol": "anthropic",
+    "hasUsage": true,
+    "inputTokens": 1,
+    "outputTokens": 6,
+    "totalTokens": 7,
+    "source": "message_start,message_delta",
+    "ms": 24677
+  },
+  {
+    "protocol": "anthropic",
+    "hasUsage": true,
+    "inputTokens": 1,
+    "outputTokens": 12,
+    "totalTokens": 13,
+    "source": "message_start,message_delta",
+    "ms": 9828
+  },
+  {
+    "protocol": "anthropic",
+    "hasUsage": true,
+    "inputTokens": 1,
+    "outputTokens": 8,
+    "totalTokens": 9,
+    "source": "message_start,message_delta",
+    "ms": 2254
+  },
+  {
+    "protocol": "chat",
+    "hasUsage": true,
+    "inputTokens": 5,
+    "outputTokens": 105,
+    "totalTokens": 110,
+    "source": "usage_chunk(stream_options)",
+    "ms": 2567
+  },
+  {
+    "protocol": "chat",
+    "hasUsage": true,
+    "inputTokens": 13,
+    "outputTokens": 229,
+    "totalTokens": 242,
+    "source": "usage_chunk(stream_options)",
+    "ms": 9499
+  },
+  {
+    "protocol": "responses",
+    "hasUsage": true,
+    "inputTokens": 4387,
+    "outputTokens": 12,
+    "totalTokens": 4399,
+    "source": "response.completed",
+    "ms": 1532
+  },
+  {
+    "protocol": "responses",
+    "hasUsage": true,
+    "inputTokens": 4387,
+    "outputTokens": 14,
+    "totalTokens": 4401,
+    "source": "response.completed",
+    "ms": 2138
+  },
+  {
+    "protocol": "chat",
+    "hasUsage": false,
+    "error": "HTTP 503 - {\"error\":{\"code\":\"model_not_found\",\"message\":\"No available channel for model GLM-5.1 under group PBG (distributor) (request id: 202607200622236173251408268d9d6yMxQkoUh)\",\"type\":\"new_api_error\"}}",
+    "ms": 51
+  },
+  {
+    "protocol": "chat",
+    "hasUsage": true,
+    "inputTokens": 11,
+    "outputTokens": 233,
+    "totalTokens": 244,
+    "source": "usage_chunk(stream_options)",
+    "ms": 4896
+  },
+  {
+    "protocol": "responses",
+    "hasUsage": true,
+    "inputTokens": 4387,
+    "outputTokens": 14,
+    "totalTokens": 4401,
+    "source": "response.completed",
+    "ms": 2453
+  },
+  {
+    "protocol": "responses",
+    "hasUsage": false,
+    "error": "HTTP 401 - {\"code\":\"INVALID_API_KEY\",\"message\":\"Invalid API key\"}",
+    "ms": 1542
+  },
+  {
+    "protocol": "responses",
+    "hasUsage": false,
+    "error": "HTTP 401 - {\"code\":\"INVALID_API_KEY\",\"message\":\"Invalid API key\"}",
+    "ms": 1949
+  },
+  {
+    "protocol": "responses",
+    "hasUsage": false,
+    "error": "HTTP 401 - {\"code\":\"INVALID_API_KEY\",\"message\":\"Invalid API key\"}",
+    "ms": 365
+  }
+]

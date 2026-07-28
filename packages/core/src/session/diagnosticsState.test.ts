@@ -9,6 +9,7 @@ function hostStub(): AgentHost {
     fs: {
       read: async () => null,
       write: async () => {},
+      append: async () => {},
       stat: async () => ({ isFile: true, isDir: false }),
       readdir: async () => [],
       mkdirp: async () => {},

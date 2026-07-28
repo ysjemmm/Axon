@@ -8,6 +8,7 @@ function makeHost() {
     mkdirp: vi.fn(async () => {}),
     read: vi.fn(async (p: string) => store.get(p) ?? null),
     write: vi.fn(async (p: string, content: string) => { store.set(p, content); }),
+    append: vi.fn(async (p: string, content: string) => { store.set(p, (store.get(p) ?? "") + content); }),
   } as any;
   return { host: { fs } as AgentHost, store, fs };
 }
@@ -26,7 +27,7 @@ describe("SessionTraceWriter", () => {
   });
 
   it("append 追加 JSONL，保持顺序", async () => {
-    const { host, store } = makeHost();
+    const { host, store, fs } = makeHost();
     const w = new SessionTraceWriter({ host, cwd: "/workspace" });
     await w.init("sid-1");
     await w.append({ ts: "t1", sessionId: "sid-1", type: "user.input", turn: 1, payload: { text: "hi" } });
@@ -34,6 +35,13 @@ describe("SessionTraceWriter", () => {
 
     const lines = (store.get(w.getPath()) || "").trim().split("\n").map((l) => JSON.parse(l));
     expect(lines.map((l) => l.type)).toEqual(["session.trace_ready", "user.input", "turn.end"]);
+
+    // 必须走真正的追加写。早先实现是 read 整个文件 → write 整个文件，
+    // trace 长到几十 MB 后每条 reasoning 增量都触发一次全量读写（O(n²) I/O，
+    // 且中途失败即整文件损坏）。这两条断言就是防止那个写法被改回来。
+    expect(fs.append).toHaveBeenCalledTimes(3);
+    expect(fs.write).not.toHaveBeenCalled();
+    expect(fs.read).not.toHaveBeenCalled();
   });
 });
 

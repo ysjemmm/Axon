@@ -95,6 +95,27 @@ export interface RunTurnParams {
    * 典型用途：压缩摘要等场景希望限制输出长度。
    */
   maxOutputTokens?: number;
+  /**
+   * 是否允许开启模型的思考/推理能力（用户级开关，默认允许）。
+   *
+   * 语义是"允许"而非"强制"：各策略仍只对**已确认支持**的模型下发思考参数
+   * （见各 strategy 内的模型判定）。盲传未确认的参数会被中转网关直接断流，
+   * 这一点在 chatCompletionsStrategy 里有多处血泪注释，勿改成无条件下发。
+   *
+   * 因此本开关实际只有一个方向是硬保证的：**false 时一定不开思考**。
+   * 关掉能省 token、降延迟，并让 temperature 重新生效（Anthropic 开思考时会强制忽略 temperature）。
+   *
+   * 缺省（undefined）按 true 处理：内部工具调用（压缩摘要、Relay 评审）不传即维持原行为。
+   */
+  think?: boolean;
+  /**
+   * 该模型在 provider 目录 / providers.json 里**声明**的思考能力（`ProviderModel.thinking`）。
+   *
+   * 与 `vision` 同一层级的声明式能力：中转站的模型名是任意的（用户环境里就有把 GPT
+   * 打成 GTP 的 `GTP-5.6-luna`），靠模型名正则永远追不上，只有声明能覆盖。
+   * 未声明（undefined）时策略回退到 supportsThinking 里的兜底启发式。
+   */
+  modelSupportsThinking?: boolean;
 }
 
 /**

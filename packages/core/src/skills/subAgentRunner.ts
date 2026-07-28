@@ -79,6 +79,16 @@ export type SubAgentEmit = (type: string, data: Record<string, unknown>) => void
 export interface SubAgentDeps {
   strategy: LLMStrategy;
   model: string;
+  /**
+   * 是否允许向模型请求思考。缺省（undefined）按 true 处理，即沿用"支持就开"的既有行为——
+   * 这样未显式透传该字段的构造点不会因为本字段的引入而静默改变行为。
+   */
+  think?: boolean;
+  /**
+   * 该模型在 provider 目录 / providers.json 里声明的 thinking 能力（未声明则 undefined，
+   * 由 strategy 回退到启发式判定）。由构造方用 declaredThinkingFor 解析后注入。
+   */
+  modelSupportsThinking?: boolean;
   cwd: string;
   workspaces: string[];
   /** 执行端能力（父注入一个独立的 auto 模式 host，子 agent 改动直接落盘） */
@@ -373,7 +383,7 @@ export class SubAgentRunner {
         }
         this.deps.emit("stream_delta", { content: text });
       },
-      // 与主会话一致：流式阶段检测到工具只代表"已排队"，此刻还没开始跑（子 agent 同样串行执行）
+      // 与主会话一致：流式阶段检测到工具只代表"还没开始跑"，此刻参数仍在累加（子 agent 同样串行执行）
       onToolCallDetected: (name, id) => this.deps.emit("tool_call", { name, id, args: {}, cwd: this.deps.cwd, status: ToolCallStatus.Queued }),
     };
 
@@ -384,6 +394,8 @@ export class SubAgentRunner {
       signal: this.deps.signal,
       callbacks,
       temperature: 0.2,
+      think: this.deps.think,
+      modelSupportsThinking: this.deps.modelSupportsThinking,
     }).then((turn) => {
       // 累计本回合 input/output token，run() 结束时上报父 Agent
       if (turn.usage) {

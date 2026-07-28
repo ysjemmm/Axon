@@ -10,7 +10,7 @@
 import { useState, useRef, useCallback } from "react";
 import { Send, GitBranch, Zap, Square, Trash2, Loader2, Circle, CheckCircle2, XCircle } from "lucide-react";
 import { useParallelSession } from "./useParallelSession";
-import { ModelSelector, autoSelectModel, findModel } from "@/components/ModelSelector";
+import { ModelSelector, findModel, normalizeStoredModelId, DEFAULT_MODEL_ID } from "@/components/ModelSelector";
 import { MentionEditor, type MentionEditorHandle } from "@/components/chat/MentionEditor";
 import { AgentDetail } from "./AgentDetail";
 import { BatchProgressBar } from "./BatchProgressBar";
@@ -33,7 +33,7 @@ import { STORAGE } from "@/lib/constants";
 export function ParallelPanel({ connected, send }: ParallelPanelProps) {
   const { state, thinking, thinkingStatus, submit, cancelBatch, deleteBatch, undoFile, setActiveBatch } = useParallelSession({ connected, send });
   const [model, setModel] = useState(() => {
-    try { return localStorage.getItem(STORAGE.PARALLEL_MODEL) || "auto"; } catch { return "auto"; }
+    try { return normalizeStoredModelId(localStorage.getItem(STORAGE.PARALLEL_MODEL)) || DEFAULT_MODEL_ID; } catch { return DEFAULT_MODEL_ID; }
   });
   // provider 需与 model 一起持久化：多个 provider 下存在同名模型时，
   // 仅存 model id 无法区分具体是哪一个，会在下次打开时误配到第一个同名模型
@@ -57,18 +57,13 @@ export function ParallelPanel({ connected, send }: ParallelPanelProps) {
   const handleSubmit = useCallback(() => {
     const { text } = editorRef.current?.read() ?? { text: "" };
     if (!text.trim()) return;
-    // 如果是 auto 模式，根据内容选择模型
-    let actualModel = model;
+    // provider 没持久化下来时（老数据/单 provider 场景）按模型 id 反查补齐
     let actualProvider: string | undefined = provider;
-    if (model === "auto") {
-      const selected = autoSelectModel(text, false);
-      actualModel = selected.id;
-      actualProvider = selected.provider;
-    } else if (!actualProvider) {
+    if (!actualProvider) {
       const found = findModel(model);
       if (found) actualProvider = found.provider;
     }
-    submit(text.trim(), actualModel, actualProvider);
+    submit(text.trim(), model, actualProvider);
     editorRef.current?.clear();
     setComposerEmpty(true);
     editorRef.current?.focus();

@@ -43,6 +43,17 @@ export interface HostFileSystem {
   /** 写入文件文本内容；父目录不存在时由实现负责创建 */
   write(absPath: string, content: string): Promise<void>;
 
+  /**
+   * 追加文本到文件末尾；文件/父目录不存在时由实现负责创建。
+   *
+   * 为什么必须是独立能力，而不是让调用方 read + write 拼一下：
+   * 追加日志类文件（JSONL trace）时，read+write 的成本随文件已有大小线性增长，
+   * 整体累计到 O(n²)——一条几字节的事件也要把整个文件读出来再整个写回去。
+   * trace 文件长到几十 MB 后，每条记录都是上百 MB 的磁盘 I/O 与同等的内存峰值。
+   * 底层文件系统本就有 O(1) 的追加语义，这里把它暴露出来。
+   */
+  append(absPath: string, content: string): Promise<void>;
+
   /** 查询元信息；路径不存在返回 null */
   stat(absPath: string): Promise<StatInfo | null>;
 

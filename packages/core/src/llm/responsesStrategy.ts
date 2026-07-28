@@ -19,6 +19,7 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 import type { LLMStrategy, RunTurnParams, LLMTurnResult, NormalizedToolCall, ToolDef } from "./types.js";
 import { sanitizeToolPairing } from "../messageSanitizer.js";
 import { normalizeFinishReason, mapResponsesStatusToFinishReason } from "./finishReasonMapper.js";
+import { supportsThinking } from "./thinkingSupport.js";
 
 /** Responses API 的输入项（联合类型，覆盖普通消息 / 工具调用 / 工具结果） */
 type ResponsesInputItem =
@@ -40,14 +41,23 @@ export class ResponsesStrategy implements LLMStrategy {
   constructor(private client: OpenAI) {}
 
   async runTurn(params: RunTurnParams): Promise<LLMTurnResult> {
-    const { model, messages, tools, signal, callbacks, temperature, maxOutputTokens } = params;
+    const { model, messages, tools, signal, callbacks, temperature, maxOutputTokens, think, modelSupportsThinking } = params;
 
     const isGpt = /^gpt/i.test(model);
     // 推理模型（gpt-5.x / o1 / o3 / o4 系列）支持 reasoning summary。
     // 显式请求 summary 后，流式响应中会返回 reasoning_summary_text.delta 事件，
     // 上层 onReasoningDelta 回调接收后推送给前端展示为可折叠"思考过程"。
     // 不传该参数时模型默认不吐摘要，前端 ReasoningBlock 拿不到内容。
-    const isReasoningModel = /^(gpt-5|o1|o3|o4)/i.test(model);
+    //
+    // 用户关掉思考时不再请求摘要。注意：这类模型的推理是内建的、API 层无法关闭，
+    // 关掉开关只是不要摘要（省 token、不展示），并不等于模型不再推理——与 Anthropic
+    // 的 extended thinking（可真正不开）语义不同，别指望这里能省下推理开销。
+    // think 省略时按 true 处理，保持内部调用行为不变。
+    //
+    // 能力判定统一走 supportsThinking（声明优先、启发式兜底），本文件不再自己维护模型名正则。
+    // Responses API 是 OpenAI 原生协议，reasoning.summary 就是这条协议上唯一的编码方式，
+    // 不需要再按厂商分支。
+    const isReasoningModel = think !== false && supportsThinking(model, modelSupportsThinking);
     const { instructions, input } = this.convertMessages(messages);
     const hasTools = tools.length > 0;
     const actionReinforcement = isGpt

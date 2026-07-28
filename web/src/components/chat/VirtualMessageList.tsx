@@ -45,6 +45,36 @@ interface VirtualMessageListProps {
   initialBottom?: boolean;
 }
 
+/** Header / Footer 插槽的动态内容，经 Virtuoso 的 context 下发（理由见 HeaderSlot 注释）。 */
+interface SlotContext {
+  header?: ReactNode;
+  footer?: ReactNode;
+}
+
+/**
+ * 模块级、引用恒定的插槽组件。
+ *
+ * ⚠️ 不要改回 `useCallback(() => <>{footer}</>, [footer])`。
+ *
+ * `components.Header` / `components.Footer` 传给 React 的是**组件类型**。每次传入新的函数
+ * 引用，diff 时就认定类型变了，于是卸载整棵插槽子树、再重新挂载一遍。而 header/footer 是
+ * ChatPanel 内联的 JSX，每次 ChatPanel 重渲染都是新引用——「AI 还没开始回复」那段时间
+ * status / token_usage / reasoning_delta 事件密集到达，每个 setState 都触发一轮重挂载：
+ *   · `animate-fade-in`（0.2s，opacity 0→1）被反复重放 → 这就是肉眼看到的闪烁
+ *   · 插槽内 SVG 的 CSS animation 每次从头重启 → 伸缩动画被不断打断
+ *
+ * 早先这里的注释断言「SVG 改用 CSS animation 后不受 DOM patch 影响，所以 Footer 更新不会
+ * 重置动画」——前半句对，结论错：CSS animation 确实不受 patch 影响，但**重挂载**会让它归零，
+ * 而依赖变化导致的正是重挂载而非 patch。
+ *
+ * 把类型钉成模块级常量后，内容变化只让插槽走一次普通 patch，DOM 节点保持原样。
+ */
+const HeaderSlot = ({ context }: { context?: SlotContext }) => <>{context?.header ?? null}</>;
+const FooterSlot = ({ context }: { context?: SlotContext }) => <>{context?.footer ?? null}</>;
+
+/** components 映射也保持恒定引用：两个插槽都是模块级常量，没有任何需要重建的理由。 */
+const SLOT_COMPONENTS = { Header: HeaderSlot, Footer: FooterSlot };
+
 // #endregion
 
 // #region Component
@@ -139,18 +169,9 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
       );
     }, [messages, renderMessage]);
 
-    // Header/Footer 用 useCallback 包裹。footer/header 引用变化时 useCallback 更新，
-    // 但由于 SVG 改用了 CSS animation（不受 DOM patch 影响），即使 Virtuoso 更新
-    // Footer 内容也不会导致旋转动画重置。
-    const HeaderComponent = useCallback(() => {
-      if (!header) return null;
-      return <>{header}</>;
-    }, [header]);
-
-    const FooterComponent = useCallback(() => {
-      if (!footer) return null;
-      return <>{footer}</>;
-    }, [footer]);
+    // 插槽内容走 context 下发。这个对象每次重建无妨：它只是 prop，变化只让插槽 patch，
+    // 而组件类型（HeaderSlot / FooterSlot）恒定，所以不会重挂载。
+    const slotContext: SlotContext = { header, footer };
 
     return (
       <Virtuoso
@@ -162,10 +183,8 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
         overscan={overscan}
         followOutput={handleFollowOutput}
         initialTopMostItemIndex={initialBottom && messages.length > 0 ? messages.length - 1 : undefined}
-        components={{
-          Header: HeaderComponent,
-          Footer: FooterComponent,
-        }}
+        components={SLOT_COMPONENTS}
+        context={slotContext}
         scrollerRef={(el) => {
           scrollContainerRef.current = el as HTMLElement;
         }}

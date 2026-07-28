@@ -8,7 +8,7 @@
  * skill 注册表/命令信任门 gateCommand/子 Agent token 累加等。
  */
 
-import { getStrategy } from "../providers.js";
+import { getStrategy, declaredThinkingFor } from "../providers.js";
 import { deriveSubAgentHost } from "../host/index.js";
 import { SubAgentRunner, type SubAgentResult } from "../skills/subAgentRunner.js";
 import type { LoadedSkill } from "../skills/skillLoader.js";
@@ -67,6 +67,9 @@ export class DelegateRunner {
       emit,
       skillLoader: this.s.loadSkillForTool,
       web: this.s.web,
+      // 思考开关跟随父会话：用户关掉思考后，子 Agent 也不该偷偷开着思考继续烧钱
+      think: this.s.think,
+      modelSupportsThinking: declaredThinkingFor(execModel, execProvider),
       // 子 Agent 的 execute_command 复用父会话的信任门：灾难硬拦 + 白名单 + 冒泡到用户审批
       gateCommand: (command, toolCallId) => this.s.gateCommand(command, toolCallId),
     });

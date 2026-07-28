@@ -8,7 +8,7 @@
  * 并发计数器/活动 Relay 任务/并行回滚快照存储/子 Agent token 累加等。
  */
 
-import { getStrategy } from "../providers.js";
+import { getStrategy, declaredThinkingFor } from "../providers.js";
 import { deriveSubAgentHost } from "../host/index.js";
 import { runParallelResearch, aggregateResearchResults, type ResearchTask } from "../relay/parallelResearch.js";
 import { runParallelExecution, aggregateExecutionResults, type ExecutionTask } from "../relay/parallelExecution.js";
@@ -69,12 +69,15 @@ export class ParallelRunner {
     const results = await runParallelResearch(tasks, {
       strategy: getStrategy(this.s.provider, this.s.model),
       model: this.s.model,
+      modelSupportsThinking: declaredThinkingFor(this.s.model, this.s.provider),
       cwd: this.s.cwd,
       workspaces: this.s.workspaces,
       host: deriveSubAgentHost(this.s.host),
       signal: this.s.abortSignal,
       skillLoader: this.s.loadSkillForTool,
       web: this.s.web,
+      // 思考开关跟随父会话（并行调研会派多路子 Agent，漏传等于用户关了也照样多花好几份思考钱）
+      think: this.s.think,
       emitFor,
       maxConcurrency: 3,
     });
@@ -134,12 +137,15 @@ export class ParallelRunner {
     const results = await runParallelExecution(tasks, {
       strategy: getStrategy(execProvider, execModel),
       model: execModel,
+      modelSupportsThinking: declaredThinkingFor(execModel, execProvider),
       cwd: this.s.cwd,
       workspaces: this.s.workspaces,
       host: this.s.host,
       signal: this.s.abortSignal,
       skillLoader: this.s.loadSkillForTool,
       web: this.s.web,
+      // 思考开关跟随父会话（同 research：多路子 Agent，漏传就是成倍的思考开销）
+      think: this.s.think,
       emitFor,
       maxConcurrency: 3,
       snapshotStore: batchSnapshots,

@@ -18,6 +18,7 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 import type { LLMStrategy, RunTurnParams, LLMTurnResult, NormalizedToolCall, ToolDef } from "./types.js";
 import { sanitizeToolPairing } from "../messageSanitizer.js";
 import { normalizeFinishReason } from "./finishReasonMapper.js";
+import { supportsThinking } from "./thinkingSupport.js";
 import {
   emptyRawUsage,
   mergeRawUsage,
@@ -37,12 +38,11 @@ const THINKING_MAX_OUTPUT_TOKENS = 16384;
 /** extended thinking 的 budget_tokens（思考预算） */
 const THINKING_BUDGET_TOKENS = 10000;
 
-/** 判断模型是否支持 extended thinking（Opus 4+ / Sonnet 4.5+） */
-function supportsExtendedThinking(model: string): boolean {
-  const m = model.toLowerCase();
-  // Opus 4 系列、Sonnet 4.5+、Claude 4+ 泛化匹配
-  return /opus-4|claude-opus-4|sonnet-4[.-]5|claude-sonnet-4[.-]5|sonnet-5|claude-sonnet-5/.test(m);
-}
+/**
+ * 能力判定统一走 supportsThinking（声明优先、启发式兜底）。
+ * 本文件不再自己维护模型名正则——早先那份枚举漏掉了 claude-opus-5，
+ * 目录里的旗舰模型反而拿不到思考能力，且漏判不报错、只是静默少个能力。
+ */
 
 /** Anthropic 内容块（请求侧：文本 / 图片 / 工具调用 / 工具结果） */
 type AnthropicContentBlock =
@@ -138,7 +138,7 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
   ) {}
 
   async runTurn(params: RunTurnParams): Promise<LLMTurnResult> {
-    const { model, messages, tools, signal, callbacks, temperature, maxOutputTokens } = params;
+    const { model, messages, tools, signal, callbacks, temperature, maxOutputTokens, think, modelSupportsThinking } = params;
 
     const { system, anthropicMessages } = this.convertMessages(messages);
     const hasTools = tools.length > 0;
@@ -148,7 +148,9 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
     const estimatedPromptTokens = estimateAnthropicPromptTokens(system, anthropicMessages, anthropicTools);
 
     const url = this.baseUrl.replace(/\/+$/, "") + "/messages";
-    const useThinking = supportsExtendedThinking(model);
+    // 用户关掉思考 → 不下发 thinking（连带恢复 temperature 生效、max_tokens 回到常规默认）。
+    // think 省略时按 true 处理：内部调用（压缩摘要 / Relay 评审）不传，行为与开关引入前一致。
+    const useThinking = think !== false && supportsThinking(model, modelSupportsThinking);
     const effectiveMaxTokens = useThinking
       ? Math.max(maxOutputTokens ?? THINKING_MAX_OUTPUT_TOKENS, THINKING_BUDGET_TOKENS + 1024)
       : (maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS);

@@ -22,16 +22,41 @@
 import { useRef, useCallback } from "react";
 import type { ChatMessage, TextSegment } from "./types";
 
-/** 正常出字基准：25 字符/帧，约 60fps → 1500 字/秒 */
-const BASE_BATCH = 25;
-/** 收尾（stream_end）出字基准 */
-const ENDING_BATCH = 80;
+/**
+ * ── 出字粒度：为什么这些数字比看起来"应该"的小 ──
+ *
+ * 每帧追加的那一批字是**瞬间从无到有**的：一帧里塞 25 个字，看到的就是"一簇字蹦出来"，
+ * 而不是字在流动。批量越大，这种颗粒感越强——积压时旧参数单帧能倒 220 字，那已经不是
+ * 打字而是"贴上去"，正是用户描述的"唰的一下出现"。
+ *
+ * 所以常态批量压到个位数，让相邻两帧的增量小于一个视觉单元；同时把积压加速摊到更多帧上，
+ * 避免一波积压把粒度瞬间拉回大批量。
+ *
+ * 代价是纯粹的吞吐下降（300 字/秒 vs 1500 字/秒）。这个代价可以付：模型实际吐字速度远低于
+ * 300 字/秒，常态下 buffer 压根攒不起来，只有长代码块整段到达时才会触发积压加速。
+ */
+
+/** 正常出字基准：5 字符/帧，约 60fps → 300 字/秒（远高于模型实际吐字速度） */
+const BASE_BATCH = 5;
+/** 收尾（stream_end）出字基准：可以快，但仍需可辨识 */
+const ENDING_BATCH = 40;
 /** 排空（工具卡片前）出字基准：要赶在卡片之前出完，比收尾再快些 */
-const DRAIN_BATCH = 100;
-/** 积压加速：让当前 buffer 在约这么多帧内排完 */
-const BACKLOG_FRAMES = 8;
-/** 单帧出字上限：再快就不像"打字"而像"贴上去"了 */
-const MAX_BATCH = 220;
+const DRAIN_BATCH = 60;
+/** 积压加速：让当前 buffer 在约这么多帧内排完。帧数越多，追赶越平缓 */
+const BACKLOG_FRAMES = 16;
+
+/**
+ * 单帧出字上限，**按模式分开**。
+ *
+ * 早先三个模式共用一个 220 的上限，于是常态下只要有积压就会飙到 220 字/帧——
+ * 为「排空要赶在卡片前」「收尾要尽快落终态」这两个特殊需求付的代价，被常态观感一起承担了。
+ * 分开之后：常态优先细腻，排空/收尾优先及时，各自不牵累对方。
+ */
+const MAX_BATCH: Record<TypewriterMode, number> = {
+  normal: 48,
+  draining: 160,
+  ending: 200,
+};
 /** 排空最长等待：超时直接倒出，避免模型吐得多时工具卡片迟迟不出现 */
 const DRAIN_TIMEOUT_MS = 400;
 /** 写入目标缺失时的重试上限（帧）：约 2 秒，异常状态下兜底放弃，避免无限空转 */
@@ -82,17 +107,17 @@ function batchBaseFor(mode: TypewriterMode): number {
 }
 
 /**
- * 计算本帧出字量：基准值与"按积压量摊到 BACKLOG_FRAMES 帧"取大者。
+ * 计算本帧出字量：基准值与"按积压量摊到 BACKLOG_FRAMES 帧"取大者，再按模式上限封顶。
  * 固定速率的问题是积压时排不动，只能靠瞬间倒出兜底——那一下正是割裂感的来源。
  */
-function nextBatchSize(len: number, base: number): number {
-  const size = Math.max(base, Math.ceil(len / BACKLOG_FRAMES));
-  return Math.min(size, MAX_BATCH, len);
+function nextBatchSize(len: number, mode: TypewriterMode): number {
+  const size = Math.max(batchBaseFor(mode), Math.ceil(len / BACKLOG_FRAMES));
+  return Math.min(size, MAX_BATCH[mode], len);
 }
 
 /** 从 buffer 头部安全切一批（不切断代理对，避免 emoji 裂成两半） */
-function takeBatch(buffer: React.MutableRefObject<string>, base: number): string {
-  let size = nextBatchSize(buffer.current.length, base);
+function takeBatch(buffer: React.MutableRefObject<string>, mode: TypewriterMode): string {
+  let size = nextBatchSize(buffer.current.length, mode);
   if (size < buffer.current.length) {
     const lastCode = buffer.current.charCodeAt(size - 1);
     if (lastCode >= 0xd800 && lastCode <= 0xdbff) size++;
@@ -212,7 +237,7 @@ export function useTypewriter(): TypewriterApi {
         buffer.current = "";
         appendToLastText(ctx, rest, stash);
       } else {
-        appendToLastText(ctx, takeBatch(buffer, batchBaseFor(mode.current)), stash);
+        appendToLastText(ctx, takeBatch(buffer, mode.current), stash);
         raf.current = requestAnimationFrame(tick);
         return;
       }

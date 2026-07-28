@@ -34,7 +34,7 @@
  *            ~/.axon/settings/providers.json 的 builtinApiKeys.axon → 环境变量
  *            PROVIDER_AXON_API_KEY / AXON_API_KEY
  *   --base   端点，默认取 providers.json 的 builtinBaseUrls.axon，
- *            回退 https://ai.sunnorthgod.top:8443/v1
+ *            回退 https://direct.sunnorthgod.top/v1
  *   --model  模型 id，默认 claude-sonnet-5
  *   --turns  回合数，默认 4
  */
@@ -74,7 +74,7 @@ const model = arg("model", "claude-sonnet-5");
 const baseUrl = (
   arg("base", "") ||
   pick(providersJson.builtinBaseUrls?.axon) ||
-  "https://ai.sunnorthgod.top:8443/v1"
+  "https://direct.sunnorthgod.top/v1"
 ).replace(/\/+$/, "");
 const turns = Number(arg("turns", "4"));
 

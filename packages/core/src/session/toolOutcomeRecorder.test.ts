@@ -31,7 +31,15 @@ describe("ToolOutcomeRecorder", () => {
     expect(pushToolMessage).toHaveBeenCalledWith(expect.objectContaining({ tool_call_id: "c1", _toolName: "search", content: "ok", status: "success" }));
   });
 
-  it("soft-fail 工具成功后补发 tool_call(success)", () => {
+  /**
+   * soft-fail 工具（如 read_file）成功后**不再**补发 tool_call。
+   *
+   * 早先是"延迟展示"：执行前不出卡，执行完确认没失败才补一张 status=success 的 tool_call。
+   * 现在 toolCallExecutor 在执行前就发出执行中卡片、全程可见，失败靠 tool_result 的
+   * hidden 标记撤卡。此时再补发只会与已存在的卡片打架（前端对 status=success 的 tool_call
+   * 不建段，那条事件纯属白跑），所以实现里已移除。这条断言守住"不补发"这个当前契约。
+   */
+  it("soft-fail 工具成功后不再补发 tool_call（卡片已由执行前事件建好）", () => {
     const { recorder, send } = makeRecorder();
     const guard: any = { recordToolResult: vi.fn() };
     recorder.record({
@@ -46,7 +54,8 @@ describe("ToolOutcomeRecorder", () => {
       mutatedFiles: new Set(),
       isPending: false,
     });
-    expect(send).toHaveBeenCalledWith("tool_call", expect.objectContaining({ id: "c1", name: "read_file", status: "success" }));
+    expect(send).not.toHaveBeenCalledWith("tool_call", expect.anything());
+    expect(send).toHaveBeenCalledWith("tool_result", expect.objectContaining({ id: "c1", name: "read_file", status: "success" }));
   });
 
   it("编辑工具软失败：标 hidden + transient，不补发 tool_call", () => {

@@ -58,7 +58,7 @@ export function ClickableFileName({ fileName, absPath, startLine, endLine, class
 /**
  * 工具卡片状态。
  *
- * · queued  已被模型规划、排在队列里等前面的工具跑完（后端串行执行，见 DefaultToolDispatchHandler）
+ * · queued  还没开始执行（细分两种原因，见 ToolCallData.queuedWaiting）
  * · pending 宿主正在真正执行这一个
  * · success / error / cancelled 终态
  *
@@ -70,16 +70,16 @@ export function ClickableFileName({ fileName, absPath, startLine, endLine, class
 export type ToolStatus = "queued" | "pending" | "success" | "error" | "cancelled";
 
 /**
- * 是否尚未跑完（排队中或执行中）。
+ * 是否尚未跑完（还没开始执行，或正在执行）。
  * 分组卡片的"组内还有进行中的调用"之类的汇总判断一律用这个，
- * 只有需要**区分**排队与执行的展示位（图标/边框/文案）才单独判 queued。
+ * 只有需要**区分**两态的展示位（图标/边框/文案）才单独判。
  */
 export function isToolInFlight(status: ToolStatus): boolean {
   return status === "queued" || status === "pending";
 }
 
 /**
- * 排队中卡片的动作文案。
+ * 尚未执行的卡片的动作文案。
  * 此刻只有工具名、没有参数，不能用 formatToolDescription 的占位文案
  * （那些写的是"执行命令中..."，会把"还没开始"说成"正在进行"）。
  */
@@ -104,13 +104,26 @@ export function queuedActionText(name: string): string {
 }
 
 /**
- * "排队中"徽标。统一所有卡片对排队态的表达，避免各处自己拼样式又拼歪。
+ * 未执行态徽标。统一所有卡片对该状态的表达，避免各处自己拼样式又拼歪。
  * 刻意做得比正在执行的卡片弱：无动画、弱对比、小字号——它的作用是"预告"，不是"吸引注意"。
+ *
+ * 两种文案对应两种**成因完全不同**的等待，不能混：
+ * · waiting=true  前面确实有工具在跑，这个在等 → "排队中"
+ * · waiting=false 流式阶段，模型还在生成这次调用的参数 → "生成中"
+ *
+ * 文案用"生成中"而不是"生成参数中"："参数"是实现词，用户不需要知道工具调用有参数这回事。
+ * 也不用"正在写入"之类偏结果的说法——那对 create_file 贴切，对 search / execute_command
+ * 就变成了错误描述。"生成中"对所有工具都成立，且与旁边的动作文案（"创建文件"）连读通顺。
+ *
+ * 为什么必须分：工具卡在工具名一到就发出（onToolCallDetected），而参数还要继续流。
+ * create_file 的 content、str_replace 的 new_str 往往就是模型本轮输出的主体，
+ * 这一段可能几十秒。全都写"排队中"会让用户以为卡在调度上，
+ * 而真实情况是模型正在逐字写文件内容——等待时间的归因整个错了。
  */
-export function QueuedBadge() {
+export function QueuedBadge({ waiting }: { waiting?: boolean }) {
   return (
     <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground/70 border border-border/60">
-      排队中
+      {waiting ? "排队中" : "生成中"}
     </span>
   );
 }
@@ -149,6 +162,15 @@ export interface ToolCallData {
   displayName?: string; // 可选：消歧后的展示文件名（同名文件补路径），覆盖默认 basename 展示
   /** 该工具调用卡片是否对用户隐藏（中性结果：试探性调用被执行层拦住） */
   hidden?: boolean;
+  /**
+   * status="queued" 时，区分它为什么还没跑（由 renderSegments 按同轮工具的执行进度推导）：
+   * · true  前面已有工具开始执行 → 它在真排队
+   * · false/缺省 执行还没开始 → 流式阶段，模型还在生成这次调用的参数
+   *
+   * 后端严格串行，所以"它之前有工具进入过 pending/终态"就等价于"执行已开始"，
+   * 不需要为此加协议字段。
+   */
+  queuedWaiting?: boolean;
   /** MCP 工具专用：真实 server 名 / 工具名（后端透传，免去从编码工具名反推） */
   mcpServer?: string;
   mcpTool?: string;
@@ -480,7 +502,7 @@ function CommandCardItem({ tool, approval }: { tool: ToolCallData; approval: Ret
         {tool.status === "success" && <Terminal className="w-3.5 h-3.5 text-green-600 shrink-0" />}
         {tool.status === "error" && <Terminal className="w-3.5 h-3.5 text-red-500 shrink-0" />}
         <span className="text-muted-foreground flex-1">Command</span>
-        {tool.status === "queued" && <QueuedBadge />}
+        {tool.status === "queued" && <QueuedBadge waiting={tool.queuedWaiting} />}
         {isWaitingInput && tool.status === "pending" && (
           <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary/10 text-primary border border-primary/30 animate-pulse">
             等待用户输入
@@ -946,7 +968,7 @@ export function ToolCallItem({ tool, onAcceptEdit, onRejectEdit, onUndoEdit }: T
       {/* 排队中：只说"要做什么"，不用 description 的占位文案（那些写着"执行命令中..."，
           会把还没开始的事说成正在进行）。参数此刻通常还没到，也就没有文件名可展示。 */}
       {tool.status === "queued"
-        ? <><TruncatedText text={queuedActionText(tool.name)} className="text-muted-foreground/70" /><QueuedBadge /></>
+        ? <><TruncatedText text={queuedActionText(tool.name)} className="text-muted-foreground/70" /><QueuedBadge waiting={tool.queuedWaiting} /></>
         : tool.name === "read_file" && typeof tool.args?.path === "string" && tool.args.path.trim()
           ? <ClickableFileName fileName={String(tool.args.path)} absPath={String(tool.args.path)} startLine={toLineNumber(tool.args?.startLine)} endLine={toLineNumber(tool.args?.endLine)} className={`font-mono truncate min-w-0 ${tool.status === "error" ? "text-red-600" : "text-foreground"}`} />
           : (tool.mcpTool && tool.status === "success")

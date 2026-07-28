@@ -27,6 +27,7 @@ export * from "./mcp/types.js";
 export * from "./mcp/mcpRegistry.js";
 export * from "./llm/types.js";
 export * from "./llm/modelContext.js";
+export * from "./llm/thinkingSupport.js";
 export * from "./llm/chatCompletionsStrategy.js";
 export * from "./llm/responsesStrategy.js";
 export * from "./relay/types.js";
@@ -37,6 +38,12 @@ export * from "./storage/types.js";
 export * from "./skills/builtinSkills.js";
 export * from "./skills/skillLoader.js";
 export * from "./skills/subAgentRunner.js";
+// 自定义 Agent 加载器：呈现端（VS Code 的 Agent 树）需要 listCustomAgents 来列目录。
+// 早先扩展是深链到 "@axon/core/src/skills/customAgentLoader.js" 拿它的，而本包 exports
+// 只声明了 "." / "./host" / "./channel" 三个入口，没有 "./src/*" 子路径映射，于是 tsc 报
+// TS2307（esbuild 走自己的解析所以能打包成功，运行时没事——类型检查却一直是红的）。
+// 从主入口正常导出，比给 exports 开一个 ./src/* 后门更符合这个包既有的边界设计。
+export * from "./skills/customAgentLoader.js";
 
 // relay 运行时（迁自 server/src/relay）
 export * from "./relay/relayStore.js";

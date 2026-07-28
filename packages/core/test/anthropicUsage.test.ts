@@ -5,7 +5,7 @@ import {
   normalizeAnthropicUsage,
   estimateTokensFromText,
   estimateAnthropicPromptTokens,
-} from "./anthropicUsage.js";
+} from "../src/llm/anthropicUsage.js";
 
 describe("mergeRawUsage", () => {
   it("message_delta 只带 output_tokens 时，不清空 message_start 拿到的 input", () => {
@@ -47,7 +47,34 @@ describe("mergeRawUsage", () => {
     mergeRawUsage(raw, { input_tokens: 8448 });
     expect(raw.startInputTokens).toBe(0);
     expect(raw.startCacheTotal).toBe(2933);
-    expect(raw.inputTokens).toBe(8448);
+    // start 已经给过 prompt 侧的账 → delta 的 8448（网关计费口径）不得改写它
+    expect(raw.inputTokens).toBe(0);
+  });
+
+  /**
+   * 实测样本（Axon 官方中转站 claude-sonnet-5，真实 prompt 约 264 token）：
+   *   message_start: input_tokens=286，无缓存字段（286 未达 1024 缓存门槛，确实没缓存）
+   *   message_delta: input_tokens=6955 + 非标准的 credits 字段 → 网关计费数字
+   * 老规则逐字段覆盖 → 计费按 6955 算，虚高 26 倍。
+   */
+  it("回归：delta 的计费数字不得盖掉 message_start 的真实 input（实测虚高 26 倍）", () => {
+    const raw = emptyRawUsage();
+    mergeRawUsage(raw, { input_tokens: 286, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0 }, true);
+    mergeRawUsage(raw, { input_tokens: 6955, output_tokens: 22, credits: 0.0287 } as Record<string, number>);
+    expect(raw.inputTokens).toBe(286);
+    expect(raw.outputTokens).toBe(22); // output 仍然照常更新
+    const u = normalizeAnthropicUsage(raw)!;
+    expect(u.semantics).toBe("plain");
+    expect(u.promptTokens).toBe(286);
+  });
+
+  it("只在 delta 报 usage 的端点：prompt 侧字段仍然采纳（补空而非覆盖）", () => {
+    const raw = emptyRawUsage();
+    // 没有 message_start（sawStart=false）→ delta 是唯一来源，不能一并忽略
+    mergeRawUsage(raw, { input_tokens: 5000, cache_read_input_tokens: 1000, output_tokens: 40 });
+    expect(raw.inputTokens).toBe(5000);
+    expect(raw.cacheReadTokens).toBe(1000);
+    expect(normalizeAnthropicUsage(raw)?.promptTokens).toBe(6000);
   });
 });
 

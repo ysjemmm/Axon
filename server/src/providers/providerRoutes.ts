@@ -12,6 +12,7 @@ import {
   ProviderRegistry,
   refreshProviders,
   probeProviderModels,
+  supportsThinking,
   type AgentHost,
   type ResolvedProvider,
 } from "@axon/core";
@@ -61,7 +62,10 @@ function flattenModels(providers: ResolvedProvider[]) {
           free: !!m.free,
           provider: p.name,
           builtin: p.builtin,
-          tier: m.tier || "balanced",
+          // 下发【已解析】的思考能力（声明优先、启发式兜底），而不是原始声明：
+          // web 是独立工程、引用不到 @axon/core，若下发原始声明前端就得自己再抄一份
+          // 启发式，两份必然漂移。判定只留在 core 一处。
+          thinking: supportsThinking(m.id, m.thinking),
         })),
     );
 }

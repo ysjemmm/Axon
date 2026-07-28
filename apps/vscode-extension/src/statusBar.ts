@@ -112,16 +112,16 @@ function readAxonBaseUrl(): string {
 	} catch {
 		/* 配置不存在时用默认值 */
 	}
-	return "https://ai.sunnorthgod.top:8443/v1";
+	return "https://direct.sunnorthgod.top/v1";
 }
 
-/** 从 baseUrl 提取域名:端口（如 https://ai.sunnorthgod.top:8443/v1 → https://ai.sunnorthgod.top:8443） */
+/** 从 baseUrl 取 origin（协议 + 域名 + 端口，丢掉路径）——用量 API 不在 Messages API 的路径下 */
 function usageApiOrigin(baseUrl: string): string {
 	try {
 		const u = new URL(baseUrl);
 		return `${u.protocol}//${u.host}`;
 	} catch {
-		return "https://ai.sunnorthgod.top:8443";
+		return "https://direct.sunnorthgod.top";
 	}
 }
 

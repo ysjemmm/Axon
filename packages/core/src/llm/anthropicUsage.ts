@@ -62,12 +62,24 @@ export function emptyRawUsage(): RawAnthropicUsage {
 /**
  * 把一个 usage 事件（message_start.message.usage / message_delta.usage）合并进累积器。
  *
- * 规则：**逐字段覆盖，且只接受 > 0 的值**。
- * - 覆盖而非相加：协议规定 message_delta 里的 usage 是整条消息的累计值，不是增量。
- * - 忽略 0/缺省：message_delta 往往只带 output_tokens，此时不能把 message_start 已经
- *   拿到的 input 清零。老实现在这里用"缺省则回退到上一次算好的 promptTokens，再加一次
- *   cache_read"，只要中转站在 delta 里回显了 cache_read 而没回显 input_tokens，
- *   缓存部分就会被重复累加一次——这是与语义无关、纯粹的实现 bug。
+ * ── prompt 侧字段：message_start 一旦给出，delta 不得改写（实测驱动的修复）──
+ *
+ * prompt 的大小在请求发出那一刻就固定了，流开始之后逻辑上不可能再变。Anthropic 官方
+ * message_delta 也只报 output_tokens，正因如此。
+ *
+ * 为什么必须约束：实测 Axon 官方中转站（claude-sonnet-5），一个真实只有 264 token 的请求——
+ *   message_start.usage = { input_tokens: 286, cache_*: 0 }        ← 可信，误差 8%
+ *   message_delta.usage = { input_tokens: 6955, credits: 0.0287 }  ← 与 prompt 无关
+ * delta 里那个 6955 是网关自己的计费数字（同一个 delta 里还塞了非标准的 credits 字段作旁证）。
+ * 老规则"逐字段覆盖"会让它盖掉 start 的 286，于是这类无缓存小请求的用量虚高 26 倍，
+ * 直接体现在 credits 上。
+ *
+ * 但规则刻意只做到"不得改写"，而不是"delta 一律忽略"：确实存在只在 message_delta 里报
+ * usage、message_start 不报的端点，一律忽略会让这些端点彻底拿不到用量。所以 delta 只能
+ * **补空**（sawStart 为假时），不能覆盖。对规范端点零影响——它们的 delta 压根不带这些字段。
+ *
+ * output_tokens 不受此约束，逐事件覆盖：它确实是边生成边累计的，且协议规定 delta 报的是
+ * 整条消息的累计值而非增量，取最后一次即为最终值。
  */
 export function mergeRawUsage(acc: RawAnthropicUsage, incoming: unknown, isStart = false): void {
   if (!incoming || typeof incoming !== "object") return;
@@ -76,49 +88,42 @@ export function mergeRawUsage(acc: RawAnthropicUsage, incoming: unknown, isStart
     const v = u[key];
     return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined;
   };
+
+  const output = take("output_tokens");
+  if (output !== undefined) {
+    acc.outputTokens = output;
+    acc.seen = true;
+  }
+
   // message_start 的原值单独留档（含 0），用于判别端点语义
   if (isStart) {
     const rawInput = u["input_tokens"];
     acc.sawStart = true;
     acc.startInputTokens = typeof rawInput === "number" && Number.isFinite(rawInput) ? rawInput : 0;
     acc.startCacheTotal = (take("cache_read_input_tokens") ?? 0) + (take("cache_creation_input_tokens") ?? 0);
+  } else if (acc.sawStart) {
+    // message_start 已经给过 prompt 侧的账，delta 无权改写（那是网关计费口径）。
+    return;
   }
+
   const input = take("input_tokens");
   const cacheRead = take("cache_read_input_tokens");
   const cacheCreation = take("cache_creation_input_tokens");
-  const output = take("output_tokens");
   if (input !== undefined) acc.inputTokens = input;
   if (cacheRead !== undefined) acc.cacheReadTokens = cacheRead;
   if (cacheCreation !== undefined) acc.cacheCreationTokens = cacheCreation;
-  if (output !== undefined) acc.outputTokens = output;
-  if (input !== undefined || cacheRead !== undefined || cacheCreation !== undefined || output !== undefined) {
+  if (input !== undefined || cacheRead !== undefined || cacheCreation !== undefined) {
     acc.seen = true;
   }
 }
 
-/** 中日韩字符（含全角标点）判定：这些字符 token 密度远高于拉丁字母，必须分开估 */
-function isCjk(code: number): boolean {
-  return (
-    (code >= 0x3000 && code <= 0x9fff) ||
-    (code >= 0xac00 && code <= 0xd7af) ||
-    (code >= 0xf900 && code <= 0xfaff) ||
-    (code >= 0xff00 && code <= 0xffef)
-  );
-}
-
 /**
- * 文本 token 粗估：CJK 约 0.7 token/字符，其余（英文/代码/JSON）约 3.6 字符/token。
- * 只用于在两种 usage 语义之间做判别，不参与计费，精度要求 ±30% 即可。
+ * 文本 token 估算：统一走 tokenEstimator，本模块不再自己维护系数。
+ * 早先这里有一份独立的 isCjk + 系数实现，与 tokenAccountant 里的 `chars * 0.4` 是第三份口径——
+ * 同一个仓库对"一个字符值多少 token"给出三个答案，占比和计费自然对不上。
  */
-export function estimateTokensFromText(text: string): number {
-  if (!text) return 0;
-  let cjk = 0;
-  for (let i = 0; i < text.length; i++) {
-    if (isCjk(text.charCodeAt(i))) cjk++;
-  }
-  const other = text.length - cjk;
-  return Math.ceil(cjk * 0.7 + other / 3.6);
-}
+import { estimateTokensFromText } from "./tokenEstimator.js";
+export { estimateTokensFromText };
 
 /** 单张图片按 Anthropic 常见量级折算（与 base64 长度无关，避免 base64 把估算撑爆） */
 const IMAGE_TOKEN_ESTIMATE = 1600;

@@ -57,13 +57,23 @@ export class SessionTraceWriter {
     return this.filePath;
   }
 
-  /** 追加一条事件。内部串行化写入，避免并发 append 打乱顺序。 */
+  /**
+   * 追加一条事件。
+   *
+   * 必须用宿主的追加写，不能 read + write 模拟：trace 是一条会话写满全程的日志，
+   * 一次会话就能积到几十 MB / 二十多万行。若每条事件都把整个文件读进内存再整个写回，
+   * 单条几字节的 reasoning.delta 也要付一整个文件的读 + 写，累计 I/O 是 O(n²)，
+   * 内存里还要同时压两份该文件的字符串副本。写到后期，光记录思考增量就能拖慢流式输出，
+   * 而且任何一次写入中断都是整文件损坏，不是丢一行。
+   *
+   * writeChain 仍然保留：appendFile 的多次调用各自 open/write/close，并发时行序不保证，
+   * 而 trace 的全部价值就在于"谁先谁后"。串行化是这里的功能需求，不是性能取舍。
+   */
   async append(event: SessionTraceEvent): Promise<void> {
     if (!this.enabled || !this.filePath) return;
     const line = JSON.stringify(event) + "\n";
     this.writeChain = this.writeChain.then(async () => {
-      const prev = (await this.deps.host.fs.read(this.filePath)) || "";
-      await this.deps.host.fs.write(this.filePath, prev + line);
+      await this.deps.host.fs.append(this.filePath, line);
     }).catch((err) => {
       console.warn("[trace] 追加 session trace 失败（忽略）:", (err as Error).message);
     });

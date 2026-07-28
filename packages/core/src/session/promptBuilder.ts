@@ -262,8 +262,13 @@ export class PromptBuilder {
     }
 
     // 上下文使用率提醒是高波动动态信息，避免污染可缓存前缀：只在真的接近上限且作为尾部注入时出现。
-    if (this.s.lastPromptTokens > 0 && this.s.getContextWindow() > 0) {
-      const usagePercent = this.s.lastPromptTokens / this.s.getContextWindow();
+    //
+    // 用 lastTotalTokens（本地估算的上下文占用）而非 lastPromptTokens（端点报的计费口径）：
+    // 后者经中转网关后与真实上下文能差 3.5 倍，会在上下文其实很空时就反复提醒用户"快满了"，
+    // 或者真的快满时一声不响。另外 TokenAccountant 算占用时会调用本方法，读一个由它自己写入的
+    // 字段（上一轮的值）而非同步重算，才不会形成循环。
+    if (this.s.lastTotalTokens > 0 && this.s.getContextWindow() > 0) {
+      const usagePercent = this.s.lastTotalTokens / this.s.getContextWindow();
       if (usagePercent >= 0.6) {
         const pct = Math.round(usagePercent * 100);
         injections.push({

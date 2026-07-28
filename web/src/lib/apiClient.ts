@@ -473,7 +473,11 @@ export interface ProviderModelInfo {
   group?: string;
   free?: boolean;
   disabled?: boolean;
-  tier?: "fast" | "balanced" | "flagship";
+  /**
+   * 该模型是否支持思考/推理。后端下发的是**已解析**的结果
+   * （模型声明优先，未声明时由后端启发式兜底），前端直接采信、不要自己再判一遍。
+   */
+  thinking?: boolean;
 }
 
 /** 解析后的 provider（脱敏，无 apiKey），来自 GET /api/providers */
@@ -502,7 +506,8 @@ export interface FlatModelInfo {
   free: boolean;
   provider: string;
   builtin: boolean;
-  tier?: "fast" | "balanced" | "flagship";
+  /** 是否支持思考（后端已解析，见 ProviderModelInfo.thinking） */
+  thinking?: boolean;
 }
 
 /** providers.json 里单个自定义 provider 条目 */

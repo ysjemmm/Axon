@@ -8,6 +8,7 @@
 
 import * as vscode from "vscode";
 import { join, dirname } from "node:path";
+import { appendFile, mkdir } from "node:fs/promises";
 import type { HostFileSystem, DirChild, StatInfo } from "@axon/core";
 
 const td = new TextDecoder("utf-8");
@@ -36,6 +37,21 @@ export class VSCodeFileSystem implements HostFileSystem {
       /* 已存在或无需创建，忽略 */
     }
     await vscode.workspace.fs.writeFile(uri, te.encode(content));
+  }
+
+  /**
+   * 追加写。这是本类唯一绕开 vscode.workspace.fs 的方法——因为它没有追加语义，
+   * 只有全量 writeFile。用 read + write 模拟追加会退化成 O(n²)：每追加一行都要
+   * 把整个文件读进内存再整个写回，日志类文件（session trace 能长到几十 MB）会被
+   * 这个模式活活拖死，而且中途失败就是整文件损坏而非丢一行。
+   *
+   * 代价是失去虚拟文件系统支持。这里可以接受：扩展只声明了 `main` 入口（Node 扩展宿主，
+   * 无 web 扩展形态），Remote-SSH / Dev Container 下扩展进程本就跑在目标机上，
+   * node:fs 访问到的正是同一个文件系统。若将来要支持 web 扩展，这个方法是唯一的阻塞点。
+   */
+  async append(absPath: string, content: string): Promise<void> {
+    await mkdir(dirname(absPath), { recursive: true });
+    await appendFile(absPath, content, "utf-8");
   }
 
   async stat(absPath: string): Promise<StatInfo | null> {

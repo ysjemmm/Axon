@@ -39,6 +39,10 @@ export interface ResearchResult {
 export interface ParallelResearchDeps {
   strategy: LLMStrategy;
   model: string;
+  /** 用户是否允许思考（透传给子 Agent）；缺省视为允许 */
+  think?: boolean;
+  /** 模型声明的 thinking 能力（透传给子 Agent）；缺省由 supportsThinking 启发式兜底 */
+  modelSupportsThinking?: boolean;
   cwd: string;
   workspaces: string[];
   /** 执行端能力（透传给只读调研子 Agent） */
@@ -86,6 +90,8 @@ export async function runParallelResearch(
         emit: deps.emitFor(task.id),
         skillLoader: deps.skillLoader,
         web: deps.web,
+        think: deps.think,
+        modelSupportsThinking: deps.modelSupportsThinking,
         readOnly: true, // 并行调研强制只读，保证并发安全
       });
 

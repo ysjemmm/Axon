@@ -50,6 +50,10 @@ export interface ExecutionResult {
 export interface ParallelExecutionDeps {
   strategy: LLMStrategy;
   model: string;
+  /** 用户是否允许思考（透传给子 Agent）；缺省视为允许 */
+  think?: boolean;
+  /** 模型声明的 thinking 能力（透传给子 Agent）；缺省由 supportsThinking 启发式兜底 */
+  modelSupportsThinking?: boolean;
   cwd: string;
   workspaces: string[];
   host: AgentHost;
@@ -116,6 +120,8 @@ export async function runParallelExecution(
         emit: deps.emitFor(task.id),
         skillLoader: deps.skillLoader,
         web: deps.web,
+        think: deps.think,
+        modelSupportsThinking: deps.modelSupportsThinking,
         readOnly: false, // 并行执行允许写（受 ScopedHost 文件作用域限制）
         maxRounds: 30, // 并行子 Agent 紧上限：30 轮（约 2-3 分钟），避免长时间空转
       });

@@ -1,6 +1,6 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { MODELS, findModel, getModels, useModels } from "@/components/ModelSelector";
+import { MODELS, findModel, getModels, useModels, normalizeStoredModelId, DEFAULT_MODEL_ID } from "@/components/ModelSelector";
 import { isToolInFlight, type ToolStatus } from "@/components/ToolCallItem";
 import { listRelays, type RelayData } from "@/lib/apiClient";
 import { useSessionEvents } from "@/hooks/useSessionEvents";
@@ -14,7 +14,14 @@ import type { EventHandlerCtx } from "./eventHandlers/types";
 import { useTypewriter } from "./useTypewriter";
 import { useToolCallQueue } from "./useToolCallQueue";
 
-const DEFAULT_MODEL_ID = "glm-4-flash";
+/** 读取持久化的模型选择；已移除的 "auto" 视为没存过，回退到默认模型 */
+function readStoredModelId(): string {
+  try {
+    return normalizeStoredModelId(localStorage.getItem(STORAGE.LAST_MODEL)) || DEFAULT_MODEL_ID;
+  } catch {
+    return DEFAULT_MODEL_ID;
+  }
+}
 
 export interface SubmitPayload {
   /** 加入聊天时间线的用户气泡 */
@@ -32,8 +39,13 @@ export interface SubmitPayload {
     replyStyle: string;
     /** 会话模式 */
     mode?: "agent" | "quest";
-    /** Quest 模式选项 */
-    quest?: { think?: boolean; webSearch?: boolean };
+    /**
+     * 是否请求模型思考（agent / quest 两种模式都生效）。
+     * 关掉即不下发 thinking 参数、也不转发 reasoning——省钱省延迟，不只是不展示。
+     */
+    think?: boolean;
+    /** Quest 模式专属选项（联网搜索；思考开关已上移到 think） */
+    quest?: { webSearch?: boolean };
   };
 }
 
@@ -63,13 +75,12 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingSession, setIsLoadingSession] = useState(!!sessionId);
   const [tokenUsage, setTokenUsage] = useState<{ used: number; max: number; cumulative: number }>(() => {
-    let savedModel = DEFAULT_MODEL_ID;
-    try { savedModel = localStorage.getItem(STORAGE.LAST_MODEL) || DEFAULT_MODEL_ID; } catch { /* ignore */ }
+    const savedModel = readStoredModelId();
     const currentModel = findModel(savedModel) || MODELS.find((m) => m.id === savedModel);
     return { used: 0, max: currentModel?.contextWindow || TIMEOUT.DEFAULT_CONTEXT_WINDOW, cumulative: 0 };
   });
   const [model, setModelState] = useState(() => {
-    try { return localStorage.getItem(STORAGE.LAST_MODEL) || DEFAULT_MODEL_ID; } catch { return DEFAULT_MODEL_ID; }
+    return readStoredModelId();
   });
   const [providerState, setProviderState] = useState<string | undefined>(() => {
     try { return localStorage.getItem(STORAGE.LAST_PROVIDER) || undefined; } catch { return undefined; }
@@ -102,16 +113,25 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const [editMode, setEditMode] = useState<"auto" | "manual">(() => {
     try { return (localStorage.getItem(STORAGE.EDIT_MODE) as "auto" | "manual") || "manual"; } catch { return "manual"; }
   });
-  // Quest 模式开关：思考过程 / 联网搜索（持久化）
-  const [questThink, setQuestThinkState] = useState<boolean>(() => {
-    try { return localStorage.getItem(STORAGE.QUEST_THINK) === "1"; } catch { return false; }
+  /**
+   * 思考开关（agent / quest 通用），**默认开启**。
+   *
+   * 关掉时后端既不向模型请求思考、也不转发 reasoning——所以关掉是真的省钱省延迟。
+   * 早先这是 Quest 专属开关且只管"要不要展示"，模型照样在想、照样计费。
+   */
+  const [think, setThinkState] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem(STORAGE.THINK);
+      return v === null ? true : v === "1";
+    } catch { return true; }
   });
+  // Quest 模式：联网搜索开关（持久化）
   const [questWebSearch, setQuestWebSearchState] = useState<boolean>(() => {
     try { return localStorage.getItem(STORAGE.QUEST_WEBSEARCH) === "1"; } catch { return false; }
   });
-  const setQuestThink = useCallback((v: boolean) => {
-    setQuestThinkState(v);
-    try { localStorage.setItem(STORAGE.QUEST_THINK, v ? "1" : "0"); } catch { /* ignore */ }
+  const setThink = useCallback((v: boolean) => {
+    setThinkState(v);
+    try { localStorage.setItem(STORAGE.THINK, v ? "1" : "0"); } catch { /* ignore */ }
   }, []);
   const setQuestWebSearch = useCallback((v: boolean) => {
     setQuestWebSearchState(v);
@@ -560,8 +580,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
     editMode, workspace, workspaces, workspacesLoaded, currentGroupId, hasRelay, model, provider: providerState,
     // 撤销轻提示
     undoNotice, setUndoNotice,
-    // Quest
-    mode, questThink, questWebSearch, setQuestThink, setQuestWebSearch,
+    // 思考开关（agent / quest 通用）+ Quest 专属联网开关
+    mode, think, setThink, questWebSearch, setQuestWebSearch,
     // 动作
     submit, removeFromQueue, cancelTurn,
     toggleEditMode, acceptEdits, rejectEdits, undoEdits, editUserMessage, confirmTool,

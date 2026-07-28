@@ -25,7 +25,8 @@ import { looksLikeIncompleteReply, LoopGuard, policyForModel, isSoftToolFailure,
 import { McpRegistry } from "./mcp/mcpRegistry.js";
 import { modelContextWindow } from "./llm/modelContext.js";
 import { SYSTEM_PROMPT, QUEST_SYSTEM_PROMPT } from "./systemPrompt.js";
-import { getStrategy, ZHIPU_PROVIDER, findProviderForModel } from "./providers.js";
+import { getStrategy, ZHIPU_PROVIDER, findProviderForModel, declaredThinkingFor } from "./providers.js";
+import { DEFAULT_MODEL_ID } from "./providerCatalog.js";
 import { PromptBuilder, messageText } from "./session/promptBuilder.js";
 import {
   resolveToolDispatchRoute,
@@ -210,12 +211,24 @@ export class AgentSession {
   // mode=quest 时：不绑定工作区语义、禁用所有读写/执行工具（仅在开启联网时放行 web 工具）、
   // 使用问答系统提示。think 控制是否把 reasoning_delta 转发给前端。
   /** @internal */ readonly mode: "agent" | "quest";
-  private questThink = false;
+  /**
+   * 是否请求模型思考（用户开关，默认开）。
+   *
+   * 一个开关同时管两件事：**不向模型请求思考** + **不向前端转发 reasoning**。
+   * 早先这是 Quest 专属的 questThink，且只管转发——模型照样在想、照样计费，
+   * 只是不给用户看，省不下任何东西。合并后关掉它是真的少花钱少等待。
+   *
+   * 注意方向性：关闭是安全的（不下发参数即可），强制开启不是——
+   * 中转网关收到不认识的 thinking 参数会直接断流，而断流不可静默恢复
+   * （那时部分正文已经流给用户了）。所以本开关只负责"允许关"，
+   * "是否能开"仍由各 strategy 按模型判断。
+   */
+  /** @internal */ think = true;
   /** @internal */ questWebSearch = false;
 
   constructor(cwd: string, channel: AgentChannel, host: AgentHost, existingMessages?: ChatCompletionMessageParam[], workspaces?: string[], homeDir?: string, web?: WebCapability, mode: "agent" | "quest" = "agent", mcp?: McpCapability, commandGate?: CommandGate) {
     this.mode = mode;
-    this.model = process.env.DEFAULT_MODEL || "gpt-5.5";
+    this.model = process.env.DEFAULT_MODEL || DEFAULT_MODEL_ID;
     this.provider = process.env.DEFAULT_PROVIDER || ZHIPU_PROVIDER;
     this.messages = existingMessages && existingMessages.length > 0
       ? existingMessages
@@ -873,9 +886,13 @@ export class AgentSession {
     return this.toolDefBuilder.getToolDefs();
   }
 
+  /** 设置思考开关（每轮用户输入前由 SessionHub 注入，agent / quest 两种模式都生效） */
+  setThink(think: boolean): void {
+    this.think = think;
+  }
+
   /** 设置 Quest 模式选项（每轮用户输入前由 SessionHub 注入） */
-  setQuestOptions(opts: { think?: boolean; webSearch?: boolean }): void {
-    if (typeof opts.think === "boolean") this.questThink = opts.think;
+  setQuestOptions(opts: { webSearch?: boolean }): void {
     if (typeof opts.webSearch === "boolean") this.questWebSearch = opts.webSearch;
   }
 
@@ -1198,6 +1215,8 @@ export class AgentSession {
           tools: this.getToolDefs(),
           temperature: 0.2,
           signal: this.abortController?.signal,
+          think: this.think,
+          modelSupportsThinking: declaredThinkingFor(this.model, this.provider),
           // 关键：把新链路的流式增量实时接到主循环 callbacks 上，让前端看到正常的思考/打字效果。
           onReasoningDelta: (text, partIndex, itemId) => callbacks.onReasoningDelta(text, partIndex, itemId),
           onTextDelta: (text) => callbacks.onTextDelta(text),
@@ -1681,9 +1700,10 @@ export class AgentSession {
       const callbacks: LLMStreamCallbacks = {
         onReasoningDelta: (text, partIndex, itemId) => {
           this.trace("reasoning.delta", { text: truncateForTrace(text, 2000), partIndex, itemId }, this.turnCount);
-          // 思考过程：推送给前端展示，不持久化到消息历史
-          // Quest 模式且未开启「思考」开关时，不转发 reasoning（前端也就不展示思考过程）
-          if (this.mode === "quest" && !this.questThink) return;
+          // 思考过程：推送给前端展示，不持久化到消息历史。
+          // 思考开关关闭时不转发（此时各 strategy 也已不向模型请求思考，正常不会有增量到达；
+          // 这里仍然拦一道，兜住"模型无视参数照样吐 reasoning"的中转站）。
+          if (!this.think) return;
           // 细化状态提示：首次 reasoning chunk → "深度思考中..."；累计一定量后若含图形关键词 → "正在构思图形..."
           if (!reasoningStarted) {
             reasoningStarted = true;
@@ -1726,6 +1746,12 @@ export class AgentSession {
           // status=queued 而非 pending：此刻一个工具都还没开始跑（本轮工具由 ToolDispatchHandler
           // 串行执行）。发 pending 会让前端把"排队等待"画成"正在执行"——多工具轮里几张卡一起
           // 转圈、都写着"执行命令中..."。真正开始执行时 toolCallExecutor 会按同一个 id 发 executing。
+          //
+          // 注意此刻工具名刚定、**参数还在流式累加**（create_file 的 content 就是整个文件正文），
+          // 所以这张卡代表的不只是"排队"，也可能是"模型正在写参数"。两者的等待原因不同、
+          // 时长量级也不同，但协议上都是"还没开始执行"，前端按顺序自行区分文案
+          // （见 renderSegments 的 queuedWaitingIds）——不为此加协议字段，
+          // 因为多发一轮 tool_call 会被前端 80ms 卡片队列逐个限流，反而推迟真正的执行中卡片。
           this.send("tool_call", { id, name, args: {}, cwd: this.cwd, status: ToolCallStatus.Queued, ...this.mcpMetaFor(name) });
         },
       };
@@ -1909,8 +1935,12 @@ export class AgentSession {
         messages: this.promptBuilder.buildRequestMessages(),
         tools: [], // 不提供工具，强制用文字收尾
         signal: this.abortController?.signal,
+        // 跟随用户的思考开关。这里虽然不展示思考过程，但思考本身会影响收尾结论的质量，
+        // 所以不强制关掉——只在用户明确关闭时才不请求。
+        think: this.think,
+        modelSupportsThinking: declaredThinkingFor(this.model, this.provider),
         callbacks: {
-          onReasoningDelta: () => { /* 收尾阶段忽略思考过程 */ },
+          onReasoningDelta: () => { /* 收尾阶段不展示思考过程，只取最终文字 */ },
           onTextDelta: (text) => {
             if (!started) {
               this.send("stream_start", {});

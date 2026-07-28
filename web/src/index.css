@@ -410,11 +410,206 @@ input[type="file"],
   100% { transform: translateX(100%); }
 }
 
+/* AxonSpark 活动指示器：辐条沿自身轴向"伸缩"，相位错开形成绕圈涟漪。
+   ── 为什么是这套参数，而不是别的写法 ──
+   · 全部辐条共用**同一个 duration**，只靠 animation-delay 错开相位。周期相同就不存在
+     节拍（beat）——旧 compact logo 的 stroke-width(1.8s) + r(1.5s) 是两个互质周期，
+     要 9s 才重新对齐，中途持续错相，看起来就是"隔一段时间闪一下"。
+   · 动 scaleY 而**不动 stroke-width**。stroke-width 在 20px 下落进次像素区间
+     （viewBox 100 / 显示 22px，4→6 实际只有 0.88→1.32px），描边边缘抗锯齿覆盖率
+     在相邻像素间跳档，那是真抖动。scaleY 只沿描边轴向拉伸，不改变描边厚度。
+   · transform-origin 取辐条内端（12, 7.5 用户单位），所以是从中心朝外生长，而非两端齐伸。
+     默认 transform-box: view-box，px 值直接对应 viewBox 用户坐标。 */
+@keyframes axon-spark-spoke {
+  0%, 100% {
+    transform: scaleY(0.34);
+    opacity: 0.28;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+.axon-spark-spoke {
+  transform-origin: 12px 7.5px;
+  /* ⚠️ 这个 duration 必须与 AxonSpark.tsx 的 CYCLE_SECONDS 保持一致：
+     组件按它算每根辐条的负 delay（-i * CYCLE / 8）来均分相位，两边不一致相位就不均了。 */
+  animation: axon-spark-spoke 1.2s ease-in-out infinite;
+}
+
+/* 状态文字（"思考中…"/"正在回复…"）的高光扫过。
+   ── 为什么用扫光而不是早先的 animate-pulse ──
+   pulse 是把**整段文字**的 opacity 在 1↔0.5 之间来回拉，那是全局明暗振荡：它与图标的动画
+   周期互不相约时，两者会周期性地同时变暗，观感就是"隔一段时间一起闪一下"。
+   扫光不动整体亮度——底色恒定，只有一条窄高光带平移过去。所以就算它和图标周期不同，
+   也不会叠出节拍，纯粹是一层局部位移。
+   ── 配色为什么用变量而不是写死白色 ──
+   底色 --muted-foreground、高光 --foreground，两者在浅色/深色/VS Code 主题下都有定义。
+   深色主题里 --foreground 接近白，正是"白光扫过"；浅色主题里它接近黑，扫过的是一道加重色带
+   ——写死白色在白底上会直接看不见。 */
+@keyframes axon-text-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  /* 60% 处扫完，余下 40% 停在底色：留一个间歇，比连续不停地扫更克制 */
+  60%, 100% {
+    background-position: 0% 0;
+  }
+}
+
+.axon-text-shimmer {
+  /* 不支持 background-clip:text 时的兜底色。必须留着——下面把 color 设成 transparent，
+     万一 @supports 没生效而 color 已透明，文字就整段消失了。 */
+  color: var(--muted-foreground);
+}
+
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .axon-text-shimmer {
+    /* 300% 宽 + 高光居中：background-position 从 100% 走到 0%，高光带正好自左向右穿过文字 */
+    background-image: linear-gradient(
+      90deg,
+      var(--muted-foreground) 40%,
+      var(--foreground) 50%,
+      var(--muted-foreground) 60%
+    );
+    background-size: 300% 100%;
+    background-repeat: no-repeat;
+    background-position: 100% 0;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    animation: axon-text-shimmer 2.4s linear infinite;
+  }
+}
+
+/* ── AxonMascot 吉祥物动作 ──────────────────────────────────────────────
+   动画纪律（这几条是前面调 AxonSpark 时踩出来的，别退回去）：
+   · 绝不动 stroke-width —— 小尺寸下它落在次像素区间，描边抗锯齿覆盖率在相邻像素间跳档，
+     那是真抖动，不是观感问题。
+   · 同一处视觉区域不叠加多个互质周期 —— 周期不相约会产生节拍（beat），看起来就是
+     "隔一段时间闪一下"。这里每个 mood 只让不同元素各跑一条动画（整体位移 / 触须旋转 /
+     眼睛缩放），且需要错相的地方统一用「同 duration + 负 delay」而不是各给不同 duration。
+   · transform-origin 用 px 时依赖 transform-box 的初始值 view-box，px 直接对应 viewBox 用户单位。 */
+
+/* idle：轻微上下浮动。translate 与原点无关，不必设 transform-box */
+@keyframes axon-mascot-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1.6px); }
+}
+.axon-mascot-bob {
+  animation: axon-mascot-bob 2.6s ease-in-out infinite;
+}
+
+/* 眨眼：绝大部分时间睁着，只在周期末尾快速闭合一次（~150ms），所以不会显得在抽搐 */
+@keyframes axon-mascot-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  95%, 97% { transform: scaleY(0.12); }
+}
+.axon-mascot-blink {
+  transform-origin: 20px 23px;
+  animation: axon-mascot-blink 5.2s ease-in-out infinite;
+}
+
+/* focused：坐直一点（静态变换 + 过渡，不是循环动画）。原点在"脚下"，所以是从底部长高 */
+.axon-mascot-perk {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  transform: scale(1.07) translateY(-0.5px);
+  transition: transform 0.18s ease-out;
+}
+
+/* typing：触须快速摆动。绕触须根部旋转 */
+@keyframes axon-mascot-wiggle {
+  0%, 100% { transform: rotate(-7deg); }
+  50% { transform: rotate(7deg); }
+}
+.axon-mascot-wiggle {
+  transform-origin: 20px 14px;
+  animation: axon-mascot-wiggle 0.44s ease-in-out infinite;
+}
+
+/* deleting：身体往后仰一下 + 眼睛眯起来（都是静态变换，靠 transition 过渡） */
+.axon-mascot-lean {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  transform: rotate(-9deg);
+  transition: transform 0.16s ease-out;
+}
+.axon-mascot-squint {
+  transform-origin: 20px 23px;
+  transform: scaleY(0.4);
+  transition: transform 0.12s ease-out;
+}
+
+/* thinking：三个触须尖依次亮起，像信号在跑。
+   三者共用同一个 duration，只靠负 delay 错相 —— 同周期 + 相位差 = 波纹推进；
+   给它们各配一个 duration 才会产生节拍。只动 opacity，不动 r/stroke-width。 */
+@keyframes axon-mascot-spark {
+  0%, 100% { opacity: 0.3; }
+  40% { opacity: 1; }
+}
+.axon-mascot-spark {
+  animation: axon-mascot-spark 1.05s ease-in-out infinite;
+}
+
+/* sleeping：更慢更沉的起伏 */
+@keyframes axon-mascot-sleep {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(1.2px) scale(0.985); }
+}
+.axon-mascot-sleep {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  animation: axon-mascot-sleep 3.6s ease-in-out infinite;
+}
+
+/* sleeping 的 Zzz：飘起来并淡出 */
+@keyframes axon-mascot-zzz {
+  0% { opacity: 0; transform: translate(0, 0) scale(0.7); }
+  25% { opacity: 0.85; }
+  100% { opacity: 0; transform: translate(3px, -7px) scale(1); }
+}
+.axon-mascot-zzz {
+  animation: axon-mascot-zzz 2.8s ease-out infinite;
+}
+
 /* 尊重"减少动态效果"的系统偏好：关闭动画，仅保留高亮边框 */
 @media (prefers-reduced-motion: reduce) {
   .relay-breathing {
     animation: none;
     border-color: rgba(99, 102, 241, 0.8);
+  }
+
+  /* 吉祥物退回静止姿态：循环动画全停，静态姿态（perk/lean/squint）保留——
+     那些不是动画，而是"当前心情长什么样"，去掉反而丢信息。
+     Zzz 直接隐藏：停在某一帧会留下一个莫名的静态字符。 */
+  .axon-mascot-bob,
+  .axon-mascot-blink,
+  .axon-mascot-wiggle,
+  .axon-mascot-spark,
+  .axon-mascot-sleep {
+    animation: none;
+  }
+  .axon-mascot-zzz {
+    animation: none;
+    display: none;
+  }
+
+  /* 停在完全展开态，而不是停在关键帧起点（scaleY 0.34 会缩成一小团） */
+  .axon-spark-spoke {
+    animation: none;
+    transform: none;
+    opacity: 0.85;
+  }
+
+  /* 退回纯色文字：连渐变一起撤掉，避免停在某个相位上留下一道静态亮斑 */
+  .axon-text-shimmer {
+    animation: none;
+    background-image: none;
+    color: var(--muted-foreground);
+    -webkit-text-fill-color: currentColor;
   }
 }
 
@@ -585,11 +780,6 @@ body.vscode-high-contrast {
 }
 .animate-fade-in {
   animation: fade-in 0.2s ease-out;
-}
-
-/* 流式打字机渐入效果：容器整体有微妙的透明度脉动，让新内容出现时有"浮现"感 */
-.streaming-text-fade {
-  transition: opacity 0.15s ease-out;
 }
 
 /* ── 列表样式优化 ──

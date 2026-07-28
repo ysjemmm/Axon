@@ -8,15 +8,17 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Send, Loader2, Copy, ImagePlus, X, Paperclip, Plus, Camera, Feather, Check, ChevronDown, ListChecks, Sparkles, Globe, ShieldAlert, Undo2, Minimize2, AlertTriangle } from "lucide-react";
+import { Send, Loader2, Copy, ImagePlus, X, Paperclip, Plus, Camera, Feather, Check, ChevronDown, ListChecks, Globe, ShieldAlert, Undo2, Minimize2, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { ModelSelector, autoSelectModel, useModels, findModel, getModels } from "@/components/ModelSelector";
+import { ModelSelector, useModels, findModel, getModels } from "@/components/ModelSelector";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
 import { WorkspaceGroupManager, type WorkspaceGroup } from "@/components/WorkspaceGroupManager";
 import { AxonLogo } from "@/components/AxonLogo";
+import { AxonMascot } from "@/components/AxonMascot";
+import { useMascotMood } from "./chat/useMascotMood";
 import { SkillStudio } from "@/components/SkillStudio";
 
 import type { AttachedFile, ChatPanelProps, ReplyStyle, UserSegment } from "./chat/types";
@@ -108,6 +110,9 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     [],
   );
   const slash = useSlashCommands({ host: slashHost, editor: slashEditorBridge, commands: slashCommands });
+
+  // 输入框上沿的吉祥物：按 焦点 / 击键 / AI 忙 / 静默 切换表情
+  const mascot = useMascotMood(session.isLoading);
 
   /** 编辑器内容变化：刷新空态 + 驱动斜杠检测 */
   const handleEditorChange = useCallback((before: string) => {
@@ -315,13 +320,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         : `以下是我提供的上下文：\n\n${fileBlocks}`;
     }
 
-    let actualModel = session.model;
-    let actualProvider = session.provider || findModel(session.model)?.provider;
-    if (session.model === "auto") {
-      const selected = autoSelectModel(contentForModel, sendImages.length > 0);
-      actualModel = selected.id;
-      actualProvider = selected.provider;
-    }
+    const actualModel = session.model;
+    const actualProvider = session.provider || findModel(session.model)?.provider;
 
     const payload: SubmitPayload = {
       userBubble: {
@@ -342,7 +342,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         workspaces: mode === "quest" ? undefined : (session.workspaces.length > 0 ? session.workspaces : undefined),
         replyStyle,
         mode,
-        quest: mode === "quest" ? { think: session.questThink, webSearch: session.questWebSearch } : undefined,
+        think: session.think,
+        quest: mode === "quest" ? { webSearch: session.questWebSearch } : undefined,
       },
     };
 
@@ -1008,10 +1009,24 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               onRequestClose={slash.close}
             />
           )}
+        {/* 吉祥物「Axo」：趴在输入框左上沿。
+            · 必须放在这个 relative 容器里、而不是输入框内部——输入框带 overflow-hidden，
+              放进去会被上边缘直接裁掉。斜杠菜单当年也是因为同一个原因提到这一层的。
+            · pointer-events-none：它悬在边框上方，不能吃掉用户点击输入框的操作。
+            · 斜杠菜单打开时藏起来：菜单正是贴着输入框上方弹出的，两者会撞在一起。 */}
+        {!slash.open && (
+          <div className="pointer-events-none absolute -top-[21px] left-3 z-0 select-none">
+            <AxonMascot mood={mascot.mood} size={26} />
+          </div>
+        )}
         <div
-          className="border border-border rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-ring focus-within:border-transparent transition-all relative"
+          className="border border-border rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-ring focus-within:border-transparent transition-all relative bg-background"
           onDrop={handleDrop}
           onDragOver={(e) => e.preventDefault()}
+          // focus/blur 挂在容器上而非 MentionEditor：React 的 onFocus/onBlur 底层是
+          // focusin/focusout，会冒泡，因此无需给编辑器新增 props。
+          onFocus={mascot.onFocus}
+          onBlur={mascot.onBlur}
         >
           {/* 图片预览区 */}
           {images.length > 0 && (
@@ -1256,6 +1271,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               placeholder={connected ? (currentModelVision ? "给 Axon 发消息...（可粘贴或拖拽图片）" : "给 Axon 发消息...") : "等待连接..."}
               onChange={handleEditorChange}
               onKeyDown={(e) => {
+                // 吉祥物只是旁观者：先记一笔按键类型，不影响后续任何消费判定
+                mascot.noteKey(e.key);
                 // 斜杠菜单优先消费方向键/回车/Esc，未消费时再走默认发送逻辑
                 if (slash.handleKeyDown(e)) return;
                 handleKeyDown(e);
@@ -1273,6 +1290,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                 disabledModels={images.length > 0 ? models.filter((m) => !m.vision).map((m) => m.id) : []}
                 disabled={session.isCompacting || session.contextOverflow}
                 disabledTooltip={session.contextOverflow ? "上下文超限，请先压缩" : "压缩期间不可切换模型"}
+                think={session.think}
+                onThinkChange={session.setThink}
               />
 
               <Popover open={menuOpen} onOpenChange={setMenuOpen}>
@@ -1362,42 +1381,23 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             </div>
             <div className="flex items-center gap-3">
               {mode === "quest" ? (
-                <>
-                  {/* Quest：思考开关 */}
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          onClick={() => session.setQuestThink(!session.questThink)}
-                          className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${session.questThink ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
-                        >
-                          <Sparkles className="w-3.5 h-3.5" />
-                          思考
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" align="end" className="max-w-[220px]">
-                        <p className="text-xs text-white">开启后展示模型的思考过程（reasoning）。</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                  {/* Quest：联网搜索开关 */}
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          onClick={() => session.setQuestWebSearch(!session.questWebSearch)}
-                          className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${session.questWebSearch ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
-                        >
-                          <Globe className="w-3.5 h-3.5" />
-                          联网
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" align="end" className="max-w-[220px]">
-                        <p className="text-xs text-white">开启后允许联网搜索与抓取网页；关闭时仅基于模型知识作答。</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                </>
+                /* Quest：联网搜索开关（思考开关已统一到模型选择器里，agent / quest 共用） */
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={() => session.setQuestWebSearch(!session.questWebSearch)}
+                        className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${session.questWebSearch ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
+                      >
+                        <Globe className="w-3.5 h-3.5" />
+                        联网
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" align="end" className="max-w-[220px]">
+                      <p className="text-xs text-white">开启后允许联网搜索与抓取网页；关闭时仅基于模型知识作答。</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               ) : (
                 /* Agent：编辑模式开关 */
                 <TooltipProvider>
@@ -1441,13 +1441,30 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                 </Tooltip>
               </TooltipProvider>
               {session.isLoading ? (
+                /* 停止按钮：与发送按钮同一套外形（default variant 的 bg-primary + h-7 w-7 圆形），
+                   只把图标换成实心圆角方块——沿用 ChatGPT / Claude 的约定。
+                   · 不用红色 destructive：那套语义是"危险/删除"，而停止生成既不危险也不丢东西
+                     （已产出内容全部保留），红色却是整个输入区里最扎眼的，抢走视觉重心。
+                   · 不另配深色底：与发送按钮同底色，切换时只有图标变化，按钮本身不跳。 */
                 <Button
                   size="sm"
                   onClick={() => session.cancelTurn(session.model)}
                   disabled={session.isCompacting}
-                  className="h-7 w-7 rounded-full bg-destructive hover:bg-destructive/90 shrink-0 disabled:opacity-40"
+                  title="停止生成"
+                  aria-label="停止生成"
+                  className="h-7 w-7 rounded-full shrink-0 disabled:opacity-40"
                 >
-                  <X className="w-3.5 h-3.5" />
+                  {/* ⚠️ 尺寸必须用 `size-*` 而不是 `w-* h-*`。
+                      Button 基类里有 `[&_svg:not([class*='size-'])]:size-3.5`：只要 svg 的 class
+                      里不含 "size-"，就会被强制拉到 14px（父级复合选择器特异性高于单类 w-/h-）。
+                      早先写成 w-2.5 h-2.5 正中这个陷阱——实心方块被放大到 50% 直径，
+                      和描边的发送图标一样大却重得多，看起来就成了个"甜甜圈"。
+                      8px / 28px ≈ 30%，是实心停止块的常见比例；描边图标才需要 14px。
+
+                      用内联 svg 而非 lucide 的 Square：后者是描边图标，这里要的是实心块。 */}
+                  <svg viewBox="0 0 10 10" className="size-2" aria-hidden="true">
+                    <rect x="0" y="0" width="10" height="10" rx="2" fill="currentColor" />
+                  </svg>
                 </Button>
               ) : (
                 <Button

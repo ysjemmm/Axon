@@ -1,12 +1,12 @@
 /**
- * 模型选择器组件 - 两级菜单：一级 provider，hover 展开二级模型列表
+ * 模型选择器组件 - 两级菜单：一级 provider，点击展开二级模型列表（同时只展开一个）
  *
  * 数据驱动：从 /api/providers 拉取内置 + 自定义 provider 及其模型（实时刷新）。
- * 内置 MODELS 仅作离线兜底与 autoSelectModel 依据。打开下拉时会重新拉取，配置改动即时反映。
+ * 内置 MODELS 仅作离线兜底。打开下拉时会重新拉取，配置改动即时反映。
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Settings } from "lucide-react";
+import { ChevronDown, ChevronRight, Settings, Image as ImageIcon, Lightbulb, LightbulbOff } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { getProviders, type ProviderModelInfo, type ResolvedProviderInfo } from "@/lib/apiClient";
@@ -21,8 +21,11 @@ export interface ModelOption {
   provider: string; // 对应后端的 provider key
   /** 分组标签（厂商/来源），用于下拉列表分组展示 */
   group: string;
-  /** Auto 选择档位 */
-  tier?: "fast" | "balanced" | "flagship";
+  /**
+   * 是否支持思考/推理。由后端解析后下发（模型声明优先、启发式兜底），
+   * 前端只做展示，不自己判断——判定逻辑留在 core 一处，避免两边漂移。
+   */
+  thinking?: boolean;
 }
 
 /**
@@ -33,12 +36,34 @@ export interface ModelOption {
 const PROVIDER_ZHIPU = "zhipu";
 
 export const MODELS: ModelOption[] = [
-  // ── 系统 ──
-  { id: "auto", name: "Auto", contextWindow: 0, description: "根据任务和当前可用模型自动选择", free: false, vision: true, provider: PROVIDER_ZHIPU, group: "系统" },
   // ── 智谱 ──
-  { id: "glm-4-flash", name: "GLM-4 Flash", contextWindow: 128000, description: "免费，快速响应", free: true, vision: false, provider: PROVIDER_ZHIPU, group: "智谱", tier: "fast" },
-  { id: "glm-4-flashx", name: "GLM-4 FlashX", contextWindow: 128000, description: "免费，极速推理", free: true, vision: false, provider: PROVIDER_ZHIPU, group: "智谱", tier: "fast" },
+  { id: "glm-4-flash", name: "GLM-4 Flash", contextWindow: 128000, description: "免费，快速响应", free: true, vision: false, provider: PROVIDER_ZHIPU, group: "智谱" },
+  { id: "glm-4-flashx", name: "GLM-4 FlashX", contextWindow: 128000, description: "免费，极速推理", free: true, vision: false, provider: PROVIDER_ZHIPU, group: "智谱" },
 ];
+
+/**
+ * 默认模型 id。收口在此（而不是各面板各写一份字面量）：
+ * 模型知识归 ModelSelector 所有，聊天面板与并行面板都从这里取同一个默认值。
+ */
+export const DEFAULT_MODEL_ID = "glm-4-flash";
+
+/**
+ * 曾经存在的 "auto" 伪模型 id —— 按任务自动挑模型的 Auto 已移除。
+ *
+ * 老用户的 localStorage 里可能还存着它。必须在读取处归一化掉：
+ * 它不再对应任何真实模型，留着会让面板显示一个选不中的名字，
+ * 并把 model="auto" 发给后端（后端会拿它当真实模型名去调接口，直接失败）。
+ */
+const LEGACY_AUTO_MODEL_ID = "auto";
+
+/**
+ * 归一化持久化的模型 id：已移除的 "auto" 视为"没存过"，返回 null。
+ * 调用方据此回退到自己的默认值（通常是 DEFAULT_MODEL_ID）。
+ */
+export function normalizeStoredModelId(stored: string | null | undefined): string | null {
+  if (!stored || stored === LEGACY_AUTO_MODEL_ID) return null;
+  return stored;
+}
 
 // ── provider / 模型动态加载（从 /api/providers 拉取内置 + 自定义）──────────
 
@@ -48,8 +73,6 @@ let _loaded = false;
 let _loading = false;
 const _subs = new Set<() => void>();
 
-/** Auto 系统伪模型（始终置于菜单顶部） */
-const AUTO_MODEL = MODELS.find((m) => m.id === "auto")!;
 /** 内置 provider 的展示名兜底 */
 const BUILTIN_LABELS: Record<string, string> = { [PROVIDER_ZHIPU]: "智谱" };
 
@@ -83,7 +106,7 @@ function _toOption(providerName: string, group: string, m: ProviderModelInfo): M
     vision: !!m.vision,
     provider: providerName,
     group,
-    tier: m.tier,
+    thinking: m.thinking,
   };
 }
 
@@ -91,11 +114,10 @@ function _toOption(providerName: string, group: string, m: ProviderModelInfo): M
 export interface ProviderGroup { name: string; label: string; builtin: boolean; configured: boolean; models: ModelOption[] }
 
 export function getProviderGroups(): ProviderGroup[] {
-  // 兜底：后端不可用时，从内置 MODELS（去掉 auto）按 provider 分组
+  // 兜底：后端不可用时，从内置 MODELS 按 provider 分组
   if (_providers.length === 0) {
     const map = new Map<string, ModelOption[]>();
     for (const m of MODELS) {
-      if (m.id === "auto") continue;
       if (!map.has(m.provider)) map.set(m.provider, []);
       map.get(m.provider)!.push(m);
     }
@@ -114,9 +136,9 @@ export function getProviderGroups(): ProviderGroup[] {
   return [...groups.filter((g) => g.builtin), ...groups.filter((g) => !g.builtin)];
 }
 
-/** 全部可选模型（auto + 各 provider 未禁用模型） */
+/** 全部可选模型（各 provider 未禁用模型） */
 export function getModels(): ModelOption[] {
-  return [AUTO_MODEL, ...getProviderGroups().flatMap((g) => g.models)];
+  return getProviderGroups().flatMap((g) => g.models);
 }
 
 /** 按 id 查模型 */
@@ -147,49 +169,6 @@ export function useProviderGroups(): ProviderGroup[] {
   return getProviderGroups();
 }
 
-/**
- * Auto：在【当前可用模型】（已配置 provider + 未禁用，取自 getModels()）里按任务档位挑选，
- * 不写死模型 id；目标档位没有可用模型时优雅降级到相邻档位，绝不返回跑不起来的模型。
- */
-export function autoSelectModel(input: string, hasImages: boolean): ModelOption {
-  const available = getModels().filter((m) => m.id !== "auto");
-  // 极端：一个 provider 都没配 → 退回 Auto（UI 会提示未配置）
-  if (available.length === 0) return AUTO_MODEL;
-
-  const tierOf = (m: ModelOption): "fast" | "balanced" | "flagship" => m.tier || "balanced";
-  /** 在 pool 里按档位偏好顺序取第一个命中的；都没有则取 pool 第一个，pool 空再退回任意可用 */
-  const pick = (prefs: Array<"fast" | "balanced" | "flagship">, pool: ModelOption[]): ModelOption => {
-    for (const t of prefs) { const hit = pool.find((m) => tierOf(m) === t); if (hit) return hit; }
-    return pool[0] || available[0];
-  };
-
-  // 看图：必须用 vision 模型，优先旗舰；没有 vision 模型则尽力选一个（UI 会拦截无 vision 时附图）
-  if (hasImages) {
-    const visionPool = available.filter((m) => m.vision);
-    if (visionPool.length > 0) return pick(["flagship", "balanced", "fast"], visionPool);
-    return pick(["flagship", "balanced", "fast"], available);
-  }
-
-  // 复杂任务（含代码块 / 改代码意图 / 较长）→ 旗舰档优先
-  const mutationKeywords = [
-    "重构", "实现", "修复", "debug", "调试", "优化", "创建文件", "新建", "添加",
-    "改写", "替换", "删除", "写一个", "帮我写", "帮我改", "帮我加", "设计", "架构",
-  ];
-  const isComplex = input.includes("```") || input.length > 80 || mutationKeywords.some((k) => input.includes(k));
-  if (isComplex) return pick(["flagship", "balanced", "fast"], available);
-
-  // 探索/定位/导航 → 均衡档（决策果断、省 token）
-  const explorationKeywords = [
-    "找", "搜索", "查找", "定位", "在哪", "叫什么", "还是啥", "是哪个",
-    "看看", "看下", "有没有", "有哪些", "了解", "介绍", "梳理", "结构",
-    "接口", "方法", "函数", "类", "文件", "工作区", "项目", "目录", "模块",
-  ];
-  if (explorationKeywords.some((k) => input.includes(k))) return pick(["balanced", "flagship", "fast"], available);
-
-  // 简单短问答/概念题 → 便宜快档
-  return pick(["fast", "balanced", "flagship"], available);
-}
-
 /** 打开 VS Code 侧边栏 Provider 配置面板 */
 function openProviderPanel() {
   const vscode = (window as any).__axonVSCode;
@@ -212,31 +191,49 @@ interface ModelSelectorProps {
   /** 整个选择器禁用（如压缩期间） */
   disabled?: boolean;
   disabledTooltip?: string;
+  /**
+   * 深度思考开关的当前值。传入才渲染这一行；不传（如并行面板）则整块不出现。
+   *
+   * 放在模型选择器里而不是工具栏上：它是模型参数，不是会话参数，
+   * 且默认开启——常态无需占据工具栏宽度，只在关闭时于触发器上留一个标记。
+   */
+  think?: boolean;
+  onThinkChange?: (next: boolean) => void;
 }
 
-/** 单个模型行（菜单项） */
+/** 把上下文窗口格式化为紧凑标记（1M / 256K）；无窗口信息返回空串 */
+function formatContextWindow(contextWindow: number): string {
+  if (contextWindow <= 0) return "";
+  if (contextWindow >= 1_000_000) return `${(contextWindow / 1_000_000).toFixed(0)}M`;
+  return `${(contextWindow / 1000).toFixed(0)}K`;
+}
+
+/**
+ * 单个模型行（菜单项）——单行紧凑布局。
+ *
+ * 一行放下：选中指示条 + 模型名 + 多模态图标 + 上下文窗口。
+ * 描述不再单独占一行，移到原生 title：中转站类 provider 的模型普遍没有描述，
+ * 为它留一行等于给每个模型白付一行高度（截图里 7 个模型就撑满了整个弹层）。
+ * 多模态也从"多模态"文字徽标换成图标，省下的横向空间留给模型名——
+ * 名字才是选择依据，徽标只是限定词。
+ */
 function ModelRow({ model, selected, disabled, disabledHint, onPick }: { model: ModelOption; selected: boolean; disabled: boolean; disabledHint?: string; onPick: () => void }) {
-  const win = model.contextWindow >= 1000000 ? `${(model.contextWindow / 1000000).toFixed(0)}M` : `${(model.contextWindow / 1000).toFixed(0)}K`;
-  const sub = model.contextWindow > 0 ? `${model.description} · ${win}` : model.description;
+  const win = formatContextWindow(model.contextWindow);
+  // hover 提示：把被折叠掉的信息（描述/多模态/窗口）都并进来，紧凑不等于丢信息
+  const title = [model.name, model.description, model.vision ? "多模态" : "", win].filter(Boolean).join(" · ");
   const btn = (
     <button
       data-selected={selected ? "true" : undefined}
       disabled={disabled}
       onClick={onPick}
-      className={`flex items-center justify-between w-full gap-3 py-1.5 pl-2 pr-3 rounded-md text-xs text-left transition-colors ${selected ? "bg-muted/60" : "hover:bg-muted/50"} disabled:opacity-40 disabled:cursor-not-allowed`}
+      title={title}
+      className={`relative flex items-center w-full gap-1.5 py-1 pl-2.5 pr-2 rounded text-xs text-left transition-colors ${selected ? "bg-primary/10 text-primary" : "text-foreground hover:bg-muted/60"} disabled:opacity-40 disabled:cursor-not-allowed`}
     >
-      <div className="flex flex-col gap-0 min-w-0">
-        <div className="flex items-center gap-1.5">
-          <span className={`text-xs ${selected ? "font-semibold" : "font-medium"}`}>{model.name}</span>
-          {model.vision && (
-            <span className="text-[9px] px-1 py-px rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 leading-none">多模态</span>
-          )}
-        </div>
-        {sub && (
-          <span className="text-[10px] text-muted-foreground/70 leading-tight truncate">{sub}</span>
-        )}
-      </div>
-      {selected && <Check className="w-3 h-3 text-muted-foreground shrink-0" />}
+      {/* 选中指示：左侧竖条。比右侧 Check 省一格横向空间，且在长列表里更容易扫到 */}
+      {selected && <span className="absolute left-0 top-1/2 -translate-y-1/2 h-3.5 w-[2px] rounded-full bg-primary" />}
+      <span className={`truncate min-w-0 flex-1 ${selected ? "font-semibold" : "font-medium"}`}>{model.name}</span>
+      {model.vision && <ImageIcon className={`w-3 h-3 shrink-0 ${selected ? "opacity-70" : "opacity-40"}`} />}
+      {win && <span className={`shrink-0 text-[10px] tabular-nums ${selected ? "text-primary/70" : "text-muted-foreground/60"}`}>{win}</span>}
     </button>
   );
   if (disabled && disabledHint) {
@@ -256,7 +253,7 @@ function ModelRow({ model, selected, disabled, disabledHint, onPick }: { model: 
   return btn;
 }
 
-export function ModelSelector({ value, provider, onChange, disabledModels = [], disabled = false, disabledTooltip }: ModelSelectorProps) {
+export function ModelSelector({ value, provider, onChange, disabledModels = [], disabled = false, disabledTooltip, think, onThinkChange }: ModelSelectorProps) {
   const groups = useProviderGroups();
   const [open, setOpen] = useState(false);
   // 当前展开的 provider；打开时默认展开当前所选模型所属 provider
@@ -301,15 +298,26 @@ export function ModelSelector({ value, provider, onChange, disabledModels = [], 
   };
 
   const pick = (id: string, providerName?: string) => { if (providerName) setLastProvider(providerName); onChange(id, providerName); setOpen(false); };
-  const autoDisabled = disabledModels.includes(AUTO_MODEL.id);
+
+  // 思考开关默认开启，所以只在**关掉**时才在触发器上留个记号。
+  // 与同一工具栏里 replyStyle 的做法一致：默认态什么都不显示，只有偏离默认才占位置。
+  // 否则一个常亮的图标会白占宽度，还得让用户去分辨"亮着是开还是关"。
+  const showThinkOff = think === false;
+  // 开关开着、但当前模型本身不支持思考 → 开关此刻不起作用，得如实告诉用户。
+  // thinking 由后端下发（已含声明与启发式判定），前端不重复判断模型名。
+  const thinkInert = think !== false && current?.thinking === false;
 
   const trigger = (
     <button
       type="button"
       className={`inline-flex items-center h-7 gap-1 rounded-md px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors ${disabled ? "opacity-30 cursor-not-allowed" : ""}`}
       onClick={() => { if (!disabled) setOpen(!open); }}
+      title={showThinkOff ? "深度思考已关闭" : undefined}
     >
       {current?.name || value}
+      {/* 用 lucide 自带的 off 图标表达关闭态。不要给普通图标加 line-through——
+          那是文本装饰，对 SVG 不生效，只会得到一个和开启态看起来一样的图标。 */}
+      {showThinkOff && <LightbulbOff className="w-3 h-3 shrink-0 opacity-50" />}
       <ChevronDown className="w-3 h-3 opacity-60" />
     </button>
   );
@@ -339,13 +347,9 @@ export function ModelSelector({ value, provider, onChange, disabledModels = [], 
         align="start"
         sideOffset={6}
         collisionPadding={8}
-        className="w-auto min-w-[220px] max-w-[380px] max-h-[70vh] overflow-y-auto p-1 gap-0 ring-1 ring-border shadow-lg"
+        className="w-[250px] max-h-[70vh] overflow-y-auto p-1 gap-0 ring-1 ring-border shadow-lg [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-transparent [&::-webkit-scrollbar-track]:bg-transparent hover:[&::-webkit-scrollbar-thumb]:bg-muted-foreground/25 [scrollbar-width:thin] [scrollbar-color:transparent_transparent] hover:[scrollbar-color:rgba(128,128,128,0.25)_transparent]"
       >
-        {/* Auto（系统） */}
-        <ModelRow model={AUTO_MODEL} selected={value === AUTO_MODEL.id} disabled={autoDisabled} onPick={() => pick(AUTO_MODEL.id)} />
-        {groups.length > 0 && <div className="border-t border-border/50 my-1" />}
-
-        {/* provider 一级 + hover 内联展开二级模型 */}
+        {/* provider 一级 + 点击内联展开二级模型（同时只展开一个） */}
         {/* side="top" 向上弹出时，底部离按钮最近。将当前选中的 provider 排到最后（最靠近按钮）以减少误触 */}
         {[...groups].sort((a, b) => {
           const aCurrent = current && a.name === current.provider ? 1 : 0;
@@ -360,18 +364,20 @@ export function ModelSelector({ value, provider, onChange, disabledModels = [], 
                 tabIndex={0}
                 onClick={() => setExpanded(expanded === g.name ? null : g.name)}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded(expanded === g.name ? null : g.name); } }}
-                className={`flex items-center justify-between gap-2 py-1.5 pl-2 pr-2 rounded-md text-xs cursor-pointer transition-colors ${isExpanded ? "text-foreground bg-muted/30" : "text-muted-foreground hover:text-foreground hover:bg-muted/20"}`}
+                className={`flex items-center gap-1 py-1 pl-1 pr-1.5 rounded text-[11px] cursor-pointer select-none transition-colors ${isExpanded ? "text-foreground bg-muted/40" : "text-muted-foreground hover:text-foreground hover:bg-muted/25"}`}
               >
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="font-medium truncate">{g.label}</span>
-                  {!g.configured && <span className="text-[9px] px-1 py-px rounded bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 shrink-0">未配置</span>}
-                </div>
-                <ChevronRight className={`w-3 h-3 opacity-60 shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+                {/* 披露箭头放左侧：它标示的是"这一项可展开"的层级关系，贴着标题才读得出来。
+                    放在最右端时它离标题最远，反而像一个独立的前进按钮。右侧腾出来放模型数量。 */}
+                <ChevronRight className={`w-3 h-3 shrink-0 opacity-50 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+                <span className="font-semibold truncate flex-1 min-w-0">{g.label}</span>
+                {!g.configured
+                  ? <span className="text-[9px] px-1 py-px rounded bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 shrink-0">未配置</span>
+                  : <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/50">{g.models.length}</span>}
               </div>
               {isExpanded && (
                 <div
                   ref={(el) => { scrollRefs.current[g.name] = el; }}
-                  className="pl-2 border-l border-border/40 ml-2 mb-1 max-h-[280px] overflow-y-auto"
+                  className="pl-1.5 border-l border-border/40 ml-2.5 mb-1 max-h-[232px] overflow-y-auto [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-transparent [&::-webkit-scrollbar-track]:bg-transparent hover:[&::-webkit-scrollbar-thumb]:bg-muted-foreground/25 [scrollbar-width:thin] [scrollbar-color:transparent_transparent] hover:[scrollbar-color:rgba(128,128,128,0.25)_transparent]"
                 >
                   {g.models.map((m) => (
                     <ModelRow
@@ -389,14 +395,43 @@ export function ModelSelector({ value, provider, onChange, disabledModels = [], 
           );
         })}
 
+        {/* 模型级开关：深度思考。
+            放在这里而不是工具栏，是因为它是模型参数而非会话设置——和"用哪个模型"是同一类决定。
+            工具栏已经很满，而本开关默认开启、常态不需要露面。
+            点它不关闭弹层：调完还能顺手换模型。 */}
+        {onThinkChange && (
+          <>
+            <div className="border-t border-border/50 my-1" />
+            <button
+              onClick={() => onThinkChange(think === false)}
+              title="关闭后不再向模型请求思考（省 token、更快），也不展示思考过程。模型本身不支持思考时本开关无效果。"
+              className="flex items-center gap-1.5 w-full py-1 pl-1.5 pr-1.5 rounded text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+            >
+              {think === false
+                ? <LightbulbOff className="w-3 h-3 shrink-0 opacity-60" />
+                : <Lightbulb className={`w-3 h-3 shrink-0 ${thinkInert ? "opacity-40" : "text-primary"}`} />}
+              <span className="flex-1 text-left">深度思考</span>
+              {/* 当前模型不支持时明说。否则用户开着开关却看不到任何思考过程，
+                  只能怀疑是功能坏了——而真实原因是这个模型压根没这个能力。 */}
+              {thinkInert && <span className="shrink-0 text-[9px] text-muted-foreground/50">此模型不支持</span>}
+              {/* 极简开关轨道：布尔状态用轨道表达比"开/关"两个字更快读懂，也不占宽。
+                  模型不支持时压暗成中性色——开关是"开"没错，但此刻不产生任何效果，
+                  画成全亮的 primary 等于承诺了一个兑现不了的状态。 */}
+              <span className={`shrink-0 w-6 h-3 rounded-full transition-colors relative ${think === false ? "bg-muted-foreground/25" : thinkInert ? "bg-muted-foreground/40" : "bg-primary"}`}>
+                <span className={`absolute top-0.5 w-2 h-2 rounded-full bg-background transition-all ${think === false ? "left-0.5" : "left-3.5"}`} />
+              </span>
+            </button>
+          </>
+        )}
+
         {/* 底部操作栏 */}
         <div className="border-t border-border/50 my-1" />
         <button
           onClick={openProviderPanel}
-          className="flex items-center gap-2 w-full py-1.5 pl-2 pr-3 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+          className="flex items-center gap-1.5 w-full py-1 pl-1.5 pr-2 rounded text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
         >
-          <Settings className="w-3 h-3" />
-          去配置自定义 Provider
+          <Settings className="w-3 h-3 shrink-0 opacity-60" />
+          配置自定义 Provider
         </button>
       </PopoverContent>
     </Popover>

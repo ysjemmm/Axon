@@ -807,7 +807,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const refreshAgentTree = async () => {
     try {
       const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
-      const { listCustomAgents } = await import("@axon/core/src/skills/customAgentLoader.js");
+      const { listCustomAgents } = await import("@axon/core");
       // 全局目录：~/.axon/agents/
       const homeDir = require("os").homedir();
       const agents = await listCustomAgents(homeDir, createHost());
