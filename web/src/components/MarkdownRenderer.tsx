@@ -325,7 +325,8 @@ interface MarkdownRendererProps { content: string; }
 export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: MarkdownRendererProps) {
   const ref = useRef<HTMLDivElement>(null);
   const lastContentRef = useRef<string>("");
-  const rafRef = useRef<number | null>(null);
+  // setTimeout 句柄（早先叫 rafRef，但里面装的从来不是 requestAnimationFrame 的返回值）
+  const parseTimerRef = useRef<number | null>(null);
   const pendingContentRef = useRef<string>(content);
 
   const computeHtml = useCallback((text: string): string => {
@@ -339,20 +340,38 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: Mark
 
   const themeTick = useThemeVersion();
 
+  // 重解析节流：窗口内的多次变更合并成一次，取窗口结束时的最新内容（尾沿触发）。
+  //
+  // ── 这个间隔决定的是"可见出字节奏"，不只是性能 ──
+  // 打字机按 RAF 每帧出 5 个字（BASE_BATCH，见 useTypewriter：刻意压到个位数，让相邻两帧的
+  // 增量小于一个视觉单元，避免"一簇字蹦出来"）。但字要变成像素，必须等这里重解析一次 DOM。
+  // 节流窗口就是最终可见的更新周期：80ms 时一秒只更新 12.5 次、每次一口气冒出约 25 个字——
+  // 打字机切好的细粒度在这一层被重新量化掉了，观感恰好回到它想避免的那种颗粒感。
+  //
+  // 降到 32ms（约 30fps，每次约 8 个字）。之所以现在敢降，是因为 markdown.ts 给
+  // highlight.js 与 KaTeX 都加了按输入的缓存：流式重解析时靠前的代码块/公式逐字未变，
+  // 直接命中缓存，重解析的成本基本只剩 markdown-it 的 token 化。在那之前每次重解析都要
+  // 全量重跑高亮（无语言标注还要 highlightAuto 逐个试语言），80ms 是被成本逼出来的。
+  //
+  // 不再往 16ms 压：那样每帧都要重解析 + 重建整棵子树，token 化本身的成本会顶上来，
+  // 而 30fps 对"字在流动"的观感已经够了——瓶颈重新变成打字机的出字量而非渲染频率。
+  const PARSE_THROTTLE_MS = 32;
+
   useEffect(() => {
     pendingContentRef.current = content;
     if (content === lastContentRef.current) return;
-    if (rafRef.current !== null) return;
-    rafRef.current = window.setTimeout(() => {
-      rafRef.current = null;
+    // 已有待触发的定时器 → 本次变更只更新 pendingContentRef，由那次定时器统一取最新值
+    if (parseTimerRef.current !== null) return;
+    parseTimerRef.current = window.setTimeout(() => {
+      parseTimerRef.current = null;
       const text = pendingContentRef.current;
       lastContentRef.current = text;
       setHtml(computeHtml(text));
-    }, 80);
+    }, PARSE_THROTTLE_MS);
   }, [content, computeHtml]);
 
   useEffect(() => {
-    return () => { if (rafRef.current !== null) { clearTimeout(rafRef.current); rafRef.current = null; } };
+    return () => { if (parseTimerRef.current !== null) { clearTimeout(parseTimerRef.current); parseTimerRef.current = null; } };
   }, []);
 
   // 事件委托（React 合成事件）

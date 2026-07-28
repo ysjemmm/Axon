@@ -5,6 +5,49 @@
 import type { CreditDetail } from "../types";
 import type { EventHandlerCtx, WsMessage } from "./types";
 
+/**
+ * 异常收尾：把最后一条仍在流式中的 assistant 消息落成终态。
+ *
+ * ── 为什么需要它 ──
+ * 一轮的"结束"由**两个**独立标志表达，缺一不可：
+ * · isLoading            控制输入框（发送/停止按钮）与 ChatPanel 的 pending 头部
+ * · message.streaming    控制这条消息自己的头部（AxonSpark 是否转、"Axon" 名字是否出现、
+ *                        思考块是否自动折叠、底部 Credits/Elapsed 是否显示）
+ *
+ * 正常路径（打字机 finalizeStreaming / turn_cancelled / 断线 / cancelTurn）两个都收。
+ * 但两条**错误**路径早先只调了 finishLoading()，没人管 streaming：
+ *   · session_error（handleSessionError）
+ *   · error（handleError，extension.ts 里 hub.dispatch 抛非 abort 异常时发的就是这个）
+ * 结果是输入框解锁了、消息头部却永远在转圈，看起来"AI 还在回复但其实早停了"。
+ * 后端这两条路径都不发 stream_end / turn_cancelled，所以前端不会再有第二次机会收尾。
+ *
+ * ── 顺带做的两件事 ──
+ * ① 打字机先 flush 再 cancel：flush 把已到达但还没出字的残余写进当前消息（异常不等于要吞字），
+ *    cancel 停掉 RAF 循环。不 cancel 的话循环会一直空转，而且后续 handleError 追加 ❌ 消息后，
+ *    appendToLastText 会把残余写到那条 ❌ 消息上——串到错误的消息里去。
+ * ② 清空状态文字：留着陈旧值会让之后任何"loading 但消息还没建好"的瞬间闪出上一轮的文案
+ *    （如"正在推理..."）。与 turn_cancelled、断线处理保持同一套收尾动作。
+ */
+export function finalizeStreamingTurnAsError(ctx: EventHandlerCtx): void {
+  ctx.typewriter.flush(ctx);
+  ctx.typewriter.cancel();
+  ctx.setChatHistory((prev) => {
+    // 反向找最后一条 assistant 消息：只有它可能还挂着 streaming。
+    // 已经是终态就原样返回，避免把正常完成的一轮误标成 error。
+    for (let i = prev.length - 1; i >= 0; i--) {
+      const m = prev[i];
+      if (m.role !== "assistant") continue;
+      if (!m.streaming) return prev;
+      const updated = [...prev];
+      updated[i] = { ...m, streaming: false, turnStatus: "error" };
+      return updated;
+    }
+    return prev;
+  });
+  ctx.setStatusText("");
+  ctx.setStatusPhase("");
+}
+
 export function handleTurnCancelled(msg: WsMessage, ctx: EventHandlerCtx): void {
   const stats = {
     elapsed: (msg as any).elapsed || 0,
@@ -78,13 +121,8 @@ export function handleTurnCancelled(msg: WsMessage, ctx: EventHandlerCtx): void 
 
 export function handleTurnError(msg: WsMessage, ctx: EventHandlerCtx): void {
   console.error("[session]", (msg as any).message || msg);
-  ctx.setChatHistory((prev) => {
-    const updated = [...prev];
-    const last = updated[updated.length - 1];
-    if (last?.role === "assistant") {
-      updated[updated.length - 1] = { ...last, streaming: false, turnStatus: "error" };
-    }
-    return updated;
-  });
+  // 与另外两条错误路径共用同一套收尾（顺带补上打字机停机与状态文字清空，
+  // 早先这里只置了 streaming/turnStatus）。
+  finalizeStreamingTurnAsError(ctx);
   ctx.finishLoading();
 }

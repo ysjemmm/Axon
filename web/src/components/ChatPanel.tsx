@@ -1010,15 +1010,25 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             />
           )}
         {/* 吉祥物「Axo」：趴在输入框左上沿。
-            · 必须放在这个 relative 容器里、而不是输入框内部——输入框带 overflow-hidden，
+            · 必须放在这个容器里、而不是输入框内部——输入框带 overflow-hidden，
               放进去会被上边缘直接裁掉。斜杠菜单当年也是因为同一个原因提到这一层的。
             · pointer-events-none：它悬在边框上方，不能吃掉用户点击输入框的操作。
-            · 斜杠菜单打开时藏起来：菜单正是贴着输入框上方弹出的，两者会撞在一起。 */}
-        {!slash.open && (
-          <div className="pointer-events-none absolute -top-[21px] left-3 z-0 select-none">
-            <AxonMascot mood={mascot.mood} size={26} />
-          </div>
-        )}
+
+            ── 为什么占真实布局空间，而不是 absolute 悬浮 ──
+            早先是 `absolute -top-[21px]`，不占空间，那 21px 是**借**上面 UnifiedStatusBar 的
+            （它有 mb-1 + min-h-[34px] 的行，合计 38px，够站）。可那条 bar 在没有文件改动时
+            整条 return null，此时输入框上方只剩外壳的 py-4（16px），吉祥物就溢出 5px
+            压到消息列表最后一行（Credits/Elapsed）上——"挨得很紧"就是这么来的。
+            改成占位元素后，21px 是它自己的，与上面渲染了什么无关：h-[26px] 是本体高度，
+            -mb-[5px] 让底部 5px 仍搭在输入框边框上，净占 21px，视觉与原来一致。
+
+            · 斜杠菜单打开时只 invisible、不卸载：菜单贴着输入框上方弹出，两者会撞在一起，
+              但直接摘掉节点会让预留的 21px 一起塌掉、输入框上跳。invisible 保留盒子。 */}
+        <div
+          className={`pointer-events-none flex items-start pl-3 h-[26px] -mb-[5px] z-0 select-none ${slash.open ? "invisible" : ""}`}
+        >
+          <AxonMascot mood={mascot.mood} size={26} />
+        </div>
         <div
           className="border border-border rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-ring focus-within:border-transparent transition-all relative bg-background"
           onDrop={handleDrop}

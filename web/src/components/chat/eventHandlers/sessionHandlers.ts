@@ -12,6 +12,7 @@ import {
 import type { ToolStatus } from "@/components/ToolCallItem";
 import type { AttachedFile, ChatMessage, UserSegment } from "../types";
 import type { EventHandlerCtx, WsMessage } from "./types";
+import { finalizeStreamingTurnAsError } from "./turnHandlers";
 
 export function handleSessionCreated(msg: WsMessage, ctx: EventHandlerCtx): void {
   if (ctx.compactionMigratedRef.current) return;
@@ -27,6 +28,10 @@ export function handleSessionCreated(msg: WsMessage, ctx: EventHandlerCtx): void
 
 export function handleSessionError(msg: WsMessage, ctx: EventHandlerCtx): void {
   console.error("[session]", (msg as any).message || msg);
+  // 消息自己的终态必须一起落。早先这里只收 isLoading，那条还在 streaming 的 assistant
+  // 消息就永远停在"进行中"：头部图标一直转、思考块不折叠——而后端这条路径不会再发
+  // stream_end / turn_cancelled，前端没有第二次收尾机会。详见 finalizeStreamingTurnAsError。
+  finalizeStreamingTurnAsError(ctx);
   ctx.finishLoading();
 }
 

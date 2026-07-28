@@ -5,6 +5,24 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**"]
     },
+
+    // 扩展的打包必须显式声明依赖，不能只靠 "^build" 的拓扑推导。
+    //
+    // 原因：apps/vscode-extension（包名 axon-ide）的 package.json 里 dependencies 是空的
+    // ——它对 @axon/core / @axon/host-vscode 的引用是靠 node_modules 下已存在的 workspace
+    // 符号链接解析的，并没有声明成依赖。而 "^build" 是**拓扑**依赖，没有依赖边就推导不出顺序，
+    // turbo 会把 core 和 extension 并行跑，esbuild 很可能打进上一轮的旧 dist——
+    // 也就是"构建成功了但改动没生效"。
+    //
+    // 这里用显式的 <pkg>#<task> 依赖补上这条边，而不是去改 package.json 的 dependencies：
+    // 后者会牵动 lockfile 和依赖安装，而符号链接本来就是通的，没必要冒那个风险。
+    //
+    // outputs 要带上 media/web/**：webview 产物由 copy-web.mjs 写进这里，
+    // 漏掉的话 turbo 的缓存命中会跳过构建、却不恢复这部分产物。
+    "axon-ide#build": {
+      "dependsOn": ["@axon/core#build", "@axon/host-vscode#build"],
+      "outputs": ["dist/**", "media/web/**"]
+    },
     "typecheck": {
       "dependsOn": ["^build"]
     },

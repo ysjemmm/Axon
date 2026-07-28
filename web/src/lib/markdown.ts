@@ -10,23 +10,96 @@ import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
 import katex from "katex";
 
+/**
+ * ── 渲染结果缓存（流式输出的关键优化）──
+ *
+ * 流式期间 MarkdownRenderer 会把**整条消息**反复从头重新解析（内容每增长一次就重来一遍），
+ * 而这条链路里最贵的两步——highlight.js 语法高亮与 KaTeX 公式渲染——输入几乎完全没变：
+ * 一条回复里靠前的代码块/公式在后续每一次重解析中都逐字相同，却每次都要重算一遍。
+ * 长回复里这是几十次全量高亮，也正是当初不得不把重解析节流到 80ms 的原因——
+ * 代价是可见更新掉到 12.5fps，把打字机精心切细的出字粒度又重新量化成"一簇字蹦一下"
+ * （打字机压到 5 字/帧就是为了避免这种颗粒感，见 useTypewriter 的 BASE_BATCH 注释）。
+ *
+ * 三个调用点都是纯函数（同样输入必得同样 HTML），所以按输入缓存是安全的。
+ * 命中后重解析基本只剩 markdown-it 自身的 token 化，节流才降得下来。
+ *
+ * 与主题无关：hljs 产出的是 class 名（hljs-keyword 等）、KaTeX 产出的是结构化标记，
+ * 配色全靠 CSS，所以主题切换不需要让缓存失效。
+ *
+ * 用 Map + FIFO 淘汰而非 LRU：这里的访问模式是"同一批 key 在一轮流式内被反复命中"，
+ * 容量够装下单条消息的全部块就行，不必按热度排序。
+ */
+const RENDER_CACHE_MAX = 256;
+
+/** 按 key 缓存纯函数结果；未命中时调 compute 并写入（超容量时淘汰最早插入的） */
+function memoized(cache: Map<string, string>, key: string, compute: () => string): string {
+  const hit = cache.get(key);
+  if (hit !== undefined) return hit;
+  const value = compute();
+  if (cache.size >= RENDER_CACHE_MAX) {
+    // Map 的迭代顺序即插入顺序，首个 key 就是最早写入的那个
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+  cache.set(key, value);
+  return value;
+}
+
+/**
+ * 三个缓存必须各自独立：同一份 (lang, code) 在"未知语言"分支下的产出并不相同
+ * （autoCache 会去猜语言，escapeCache 只做转义），共用一个 Map 会串味。
+ */
+const highlightAutoCache = new Map<string, string>();
+const highlightEscapeCache = new Map<string, string>();
+const katexCache = new Map<string, string>();
+
+/** 缓存 key 分隔符：lang / displayMode 里不可能出现 NUL，不会与内容混淆 */
+const CACHE_KEY_SEP = "\u0000";
+
+/**
+ * md 构造项 highlight 用的高亮：已知语言走精确高亮，否则 highlightAuto。
+ * fence 规则被下面重写了，所以这条路径实际只服务缩进式代码块（4 空格）。
+ * highlightAuto 要逐个语言试一遍，是整条渲染链里单次最贵的调用，最需要缓存。
+ */
+function highlightWithAutoFallback(code: string, lang: string): string {
+  return memoized(highlightAutoCache, `${lang}${CACHE_KEY_SEP}${code}`, () => {
+    if (lang && hljs.getLanguage(lang)) {
+      try {
+        return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
+      } catch { /* fallback */ }
+    }
+    try {
+      return hljs.highlightAuto(code).value;
+    } catch {
+      return "";
+    }
+  });
+}
+
+/**
+ * fence 规则用的高亮：已知语言走精确高亮，否则仅做 HTML 转义。
+ * 刻意**不**回落到 highlightAuto——代码块通常带语言标注，对没标注的内容瞎猜语言
+ * 既慢又容易染错色。这与上面那条路径的语义差异是有意的，别合并。
+ */
+function highlightOrEscape(code: string, lang: string): string {
+  return memoized(highlightEscapeCache, `${lang}${CACHE_KEY_SEP}${code}`, () => {
+    if (lang && hljs.getLanguage(lang)) {
+      try {
+        return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
+      } catch {
+        return md.utils.escapeHtml(code);
+      }
+    }
+    return md.utils.escapeHtml(code);
+  });
+}
+
 const md = new MarkdownIt({
   html: false, // 禁止历史/普通回复里的裸 HTML 进入 dangerouslySetInnerHTML；KaTeX 通过占位符在渲染后恢复
   linkify: true,
   typographer: false, // 关闭：防止 typographer 对占位符周围的引号做智能替换
   breaks: true,
-  highlight: function (str, lang) {
-    if (lang && hljs.getLanguage(lang)) {
-      try {
-        return hljs.highlight(str, { language: lang, ignoreIllegals: true }).value;
-      } catch { /* fallback */ }
-    }
-    try {
-      return hljs.highlightAuto(str).value;
-    } catch {
-      return "";
-    }
-  },
+  highlight: (str, lang) => highlightWithAutoFallback(str, lang),
 });
 
 // 禁用水平分割线渲染
@@ -65,16 +138,8 @@ md.renderer.rules.fence = function (tokens, idx) {
   const enableEnhance = ENHANCED_LANGS.has(lang) && meta.includes(ENHANCED_RENDER_MARKER);
   const canPreview = ENHANCED_LANGS.has(lang) && !enableEnhance;
 
-  let highlightedCode: string;
-  if (lang && hljs.getLanguage(lang)) {
-    try {
-      highlightedCode = hljs.highlight(token.content, { language: lang, ignoreIllegals: true }).value;
-    } catch {
-      highlightedCode = md.utils.escapeHtml(token.content);
-    }
-  } else {
-    highlightedCode = md.utils.escapeHtml(token.content);
-  }
+  // 走缓存：流式重解析时靠前的代码块内容逐字不变，没必要每次重跑高亮
+  const highlightedCode = highlightOrEscape(token.content, lang);
 
   const enhanceAttr = enableEnhance ? ` data-enhanced-lang="${lang}"` : "";
   const previewAttr = canPreview ? ` data-preview-lang="${lang}"` : "";
@@ -121,35 +186,135 @@ export function renderMarkdown(text: string): string {
   return restoreMath(html, placeholders);
 }
 
+/** 解析一行是否为代码围栏行；返回围栏长度与其后的 info string（语言标识） */
+function parseFenceLine(line: string): { indent: string; marker: string; info: string } | null {
+  const m = line.match(/^([ \t]{0,3})(`{3,})(.*)$/);
+  if (!m) return null;
+  return { indent: m[1], marker: m[2], info: m[3].trim() };
+}
+
 /**
- * 容错：修复模型常见的畸形代码围栏——闭合 ``` 后直接贴了正文（如 "```好的"），
- * markdown-it 不认这种闭合，会把后续文本吞进代码块。这里给闭合围栏后补一个换行。
- * 按出现次序计数：奇数个 ``` 视为开围栏（保留其语言标识，如 ```python），偶数个视为闭围栏。
+ * 容错：修复模型常见的畸形代码围栏。
+ *
+ * 处理两类问题：
+ *
+ * 1) 嵌套围栏被外层"抢走"闭合。
+ *    Markdown 里同长度围栏无法嵌套：展示 md 示例时外层与内层都是三反引号，
+ *    内层示例的收尾围栏会被当成外层的闭合，末尾还会多出一个空代码块。
+ *    做法是按"是否带语言标识"区分开/闭（闭合围栏依 CommonMark 不允许带 info string），
+ *    用栈判断嵌套深度；一旦发现某个块内部还有围栏，就把最外层围栏补长到超过内层，
+ *    交给 markdown-it 时已是合法的 CommonMark 嵌套写法。
+ *
+ * 2) 闭合围栏后直接贴正文（如围栏紧跟"好的"），markdown-it 不认这种闭合，
+ *    会把后续文本一路吞进代码块。这里把它拆成"纯围栏行 + 换行 + 正文"。
+ *
+ * 不再使用旧的"遇到任意三反引号就按奇偶计数"的做法——那会把内层示例围栏误判成闭合，
+ * 还会把带语言的围栏改写坏（如把 json 标识挤到下一行）。
  */
 function normalizeFences(text: string): string {
   if (!text.includes("```")) return text;
-  let result = "";
-  let i = 0;
-  let count = 0;
-  while (i < text.length) {
-    if (text.startsWith("```", i)) {
-      count++;
-      result += "```";
-      i += 3;
-      // 闭围栏后若不是换行/结尾，补换行，使其成为合法的独立闭合行
-      if (count % 2 === 0 && i < text.length && text[i] !== "\n" && text[i] !== "\r") {
-        result += "\n";
+
+  const parts = text.split(/(\r?\n)/);
+  // 收集每一行的围栏信息，先判定结构，再决定如何输出（补长需要回头改开围栏那一行）
+  const lines: string[] = [];
+  const newlines: string[] = [];
+  for (let i = 0; i < parts.length; i += 2) {
+    lines.push(parts[i] ?? "");
+    newlines.push(parts[i + 1] ?? "");
+  }
+
+  // 第一遍：用栈求出每个顶层块的范围，以及块内出现过的最大围栏长度
+  interface Block { openIdx: number; closeIdx: number; markerLen: number; innerMaxLen: number }
+  const blocks: Block[] = [];
+  const stack: { openIdx: number; markerLen: number }[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const f = parseFenceLine(lines[i]);
+    if (!f) continue;
+    const isOpen = f.info.length > 0;
+
+    if (isOpen) {
+      // 带语言标识 → 一定是开围栏
+      stack.push({ openIdx: i, markerLen: f.marker.length });
+      // 记录到最外层块的内层最大长度
+      if (stack.length > 1) {
+        const outerOpen = stack[0].openIdx;
+        const rec = blocks.find((b) => b.openIdx === outerOpen);
+        if (rec) rec.innerMaxLen = Math.max(rec.innerMaxLen, f.marker.length);
+      } else {
+        blocks.push({ openIdx: i, closeIdx: -1, markerLen: f.marker.length, innerMaxLen: 0 });
       }
+      continue;
+    }
+
+    // 裸围栏 → 闭合最近一个未闭合的块
+    const opened = stack.pop();
+    if (!opened) continue;
+    if (stack.length === 0) {
+      const rec = blocks.find((b) => b.openIdx === opened.openIdx);
+      if (rec) rec.closeIdx = i;
     } else {
-      result += text[i];
-      i += 1;
+      const outerOpen = stack[0].openIdx;
+      const rec = blocks.find((b) => b.openIdx === outerOpen);
+      if (rec) rec.innerMaxLen = Math.max(rec.innerMaxLen, f.marker.length);
     }
   }
-  // 奇数个围栏 = 未闭合代码块 → 补闭合，防止流式输出中断时后续内容被吞
-  if (count % 2 === 1) {
-    result += "\n```";
+
+  // 未闭合的块（流式输出被打断）：记下来，末尾补闭合
+  const unclosed = stack.length > 0 ? stack[0] : null;
+  if (unclosed) {
+    const rec = blocks.find((b) => b.openIdx === unclosed.openIdx);
+    if (rec) rec.closeIdx = lines.length; // 虚拟闭合位，输出时补
+  }
+
+  // 第二遍：按块信息输出。需要补长的块，其开/闭围栏都换成更长的围栏
+  const bump = new Map<number, string>(); // 行号 → 替换后的围栏行
+  for (const b of blocks) {
+    if (b.innerMaxLen < b.markerLen) continue; // 无嵌套或内层更短 → 不用动
+    const longer = "`".repeat(b.innerMaxLen + 1);
+    const openF = parseFenceLine(lines[b.openIdx]);
+    if (openF) bump.set(b.openIdx, `${openF.indent}${longer}${openF.info}`);
+    if (b.closeIdx >= 0 && b.closeIdx < lines.length) {
+      const closeF = parseFenceLine(lines[b.closeIdx]);
+      if (closeF) bump.set(b.closeIdx, `${closeF.indent}${longer}`);
+    }
+  }
+
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const replaced = bump.get(i);
+    if (replaced !== undefined) {
+      out.push(replaced, newlines[i]);
+      continue;
+    }
+
+    // 畸形闭合：围栏后直接贴正文 → 拆成独立闭合行 + 正文
+    const f = parseFenceLine(lines[i]);
+    if (f && f.info.length > 0 && /^[^\s`]/.test(f.info)) {
+      const enclosing = blocks.find((b) => b.openIdx < i && (b.closeIdx === -1 || i < b.closeIdx));
+      const looksLikeClose = enclosing && !isLikelyLanguage(f.info);
+      if (looksLikeClose) {
+        out.push(`${f.indent}${f.marker}`, newlines[i] || "\n", f.info, newlines[i]);
+        continue;
+      }
+    }
+
+    out.push(lines[i], newlines[i]);
+  }
+
+  let result = out.join("");
+  if (unclosed) {
+    const rec = blocks.find((b) => b.openIdx === unclosed.openIdx);
+    const len = rec && rec.innerMaxLen >= rec.markerLen ? rec.innerMaxLen + 1 : unclosed.markerLen;
+    result += "\n" + "`".repeat(len);
   }
   return result;
+}
+
+/** info string 是否像语言标识（字母数字/+#-. 组成的短串），用于区分"开围栏"与"畸形闭合后贴的正文" */
+function isLikelyLanguage(info: string): boolean {
+  const first = info.split(/\s+/)[0] || "";
+  return /^[a-zA-Z][\w+#.-]*$/.test(first) && first.length <= 20;
 }
 
 /**
@@ -189,13 +354,19 @@ function extractAndRenderMath(text: string): { cleaned: string; placeholders: Ma
   return { cleaned: guarded, placeholders };
 }
 
-/** 调用 KaTeX 渲染,出错时降级为原文（红色提示） */
+/**
+ * 调用 KaTeX 渲染（带缓存），出错时降级为原文（红色提示）。
+ * 缓存键含 displayMode：同一段 latex 行内/行间渲染出的 HTML 不同。
+ * 降级分支的结果一并缓存——它同样只取决于 latex，重算不会有不同结果。
+ */
 function renderKatex(latex: string, displayMode: boolean): string {
-  try {
-    return katex.renderToString(latex, { displayMode, throwOnError: false });
-  } catch {
-    return `<span style="color:#cc0000" title="KaTeX 渲染失败">${escapeHtml(latex)}</span>`;
-  }
+  return memoized(katexCache, `${displayMode ? "d" : "i"}${CACHE_KEY_SEP}${latex}`, () => {
+    try {
+      return katex.renderToString(latex, { displayMode, throwOnError: false });
+    } catch {
+      return `<span style="color:#cc0000" title="KaTeX 渲染失败">${escapeHtml(latex)}</span>`;
+    }
+  });
 }
 
 /** 把占位符还原为预渲染的 KaTeX HTML */

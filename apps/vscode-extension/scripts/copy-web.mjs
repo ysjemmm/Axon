@@ -8,7 +8,7 @@
  *       node scripts/copy-web.mjs --no-build （仅拷贝已有 web/dist）
  */
 
-import { cp, rm, access, readFile, writeFile, readdir } from "node:fs/promises";
+import { cp, rm, access, readFile, writeFile, readdir, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -22,17 +22,45 @@ const target = join(extRoot, "media", "web");
 
 const noBuild = process.argv.includes("--no-build");
 
+/** 读 web/dist/index.html 的 mtime（毫秒），不存在返回 0。用于校验构建是否真的产出了新文件。 */
+async function distStamp() {
+  try {
+    return (await stat(join(webDist, "index.html"))).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
 if (!noBuild) {
   console.log("[copy-web] 构建 web（AXON_WEB_BASE=./）...");
   // 直接调用 web 本地的 vite bin（不走 web 的 "tsc -b && vite build"，避免 web 既有 tsconfig 遗留问题）。
+  const before = await distStamp();
   const viteBin = join(webRoot, "node_modules", ".bin", process.platform === "win32" ? "vite.cmd" : "vite");
-  spawnSync(viteBin, ["build"], {
+  const { status } = spawnSync(viteBin, ["build"], {
     cwd: webRoot,
     stdio: "inherit",
     shell: process.platform === "win32",
     env: { ...process.env, AXON_WEB_BASE: "./" },
   });
-  // 注：部分 shell 包装下 vite 退出码传递不可靠，成功与否以下方 webDist 可访问性为准（fail-fast）。
+
+  // 成功判定分两道，缺一不可：
+  //  ① 退出码为 0（部分 shell 包装下会传成 null，此时退回看 ②）
+  //  ② index.html 的 mtime 变新了 —— 证明这一次真的重新产出了文件。
+  // 只看 webDist 是否存在是不够的：增量构建时它本来就在，vite 失败也照样存在，
+  // 于是会把【上一次的旧产物】拷进 media/web，构建显示成功却发布了旧代码。
+  const after = await distStamp();
+  const producedFresh = after > before;
+  if (status !== 0 && status !== null) {
+    console.error(`[copy-web] vite build 退出码 ${status}，构建失败`);
+    process.exit(1);
+  }
+  if (!producedFresh) {
+    console.error(
+      `[copy-web] web/dist/index.html 未被刷新（mtime 没变），判定 vite build 失败——` +
+      `拒绝拷贝旧产物。请查看上方 vite 输出。`,
+    );
+    process.exit(1);
+  }
 }
 
 try {

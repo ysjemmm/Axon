@@ -641,6 +641,7 @@
     ]
   },
   "scripts": {
+    "build": "node scripts/copy-web.mjs && node esbuild.mjs",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "dependencies": {},

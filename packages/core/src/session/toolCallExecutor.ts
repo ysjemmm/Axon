@@ -186,30 +186,9 @@ export class ToolCallExecutor {
       result = out.result;
       status = out.status;
     } else {
-      // check_diagnostics 去重：只保留本会话内 AI 改过且尚未成功诊断的文件。
-      // 过滤后为空则直接 no-op，避免无意义地再跑一次 diagnostics。
-      if (toolName === ToolName.CheckDiagnostics && Array.isArray(toolArgs.paths)) {
-        const originalPaths = toolArgs.paths as string[];
-        const kept: string[] = [];
-        for (const p of originalPaths) {
-          if (!p) continue;
-          try {
-            const abs = await resolveInWorkspaces(p, this.s.cwd, this.s.host, this.s.workspaces);
-            if (this.s.aiTouchedFilesNeedingDiagnostics.has(abs)) kept.push(p);
-          } catch {
-            kept.push(p);
-          }
-        }
-        if (originalPaths.length > 0 && kept.length === 0) {
-          return {
-            result: "本次 check_diagnostics 请求中的文件都已在之前成功诊断过，且之后没有再被 AI 改动；已跳过重复诊断。",
-            status: "success" as const,
-            commandWasEdited: undefined,
-            toolArgs,
-          };
-        }
-        toolArgs = { ...toolArgs, paths: kept };
-      }
+      // check_diagnostics 去重由 genericToolExecutor.filterDiagnosticsPaths 统一负责
+      // （做了路径归一化，Windows 下不会因盘符大小写/斜杠方向误判）。
+      // 此层不再重复过滤，避免两层逻辑不一致导致"跳过但未标 hidden"的空卡片 bug。
 
       const out = await this.s.genericToolExecutor.execute({
         toolName,

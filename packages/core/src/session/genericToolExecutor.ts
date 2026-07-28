@@ -65,9 +65,13 @@ export class GenericToolExecutor {
     // check_diagnostics 去重：把请求的文件过滤为"仍在待诊断集合里"的（即之前没诊断过、
     // 或诊断后又被改动过的）。已诊断通过且之后没再改动的文件跳过，避免重复跑 tsc。
     // 若过滤后一个都不剩，直接返回跳过提示，连 executeToolCall 都不调。
+    // 跳过时标记 hidden，让前端不渲染这张无诊断内容的空卡片。
     if (toolName === ToolName.CheckDiagnostics) {
       const skip = await this.filterDiagnosticsPaths(toolArgs, req.runtime.aiTouchedFilesNeedingDiagnostics);
-      if (skip) return skip;
+      if (skip) {
+        meta.hidden = true;
+        return skip;
+      }
     }
 
     // 写文件类：执行前建快照（问答模式不做快照）

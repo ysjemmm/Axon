@@ -96,7 +96,8 @@ code:not(.hljs):not(.prose code) {
 }
 
 .axon-codeblock-scroll > pre {
-  overflow: visible;
+  overflow-y: auto;
+  overflow-x: visible;
   width: max-content;
   min-width: 100%;
 }

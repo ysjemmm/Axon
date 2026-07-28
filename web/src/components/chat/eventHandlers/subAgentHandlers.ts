@@ -6,6 +6,7 @@
 import { isToolInFlight, type ToolStatus } from "@/components/ToolCallItem";
 import { updateSubAgentInner } from "../subAgentEvents";
 import type { EventHandlerCtx, WsMessage } from "./types";
+import { finalizeStreamingTurnAsError } from "./turnHandlers";
 
 export function handleSubAgentStart(msg: WsMessage, ctx: EventHandlerCtx): void {
   if (ctx.cancelled.current) return;
@@ -106,6 +107,17 @@ export function handleSubAgentEnd(msg: WsMessage, ctx: EventHandlerCtx): void {
 }
 
 export function handleError(msg: WsMessage, ctx: EventHandlerCtx): void {
+  // 先给正在进行中的那条消息落终态，再追加错误消息。
+  //
+  // 顺序不能反：finalizeStreamingTurnAsError 找的是"最后一条仍在 streaming 的 assistant 消息"，
+  // 一旦 ❌ 消息先入队，它就成了最后一条 assistant——而它 streaming 为假，收尾函数直接返回，
+  // 真正卡着的那条反而被跳过。
+  //
+  // 早先这里只追加 ❌ 消息 + 收 isLoading，上一条消息的 streaming 没人清：输入框解锁了，
+  // 但它的头部图标继续转、"Axon" 名字不出现、思考块保持展开。而这条路径（extension.ts 里
+  // hub.dispatch 抛非 abort 异常时 emit 的 error 事件）之后不会再有 stream_end，
+  // 那条消息就永久停在进行中。
+  finalizeStreamingTurnAsError(ctx);
   ctx.setChatHistory((prev) => [
     ...prev,
     { id: `err-${Date.now()}`, role: "assistant", segments: [{ type: "text", content: `❌ ${msg.content}` }], turnStatus: "error" },

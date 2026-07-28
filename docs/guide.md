@@ -28,18 +28,29 @@ d:\projects\Axon\                ← monorepo 根目录
 
 ### ⚡ 速查：改了什么，要跑什么
 
-| 改了哪个目录的代码 | 必须执行的命令（按顺序） | Reload? |
+**大多数情况下，只需在根目录执行一条命令：**
+
+```bash
+pnpm build
+```
+
+turbo 会按依赖顺序全量构建：`@axon/core` / `host-node` / `host-vscode` / `server` →
+web（`copy-web.mjs`）→ extension（`esbuild.mjs`）。turbo 有缓存，没改到的包会直接命中缓存跳过，
+所以增量构建通常只花几秒，不必再去记「改了 X 要跑哪几步」。构建完 Reload Window 即可。
+
+> `axon-ide#build` 在 `turbo.json` 里显式声明了 `dependsOn: [@axon/core#build, @axon/host-vscode#build]`，
+> 保证扩展一定在两个依赖包编译完之后才打包——否则 esbuild 会打进旧的 `packages/*/dist`。
+
+如果确实想只构建单块（省那几秒缓存校验），下表是等价的手动步骤：
+
+| 改了哪个目录的代码 | 手动命令（按顺序） | Reload? |
 |---|---|---|
 | `web/src/` | `node scripts/copy-web.mjs`（在 `apps/vscode-extension/`） | ✅ |
 | `apps/vscode-extension/src/` | `node esbuild.mjs`（在 `apps/vscode-extension/`） | ✅ |
 | `packages/core/src/` | ① `npx tsc`（在 `packages/core/`）→ ② `node esbuild.mjs`（在 `apps/vscode-extension/`） | ✅ |
 | `packages/host-vscode/src/` | ① `npx tsc`（在 `packages/host-vscode/`）→ ② `node esbuild.mjs`（在 `apps/vscode-extension/`） | ✅ |
 | `packages/host-node/src/` | ① `npx tsc`（在 `packages/host-node/`）→ ② `node esbuild.mjs`（在 `apps/vscode-extension/`） | ✅ |
-| 同时改了 core + web | ① 编 core → ② 编 host-vscode（如改了）→ ③ `node scripts/copy-web.mjs` → ④ `node esbuild.mjs` | ✅ |
 | 只改了 `*.json` / `*.css` 等资源 | 不需要构建，直接 Reload | ✅ |
-
-> **最省事的一键全量构建**（不关心改了哪里时用）：在根目录执行 `pnpm build`，
-> turbo 会按依赖顺序编译所有 packages → web → extension。但速度较慢（~30s）。
 
 ### 为什么改了 packages/* 必须先 tsc？
 
