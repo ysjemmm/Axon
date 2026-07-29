@@ -59,6 +59,27 @@ function guessByName(model: string): boolean {
 }
 
 /**
+ * 无声明时的兜底启发式：哪些模型已知支持 OpenAI 兼容的 cache_control。
+ *
+ * 取向仍是宁漏不错——不确定就不发，断流比少省几个 token 严重得多。
+ */
+export function supportsCacheControl(model: string, declared?: boolean): boolean {
+  if (typeof declared === "boolean") return declared;
+  return guessCacheSupport(model);
+}
+
+function guessCacheSupport(model: string): boolean {
+  const m = model.toLowerCase();
+
+  // 已知不支持：Yi 系列
+  if (/\byi-/i.test(m)) return false;
+
+  // 保守策略：默认不传。除非 provider 目录显式声明 true。
+  // 已实测确认支持的端点（kimi-k3 等）可在 providers.json 里声明 cacheControl: true 即可生效。
+  return false;
+}
+
+/**
  * 判定某模型本轮是否应该请求思考。
  *
  * @param model    真实 API model id

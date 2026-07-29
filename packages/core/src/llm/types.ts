@@ -116,6 +116,12 @@ export interface RunTurnParams {
    * 未声明（undefined）时策略回退到 supportsThinking 里的兜底启发式。
    */
   modelSupportsThinking?: boolean;
+
+  /**
+   * 该模型在 provider 目录里**声明**的 cache_control 能力。
+   * 缺省（undefined）时策略回退到启发式，不确定时不传——断流代价远大于少省几个 token。
+   */
+  modelSupportsCacheControl?: boolean;
 }
 
 /**

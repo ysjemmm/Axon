@@ -115,6 +115,27 @@ export function declaredThinkingFor(modelId: string, preferredProvider?: string)
   return matches.length === 1 ? matches[0].thinking : undefined;
 }
 
+/**
+ * 查询某模型在 provider 目录里**声明**的 cache_control 能力。
+ *
+ * 返回 undefined 表示"没声明"，调用方据此回退到启发式；
+ * 返回 true/false 都是明确意图，策略层直接采信。
+ */
+export function declaredCacheControlFor(modelId: string, preferredProvider?: string): boolean | undefined {
+  if (!_resolved) return undefined;
+
+  if (preferredProvider) {
+    const preferred = _resolved.get(normalizeProvider(preferredProvider));
+    const hit = preferred?.models.find((m) => m.id === modelId);
+    if (hit) return hit.cacheControl;
+  }
+
+  const matches = [..._resolved.values()]
+    .map((p) => p.models.find((m) => m.id === modelId))
+    .filter((m): m is NonNullable<typeof m> => !!m);
+  return matches.length === 1 ? matches[0].cacheControl : undefined;
+}
+
 /** 取某 provider 的运行时配置：先查已注入的解析结果，再回退到环境变量。 */
 function configFor(name: string): ProviderConfig | undefined {
   const hit = _resolved?.get(name);

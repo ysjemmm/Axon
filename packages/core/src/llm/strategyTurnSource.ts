@@ -34,6 +34,8 @@ export interface StrategyTurnSourceOptions {
   think?: boolean;
   /** 模型声明的思考能力（provider 目录 / providers.json）。省略时策略回退启发式判定。 */
   modelSupportsThinking?: boolean;
+  /** 模型声明的 cache_control 能力。省略时策略回退启发式判定。 */
+  modelSupportsCacheControl?: boolean;
   /**
    * 可选：reasoning 流式回调。提供时在生成过程中按到达顺序实时回调（用于 canary 真正驱动 UI）；
    * 不提供时（如 shadow 只读对比）完全静默，保持零副作用——这是 shadow 只读保证的关键。
@@ -85,6 +87,7 @@ export class StrategyTurnSource implements LLMTurnSource {
       temperature: this.opts.temperature,
       think: this.opts.think,
       modelSupportsThinking: this.opts.modelSupportsThinking,
+      modelSupportsCacheControl: this.opts.modelSupportsCacheControl,
       callbacks: {
         onReasoningDelta: (text, partIndex, itemId) => {
           if (text) reasoningDeltas.push({ text, partIndex, itemId });

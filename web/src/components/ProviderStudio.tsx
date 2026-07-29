@@ -544,6 +544,8 @@ function ModelRow({ model, editable, confirmDelete, onToggle, onEdit, onDelete }
         {model.vendor && <span className="ml-1 text-[9px] px-1 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">{model.vendor}</span>}
         {model.protocol && <span className="ml-1 text-[9px] px-1 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{model.protocol}</span>}
         {model.vision && <span className="ml-1 text-[9px] px-1 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">多模态</span>}
+        {model.thinking && <span className="ml-1 text-[9px] px-1 rounded bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">思考</span>}
+        {model.cacheControl && <span className="ml-1 text-[9px] px-1 rounded bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400">缓存</span>}
         {model.disabled && <span className="ml-1 text-[9px] px-1 rounded bg-muted text-muted-foreground">已禁用</span>}
         <span className="ml-1.5 text-[10px] text-muted-foreground font-mono">{model.id} · {win}</span>
       </div>
@@ -573,6 +575,7 @@ function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo;
   const [vision, setVision] = useState(!!initial?.vision);
   const [vendor, setVendor] = useState(initial?.vendor || "");
   const [protocol, setProtocol] = useState<"chat" | "responses" | "anthropic">(initial?.protocol || "chat");
+  const [cacheControl, setCacheControl] = useState(!!initial?.cacheControl);
 
   const vendorOptions = [
     { id: "openai", label: "OpenAI" },
@@ -589,7 +592,7 @@ function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo;
   const submit = () => {
     if (!id.trim()) return;
     const contextWindow = /^\d+$/.test(win.trim()) ? parseInt(win.trim(), 10) : 128000;
-    onSave({ id: id.trim(), name: name.trim() || id.trim(), contextWindow, vision, protocol, vendor: vendor || undefined, disabled: initial?.disabled });
+    onSave({ id: id.trim(), name: name.trim() || id.trim(), contextWindow, vision, cacheControl: cacheControl || undefined, protocol, vendor: vendor || undefined, disabled: initial?.disabled });
   };
 
   return (
@@ -622,6 +625,10 @@ function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo;
         <label className="flex items-center gap-1 text-xs text-muted-foreground cursor-pointer">
           <input type="checkbox" checked={vision} onChange={(e) => setVision(e.target.checked)} className="w-3 h-3 accent-primary" />
           多模态
+        </label>
+        <label className="flex items-center gap-1 text-xs text-muted-foreground cursor-pointer">
+          <input type="checkbox" checked={cacheControl} onChange={(e) => setCacheControl(e.target.checked)} className="w-3 h-3 accent-primary" />
+          缓存
         </label>
         <div className="ml-auto flex gap-1">
           <Button size="sm" onClick={submit} disabled={!id.trim()}>保存</Button>

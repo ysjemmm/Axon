@@ -478,6 +478,8 @@ export interface ProviderModelInfo {
    * （模型声明优先，未声明时由后端启发式兜底），前端直接采信、不要自己再判一遍。
    */
   thinking?: boolean;
+  /** 是否支持 OpenAI 兼容的 prompt caching（cache_control）。 */
+  cacheControl?: boolean;
 }
 
 /** 解析后的 provider（脱敏，无 apiKey），来自 GET /api/providers */

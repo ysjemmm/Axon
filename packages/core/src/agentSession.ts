@@ -25,7 +25,7 @@ import { looksLikeIncompleteReply, LoopGuard, policyForModel, isSoftToolFailure,
 import { McpRegistry } from "./mcp/mcpRegistry.js";
 import { modelContextWindow } from "./llm/modelContext.js";
 import { SYSTEM_PROMPT, QUEST_SYSTEM_PROMPT } from "./systemPrompt.js";
-import { getStrategy, ZHIPU_PROVIDER, findProviderForModel, declaredThinkingFor } from "./providers.js";
+import { getStrategy, ZHIPU_PROVIDER, findProviderForModel, declaredThinkingFor, declaredCacheControlFor } from "./providers.js";
 import { DEFAULT_MODEL_ID } from "./providerCatalog.js";
 import { PromptBuilder, messageText } from "./session/promptBuilder.js";
 import {
@@ -1217,6 +1217,7 @@ export class AgentSession {
           signal: this.abortController?.signal,
           think: this.think,
           modelSupportsThinking: declaredThinkingFor(this.model, this.provider),
+          modelSupportsCacheControl: declaredCacheControlFor(this.model, this.provider),
           // 关键：把新链路的流式增量实时接到主循环 callbacks 上，让前端看到正常的思考/打字效果。
           onReasoningDelta: (text, partIndex, itemId) => callbacks.onReasoningDelta(text, partIndex, itemId),
           onTextDelta: (text) => callbacks.onTextDelta(text),
@@ -1939,6 +1940,7 @@ export class AgentSession {
         // 所以不强制关掉——只在用户明确关闭时才不请求。
         think: this.think,
         modelSupportsThinking: declaredThinkingFor(this.model, this.provider),
+        modelSupportsCacheControl: declaredCacheControlFor(this.model, this.provider),
         callbacks: {
           onReasoningDelta: () => { /* 收尾阶段不展示思考过程，只取最终文字 */ },
           onTextDelta: (text) => {

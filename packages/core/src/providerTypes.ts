@@ -57,6 +57,14 @@ export interface ProviderModel {
    * - false：不请求。用于名字看着像推理模型、但该端点实际不支持的情况。
    */
   thinking?: boolean;
+  /**
+   * 是否支持 OpenAI 兼容的 prompt caching（cache_control / ephemeral breakpoints）。
+   *
+   * 缺省（undefined）时按模型名启发式推断（见 llm/thinkingSupport.ts）。
+   * 不支持的端点收到 cache_control 会直接 400——这和 thinking 参数一样危险。
+   * 不确定时显式声明 false；确实支持的声明 true。
+   */
+  cacheControl?: boolean;
   /** LLM 调用协议：chat（通用）/ responses（OpenAI Responses API）。未填则回退 provider.protocol 或 chat */
   protocol?: ProviderProtocol;
   /** 一句话描述（下拉里展示） */

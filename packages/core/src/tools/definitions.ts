@@ -177,6 +177,7 @@ export function getToolDefinitions() {
         parameters: {
           type: "object",
           properties: {},
+          required: [],
         },
       },
     },
@@ -209,6 +210,7 @@ export function getToolDefinitions() {
           properties: {
             clear: { type: "boolean", description: "读取后是否清空缓冲（默认 false）。改代码前清一次、改完再读，能只看到本次新增的报错" },
           },
+          required: [],
         },
       },
     },
@@ -224,6 +226,7 @@ export function getToolDefinitions() {
           properties: {
             fullPage: { type: "boolean", description: "是否整页截图（默认 false，只截当前可视区域）" },
           },
+          required: [],
         },
       },
     },
@@ -235,6 +238,7 @@ export function getToolDefinitions() {
         parameters: {
           type: "object",
           properties: {},
+          required: [],
         },
       },
     },
@@ -322,6 +326,7 @@ export function getToolDefinitions() {
         parameters: {
           type: "object",
           properties: {},
+          required: [],
         },
       },
     },
@@ -344,6 +349,7 @@ export function getToolDefinitions() {
             limit: { type: "number", description: "最多返回条数（默认 50，最大 200）" },
             clear: { type: "boolean", description: "读取后是否清空缓冲（默认 false）" },
           },
+          required: [],
         },
       },
     },
@@ -407,6 +413,7 @@ export function getToolDefinitions() {
             selector: { type: "string", description: "等待该 CSS 选择器的元素出现在 DOM 中（可选）" },
             ms: { type: "number", description: "等待固定毫秒数（可选，最大 30000）。与 selector 同时传时先等元素再等时间" },
           },
+          required: [],
         },
       },
     },
@@ -422,6 +429,7 @@ export function getToolDefinitions() {
           properties: {
             selector: { type: "string", description: "目标元素的 CSS 选择器（可选，不传读整个 body）" },
           },
+          required: [],
         },
       },
     },
@@ -445,7 +453,7 @@ export function getToolDefinitions() {
       function: {
         name: "browser_back",
         description: "浏览器后退（等同点击后退按钮）。",
-        parameters: { type: "object", properties: {} },
+        parameters: { type: "object", properties: {}, required: [] },
       },
     },
     {
@@ -453,7 +461,7 @@ export function getToolDefinitions() {
       function: {
         name: "browser_forward",
         description: "浏览器前进（等同点击前进按钮）。",
-        parameters: { type: "object", properties: {} },
+        parameters: { type: "object", properties: {}, required: [] },
       },
     },
     {

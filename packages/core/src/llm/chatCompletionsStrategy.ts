@@ -9,7 +9,7 @@ import OpenAI from "openai";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { LLMStrategy, RunTurnParams, LLMTurnResult, NormalizedToolCall } from "./types.js";
 import { normalizeFinishReason } from "./finishReasonMapper.js";
-import { supportsThinking } from "./thinkingSupport.js";
+import { supportsThinking, supportsCacheControl } from "./thinkingSupport.js";
 
 export class ChatCompletionsStrategy implements LLMStrategy {
   readonly name = "chat_completions";
@@ -18,6 +18,7 @@ export class ChatCompletionsStrategy implements LLMStrategy {
 
   async runTurn(params: RunTurnParams): Promise<LLMTurnResult> {
     const { model, messages, tools, signal, callbacks, temperature, maxOutputTokens, think, modelSupportsThinking } = params;
+    const modelSupportsCacheControl = params.modelSupportsCacheControl;
 
     // 🔍 调试：检查最后一条 user 消息的 content 格式（排查图片是否到达 LLM）
     // 仅在设置 AXON_LLM_DEBUG 环境变量时输出，避免污染 Extension Host 控制台。
@@ -49,18 +50,10 @@ export class ChatCompletionsStrategy implements LLMStrategy {
     });
 
     // ── Prompt Caching ──────────────────────────────────────────────
-    // 标记稳定前缀（system prompt + 除最后 2 条外的历史消息）为可缓存。
-    // DeepSeek/GLM/Claude 等均支持 OpenAI 兼容的 cache_control 参数。
-    // 命中缓存时 prefill 阶段跳过 → TTFT 降低 5-10 倍。
-    //
-    // 策略：倒数第 3 条消息打一个 cache breakpoint（覆盖 system + 绝大部分历史），
-    // 倒数第 1 条（最新 user 消息）不打（每轮都变）。
-    // 仅在消息数 > 6 时生效（太短的消息不值得打缓存标记）。
-    //
-    // 注意：Qwen 只自动缓存 system prompt，不支持对历史消息打 breakpoint，
-    // 所以对 Qwen 模型跳过 applyCacheBreakpoints，让它自动缓存 system prompt。
-    const isQwen = /qwen/i.test(model);
-    const cachedMessages = safeMessages.length > 6 && !isQwen
+    // 是否下发 cache_control 由模型声明 + 启发式兜底决定（见 supportsCacheControl），
+    // 不再每加一个模型就改这堆 isXXX 变量。不支持的端点收到 cache_control 会直接 400。
+    const canCache = supportsCacheControl(model, modelSupportsCacheControl);
+    const cachedMessages = canCache && safeMessages.length > 6
       ? applyCacheBreakpoints(safeMessages)
       : safeMessages;
 
@@ -71,6 +64,7 @@ export class ChatCompletionsStrategy implements LLMStrategy {
     // 对 deepseek 关闭并行工具调用（一次一个），从源头规避。其它网关（如 glm 中转）收到该
     // 专有参数会断流，故仅对 deepseek 下发。
     const isDeepSeek = /deepseek/i.test(model);
+    const isQwen = /qwen/i.test(model);
     const isGLM = /glm/i.test(model);
     const isQwen37Plus = /qwen(?:3\.7|37)/i.test(model);
     const isDeepSeek4Plus = /deepseek(?:-?v?4|4)/i.test(model);
