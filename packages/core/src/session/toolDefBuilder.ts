@@ -93,9 +93,9 @@ export class ToolDefBuilder {
             "3. plan：拆成小颗粒可独立验证任务清单（2-5min/项），relay_save_doc(phase=\"plan\") 写 plan.md【必须用复选框格式】。\n" +
             "   拆任务铁律：按纵向功能单元拆（导航栏/表单/图表等），严禁按\"HTML一个任务、CSS一个任务\"横切。\n" +
             "4. executing（用户确认后 relay_advance 推进）：逐项 relay_update_task(in_progress) → 实现 → 自测 → relay_review_task 评审 → relay_update_task(completed)，一口气跑完。\n\n" +
-            "【执行模式】创建时须问用户偏好（如果用户没提前说明的话）：\n" +
-            "- strict（默认）：每阶段写完文档后停下等用户确认再推进。用户说\"继续\"\"可以\"即视为确认。\n" +
-            "- auto：全自动推进，不等每阶段确认。简要呈现文档要点后直接连续推进到执行。\n\n" +
+            "【执行模式】默认传 strict。创建 Relay 时前端确认条会让用户选择严格模式或全自动模式，并以该选择覆盖 mode 参数；不要在对话里额外询问模式偏好。\n" +
+            "- strict：每阶段写完文档后停下等用户确认再推进。\n" +
+            "- auto：全自动推进，不等每阶段确认。\n\n" +
             "【评审门】只有 critical 级别问题才阻断任务完成，major/minor 作为建议不阻断。\n" +
             "【连续执行】进入 executing 后连续推进所有任务，仅评审打回/环境阻塞/全部完成时停下。\n" +
             "【parallel_research】并发布多个只读子 Agent 调研互不依赖的子问题。\n\n" +
@@ -106,7 +106,7 @@ export class ToolDefBuilder {
             properties: {
               title: { type: "string", description: "任务标题（简短，作为 relay 标识，如\"用户登录功能\"）" },
               summary: { type: "string", description: "一句话目标摘要" },
-              mode: { type: "string", enum: ["strict", "auto"], description: "执行模式：strict=每阶段等用户确认（默认），auto=全自动连续推进。创建前应询问用户偏好" },
+              mode: { type: "string", enum: ["strict", "auto"], description: "执行模式：默认 strict；用户可在创建 Relay 的前端确认条中选择 strict 或 auto，选择会覆盖此值" },
               tdd: { type: "boolean", description: "是否强制 TDD（先写失败测试→实现→测试通过）。默认 false。用户明确要求测试驱动时设 true" },
               review: { type: "boolean", description: "是否启用两阶段评审（规格符合性+代码质量）。默认 true，强烈建议保持开启" },
               modelOverrides: {

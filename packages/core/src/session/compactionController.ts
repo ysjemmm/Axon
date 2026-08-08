@@ -22,6 +22,10 @@ export class CompactionController {
   /** 手动触发上下文压缩（供前端"压缩上下文"按钮调用）。需超过当前模型窗口 35% 才允许。 */
   async compactSession(): Promise<void> {
     if (this.s.isCompacting) return;
+    // 取消/异常结束的回合可能还没走正常循环末尾的 updateAndSendTokenUsage，
+    // 此时 lastTotalTokens 是上一轮的旧快照，而前端圆环已经按当前历史显示新估算值。
+    // 手动压缩前强制以当前 messages 重算一次，确保前后端用同一口径判断 35% 阈值。
+    this.s.updateAndSendTokenUsage();
     const ctxWindow = this.s.getContextWindow();
     if (!needsCompaction(this.s.lastTotalTokens, ctxWindow)) {
       this.s.send("compacting_end", { success: false, message: "当前上下文未超过模型窗口的 35%，无需压缩" });

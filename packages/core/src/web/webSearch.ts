@@ -1,5 +1,5 @@
 /**
- * Web 搜索/抓取 - Tavily 为主，DuckDuckGo 兜底（迁自 server/src/webSearch.ts）
+ * Web 搜索/抓取 - Tavily 为主，Bing 兜底（迁自 server/src/webSearch.ts）
  *
  * 仅依赖 node:https/http 与 process.env，跨形态通用（server 与 vscode 扩展宿主均为 Node）。
  * 导出的 webSearch/webFetch 形状即 core 的 WebCapability，可直接注入 AgentSession/SessionHub。
@@ -21,11 +21,15 @@ export interface SearchResult {
 export interface SearchResponse {
   query: string;
   results: SearchResult[];
-  source: "tavily" | "duckduckgo";
+  source: "tavily" | "bing";
 }
 
-/** 简单 HTTP(S) GET/POST 请求封装 */
-function httpRequest(url: string, options?: { method?: string; headers?: Record<string, string>; body?: string }): Promise<string> {
+/** 简单 HTTP(S) GET/POST 请求封装（自动跟随最多 5 次 3xx 跳转） */
+function httpRequest(
+  url: string,
+  options?: { method?: string; headers?: Record<string, string>; body?: string },
+  redirects = 0,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const isHttps = parsed.protocol === "https:";
@@ -34,11 +38,24 @@ function httpRequest(url: string, options?: { method?: string; headers?: Record<
       method: options?.method || "GET",
       headers: options?.headers || {},
     }, (res) => {
+      const statusCode = res.statusCode || 0;
+      const location = res.headers.location;
+      if (statusCode >= 300 && statusCode < 400 && location) {
+        res.resume();
+        if (redirects >= 5) {
+          reject(new Error("重定向次数过多"));
+          return;
+        }
+        const nextUrl = new URL(location, parsed).toString();
+        httpRequest(nextUrl, options, redirects + 1).then(resolve, reject);
+        return;
+      }
+
       let data = "";
       res.on("data", (chunk) => { data += chunk; });
       res.on("end", () => {
-        if (res.statusCode && res.statusCode >= 400) {
-          reject(new Error(`HTTP ${res.statusCode}: ${data.slice(0, 200)}`));
+        if (statusCode >= 400) {
+          reject(new Error(`HTTP ${statusCode}: ${data.slice(0, 200)}`));
         } else {
           resolve(data);
         }
@@ -77,32 +94,34 @@ async function searchTavily(query: string, apiKey: string): Promise<SearchResult
   }));
 }
 
-async function searchDuckDuckGo(query: string): Promise<SearchResult[]> {
+/** 从 Bing HTML 搜索页提取结果；不依赖 API Key，作为 Tavily 不可用时的降级方案。 */
+async function searchBing(query: string): Promise<SearchResult[]> {
   const encoded = encodeURIComponent(query);
-  const url = `https://html.duckduckgo.com/html/?q=${encoded}`;
+  const url = `https://www.bing.com/search?q=${encoded}&setlang=zh-Hans`;
   const html = await httpRequest(url, {
-    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    },
   });
 
   const results: SearchResult[] = [];
-  const resultBlocks = html.split(/class="result\s/g).slice(1);
-  for (const block of resultBlocks) {
+  // Bing 的每条自然结果均以 b_algo 标识。直接全局匹配标题链接，避免页面里额外的
+  // link/style 标签或 class 属性排列变化影响按块切分。
+  const resultPattern = /<li[^>]*\bb_algo\b[\s\S]*?<h2[^>]*>[\s\S]*?<a\b[^>]*\bhref="([^"]*)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h2>[\s\S]*?(?=<li[^>]*\bb_algo\b|<\/ol>)/gi;
+  for (const match of html.matchAll(resultPattern)) {
     if (results.length >= 10) break;
-    const linkMatch = block.match(/class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/);
-    if (!linkMatch) continue;
-    let href = linkMatch[1];
-    const uddgMatch = href.match(/uddg=([^&]+)/);
-    if (uddgMatch) href = decodeURIComponent(uddgMatch[1]);
-    const title = linkMatch[2].replace(/<[^>]*>/g, "").trim();
+    const href = match[1];
+    const title = match[2].replace(/<[^>]*>/g, "").trim();
     if (!title || !href) continue;
-    const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/);
-    const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]*>/g, "").trim() : "";
+    const snippetMatch = match[0].match(/<p[^>]*>([\s\S]*?)<\/p>/i);
+    const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim() : "";
     results.push({ title, url: href, snippet, domain: extractDomain(href) });
   }
   return results;
 }
 
-/** 执行 web 搜索：Tavily 为主，失败降级 DuckDuckGo */
+/** 执行 web 搜索：Tavily 为主，失败降级 Bing */
 export async function webSearch(query: string): Promise<SearchResponse> {
   const tavilyKey = process.env.TAVILY_API_KEY?.trim();
   if (tavilyKey) {
@@ -110,14 +129,14 @@ export async function webSearch(query: string): Promise<SearchResponse> {
       const results = await searchTavily(query, tavilyKey);
       if (results.length > 0) return { query, results, source: "tavily" };
     } catch (err) {
-      console.warn("[web_search] Tavily 失败，降级到 DuckDuckGo:", (err as Error).message);
+      console.warn("[web_search] Tavily 失败，降级到 Bing:", (err as Error).message);
     }
   }
   try {
-    const results = await searchDuckDuckGo(query);
-    return { query, results, source: "duckduckgo" };
+    const results = await searchBing(query);
+    return { query, results, source: "bing" };
   } catch (err) {
-    throw new Error(`搜索失败：Tavily 和 DuckDuckGo 均不可用。${(err as Error).message}`);
+    throw new Error(`搜索失败：Tavily 和 Bing 均不可用。${(err as Error).message}`);
   }
 }
 
