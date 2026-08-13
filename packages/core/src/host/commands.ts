@@ -36,6 +36,11 @@ export interface ExecResult {
   cancelReason?: "terminal_stuck_waiting_input" | "aborted" | "terminal_closed" | "command_hijacked";
   /** 非正常结束但未拿到可靠退出码的原因分类 */
   reason?: "completed" | "timeout" | "aborted" | "terminal_stuck_waiting_input" | "unknown_exit";
+  /**
+   * 超时（reason=timeout）时命令仍在运行的可查询句柄。
+   * 实现应把该命令注册为可查询后台任务，AI 用 get_process_output(terminalId) 持续查看进度。
+   */
+  terminalId?: string;
 }
 
 /** Agent 可用的命令执行能力 */

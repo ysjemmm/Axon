@@ -38,6 +38,40 @@ const SHELL_WARMUP_MS = 300;
 const MARKER_PREFIX = "__AXON_END_";
 
 // ═══════════════════════════════════════════════════════════════
+//  超时命令注册表
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * 一条「execute_command 超时但仍在终端运行」的命令。
+ * 注册后 AI 可用 get_process_output(terminalId) 查询进度与最终结果，
+ * 而不必等到命令结束后才看到输出——这是"超时后 AI 怎么知道情况"的答案。
+ */
+export interface TimedOutTask {
+  /** 查询句柄（与 terminalKey 相同，AI 拿它调 get_process_output） */
+  terminalId: string;
+  command: string;
+  cwd?: string;
+  /** 持续累积的输出（SI 读流在命令结束前一直追加） */
+  buffer: string;
+  status: "running" | "exited";
+  exitCode: number | null;
+}
+
+/** 模块级注册表：跨 CommandRunner/ProcessManager 共享（进程内单例形态） */
+export const timedOutRegistry = new Map<string, TimedOutTask>();
+
+/** 注册超时任务；同 key 已有 exited 的旧任务则替换（新命令已开始，旧结果无需保留） */
+export function registerTimedOutTask(task: TimedOutTask): void {
+  const existing = timedOutRegistry.get(task.terminalId);
+  if (existing && existing.status === "exited") {
+    timedOutRegistry.delete(task.terminalId);
+  }
+  if (!timedOutRegistry.has(task.terminalId)) {
+    timedOutRegistry.set(task.terminalId, task);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  类型
 // ═══════════════════════════════════════════════════════════════
 
@@ -139,6 +173,74 @@ function releaseTerminal(terminalKey: string, id: string, newCwd?: string): void
   if (!entry) return;
   entry.busy = false;
   if (newCwd) entry.cwd = newCwd;
+}
+
+/**
+ * 等待某个 terminalKey 下超时命令真正结束。
+ *
+ * 判定优先级：
+ * 1. timedOutRegistry 里该 key 的任务 status === "exited"（SI end 事件更新，可靠）
+ * 2. 任务不存在（异常路径）→ 退化到终端池判定（exitStatus / SI executions 为空）
+ *
+ * 完成后把该 key 下所有仍 busy 的终端释放回池（超时时 runCommand 故意不释放，
+ * 防后续命令复用终端强杀；命令结束后必须补释放，否则终端池泄漏）。
+ * 最多等待 30 分钟（长任务也不该无限占用），超时兜底放行，避免队列永久卡死。
+ */
+export async function waitForTerminalIdle(terminalKey: string, timeoutMs = 30 * 60_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve) => {
+    const releasePool = () => {
+      const pool = terminalPools.get(terminalKey);
+      if (!pool) return;
+      for (const e of pool) e.busy = false;
+    };
+
+    const check = () => {
+      // 优先：注册表任务已结束 → 立即释放终端并放行
+      const task = timedOutRegistry.get(terminalKey);
+      if (task && task.status === "exited") {
+        releasePool();
+        resolve();
+        return;
+      }
+
+      // 任务存在但仍在跑：检查终端是否已死（用户手动关闭等）
+      if (task && task.status === "running") {
+        const pool = terminalPools.get(terminalKey);
+        const allDead = !pool || pool.length === 0 || pool.every((e) => e.terminal.exitStatus);
+        if (allDead) {
+          task.status = "exited";
+          task.exitCode = task.exitCode ?? null;
+          releasePool();
+          resolve();
+          return;
+        }
+      }
+
+      // 任务不存在（content 层异常等）：退化到终端池判定
+      if (!task) {
+        const pool = terminalPools.get(terminalKey);
+        if (!pool || pool.length === 0) { resolve(); return; }
+        const allIdle = pool.every((e) => {
+          if (e.terminal.exitStatus) return true;
+          const si = e.terminal.shellIntegration as (typeof e.terminal.shellIntegration & { executions?: readonly unknown[] }) | undefined;
+          const execs = si?.executions;
+          return !execs || execs.length === 0;
+        });
+        if (allIdle) { resolve(); return; }
+      }
+
+      if (Date.now() > deadline) {
+        // 兜底超时：强制放行（任务标 ended，释放终端，宁可用新终端也不永久卡队列）
+        if (task) task.status = "exited";
+        releasePool();
+        resolve();
+        return;
+      }
+      setTimeout(check, 1000);
+    };
+    check();
+  });
 }
 
 async function waitForShellIntegration(t: vscode.Terminal): Promise<boolean> {
@@ -262,11 +364,15 @@ async function runWithShellIntegration(
   // ── 并行读流 + 多路等待完成 ──
   let stdout = "";
   let streamDone = false;
+  // 超时后该命令注册到 timedOutRegistry，读流改写到注册项的 buffer，持续累积直到命令真正结束。
+  // 用 ref 对象而非裸变量：闭包在赋值前捕获，TS 会把裸变量收窄成 never（认为必为 null）。
+  const timedOutEntryRef: { current: TimedOutTask | null } = { current: null };
 
   const readPromise = (async () => {
     try {
       for await (const chunk of execution.read()) {
-        stdout += chunk;
+        if (timedOutEntryRef.current) timedOutEntryRef.current.buffer += stripAnsi(chunk);
+        else stdout += chunk;
       }
     } catch { /* 读流异常忽略 */ }
     streamDone = true;
@@ -335,6 +441,29 @@ async function runWithShellIntegration(
   closeChecker.dispose();
   startChecker?.dispose();
 
+  // ⚠️ 超时注册：命令仍在终端运行（clone/install/构建等长任务）。把这条执行注册成
+  // 可查询任务，AI 用 get_process_output 就能持续看到进度；命令真正结束后更新状态。
+  // 同时监听结束事件，把最终退出码回填给注册项。
+  if (completion.reason === "timeout" && opts.terminalKey) {
+    const entry: TimedOutTask = {
+      terminalId: opts.terminalKey,
+      command: effectiveCommand,
+      cwd: opts.cwd,
+      buffer: stdout,
+      status: "running",
+      exitCode: null,
+    };
+    timedOutEntryRef.current = entry;
+    registerTimedOutTask(entry);
+    const endWatch = vscode.window.onDidEndTerminalShellExecution((e) => {
+      if (e.execution === execution) {
+        entry.status = "exited";
+        entry.exitCode = e.exitCode ?? null;
+        endWatch.dispose();
+      }
+    });
+  }
+
   // read() 在 PowerShell 续行 + Ctrl+C 等场景可能永不结束。
   // waitForCompletion 已经通过 onEnd / idle / abort 判定本次 run 结束后，
   // 这里只给读流一个很短的收尾窗口，避免工具卡片永久 executing。
@@ -354,6 +483,7 @@ async function runWithShellIntegration(
     closed: !!t.exitStatus,
     cwd: actualCwd,
     cancelReason: completion.cancelReason,
+    reason: completion.reason,
   };
 }
 
@@ -385,7 +515,7 @@ async function runWithTerminalContent(
   return new Promise<TerminalRunResult>((resolve) => {
     let settled = false;
 
-    const finish = (exitCode: number | null, output: string, cancelReason?: TerminalRunResult["cancelReason"]) => {
+    const finish = (exitCode: number | null, output: string, cancelReason?: TerminalRunResult["cancelReason"], reason?: TerminalRunResult["reason"]) => {
       if (settled) return;
       settled = true;
       clearInterval(poller);
@@ -397,11 +527,27 @@ async function runWithTerminalContent(
         layer: "content",
         closed: !!t.exitStatus,
         cancelReason,
+        reason,
       });
     };
 
     const poller = setInterval(() => {
-      if (Date.now() - startTime > timeoutMs) { finish(null, ""); return; }
+      if (Date.now() - startTime > timeoutMs) {
+        // content 层超时：同样注册可查询任务（无 SI execution 事件，结束判定交给
+        // waitForTerminalIdle 的终端 exitStatus / 兜底超时）。
+        if (opts.terminalKey) {
+          registerTimedOutTask({
+            terminalId: opts.terminalKey,
+            command: effectiveCommand,
+            cwd: opts.cwd,
+            buffer: normalizeOutput(readTerminalText(t) || ""),
+            status: "running",
+            exitCode: null,
+          });
+        }
+        finish(null, "", undefined, "timeout");
+        return;
+      }
 
       const content = readTerminalText(t);
       if (!content) return;
@@ -580,12 +726,12 @@ function isCommandIncomplete(command: string): boolean {
  * 多路等待命令完成：end 事件 / close 事件 / stream 结束 / idle poll / 超时 / abort。
  * 统一管理 disposable 清理，防止资源泄漏。
  */
-function waitForCompletion(cfg: WaitForCompletionConfig): Promise<{ code: number | null; cancelReason?: TerminalRunResult["cancelReason"] }> {
-  return new Promise<{ code: number | null; cancelReason?: TerminalRunResult["cancelReason"] }>((resolve) => {
+function waitForCompletion(cfg: WaitForCompletionConfig): Promise<{ code: number | null; cancelReason?: TerminalRunResult["cancelReason"]; reason?: TerminalRunResult["reason"] }> {
+  return new Promise<{ code: number | null; cancelReason?: TerminalRunResult["cancelReason"]; reason?: TerminalRunResult["reason"] }>((resolve) => {
     let settled = false;
     const disposables: vscode.Disposable[] = [];
 
-    const finish = (code: number | null, cancelReason?: TerminalRunResult["cancelReason"]) => {
+    const finish = (code: number | null, cancelReason?: TerminalRunResult["cancelReason"], reason?: TerminalRunResult["reason"]) => {
       if (settled) return;
       settled = true;
       disposables.forEach((d) => d.dispose());
@@ -593,7 +739,7 @@ function waitForCompletion(cfg: WaitForCompletionConfig): Promise<{ code: number
       clearTimeout(streamEndTimer);
       clearInterval(idlePoller);
       cfg.signal?.removeEventListener("abort", onAbort);
-      resolve({ code, cancelReason });
+      resolve({ code, cancelReason, reason });
     };
 
     // ① 正常完成事件
@@ -602,8 +748,8 @@ function waitForCompletion(cfg: WaitForCompletionConfig): Promise<{ code: number
     // ② 终端关闭
     disposables.push(cfg.onClose(() => finish(null)));
 
-    // ③ 超时
-    const timeoutTimer = setTimeout(() => finish(null), cfg.timeoutMs);
+    // ③ 超时：标记 reason="timeout"，让上层明确知道是超时而非普通失败
+    const timeoutTimer = setTimeout(() => finish(null, undefined, "timeout"), cfg.timeoutMs);
 
     // ④ idle poller：输出静默 → 交互输入检测 / 补偿丢失的 end 事件
     // 不依赖终端可见文本（readTerminalText 不可靠），改为检查命令是否语法不完整。
@@ -704,6 +850,7 @@ export async function runCommand(opts: TerminalRunOptions): Promise<TerminalRunR
   const { terminal: t, id: terminalId, cwdChanged } = acquireTerminal(requestedKey, opts.cwd);
   const effectiveCommand = cwdChanged ? `${cdCommand(opts.cwd!)}${opts.command}` : opts.command;
 
+  let result: TerminalRunResult | null = null;
   try {
 
     // 智能聚焦：避免抢占用户正在操作的终端
@@ -722,7 +869,7 @@ export async function runCommand(opts: TerminalRunOptions): Promise<TerminalRunR
     // ── Layer 1: Shell Integration ──
     const siReady = await waitForShellIntegration(t);
     if (siReady) {
-      const result = await runWithShellIntegration(t, effectiveCommand, opts);
+      result = await runWithShellIntegration(t, effectiveCommand, opts);
       if (result) {
         vscode.commands.executeCommand("axon.internal.markAiCommandEnd", aiCmdStartTime);
         return result;
@@ -731,11 +878,16 @@ export async function runCommand(opts: TerminalRunOptions): Promise<TerminalRunR
 
     // ── Layer 2: Terminal Content Reading ──
     console.warn("[terminal] SI unavailable, falling back to content layer");
-    const contentResult = await runWithTerminalContent(t, effectiveCommand, opts);
+    result = await runWithTerminalContent(t, effectiveCommand, opts);
     vscode.commands.executeCommand("axon.internal.markAiCommandEnd", aiCmdStartTime);
-    return contentResult;
+    return result;
   } finally {
-    releaseTerminal(requestedKey, terminalId, opts.cwd);
+    // ⚠️ 超时不释放终端：命令仍在终端里运行（clone/install/构建等长任务）。
+    // 保持 busy=true 防止后续 execute_command 复用这个终端把还在跑的命令强杀。
+    // 命令真正结束后由 waitForTerminalIdle 的完成回调 releaseTerminal 释放回池。
+    if (result?.reason !== "timeout") {
+      releaseTerminal(requestedKey, terminalId, opts.cwd);
+    }
   }
 }
 

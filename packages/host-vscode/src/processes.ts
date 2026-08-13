@@ -19,6 +19,7 @@ import type {
   BackgroundProcessInfo,
   BackgroundProcessStatus,
 } from "@axon/core";
+import { timedOutRegistry } from "./terminalDisplay.js";
 
 interface ProcEntry {
   terminalId: string;
@@ -121,13 +122,26 @@ export class VSCodeProcessManager implements HostProcessManager {
 
   async getOutput(terminalId: string, lines?: number): Promise<ProcessOutputResult | null> {
     const entry = this.procs.get(terminalId);
-    if (!entry) return null;
-    let output = entry.buffer;
-    if (typeof lines === "number" && lines > 0) {
-      const all = output.split("\n");
-      output = all.slice(Math.max(0, all.length - lines)).join("\n");
+    if (entry) {
+      let output = entry.buffer;
+      if (typeof lines === "number" && lines > 0) {
+        const all = output.split("\n");
+        output = all.slice(Math.max(0, all.length - lines)).join("\n");
+      }
+      return { output, status: entry.status, exitCode: entry.exitCode };
     }
-    return { output, status: entry.status, exitCode: entry.exitCode };
+
+    // execute_command 超时但仍在运行的命令（见 terminalDisplay.timedOutRegistry）
+    const timed = timedOutRegistry.get(terminalId);
+    if (timed) {
+      let output = timed.buffer;
+      if (typeof lines === "number" && lines > 0) {
+        const all = output.split("\n");
+        output = all.slice(Math.max(0, all.length - lines)).join("\n");
+      }
+      return { output, status: timed.status, exitCode: timed.exitCode };
+    }
+    return null;
   }
 
   async stop(terminalId: string): Promise<boolean> {

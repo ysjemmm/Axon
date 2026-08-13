@@ -35,6 +35,7 @@ export class NodeCommandRunner implements HostCommandRunner {
             stderr: stderr ?? "",
             timedOut,
             exitCode: e && typeof e.code === "number" ? e.code : e ? null : 0,
+            reason: timedOut ? "timeout" : (e ? (typeof e.code === "number" ? "completed" : "unknown_exit") : "completed"),
           });
         },
       );

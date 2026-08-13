@@ -161,7 +161,9 @@ export async function executeToolCall(
         throw new Error("read_file 失败：缺少必填参数 path。请提供要读取的文件路径（字符串）。");
       }
       const filePath = await resolveInWorkspaces(args.path, cwd, host, workspaces);
-      assertWithinWorkspaces(filePath, cwd, workspaces, "read_file");
+      // ⚠️ 有意跳过 assertWithinWorkspaces：允许读取工作区外的文件（如用户系统里的
+      // 配置文件、日志、其他项目）。读是只读操作，越权风险低，且用户经常需要 AI 帮忙
+      // 看工作区外的内容。写操作（create_file / str_replace / apply_patch）仍保留边界校验。
       // 把解析后的绝对路径写入 meta，供前端文件名点击打开用
       if (meta) { (meta as any).resolvedPath = filePath; }
       // 优先读暂存区的待确认内容（手动模式下保持工作流连贯）
@@ -404,10 +406,11 @@ export async function executeToolCall(
       } else {
         execCwd = cwd;
       }
-      // 超时放宽到 120 秒——终端里跑较长命令是正常的；超时不代表失败，命令可能仍在运行。
+      // 超时放宽到 240 秒——终端里跑较长命令是正常的（tsc/npm install/构建可能远超 120s）；
+      // 超时不代表失败，命令可能仍在运行。
       const result = await host.commands.exec(args.command as string, {
         cwd: execCwd,
-        timeoutMs: 120_000,
+        timeoutMs: 240_000,
         signal,
         onWaitingInput: meta?.onWaitingInput,
       }) as Awaited<ReturnType<typeof host.commands.exec>>;
@@ -429,13 +432,24 @@ export async function executeToolCall(
           "命令已被取消"
         );
       }
-      // 超时：命令在终端里可能仍在运行（如开发服务器、需要持续交互）
+      // 超时：命令在终端里可能仍在运行（如开发服务器、clone、长构建）。
+      // ⚠️ 超时 ≠ 失败：命令没被杀、还在终端里跑（runner 队列保持占用直到它结束，
+      //    后续 execute_command 会排队等它，不会冲突）。返回"仍在运行"而非抛错，
+      //    让 AI 明确知道命令状态，而不是当作失败去重试/换方式。
       if (result.timedOut || result.reason === "timeout") {
-        throw new ToolError(
-          `命令在 120 秒内未结束：${args.command}。` +
-          `可能是长时间运行的进程（开发服务器/watch）或正在等待用户输入。` +
-          `请提示用户切换到终端面板查看并完成操作。不要重试此命令。`,
-          "命令超时，AI 已获悉"
+        const partial = (result.stdout || "").trim();
+        const queryHint = result.terminalId
+          ? `· 可随时用 get_process_output(terminalId="${result.terminalId}") 查询它的进度与最终结果（命令结束会自动标记退出状态）。\n`
+          : "";
+        return (
+          `命令仍在运行中（等待 ${240} 秒超时未结束，进程未被终止）：${args.command}\n` +
+          (partial ? `--- 目前已产生的输出 ---\n${partial}\n` : "") +
+          `---\n` +
+          `· 不要重试此命令——它还在执行。\n` +
+          queryHint +
+          `· 后续 execute_command 会排队等它结束后再执行（同一终端串行），不会与它冲突。\n` +
+          `· 如需在后台运行常驻/长任务，请改用 start_process（返回 terminalId，可用 get_process_output 查询结果）。\n` +
+          `· 用户也可以直接在 Axon 终端面板查看/操作这个正在运行的命令。`
         );
       }
       if (result.reason === "unknown_exit") {
