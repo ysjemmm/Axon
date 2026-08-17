@@ -557,6 +557,23 @@ export class RequestRouter {
         workspace: ws ? await readProviderConfig("workspace", ws) : { providers: {}, builtinApiKeys: {} },
       };
     }
+    // 识图兜底模型：读（workspace 优先，回退 user）与写（指定 level）
+    if (path === "/api/providers/vision-fallback" && method === "GET") {
+      const ws = query.get("workspace") || undefined;
+      const userCfg = await readProviderConfig("user");
+      const wsCfg = ws ? await readProviderConfig("workspace", ws) : {};
+      return { model: wsCfg.visionFallbackModel || userCfg.visionFallbackModel || null };
+    }
+    if (path === "/api/providers/vision-fallback" && method === "PUT") {
+      const { model, level, workspace } = (body || {}) as { model?: string | null; level?: "user" | "workspace"; workspace?: string };
+      const lv = level === "workspace" ? "workspace" : "user";
+      const config = await readProviderConfig(lv, workspace);
+      if (model) config.visionFallbackModel = model;
+      else delete config.visionFallbackModel;
+      await writeProviderConfig(lv, config, workspace);
+      await resolveProviders(workspace || d.defaultWorkspace);
+      return { ok: true };
+    }
     const providerLevelMatch = path.match(/^\/api\/providers\/(user|workspace)$/);
     if (providerLevelMatch && method === "PUT") {
       const level = providerLevelMatch[1] as "user" | "workspace";
@@ -725,7 +742,13 @@ async function readProviderConfig(level: "user" | "workspace", workspace?: strin
   const { readFile } = await import("node:fs/promises");
   try {
     const parsed = JSON.parse(await readFile(providerConfigPath(level, workspace), "utf-8")) as ProviderConfigFile;
-    return { providers: parsed.providers || {}, builtinApiKeys: parsed.builtinApiKeys || {}, builtinBaseUrls: parsed.builtinBaseUrls || {} };
+    return {
+      providers: parsed.providers || {},
+      builtinApiKeys: parsed.builtinApiKeys || {},
+      builtinBaseUrls: parsed.builtinBaseUrls || {},
+      builtinModels: parsed.builtinModels || {},
+      ...(parsed.visionFallbackModel ? { visionFallbackModel: parsed.visionFallbackModel } : {}),
+    };
   } catch {
     return { providers: {}, builtinApiKeys: {}, builtinBaseUrls: {} };
   }
@@ -735,7 +758,13 @@ async function readProviderConfig(level: "user" | "workspace", workspace?: strin
 async function writeProviderConfig(level: "user" | "workspace", config: ProviderConfigFile, workspace?: string): Promise<void> {
   const { mkdir, writeFile } = await import("node:fs/promises");
   const { dirname } = await import("node:path");
-  const normalized: ProviderConfigFile = { providers: config.providers || {}, builtinApiKeys: config.builtinApiKeys || {}, builtinBaseUrls: config.builtinBaseUrls || {} };
+  const normalized: ProviderConfigFile = {
+    providers: config.providers || {},
+    builtinApiKeys: config.builtinApiKeys || {},
+    builtinBaseUrls: config.builtinBaseUrls || {},
+    builtinModels: config.builtinModels || {},
+    ...(config.visionFallbackModel ? { visionFallbackModel: config.visionFallbackModel } : {}),
+  };
   const p = providerConfigPath(level, workspace);
   await mkdir(dirname(p), { recursive: true });
   await writeFile(p, JSON.stringify(normalized, null, 2), "utf-8");

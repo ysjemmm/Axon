@@ -124,6 +124,12 @@ export interface RunTurnParams {
    * 缺省（undefined）时策略回退到启发式，不确定时不传——断流代价远大于少省几个 token。
    */
   modelSupportsCacheControl?: boolean;
+  /**
+   * 该模型在 provider 目录里**声明**的 vision（多模态/支持图片）能力。
+   * 缺省（undefined）时策略回退到启发式；显式 false 时策略会把图片剥离（喂给不支持图片的
+   * 模型会 400 或被忽略）。用于取代早先按模型名正则硬猜的做法。
+   */
+  modelSupportsVision?: boolean;
 }
 
 /**

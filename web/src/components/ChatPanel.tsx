@@ -14,6 +14,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { ModelSelector, useModels, findModel, getModels } from "@/components/ModelSelector";
+import { getVisionFallbackModel } from "@/lib/apiClient";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
 import { WorkspaceGroupManager, type WorkspaceGroup } from "@/components/WorkspaceGroupManager";
 import { AxonLogo } from "@/components/AxonLogo";
@@ -123,6 +124,17 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   /** 当前模型是否支持图片（含自定义 provider 模型，故走合并列表） */
   const models = useModels();
   const currentModelVision = models.find((m) => m.id === session.model)?.vision ?? false;
+
+  /** 识图兜底模型是否已配置（配置后，非多模态模型的图片行为与多模态一致，后端负责识图转文字） */
+  const [visionFallbackModel, setVisionFallbackModelState] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    getVisionFallbackModel(session.workspace || undefined)
+      .then((r) => { if (!cancelled) setVisionFallbackModelState(r.model); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [session.workspace]);
+  const canSendImages = currentModelVision || !!visionFallbackModel;
 
   // 命令审批 Context：把"按 toolCallId 索引的待审批项 + 决策回调"下发给对话流里的命令卡片
   const commandApprovalCtx = useMemo(
@@ -301,7 +313,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
   // ── 发送 ──────────────────────────────────────────────────────────────────
   const doSend = (text: string, sendImgs: string[], sendFileList: AttachedFile[], segments: UserSegment[]) => {
-    const sendImages = currentModelVision ? sendImgs : [];
+    const sendImages = canSendImages ? sendImgs : [];
     const sendFiles = [...sendFileList];
 
     let contentForModel = text;
@@ -473,7 +485,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     const targetModel = providerName
       ? getModels().find((m) => m.id === newModel && m.provider === providerName)
       : findModel(newModel);
-    if (images.length > 0 && targetModel && !targetModel.vision) return; // 有图片时禁止切到不支持 vision 的模型
+    if (images.length > 0 && targetModel && !targetModel.vision && !visionFallbackModel) return; // 有图片且未配置识图兜底时，禁止切到不支持 vision 的模型
     session.setModel(newModel, providerName);
   };
 
@@ -534,7 +546,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   });
 
   const addImages = async (files: FileList | File[]) => {
-    if (!currentModelVision) return;
+    if (!canSendImages) return;
     const imageFiles = Array.from(files).filter((f) => f.type.startsWith("image/"));
     const base64List = await Promise.all(imageFiles.map(fileToBase64));
     const resized = await Promise.all(base64List.map((b) => normalizeImage(b)));
@@ -542,7 +554,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   };
 
   const captureScreenshot = async () => {
-    if (!currentModelVision) {
+    if (!canSendImages) {
       showFileError("当前模型不支持图片，无法使用截图");
       return;
     }
@@ -625,7 +637,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   };
 
   const handlePaste = (e: React.ClipboardEvent) => {
-    if (!currentModelVision) return;
+    if (!canSendImages) return;
     const files = e.clipboardData.files;
     if (files.length > 0) {
       e.preventDefault();
@@ -640,7 +652,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     if (files.length > 0) {
       const imgs = files.filter((f) => f.type.startsWith("image/"));
       const docs = files.filter((f) => !f.type.startsWith("image/"));
-      if (imgs.length > 0 && currentModelVision) addImages(imgs);
+      if (imgs.length > 0 && canSendImages) addImages(imgs);
       if (docs.length > 0) addFiles(docs);
       return;
     }
@@ -1305,7 +1317,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             <MentionEditor
               ref={editorRef}
               disabled={!connected}
-              placeholder={connected ? (currentModelVision ? "给 Axon 发消息...（可粘贴或拖拽图片）" : "给 Axon 发消息...") : "等待连接..."}
+              placeholder={connected ? (canSendImages ? "给 Axon 发消息...（可粘贴或拖拽图片）" : "给 Axon 发消息...") : "等待连接..."}
               onChange={handleEditorChange}
               onKeyDown={(e) => {
                 // 吉祥物只是旁观者：先记一笔按键类型，不影响后续任何消费判定
@@ -1324,7 +1336,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                 value={session.model}
                 provider={session.provider}
                 onChange={handleModelChange}
-                disabledModels={images.length > 0 ? models.filter((m) => !m.vision).map((m) => m.id) : []}
+                disabledModels={images.length > 0 && !visionFallbackModel ? models.filter((m) => !m.vision).map((m) => m.id) : []}
                 disabled={session.isCompacting || session.contextOverflow}
                 disabledTooltip={session.contextOverflow ? "上下文超限，请先压缩" : "压缩期间不可切换模型"}
                 think={session.think}
@@ -1351,18 +1363,18 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                   </button>
                   <button
                     onClick={() => { fileInputRef.current?.click(); setMenuOpen(false); }}
-                    disabled={!currentModelVision}
+                    disabled={!canSendImages}
                     className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs hover:bg-muted/60 transition-colors text-left disabled:opacity-40 disabled:cursor-not-allowed"
-                    title={currentModelVision ? "" : "当前模型不支持图片"}
+                    title={canSendImages ? "" : "当前模型不支持图片"}
                   >
                     <ImagePlus className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
                     <span className="flex-1">上传图片</span>
                   </button>
                   <button
                     onClick={() => { captureScreenshot(); setMenuOpen(false); }}
-                    disabled={!currentModelVision}
+                    disabled={!canSendImages}
                     className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs hover:bg-muted/60 transition-colors text-left disabled:opacity-40 disabled:cursor-not-allowed"
-                    title={currentModelVision ? "" : "当前模型不支持图片"}
+                    title={canSendImages ? "" : "当前模型不支持图片"}
                   >
                     <Camera className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
                     <span className="flex-1">截图</span>

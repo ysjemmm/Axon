@@ -10,9 +10,10 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
-import { Loader2, Cloud, Plus, Trash2, Save, KeyRound, ChevronRight, Pencil, Ban, RotateCcw, Download, Globe, ArrowUpToLine, ArrowDownToLine } from "lucide-react";
+import { Loader2, Cloud, Plus, Trash2, Save, KeyRound, ChevronRight, Pencil, Ban, RotateCcw, Download, Globe, ArrowUpToLine, ArrowDownToLine, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { VisionFallbackSelector } from "@/components/ModelSelector";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   getProviders,
@@ -25,6 +26,8 @@ import {
   probeProviderModels,
   openProviderConfigInEditor,
   moveCustomProvider,
+  getVisionFallbackModel,
+  setVisionFallbackModel,
   type ProviderLevel,
   type ResolvedProviderInfo,
   type ProviderModelInfo,
@@ -43,6 +46,8 @@ interface ProviderStudioProps {
 export function ProviderStudio({ workspace }: ProviderStudioProps) {
   const [level, setLevel] = useState<ProviderLevel>("user");
   const [providers, setProviders] = useState<ResolvedProviderInfo[]>([]);
+  const [visionFallbackModel, setVisionFallbackModelState] = useState<string | null>(null);
+  const [savingVision, setSavingVision] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -50,6 +55,8 @@ export function ProviderStudio({ workspace }: ProviderStudioProps) {
     try {
       const { providers: list } = await getProviders(workspace || undefined);
       setProviders(list);
+      const { model } = await getVisionFallbackModel(workspace || undefined);
+      setVisionFallbackModelState(model);
     } catch (e) {
       console.warn("加载 provider 失败", e);
     }
@@ -61,12 +68,25 @@ export function ProviderStudio({ workspace }: ProviderStudioProps) {
     try {
       const { providers: list } = await getProviders(workspace || undefined);
       setProviders(list);
+      const { model } = await getVisionFallbackModel(workspace || undefined);
+      setVisionFallbackModelState(model);
     } catch (e) {
       console.warn("刷新 provider 失败", e);
     }
   }, [workspace]);
 
   useEffect(() => { load(); }, [load]);
+
+  const saveVisionFallback = async (modelId: string | null) => {
+    setSavingVision(true);
+    try {
+      await setVisionFallbackModel(modelId, level, workspace || undefined);
+      setVisionFallbackModelState(modelId);
+    } catch (e) {
+      console.warn("保存识图兜底模型失败", e);
+    }
+    setSavingVision(false);
+  };
 
   if (loading) {
     return <div className="flex items-center justify-center h-full text-muted-foreground"><Loader2 className="w-5 h-5 animate-spin" /></div>;
@@ -96,6 +116,20 @@ export function ProviderStudio({ workspace }: ProviderStudioProps) {
         </div>
         <div className="text-[11px] text-muted-foreground mt-2">
           写入目标：{level === "user" ? "~/.axon/settings/providers.json" : "<工作区>/.axon/settings/providers.json"}
+        </div>
+      </div>
+
+      {/* 识图兜底模型 */}
+      <div className="px-5 pt-4">
+        <div className="px-3 py-2.5 rounded-lg border border-border bg-muted/20">
+          <div className="flex items-center gap-2 mb-1">
+            <Eye className="w-4 h-4 text-violet-500" />
+            <span className="text-sm font-medium">识图兜底模型</span>
+          </div>
+          <p className="text-[11px] text-muted-foreground mb-2">
+            主模型不支持图片时，用该模型把图片转成文字描述再喂给主模型。留空 = 不启用识图兜底。
+          </p>
+          <VisionFallbackSelector value={visionFallbackModel} onChange={saveVisionFallback} />
         </div>
       </div>
 

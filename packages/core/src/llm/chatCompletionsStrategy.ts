@@ -20,6 +20,7 @@ export class ChatCompletionsStrategy implements LLMStrategy {
   async runTurn(params: RunTurnParams): Promise<LLMTurnResult> {
     const { model, messages, tools, signal, callbacks, temperature, maxOutputTokens, think, modelSupportsThinking } = params;
     const modelSupportsCacheControl = params.modelSupportsCacheControl;
+    const modelSupportsVision = params.modelSupportsVision;
 
     // 🔍 调试：检查最后一条 user 消息的 content 格式（排查图片是否到达 LLM）
     // 仅在设置 AXON_LLM_DEBUG 环境变量时输出，避免污染 Extension Host 控制台。
@@ -33,18 +34,21 @@ export class ChatCompletionsStrategy implements LLMStrategy {
       }
     }
 
-    // 多模态降级：如果消息中含 image_url 但模型可能不支持（非 GPT/Claude/Qwen），
-    // 把 image_url 部分剥离，只保留文字 + 提示"图片无法显示"
+    // 多模态降级：如果消息中含 image_url 但模型声明不支持图片（vision === false），
+    // 把 image_url 部分剥离，只保留文字 + 提示"图片无法显示"。
+    // 用声明判断而非模型名正则硬猜——declaredVisionFor 能精确覆盖自定义 provider 模型。
     const safeMessages = messages.map((m) => {
       if (!m) return m; // 防御：消息为 undefined/null 时保持原样（应由上层 sanitize 保证不出现，此处兜底）
       if (m.role === "user" && Array.isArray(m.content)) {
         const parts = m.content as any[];
         const hasImage = parts.some((p) => p.type === "image_url");
-        if (hasImage && !/^(gpt|claude|qwen)/i.test(model)) {
+        if (hasImage && modelSupportsVision === false) {
           // 模型不支持图片，降级为纯文本
           const textParts = parts.filter((p) => p.type === "text").map((p) => p.text || "");
-          const text = textParts.join("\n") + "\n\n[用户附带了图片，但当前模型不支持查看图片内容]";
-          return { ...m, content: text };
+          const text = textParts.join("\n");
+          // 识图兜底已经把图片转成文字描述（text 里含描述标记）时，不追加"无法显示"提示
+          const hasFallbackDesc = text.includes("[图片内容描述");
+          return { ...m, content: hasFallbackDesc ? text : text + "\n\n[用户附带了图片，但当前模型不支持查看图片内容]" };
         }
       }
       return m;

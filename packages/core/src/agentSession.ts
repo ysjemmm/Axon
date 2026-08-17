@@ -25,7 +25,7 @@ import { looksLikeIncompleteReply, LoopGuard, policyForModel, isSoftToolFailure,
 import { McpRegistry } from "./mcp/mcpRegistry.js";
 import { modelContextWindow } from "./llm/modelContext.js";
 import { SYSTEM_PROMPT, QUEST_SYSTEM_PROMPT } from "./systemPrompt.js";
-import { getStrategy, ZHIPU_PROVIDER, findProviderForModel, declaredThinkingFor, declaredCacheControlFor } from "./providers.js";
+import { getStrategy, ZHIPU_PROVIDER, findProviderForModel, declaredThinkingFor, declaredCacheControlFor, declaredVisionFor, getVisionFallbackModel } from "./providers.js";
 import { DEFAULT_MODEL_ID } from "./providerCatalog.js";
 import { PromptBuilder, messageText } from "./session/promptBuilder.js";
 import { flattenToolHistory } from "./messageSanitizer.js";
@@ -420,6 +420,45 @@ export class AgentSession {
    */
   /** @internal */ flattenToolHistory(): void {
     this.messages = flattenToolHistory(this.messages);
+  }
+
+  /**
+   * 用识图兜底模型把图片转成文字描述。
+   * 主模型不支持图片（vision === false）时，先用兜底模型"看"图，产出文字描述供主模型消费。
+   * 识图失败（网络/配置问题）不阻塞主流程，返回空串，上层降级为"图片无法描述"。
+   */
+  /** @internal */ async describeImagesWithFallback(images: string[]): Promise<string> {
+    const fallbackModel = getVisionFallbackModel();
+    if (!fallbackModel) return "";
+    const provider = findProviderForModel(fallbackModel);
+    if (!provider) {
+      console.warn(`[vision-fallback] 兜底识图模型 "${fallbackModel}" 未在任何 provider 中找到`);
+      return "";
+    }
+    try {
+      const strategy = getStrategy(provider, fallbackModel);
+      const content = images.map((img) => ({ type: "image_url" as const, image_url: { url: img } }));
+      const turn = await strategy.runTurn({
+        model: fallbackModel,
+        messages: [
+          {
+            role: "system",
+            content:
+              "你是识图助手。请完整、详细地描述用户提供的图片：转录图中所有可见文字、代码、数字、表格，描述界面布局/结构/颜色区块，说明图片类型（截图/代码/文档/照片等）和关键信息。只输出客观描述，不要评价、不要提问、不要臆测图中没有的内容。",
+          },
+          { role: "user", content },
+        ],
+        tools: [],
+        signal: this.abortSignal,
+        callbacks: { onReasoningDelta: () => {}, onTextDelta: () => {}, onToolCallDetected: () => {} },
+        think: false,
+        modelSupportsThinking: false,
+      });
+      return turn.content || "";
+    } catch (err) {
+      console.warn("[vision-fallback] 识图兜底失败（忽略）:", (err as Error).message);
+      return "";
+    }
   }
 
   /** 序列化 pendingEdits 为可持久化数组 */
@@ -1235,6 +1274,7 @@ export class AgentSession {
           think: this.think,
           modelSupportsThinking: declaredThinkingFor(this.model, this.provider),
           modelSupportsCacheControl: declaredCacheControlFor(this.model, this.provider),
+          modelSupportsVision: declaredVisionFor(this.model, this.provider),
           // 关键：把新链路的流式增量实时接到主循环 callbacks 上，让前端看到正常的思考/打字效果。
           onReasoningDelta: (text, partIndex, itemId) => callbacks.onReasoningDelta(text, partIndex, itemId),
           onTextDelta: (text) => callbacks.onTextDelta(text),
@@ -1631,14 +1671,32 @@ export class AgentSession {
 
     // 构建用户消息（支持多模态：文字 + 图片）
     if (images && images.length > 0) {
-      const content: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
-      if (input) {
-        content.push({ type: "text", text: input });
+      // 主模型不支持图片（vision === false）时，尝试用识图兜底模型把图片转成文字描述，
+      // 用文字替换图片喂给主模型——主模型不再是"瞎子"，用户也无需感知差异。
+      const supportsVision = declaredVisionFor(this.model, this.provider);
+      const fallbackModel = getVisionFallbackModel();
+      if (supportsVision === false && fallbackModel && fallbackModel !== this.model) {
+        const desc = await this.describeImagesWithFallback(images);
+        const text = input
+          ? `${input}\n\n[图片内容描述（由识图模型生成）]：\n${desc || "（识图失败，无法描述）"}`
+          : `[图片内容描述（由识图模型生成）]：\n${desc || "（识图失败，无法描述）"}`;
+        // 持久化保留原图（image_url）供前端历史恢复展示；发给主模型时由
+        // chatCompletionsStrategy 的 vision 过滤剥离 image_url、只保留文字描述。
+        const content: Array<{ type: string; text?: string; image_url?: { url: string } }> = [
+          { type: "text", text },
+          ...images.map((img) => ({ type: "image_url", image_url: { url: img } })),
+        ];
+        this.messages.push({ role: "user", content: content as any, timestamp: Date.now(), ...userExtra } as any);
+      } else {
+        const content: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
+        if (input) {
+          content.push({ type: "text", text: input });
+        }
+        for (const img of images) {
+          content.push({ type: "image_url", image_url: { url: img } });
+        }
+        this.messages.push({ role: "user", content: content as any, timestamp: Date.now(), ...userExtra } as any);
       }
-      for (const img of images) {
-        content.push({ type: "image_url", image_url: { url: img } });
-      }
-      this.messages.push({ role: "user", content: content as any, timestamp: Date.now(), ...userExtra } as any);
     } else {
       this.messages.push({ role: "user", content: input, timestamp: Date.now(), ...userExtra } as any);
     }

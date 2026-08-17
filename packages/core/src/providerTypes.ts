@@ -125,4 +125,10 @@ export interface ProviderConfigFile {
   builtinBaseUrls?: Record<string, string>;
   /** 覆盖内置 provider 的模型列表（增删后整存；不设则取 providerCatalog 默认模型） */
   builtinModels?: Record<string, unknown[]>;
+  /**
+   * 识图兜底模型 id（全局一个）。
+   * 当主模型不支持图片（vision === false）时，用该模型把图片转成文字描述再喂给主模型。
+   * 留空/缺省 = 不启用识图兜底。
+   */
+  visionFallbackModel?: string;
 }

@@ -437,3 +437,126 @@ export function ModelSelector({ value, provider, onChange, disabledModels = [], 
     </Popover>
   );
 }
+
+/**
+ * 识图兜底模型选择器——两级菜单（provider 分组 + 点击内联展开模型，同时只展开一个），
+ * 结构与 ModelSelector 完全一致，仅过滤出支持图片（vision === true）的模型。
+ * 顶部多一个「不启用」空态行；识图兜底只存模型 id，靠后端反查 provider。
+ */
+export function VisionFallbackSelector({ value, onChange }: { value: string | null; onChange: (modelId: string | null) => void }) {
+  const groups = useProviderGroups();
+  const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  // 当前选中的模型（跨 provider 按 id 匹配）
+  const allModels = getModels();
+  const current = allModels.find((m) => m.id === value && m.vision);
+
+  // 展开 provider 时自动滚动到当前选中模型
+  const scrollRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  useEffect(() => {
+    if (!expanded) return;
+    const timer = setTimeout(() => {
+      const el = scrollRefs.current[expanded];
+      if (!el) return;
+      const selected = el.querySelector('[data-selected="true"]') as HTMLElement | null;
+      if (selected && el.scrollHeight > el.clientHeight) {
+        el.scrollTop = selected.offsetTop - el.clientHeight / 3;
+      }
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [expanded]);
+
+  const onOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (next) {
+      void refreshModels();
+      setExpanded(current?.provider ?? null);
+    }
+  };
+
+  // 只保留已配置 provider 下的 vision 模型；provider 内若 vision 模型全空则不显示该组
+  const visionGroups = groups
+    .filter((g) => g.configured)
+    .map((g) => ({ ...g, models: g.models.filter((m) => m.vision) }))
+    .filter((g) => g.models.length > 0);
+
+  const trigger = (
+    <button
+      type="button"
+      onClick={() => { if (!open) setOpen(true); else setOpen(false); }}
+      className="inline-flex items-center h-7 gap-1 rounded-md px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+    >
+      <span className={current ? "text-foreground" : ""}>{current?.name || "不启用（留空）"}</span>
+      <ChevronDown className="w-3 h-3 opacity-60" />
+    </button>
+  );
+
+  return (
+    <Popover open={open} onOpenChange={onOpenChange}>
+      <PopoverTrigger asChild>
+        {trigger}
+      </PopoverTrigger>
+      <PopoverContent
+        side="bottom"
+        align="start"
+        sideOffset={6}
+        collisionPadding={8}
+        className="w-[250px] max-h-[70vh] overflow-y-auto p-1 gap-0 ring-1 ring-border shadow-lg [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-transparent [&::-webkit-scrollbar-track]:bg-transparent hover:[&::-webkit-scrollbar-thumb]:bg-muted-foreground/25 [scrollbar-width:thin] [scrollbar-color:transparent_transparent] hover:[scrollbar-color:rgba(128,128,128,0.25)_transparent]"
+      >
+        {/* 「不启用」空态行：与 provider 行同构，固定在顶部 */}
+        <button
+          data-selected={value === null ? "true" : undefined}
+          onClick={() => { onChange(null); setOpen(false); }}
+          className={`flex items-center gap-1 py-1 pl-1 pr-1.5 rounded text-[11px] cursor-pointer select-none transition-colors ${value === null ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-muted/25"}`}
+        >
+          <span className="font-semibold truncate flex-1 min-w-0">不启用（留空）</span>
+        </button>
+
+        {/* provider 一级 + 点击内联展开二级模型（同时只展开一个） */}
+        {[...visionGroups].sort((a, b) => {
+          const aCurrent = current && a.name === current.provider ? 1 : 0;
+          const bCurrent = current && b.name === current.provider ? 1 : 0;
+          return aCurrent - bCurrent;
+        }).map((g) => {
+          const isExpanded = expanded === g.name;
+          return (
+            <div key={g.name}>
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => setExpanded(expanded === g.name ? null : g.name)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded(expanded === g.name ? null : g.name); } }}
+                className={`flex items-center gap-1 py-1 pl-1 pr-1.5 rounded text-[11px] cursor-pointer select-none transition-colors ${isExpanded ? "text-foreground bg-muted/40" : "text-muted-foreground hover:text-foreground hover:bg-muted/25"}`}
+              >
+                <ChevronRight className={`w-3 h-3 shrink-0 opacity-50 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+                <span className="font-semibold truncate flex-1 min-w-0">{g.label}</span>
+                <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/50">{g.models.length}</span>
+              </div>
+              {isExpanded && (
+                <div
+                  ref={(el) => { scrollRefs.current[g.name] = el; }}
+                  className="pl-1.5 border-l border-border/40 ml-2.5 mb-1 max-h-[232px] overflow-y-auto [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-transparent [&::-webkit-scrollbar-track]:bg-transparent hover:[&::-webkit-scrollbar-thumb]:bg-muted-foreground/25 [scrollbar-width:thin] [scrollbar-color:transparent_transparent] hover:[scrollbar-color:rgba(128,128,128,0.25)_transparent]"
+                >
+                  {g.models.map((m) => (
+                    <ModelRow
+                      key={m.id}
+                      model={m}
+                      selected={m.id === current?.id && m.provider === current?.provider}
+                      disabled={false}
+                      onPick={() => { onChange(m.id); setOpen(false); }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {visionGroups.length === 0 && (
+          <div className="px-2.5 py-2 text-[11px] text-muted-foreground/60">没有已配置的支持图片的模型</div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}

@@ -92,6 +92,7 @@ export class ProviderRegistry {
     Object.assign(merged.builtinApiKeys!, userCfg.builtinApiKeys || {});
     Object.assign(merged.builtinBaseUrls!, userCfg.builtinBaseUrls || {});
     Object.assign(merged.builtinModels!, userCfg.builtinModels || {});
+    if (userCfg.visionFallbackModel) merged.visionFallbackModel = userCfg.visionFallbackModel;
     for (const name of Object.keys(userCfg.providers || {})) levels[name] = "user";
 
     for (const ws of this.workspaces) {
@@ -100,10 +101,17 @@ export class ProviderRegistry {
       Object.assign(merged.builtinApiKeys!, wsCfg.builtinApiKeys || {});
       Object.assign(merged.builtinBaseUrls!, wsCfg.builtinBaseUrls || {});
       Object.assign(merged.builtinModels!, wsCfg.builtinModels || {});
+      if (wsCfg.visionFallbackModel) merged.visionFallbackModel = wsCfg.visionFallbackModel;
       for (const name of Object.keys(wsCfg.providers || {})) levels[name] = "workspace";
     }
 
     return { ...merged, _providerLevels: levels };
+  }
+
+  /** 读取当前生效的识图兜底模型 id（未配置返回 null） */
+  async getVisionFallbackModel(): Promise<string | null> {
+    const file = await this.readMergedConfig();
+    return file.visionFallbackModel?.trim() || null;
   }
 
   /** 读单个 providers.json，文件不存在/损坏返回空配置 */

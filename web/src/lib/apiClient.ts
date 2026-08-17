@@ -529,6 +529,8 @@ export interface ProviderConfigFile {
   builtinApiKeys?: Record<string, string>;
   /** 覆盖内置 provider 的 baseUrl */
   builtinBaseUrls?: Record<string, string>;
+  /** 识图兜底模型 id（全局一个；主模型不支持图片时用该模型识图转文字） */
+  visionFallbackModel?: string;
 }
 
 function providerQuery(workspace?: string): string {
@@ -548,6 +550,16 @@ export function getProviderConfig(workspace?: string): Promise<{ user: ProviderC
 /** 覆盖写入某 level 的完整 providers.json */
 export function saveProviderConfig(level: ProviderLevel, config: ProviderConfigFile, workspace?: string): Promise<{ ok: boolean }> {
   return put(`/api/providers/${level}${providerQuery(workspace)}`, { config });
+}
+
+/** 读取当前识图兜底模型 id（workspace 优先，回退 user；未配置返回 null） */
+export function getVisionFallbackModel(workspace?: string): Promise<{ model: string | null }> {
+  return get(`/api/providers/vision-fallback${providerQuery(workspace)}`);
+}
+
+/** 设置/清除识图兜底模型（写指定 level；model 传 null 表示清除） */
+export function setVisionFallbackModel(model: string | null, level: ProviderLevel, workspace?: string): Promise<{ ok: boolean }> {
+  return put(`/api/providers/vision-fallback${providerQuery(workspace)}`, { model, level });
 }
 
 /** 新增/覆盖一个自定义 provider */

@@ -53,6 +53,7 @@ export function applyResolvedProviders(providers: ResolvedProvider[]): void {
 export async function refreshProviders(registry: ProviderRegistry): Promise<ResolvedProvider[]> {
   const list = await registry.resolve();
   applyResolvedProviders(list);
+  setVisionFallbackModel(await registry.getVisionFallbackModel());
   return list;
 }
 
@@ -134,6 +135,41 @@ export function declaredCacheControlFor(modelId: string, preferredProvider?: str
     .map((p) => p.models.find((m) => m.id === modelId))
     .filter((m): m is NonNullable<typeof m> => !!m);
   return matches.length === 1 ? matches[0].cacheControl : undefined;
+}
+
+/**
+ * 查询某模型在 provider 目录里**声明**的 vision（多模态/支持图片）能力。
+ *
+ * 与 declaredThinkingFor / declaredCacheControlFor 同构：优先 preferredProvider 命中，
+ * 其次全局唯一命中，同名歧义时不猜返回 undefined。
+ * 用于判断主模型能否直接看图——这决定了是否走"识图兜底"链路。
+ */
+export function declaredVisionFor(modelId: string, preferredProvider?: string): boolean | undefined {
+  if (!_resolved) return undefined;
+
+  if (preferredProvider) {
+    const preferred = _resolved.get(normalizeProvider(preferredProvider));
+    const hit = preferred?.models.find((m) => m.id === modelId);
+    if (hit) return hit.vision;
+  }
+
+  const matches = [..._resolved.values()]
+    .map((p) => p.models.find((m) => m.id === modelId))
+    .filter((m): m is NonNullable<typeof m> => !!m);
+  return matches.length === 1 ? matches[0].vision : undefined;
+}
+
+/** 识图兜底模型 id（全局配置，由 refreshProviders 注入）；null 表示未配置 */
+let _visionFallbackModel: string | null = null;
+
+/** 注入识图兜底模型 id（配置变更时由 refreshProviders 同步） */
+export function setVisionFallbackModel(id: string | null): void {
+  _visionFallbackModel = id;
+}
+
+/** 当前识图兜底模型 id（未配置返回 null） */
+export function getVisionFallbackModel(): string | null {
+  return _visionFallbackModel;
 }
 
 /** 取某 provider 的运行时配置：先查已注入的解析结果，再回退到环境变量。 */
