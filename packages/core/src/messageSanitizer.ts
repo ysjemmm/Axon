@@ -5,6 +5,57 @@ const DEFAULT_TOOL_ERROR =
   "如果这条结果对当前任务有必要，请重新调用对应工具获取最新数据；" +
   "否则直接基于当前对话中已有的信息继续工作。]";
 
+/**
+ * 压平历史里的结构化工具调用：把 assistant.tool_calls + 后续 tool 结果合并成一条纯文本
+ * assistant 消息。用于切模型时清理历史，避免新模型（尤其 deepseek）被旧 tool_calls 格式
+ * 带偏、输出 DSML 等非标准内容。纯函数，便于单测。
+ */
+export function flattenToolHistory(
+  messages: ChatCompletionMessageParam[]
+): ChatCompletionMessageParam[] {
+  const flattened: ChatCompletionMessageParam[] = [];
+  let i = 0;
+  while (i < messages.length) {
+    const m = messages[i] as any;
+    if (m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+      const calls: string[] = [];
+      for (const tc of m.tool_calls) {
+        const name = tc?.function?.name || "工具";
+        let argsPreview = "";
+        try {
+          const args = JSON.parse(tc?.function?.arguments || "{}");
+          argsPreview = JSON.stringify(args);
+          if (argsPreview.length > 200) argsPreview = argsPreview.slice(0, 200) + "…";
+        } catch {
+          argsPreview = String(tc?.function?.arguments || "").slice(0, 200);
+        }
+        calls.push(`${name}(${argsPreview})`);
+      }
+      const results: string[] = [];
+      let j = i + 1;
+      while (j < messages.length && (messages[j] as any).role === "tool") {
+        const c = (messages[j] as any).content;
+        if (typeof c === "string" && c.trim()) {
+          results.push(c.length > 300 ? c.slice(0, 300) + "…" : c);
+        }
+        j++;
+      }
+      let text = typeof m.content === "string" && m.content ? m.content + "\n\n" : "";
+      text += `[此前曾调用工具：${calls.join("；")}`;
+      if (results.length > 0) text += `，结果：${results.join("；")}`;
+      text += `]`;
+      flattened.push({ role: "assistant", content: text } as ChatCompletionMessageParam);
+      i = j;
+    } else if (m.role === "tool") {
+      i++; // 孤立 tool 消息防御性丢弃
+    } else {
+      flattened.push(m);
+      i++;
+    }
+  }
+  return flattened;
+}
+
 export function sanitizeToolPairing(
   messages: ChatCompletionMessageParam[]
 ): ChatCompletionMessageParam[] {

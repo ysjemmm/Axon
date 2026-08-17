@@ -419,7 +419,15 @@ export class SessionHub {
       case "confirm_tool":
         this.getActiveSession(this.resolveSessionId(cmd))?.resolveToolConfirmation(cmd.confirmed, (cmd as any).mode);
         return;
+      case "flatten_tool_history": {
+        const s = this.getActiveSession(this.resolveSessionId(cmd));
+        if (s) {
+          s.flattenToolHistory();
+          const sid = this.resolveSessionId(cmd);
+          if (sid) await this.storage.updateSession(sid, { messages: this.filterPersistable(s.getMessages()) });
+        }
         return;
+      }
       case "confirm_command":
         this.getActiveSession(this.resolveSessionId(cmd))?.resolveCommandApproval(cmd.requestId, { choice: cmd.choice, pattern: cmd.pattern, target: cmd.target, editedCommand: cmd.editedCommand });
         return;
@@ -760,9 +768,9 @@ export class SessionHub {
     }
   }
 
-  /** 过滤掉 _transient 消息（编辑工具失败等不落盘） */
+  /** 过滤掉不落盘的消息：_transient（编辑工具失败等）与 _ephemeralInjected（单轮临时注入：反思/复盘/强制收尾/预算提醒等） */
   private filterPersistable(messages: any[]): any[] {
-    return messages.filter((m: any) => !m._transient);
+    return messages.filter((m: any) => !m._transient && !m._ephemeralInjected);
   }
 
   /** 设置编辑模式 */

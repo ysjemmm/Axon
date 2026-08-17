@@ -72,6 +72,8 @@ export interface LLMTurnResult {
   normalizedFinishReason: NormalizedFinishReason;
   /** Responses API 专用：本次响应 id，用于下一轮 previous_response_id 续接 */
   responseId?: string;
+  /** 本回合是否检测到模型用 DSML 文本协议输出工具调用（deepseek-v4 在历史污染时的退化行为） */
+  dsmlDetected?: boolean;
   /** 模型 API 返回的真实 token 用量（流式末尾的 usage）；不可得时为 undefined */
   usage?: TokenUsage;
 }

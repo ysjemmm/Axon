@@ -28,6 +28,7 @@ import { SYSTEM_PROMPT, QUEST_SYSTEM_PROMPT } from "./systemPrompt.js";
 import { getStrategy, ZHIPU_PROVIDER, findProviderForModel, declaredThinkingFor, declaredCacheControlFor } from "./providers.js";
 import { DEFAULT_MODEL_ID } from "./providerCatalog.js";
 import { PromptBuilder, messageText } from "./session/promptBuilder.js";
+import { flattenToolHistory } from "./messageSanitizer.js";
 import {
   resolveToolDispatchRoute,
   CommandToolExecutor,
@@ -406,6 +407,21 @@ export class AgentSession {
     }
   }
 
+  /**
+   * 压平历史里的结构化工具调用：把 assistant.tool_calls + 后续 tool 结果，合并成一条
+   * 纯文本 assistant 消息（"此前调用了 X，结果…"）。
+   *
+   * 目的：deepseek-v4 这类模型对 OpenAI function calling 历史回放不稳定，若看到大量
+   * 结构化 tool_calls/tool 消息会被带偏、开始用 DSML 等非标准格式"自由发挥"（甚至脑补
+   * 出错误工具名）。压平后历史只保留纯文本对话，从干净上下文起步。
+   *
+   * 由用户主动触发（前端提示"压缩不兼容记忆"），不做自动压平——避免其它模型切换方向
+   * 白白丢失结构化信息。
+   */
+  /** @internal */ flattenToolHistory(): void {
+    this.messages = flattenToolHistory(this.messages);
+  }
+
   /** 序列化 pendingEdits 为可持久化数组 */
   serializePendingEdits(): SerializedPendingEdit[] {
     return this.host.edits.serialize().map((e: SerializedPendingEdit) => ({
@@ -720,6 +736,7 @@ export class AgentSession {
       setTimeout(() => {
         if (this.toolConfirmResolve === resolve) {
           this.toolConfirmResolve = null;
+          this.send("tool_confirm_timeout", { toolName });
           resolve(false);
         }
       }, 120_000);
@@ -1761,6 +1778,12 @@ export class AgentSession {
       // 回合产出由新链路统一驱动（LLMTurnSource → LLMHandler 归一化 + 实时流式），内部仍复用 strategy。
       const turn: LLMTurnResult = await this.runPipelineTurn(strategy, requestMessages, callbacks);
 
+      // deepseek 输出 DSML 退化：本轮检测到模型用文本协议输出工具调用（历史污染信号）。
+      // 不主动压平，只发事件让前端提示用户"压缩不兼容记忆"，由用户决定是否清理历史。
+      if (turn.dsmlDetected && /deepseek/i.test(this.model)) {
+        this.send("tool_history_mismatch", { model: this.model });
+      }
+
       let contentBuffer = turn.content;
       const toolCalls = turn.toolCalls;
       // 消费归一化后的产品语义结束原因（error/truncated/complete/tool_calls/cancelled）；
@@ -1884,7 +1907,7 @@ export class AgentSession {
           _ephemeralInjected: true,
         } as any);
         // 让模型基于这条引导生成一段总结性回复
-        await this.streamFinalSummary(turnStartTime);
+        await this.streamFinalSummary(turnStartTime, true);
         return;
       }
     }
@@ -1925,8 +1948,10 @@ export class AgentSession {
   /**
    * 流式生成一段总结性回复（不提供工具，强制模型用文字收尾）。
    * 用于连续失败保护被触发后，让模型向用户说明情况。
+   * @param ephemeral 为 true 时，这条总结回复标记为单轮临时消息（不落盘、不进入后续轮次上下文），
+   * 用于"投降式收尾"——那句"我卡住了/不能再调工具"的宣言对后续 AI 没有价值，反而会污染下一轮判断。
    */
-  private async streamFinalSummary(turnStartTime: number): Promise<void> {
+  private async streamFinalSummary(turnStartTime: number, ephemeral = false): Promise<void> {
     let contentBuffer = "";
     let started = false;
     try {
@@ -1969,7 +1994,11 @@ export class AgentSession {
       contentBuffer = fallback;
     }
 
-    this.messages.push({ role: "assistant", content: contentBuffer });
+    this.messages.push(
+      ephemeral
+        ? ({ role: "assistant", content: contentBuffer, _ephemeralInjected: true } as any)
+        : { role: "assistant", content: contentBuffer },
+    );
     this.persistMessages();
     this.updateAndSendTokenUsage();
     const summaryTokens = this.lastTurnTokens || contentBuffer.length;

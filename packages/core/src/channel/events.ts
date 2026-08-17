@@ -118,6 +118,11 @@ export type AgentEventPayload =
       /** 展示标签（MCP 为 "serverName · toolName"；relay 为工作流标题） */
       label?: string;
     }
+  | {
+      type: "tool_confirm_timeout";
+      /** 超时未应答而被自动关闭的确认门对应工具标识 */
+      toolName: string;
+    }
 
   // ── 编辑模式 / 待确认改动 ──
   | { type: "edit_mode_set"; mode: "auto" | "manual" }
@@ -169,7 +174,9 @@ export type AgentEventPayload =
 
   // ── 闪电回滚 ──
   | { type: "snapshots_listed"; snapshots: Array<{ id: string; createdAt: number; label: string; files: string[] }> }
-  | { type: "snapshot_restored"; snapshotId: string; ok: boolean };
+  | { type: "snapshot_restored"; snapshotId: string; ok: boolean }
+  // ── 模型历史格式不兼容（deepseek 输出 DSML 退化）──
+  | { type: "tool_history_mismatch"; model: string };
 
 /**
  * AgentEvent —— 出站事件（含多会话路由标签）。

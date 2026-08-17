@@ -10,6 +10,7 @@ import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { LLMStrategy, RunTurnParams, LLMTurnResult, NormalizedToolCall } from "./types.js";
 import { normalizeFinishReason } from "./finishReasonMapper.js";
 import { supportsThinking, supportsCacheControl } from "./thinkingSupport.js";
+import { parseDsmlToolCalls, looksLikeDsmlStart } from "./dsmlParser.js";
 
 export class ChatCompletionsStrategy implements LLMStrategy {
   readonly name = "chat_completions";
@@ -123,6 +124,10 @@ export class ChatCompletionsStrategy implements LLMStrategy {
     let usage: LLMTurnResult["usage"];
     // 按 index 累积工具调用（chat 协议下工具参数分多个 chunk 流式到达）
     const toolAcc: Array<{ id: string; name: string; arguments: string; announced: boolean }> = [];
+    // DSML 工具调用（deepseek 文本协议）：流式阶段检测到 DSML 块开头后，把后续文本
+    // 累积进 dsmlBuffer 而非作为正文发送，流结束后统一解析成工具调用。
+    let dsmlActive = false;
+    let dsmlBuffer = "";
 
     for await (const chunk of stream) {
       // usage chunk：通常是最后一个 chunk，choices 可能为空数组或 undefined
@@ -168,8 +173,21 @@ export class ChatCompletionsStrategy implements LLMStrategy {
 
       // 正文
       if (delta.content) {
-        content += delta.content;
-        callbacks.onTextDelta(delta.content);
+        if (dsmlActive) {
+          // 已在 DSML 工具调用块内：文本累积到 dsmlBuffer，不作为正文发送
+          dsmlBuffer += delta.content;
+        } else {
+          content += delta.content;
+          // deepseek 用 DSML 文本协议输出工具调用时，content 会以 "<|DSML|tool_calls>" 开头。
+          // 检测到即切换 DSML 模式，避免原始 token 泄漏给前端。
+          if (isDeepSeek && looksLikeDsmlStart(content.replace(/｜/g, "|").trimStart())) {
+            dsmlActive = true;
+            dsmlBuffer = content;
+            content = "";
+          } else {
+            callbacks.onTextDelta(delta.content);
+          }
+        }
       }
 
       // 工具调用累积
@@ -206,10 +224,34 @@ export class ChatCompletionsStrategy implements LLMStrategy {
       toolCalls.push({ id, name: t.name, arguments: t.arguments || "{}" });
     }
 
+    // DSML 工具调用兜底：deepseek 没有走标准 function calling、而是把工具调用以
+    // "<|DSML|tool_calls>" 文本吐进 content 时，标准 toolCalls 为空，需要从文本解析。
+    let dsmlDetected = false;
+    if (toolCalls.length === 0 && isDeepSeek) {
+      const source = dsmlActive ? dsmlBuffer : content;
+      const parsed = parseDsmlToolCalls(source);
+      if (parsed && parsed.calls.length > 0) {
+        dsmlDetected = true;
+        const base = Date.now();
+        for (let i = 0; i < parsed.calls.length; i++) {
+          toolCalls.push({
+            id: `call_${base}_${i}`,
+            name: parsed.calls[i].name,
+            arguments: parsed.calls[i].arguments,
+          });
+        }
+        content = parsed.cleanText;
+      } else if (dsmlActive) {
+        // 进入了 DSML 模式但解析失败：把 dsmlBuffer 回填为正文，至少不丢内容
+        dsmlDetected = true;
+        content = dsmlBuffer;
+      }
+    }
+
     // 归一化结束原因（并存字段）：有工具调用时优先按 tool_calls 语义，否则按原始 finishReason 归一化。
     const normalizedFinishReason = normalizeFinishReason(toolCalls.length > 0 ? "tool_calls" : finishReason);
 
-    return { content, toolCalls, finishReason, normalizedFinishReason, usage };
+    return { content, toolCalls, finishReason, normalizedFinishReason, dsmlDetected, usage };
   }
 }
 

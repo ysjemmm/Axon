@@ -258,6 +258,14 @@ export function handleConfirmToolRequest(msg: WsMessage, ctx: EventHandlerCtx): 
   ctx.setToolConfirm({ toolName, title, kind });
 }
 
+export function handleToolConfirmTimeout(_msg: WsMessage, ctx: EventHandlerCtx): void {
+  ctx.setToolConfirm(null);
+}
+
+export function handleToolHistoryMismatch(msg: WsMessage, ctx: EventHandlerCtx): void {
+  ctx.setToolHistoryMismatch({ model: (msg as any).model as string });
+}
+
 export function handleToolWaitingInput(msg: WsMessage, ctx: EventHandlerCtx): void {
   const toolCallId = (msg as any).toolCallId as string | undefined;
   if (toolCallId) {

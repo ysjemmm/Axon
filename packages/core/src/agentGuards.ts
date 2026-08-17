@@ -146,10 +146,10 @@ export interface AgentPolicy {
 export const DEFAULT_AGENT_POLICY: AgentPolicy = {
   maxSameCall: 3,
   maxFileReads: 3,
-  maxConsecutiveFailures: 3,
+  maxConsecutiveFailures: 6,
   maxIncompleteRetries: 3,
   maxRounds: 200,
-  maxTargetFailures: 3,
+  maxTargetFailures: 6,
   maxReflections: 1,
   maxSummaryRestarts: 1,
 };
@@ -188,10 +188,10 @@ export function isSoftToolFailure(toolName: string, result: string): boolean {
 /**
  * 子 agent 专用策略：在 policyForModel 基础上放宽容错。
  * 子 agent 看不到主对话上下文，路径/搜索词更易连续踩空，连续失败阈值收得太紧会被过早掐断，
- * 因此把连续失败上限放宽（4），其余沿用对应模型的策略。
+ * 因此把连续失败上限进一步放宽（8），其余沿用对应模型的策略。
  */
 export function policyForSubAgent(model: string): AgentPolicy {
-  return { ...policyForModel(model), maxConsecutiveFailures: 4 };
+  return { ...policyForModel(model), maxConsecutiveFailures: 8 };
 }
 
 /** 单次工具调用经过 guard 检查后的裁决 */

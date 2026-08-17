@@ -87,6 +87,7 @@ export const AGENT_EVENT = {
   WORKSPACE_ERROR: "workspace_error",
   // ── 确认门 ──
   CONFIRM_TOOL_REQUEST: "confirm_tool_request",
+  TOOL_CONFIRM_TIMEOUT: "tool_confirm_timeout",
   CONFIRM_COMMAND_REQUEST: "confirm_command_request",
   COMMAND_BLOCKED: "command_blocked",
   // ── Relay ──
@@ -104,6 +105,8 @@ export const AGENT_EVENT = {
   PARALLEL_RESEARCH_END: "parallel_research_end",
   // ── 错误 ──
   ERROR: "error",
+  // ── 模型历史格式不兼容 ──
+  TOOL_HISTORY_MISMATCH: "tool_history_mismatch",
 } as const;
 
 // ═══════════════════════════════════════════════════════════════════
@@ -116,6 +119,7 @@ export const CONTROL_CMD = {
   USER_MESSAGE: "user_message",
   ADD_CONTEXT: "add_context",
   NAVIGATE_PARALLEL: "navigate_parallel",
+  FLATTEN_TOOL_HISTORY: "flatten_tool_history",
 } as const;
 
 // ═══════════════════════════════════════════════════════════════════

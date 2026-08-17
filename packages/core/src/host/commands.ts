@@ -52,4 +52,11 @@ export interface HostCommandRunner {
    * 仅在无法启动进程等基础设施级故障时才抛错。
    */
   exec(command: string, opts: ExecOptions): Promise<ExecResult>;
+  /**
+   * 派生一个独立的命令执行器。
+   * 子 Agent 不应与父 Agent 共用同一终端——否则多路并行子 Agent 的命令会挤进同一个终端
+   * 串行排队、互相干扰。实现应返回一个绑定独立终端/独立队列的新实例（无终端概念的形态
+   * 返回新实例即可，语义上仍与父隔离）。
+   */
+  fork(): HostCommandRunner;
 }

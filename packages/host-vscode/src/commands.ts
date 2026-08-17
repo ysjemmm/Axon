@@ -22,6 +22,11 @@ export class VSCodeCommandRunner implements HostCommandRunner {
   // 同一 session 内的所有 turn 复用同一个终端，不同 session 各自独立互不干扰。
   private terminalKey = `axon-${++cmdSeq}-${Date.now().toString(36)}`;
 
+  /** 派生独立实例：子 Agent 各占一个终端，不与父 Agent 的终端串行排队。 */
+  fork(): HostCommandRunner {
+    return new VSCodeCommandRunner();
+  }
+
   async exec(command: string, opts: ExecOptions): Promise<ExecResult> {
     // 队列占用门：正常结束时立即释放；超时（命令仍在终端运行）时保持占用，
     // 直到该命令真正结束——否则下一条命令发到同一终端会与还在跑的命令冲突。

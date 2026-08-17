@@ -1283,7 +1283,19 @@ export function SearchGroupItem({ group }: { group: SearchGroupData }) {
     if (typeof item === "string") return item;
     return exploreDisplayText(item.name, item.args, item.label);
   });
-  const isMulti = labels.length > 1;
+  // 相邻相同文案聚合：多个工作区搜索同一意图时，intent 相同、path 不同但 path 不展示，
+  // 直接平铺会变成 N 行一模一样的句子（观感像重复）。折叠成「文案 + 出现次数」。
+  const aggregated: { label: string; count: number }[] = [];
+  for (const label of labels) {
+    const last = aggregated[aggregated.length - 1];
+    if (last && last.label === label) {
+      last.count += 1;
+    } else {
+      aggregated.push({ label, count: 1 });
+    }
+  }
+  const fmt = (label: string, count: number) => (count > 1 ? `${label}（共 ${count} 处）` : label);
+  const isMulti = aggregated.length > 1;
   return (
     <div className="my-2 rounded-lg border border-border bg-popover overflow-hidden">
       {/* 第一层：图标 + 标题（前景色叠加 + 底分隔线，跨主题与下层分明） */}
@@ -1297,15 +1309,15 @@ export function SearchGroupItem({ group }: { group: SearchGroupData }) {
       <div className="px-3 py-1.5">
         {isMulti ? (
           <ul className="space-y-1">
-            {labels.map((q, i) => (
+            {aggregated.map((item, i) => (
               <li key={i} className="flex items-start gap-2 text-xs font-mono text-foreground/80">
                 <span className="text-muted-foreground/60 select-none">·</span>
-                <span className="break-all">{q}</span>
+                <span className="break-all">{fmt(item.label, item.count)}</span>
               </li>
             ))}
           </ul>
         ) : (
-          <code className="text-xs font-mono text-foreground/80 break-all">{labels[0]}</code>
+          <code className="text-xs font-mono text-foreground/80 break-all">{fmt(aggregated[0]?.label ?? "", aggregated[0]?.count ?? 1)}</code>
         )}
       </div>
     </div>

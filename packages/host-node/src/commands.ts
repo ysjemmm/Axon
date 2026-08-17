@@ -13,6 +13,11 @@ import { exec } from "node:child_process";
 import type { HostCommandRunner, ExecOptions, ExecResult } from "@axon/core";
 
 export class NodeCommandRunner implements HostCommandRunner {
+  /** 派生独立实例：Node 形态无持久终端，但语义上仍与父隔离，保持与 VSCode 形态一致。 */
+  fork(): HostCommandRunner {
+    return new NodeCommandRunner();
+  }
+
   exec(command: string, opts: ExecOptions): Promise<ExecResult> {
     // PowerShell UTF-8 包装：三处编码统一为 UTF-8，避免 GBK/UTF-8 混读导致中文乱码
     // 同时禁用 git pager：git diff/log 等在终端里会进 less 分页器阻塞等待交互

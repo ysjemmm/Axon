@@ -158,6 +158,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const [commandApprovals, setCommandApprovals] = useState<Record<string, CommandApproval>>({});
   const [commandBlocked, setCommandBlocked] = useState<{ requestId?: string; command: string; reason: string; dangerous?: boolean } | null>(null);
   const [contextOverflow, setContextOverflow] = useState(false);
+  const [toolHistoryMismatch, setToolHistoryMismatch] = useState<{ model: string } | null>(null);
   const [messageQueue, setMessageQueue] = useState<Array<{ id: string; payload: SubmitPayload }>>([]);
 
   // ── refs ───────────────────────────────────────────────────────────
@@ -214,7 +215,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     setCreditBudgetPaused,
     setPendingPaths, setPendingDiffs, setPendingExpanded, setUndoNotice,
     setToolConfirm, setWaitingInputIds, setCommandApprovals, setCommandBlocked,
-    setContextOverflow,
+    setContextOverflow, setToolHistoryMismatch,
     cancelled, cancelledTurnMsgId, turnGeneration,
     modelRef, statusPhaseRef, toolResultResetTimer,
     compactionMigratedRef, onSessionCreatedRef, onCompactionMigratedRef,
@@ -577,6 +578,9 @@ export function useChatSession(opts: UseChatSessionOptions) {
     waitingInputIds,
     commandApprovals, commandBlocked,
     contextOverflow, dismissContextOverflow, forceCompact,
+    toolHistoryMismatch,
+    flattenToolHistory: () => { setToolHistoryMismatch(null); send({ type: CONTROL_CMD.FLATTEN_TOOL_HISTORY }); },
+    dismissToolHistoryMismatch: () => setToolHistoryMismatch(null),
     editMode, workspace, workspaces, workspacesLoaded, currentGroupId, hasRelay, model, provider: providerState,
     // 撤销轻提示
     undoNotice, setUndoNotice,

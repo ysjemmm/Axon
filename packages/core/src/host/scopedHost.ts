@@ -40,7 +40,7 @@ export function createScopedHost(
   const scopedEdits = new ScopedEditPresenter(parent.edits.fork("auto"), fileScope, cwd, snapshotStore);
   return {
     fs: parent.fs,
-    commands: parent.commands,
+    commands: parent.commands.fork(),
     diagnostics: parent.diagnostics,
     browser: parent.browser,
     edits: scopedEdits,

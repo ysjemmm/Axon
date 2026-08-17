@@ -1122,6 +1122,33 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               </button>
             </div>
           )}
+          {/* 模型历史格式不兼容提示：deepseek 输出 DSML 退化时出现，用户主动整理不兼容记忆 */}
+          {session.toolHistoryMismatch && (
+            <div className="flex items-start gap-2 px-3 py-2 bg-amber-50 dark:bg-amber-950/20 border border-amber-300/50 rounded-lg mb-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium text-foreground">检测到模型工具调用格式不兼容</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  当前模型输出了非标准格式，可能是历史记忆里残留了其它模型的工具调用痕迹。建议整理一下记忆（把早期工具调用转换成纯文本），让模型恢复稳定。
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  onClick={() => session.flattenToolHistory()}
+                  className="px-2.5 py-1 rounded text-xs font-medium bg-amber-500/80 text-white hover:bg-amber-500 transition-colors"
+                >
+                  整理记忆
+                </button>
+                <button
+                  onClick={() => session.dismissToolHistoryMismatch()}
+                  className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+                  title="关闭"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
           {/* 撤销失败轻提示（保守策略：文件未被改动）。3 秒后自动消失 */}
           {session.undoNotice && (
             <div className="flex items-start gap-2 px-3 py-2 bg-amber-50 dark:bg-amber-950/20 border border-amber-300/50 rounded-lg mb-2">

@@ -19,8 +19,8 @@ import {
   handleStatus, handleRetry, handleContextOverflow, handleTokenUsage, handleReasoningDelta,
   handleEditsUpdated, handleEditUndoResult,
   handleWorkspaceSet, handleEditModeSet, handleWorkspaceError,
-  handleConfirmToolRequest, handleToolWaitingInput,
-  handleConfirmCommandRequest, handleCommandBlocked,
+  handleConfirmToolRequest, handleToolConfirmTimeout, handleToolWaitingInput,
+  handleConfirmCommandRequest, handleCommandBlocked, handleToolHistoryMismatch,
   handleFocusRelay, handleRelayUpdated, handleRelayDeleted,
   clearWaitingInput,
 } from "./stateHandlers";
@@ -131,11 +131,17 @@ export function createEventHandler(ctx: EventHandlerCtx): (msg: WsMessage) => vo
       case AGENT_EVENT.CONFIRM_TOOL_REQUEST:
         handleConfirmToolRequest(msg, ctx);
         return;
+      case AGENT_EVENT.TOOL_CONFIRM_TIMEOUT:
+        handleToolConfirmTimeout(msg, ctx);
+        return;
       case AGENT_EVENT.CONFIRM_COMMAND_REQUEST:
         handleConfirmCommandRequest(msg, ctx);
         return;
       case AGENT_EVENT.COMMAND_BLOCKED:
         handleCommandBlocked(msg, ctx);
+        return;
+      case AGENT_EVENT.TOOL_HISTORY_MISMATCH:
+        handleToolHistoryMismatch(msg, ctx);
         return;
 
       // ── Relay ──
