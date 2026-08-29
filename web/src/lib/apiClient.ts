@@ -489,6 +489,7 @@ export interface ResolvedProviderInfo {
   baseUrl: string;
   protocol: ProviderProtocol;
   models: ProviderModelInfo[];
+  quota?: ProviderQuotaConfig;
   builtin: boolean;
   locked: boolean;
   configured: boolean;
@@ -517,10 +518,51 @@ export interface RawProviderEntry {
   label?: string;
   baseUrl?: string;
   apiKey?: string;
+  quota?: ProviderQuotaConfig;
   /** 认证头格式：bearer（默认）= Authorization: Bearer / x-api-key（Anthropic 等） */
   apiKeyHeader?: string;
   protocol?: ProviderProtocol;
   models?: ProviderModelInfo[];
+}
+
+export interface ProviderQuotaConfig {
+  enabled?: boolean;
+  url: string;
+  method?: "GET" | "POST";
+  headers?: Record<string, string>;
+  query?: Record<string, string>;
+  body?: unknown;
+  auth?: {
+    header?: string;
+    prefix?: string;
+    cookieHeader?: string;
+    refreshBeforeSeconds?: number;
+    refresh?: {
+      url: string;
+      method?: "GET" | "POST";
+      headers?: Record<string, string>;
+      query?: Record<string, string>;
+      body?: unknown;
+      accessTokenPath: string;
+      refreshTokenPath?: string;
+      expiresInPath?: string;
+      expiresAtPath?: string;
+    };
+  };
+  fields: { balance?: string; used?: string; total?: string; unit?: string; expiresAt?: string; resetAt?: string };
+  scale?: number;
+  unit?: string;
+}
+
+export interface ProviderQuotaResult {
+  balance?: number;
+  used?: number;
+  total?: number;
+  unit?: string;
+  expiresAt?: string;
+  resetAt?: number;
+  updatedAt: number;
+  responsePreview: string;
 }
 
 /** providers.json 文件结构 */
@@ -529,6 +571,7 @@ export interface ProviderConfigFile {
   builtinApiKeys?: Record<string, string>;
   /** 覆盖内置 provider 的 baseUrl */
   builtinBaseUrls?: Record<string, string>;
+  builtinQuota?: Record<string, ProviderQuotaConfig>;
   /** 识图兜底模型 id（全局一个；主模型不支持图片时用该模型识图转文字） */
   visionFallbackModel?: string;
 }
@@ -600,6 +643,26 @@ export function openProviderConfigInEditor(level: ProviderLevel, workspace?: str
 /** 覆盖某自定义 provider 的模型数组（增/删/改/禁用统一整存） */
 export function setCustomProviderModels(level: ProviderLevel, name: string, models: ProviderModelInfo[], workspace?: string): Promise<{ ok: boolean }> {
   return put(`/api/providers/${level}/custom/${encodeURIComponent(name)}/models${providerQuery(workspace)}`, { models });
+}
+
+/** 保存或清除指定 Provider 的额度查询规则。 */
+export function setProviderQuota(level: ProviderLevel, name: string, quota: ProviderQuotaConfig | null, workspace?: string): Promise<{ ok: boolean }> {
+  return put(`/api/providers/${level}/${encodeURIComponent(name)}/quota${providerQuery(workspace)}`, { quota });
+}
+
+/** 在扩展进程中测试额度规则，响应预览已脱敏并截断。 */
+export function testProviderQuota(name: string, quota: ProviderQuotaConfig, workspace?: string): Promise<ProviderQuotaResult> {
+  return post(`/api/providers/${encodeURIComponent(name)}/quota/test${providerQuery(workspace)}`, { quota });
+}
+
+/** 保存额度访问令牌与刷新令牌到 VS Code 安全存储；空字符串表示保留原值。 */
+export function setProviderQuotaTokens(name: string, tokens: { accessToken?: string; refreshToken?: string; cookie?: string }, workspace?: string): Promise<{ ok: boolean }> {
+  return put(`/api/providers/${encodeURIComponent(name)}/quota/tokens${providerQuery(workspace)}`, tokens);
+}
+
+/** 读取额度凭证是否已安全保存；不返回任何凭证内容。 */
+export function getProviderQuotaTokenStatus(name: string, workspace?: string): Promise<{ hasAccessToken: boolean; hasRefreshToken: boolean; hasCookie: boolean }> {
+  return get(`/api/providers/${encodeURIComponent(name)}/quota/tokens${providerQuery(workspace)}`);
 }
 
 /** 端点探测到的模型（窗口/多模态可能为空，取决于 provider 是否返回） */

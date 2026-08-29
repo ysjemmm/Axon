@@ -97,7 +97,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
       ? getModels().find((m) => m.id === newModel && m.provider === providerName)
       : findModel(newModel);
     if (targetModel) setTokenUsage((prev) => ({ ...prev, max: targetModel.contextWindow > 0 ? targetModel.contextWindow : prev.max }));
-  }, []);
+    baseSend({ type: CONTROL_CMD.SET_ACTIVE_PROVIDER, provider: providerName, clientId });
+  }, [baseSend, clientId]);
   const [workspace, setWorkspace] = useState<string>("");
   const [workspaces, setWorkspacesState] = useState<string[]>([]);
   const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
@@ -165,6 +166,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const cancelled = useRef(false);
   const cancelledTurnMsgId = useRef<string | null>(null);
   const turnStartTime = useRef<number>(0);
+  /** 当前任务开始时间：state 用于让首个“思考中...”占位头部立刻重渲染并开始计时 */
+  const [turnStartedAt, setTurnStartedAt] = useState(0);
   const turnGeneration = useRef(0);
   const modelRef = useRef(model); modelRef.current = model;
   const statusPhaseRef = useRef(statusPhase); statusPhaseRef.current = statusPhase;
@@ -195,6 +198,12 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const send = useCallback((cmd: Record<string, unknown>) => {
     baseSend({ ...cmd, clientId });
   }, [baseSend, clientId]);
+
+  // 面板首次连接或恢复时也同步当前选择，避免状态栏继续停留在上一个 Provider。
+  useEffect(() => {
+    if (!connected) return;
+    send({ type: CONTROL_CMD.SET_ACTIVE_PROVIDER, provider: providerState });
+  }, [connected, providerState, send]);
 
   useEffect(() => {
     const currentModel = models.find((m) => m.id === model);
@@ -359,7 +368,9 @@ export function useChatSession(opts: UseChatSessionOptions) {
     setReasoning(""); // 新一轮开始：清空上一轮残留的思考过程
     setStatusText("思考中...");
     setStatusPhase("thinking");
-    turnStartTime.current = Date.now();
+    const startedAt = Date.now();
+    turnStartTime.current = startedAt;
+    setTurnStartedAt(startedAt);
   }, [send, providerState]);
 
   const submit = useCallback((payload: SubmitPayload): boolean => {
@@ -571,6 +582,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     // 状态
     chatHistory, isLoading, isLoadingSession,
     tokenUsage, reasoning, statusText,
+    turnStartTime: turnStartedAt,
     isCompacting, compactingMessage, compactSession, compactionNeeded, compactionMigrated, chooseCompaction, navigateToMigratedSession,
     creditBudgetPaused, chooseCreditBudget,
     pendingPaths, pendingDiffs, pendingExpanded, setPendingExpanded,

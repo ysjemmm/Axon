@@ -10,7 +10,7 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
-import { Loader2, Cloud, Plus, Trash2, Save, KeyRound, ChevronRight, Pencil, Ban, RotateCcw, Download, Globe, ArrowUpToLine, ArrowDownToLine, Eye } from "lucide-react";
+import { Loader2, Cloud, Plus, Trash2, Save, KeyRound, ChevronRight, Pencil, Ban, RotateCcw, Download, Globe, ArrowUpToLine, ArrowDownToLine, Eye, WalletCards, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { VisionFallbackSelector } from "@/components/ModelSelector";
@@ -32,6 +32,12 @@ import {
   type ResolvedProviderInfo,
   type ProviderModelInfo,
   type ProbedModelInfo,
+  type ProviderQuotaConfig,
+  type ProviderQuotaResult,
+  setProviderQuota,
+  testProviderQuota,
+  setProviderQuotaTokens,
+  getProviderQuotaTokenStatus,
 } from "@/lib/apiClient";
 
 function isInVSCode(): boolean {
@@ -263,6 +269,7 @@ function BuiltinCard({ provider, level, workspace, onChanged }: { provider: Reso
               }
             }}
           />
+          <QuotaConfigPanel provider={provider} level={level} workspace={workspace} onChanged={onChanged} />
         </div>
       )}
     </div>
@@ -431,6 +438,183 @@ function CustomCard({ provider, level, workspace, onChanged }: { provider: Resol
           )}
           {!editing && errorMessage && <div className="mb-3 text-xs text-red-600 dark:text-red-400">{errorMessage}</div>}
           <ModelManager models={provider.models} editable onSave={saveModels} providerName={provider.name} level={level} workspace={workspace} />
+          <QuotaConfigPanel provider={provider} level={level} workspace={workspace} onChanged={onChanged} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+const quotaTemplate = (provider: ResolvedProviderInfo): ProviderQuotaConfig => ({
+  enabled: true,
+  url: "{{origin}}/user/api/usage",
+  method: "GET",
+  headers: { authorization: "Bearer {{apiKey}}", accept: "application/json" },
+  fields: { used: "$.totalCredits", total: "$.creditLimit" },
+});
+
+const subscriptionQuotaTemplate: ProviderQuotaConfig = {
+  enabled: true,
+  url: "{{origin}}/api/subscription",
+  method: "GET",
+  headers: { accept: "application/json" },
+  auth: { header: "authorization", prefix: "Bearer " },
+  fields: {
+    used: "$.data.subscriptions[0].subscription.amount_used",
+    total: "$.data.subscriptions[0].subscription.amount_total",
+    resetAt: "$.data.subscriptions[0].subscription.next_reset_time",
+  },
+  scale: 500000,
+  unit: "$",
+};
+
+/** 声明式额度规则编辑器：请求只由扩展宿主发起，网页从不接触 API Key。 */
+function QuotaConfigPanel({ provider, level, workspace, onChanged }: {
+  provider: ResolvedProviderInfo;
+  level: ProviderLevel;
+  workspace?: string;
+  onChanged: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState(() => JSON.stringify(provider.quota || quotaTemplate(provider), null, 2));
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<ProviderQuotaResult | null>(null);
+  const [accessToken, setAccessToken] = useState("");
+  const [refreshToken, setRefreshToken] = useState("");
+  const [cookie, setCookie] = useState("");
+  const [savingTokens, setSavingTokens] = useState(false);
+  const [credentialSaved, setCredentialSaved] = useState("");
+  const [credentialStatus, setCredentialStatus] = useState<{ hasAccessToken: boolean; hasRefreshToken: boolean; hasCookie: boolean } | null>(null);
+
+  const quotaAuth = (() => {
+    try {
+      const config = JSON.parse(text) as ProviderQuotaConfig;
+      return config.auth;
+    } catch { return undefined; }
+  })();
+
+  useEffect(() => {
+    if (!open || !quotaAuth?.cookieHeader) return;
+    void getProviderQuotaTokenStatus(provider.name, workspace)
+      .then(setCredentialStatus)
+      .catch(() => setCredentialStatus(null));
+  }, [open, provider.name, workspace, quotaAuth?.cookieHeader]);
+
+  const parse = (): ProviderQuotaConfig | null => {
+    try {
+      const value = JSON.parse(text) as ProviderQuotaConfig;
+      if (!value || typeof value !== "object") throw new Error("配置必须是 JSON 对象");
+      return value;
+    } catch (e) {
+      setError(`JSON 格式无效：${(e as Error).message}`);
+      return null;
+    }
+  };
+
+  const save = async () => {
+    const quota = parse();
+    if (!quota) return;
+    setSaving(true);
+    setError("");
+    try {
+      await setProviderQuota(level, provider.name, quota, workspace);
+      onChanged();
+    } catch (e) { setError(`保存失败：${(e as Error).message}`); }
+    setSaving(false);
+  };
+
+  const test = async () => {
+    const quota = parse();
+    if (!quota) return;
+    setTesting(true);
+    setError("");
+    setResult(null);
+    try { setResult(await testProviderQuota(provider.name, quota, workspace)); }
+    catch (e) { setError(`查询失败：${(e as Error).message}`); }
+    setTesting(false);
+  };
+
+  const saveTokens = async () => {
+    if (!accessToken.trim() && !refreshToken.trim() && !cookie.trim()) return;
+    setSavingTokens(true);
+    setError("");
+    setCredentialSaved("");
+    try {
+      await setProviderQuotaTokens(provider.name, {
+        accessToken: accessToken.trim() || undefined,
+        refreshToken: refreshToken.trim() || undefined,
+        cookie: cookie.trim() || undefined,
+      }, workspace);
+      setAccessToken("");
+      setRefreshToken("");
+      setCookie("");
+      setCredentialSaved("凭证已安全保存");
+      setCredentialStatus(await getProviderQuotaTokenStatus(provider.name, workspace));
+    } catch (e) { setError(`保存令牌失败：${(e as Error).message}`); }
+    setSavingTokens(false);
+  };
+
+  const enableCookieAuth = () => {
+    const quota = parse();
+    if (!quota) return;
+    setText(JSON.stringify({
+      ...quota,
+      auth: { ...quota.auth, cookieHeader: quota.auth?.cookieHeader || "cookie" },
+    }, null, 2));
+    setError("");
+  };
+
+  return (
+    <div className="mt-3 pt-2 border-t border-border/60">
+      <button onClick={() => setOpen((value) => !value)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+        <WalletCards className="w-3.5 h-3.5" />额度查询 {provider.quota?.enabled ? "已启用" : "配置"}
+        <ChevronRight className={`w-3 h-3 transition-transform ${open ? "rotate-90" : ""}`} />
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2">
+          <div className="rounded-md border border-border/70 bg-muted/30 px-2 py-1.5 text-[11px] text-muted-foreground space-y-1">
+            <p>支持 <code>{"{{origin}}"}</code>、<code>{"{{baseUrl}}"}</code>、<code>{"{{apiKey}}"}</code>；响应字段只支持 <code>$.data.balance</code> 这类路径。<code>scale</code> 可将余额、已用和总额统一除以换算系数；<code>resetAt</code> 支持 Unix 秒或毫秒时间戳。密钥仅在本地扩展进程中替换。</p>
+            <p><strong className="text-foreground">使用同一把 API Key：</strong>请求头填 <code>authorization: Bearer {"{{apiKey}}"}</code>，不需要下面的额度 Token。</p>
+            <p><strong className="text-foreground">使用独立额度 Token：</strong>在规则填写 <code>auth.header</code>（例如 <code>authorization</code>）与 <code>auth.prefix</code>（例如 <code>Bearer </code>）后，下面会出现“额度 Bearer Token”输入框；它安全保存，不会写进规则 JSON。</p>
+            <p><strong className="text-foreground">Cookie 查询：</strong>规则填 <code>auth.cookieHeader: "cookie"</code> 后，会显示独立 Cookie 输入框；可单独使用，也可与 Bearer Token 组合。</p>
+            <p><strong className="text-foreground">自动刷新：</strong>仅配置 <code>auth.refresh</code> 时才需要额外填写 refresh token。</p>
+          </div>
+          {!quotaAuth?.cookieHeader && <Button size="sm" variant="outline" onClick={enableCookieAuth}>
+            <KeyRound className="w-3.5 h-3.5 mr-1" />使用 Cookie 凭证
+          </Button>}
+          {(quotaAuth?.header || quotaAuth?.cookieHeader) && <div className="space-y-2">
+            {quotaAuth.header && <div className="space-y-1">
+              <label className="text-xs font-medium">额度 Bearer Token</label>
+              <Input type="password" placeholder="粘贴独立额度 Token；留空保持不变" value={accessToken} onChange={(event) => setAccessToken(event.target.value)} className="h-8 text-xs" />
+            </div>}
+            {quotaAuth.cookieHeader && <div className="space-y-1">
+              <label className="text-xs font-medium">额度 Cookie</label>
+              <Input type="password" placeholder="粘贴完整 Cookie，例如 session=...; token=...；留空保持不变" value={cookie} onChange={(event) => setCookie(event.target.value)} className="h-8 text-xs" />
+              <span className={`text-[11px] ${credentialStatus?.hasCookie ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
+                {credentialStatus?.hasCookie ? "Cookie 已安全保存" : "Cookie 尚未保存"}
+              </span>
+            </div>}
+            {quotaAuth.refresh && <div className="space-y-1">
+              <label className="text-xs font-medium">刷新令牌</label>
+              <Input type="password" placeholder="粘贴 refresh token；留空保持不变" value={refreshToken} onChange={(event) => setRefreshToken(event.target.value)} className="h-8 text-xs" />
+            </div>}
+            <Button size="sm" variant="outline" onClick={saveTokens} disabled={savingTokens || (!accessToken.trim() && !refreshToken.trim() && !cookie.trim())}>
+              {savingTokens ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <KeyRound className="w-3.5 h-3.5 mr-1" />}{quotaAuth.cookieHeader && !quotaAuth.header && !quotaAuth.refresh ? "保存 Cookie" : "保存凭证"}
+            </Button>
+            {credentialSaved && <p className="text-[11px] text-green-600 dark:text-green-400">{credentialSaved}</p>}
+          </div>}
+          <textarea value={text} onChange={(event) => setText(event.target.value)} spellCheck={false} className="w-full min-h-44 rounded-md border border-input bg-background px-2 py-1.5 font-mono text-[11px] leading-5" />
+          <div className="flex gap-2">
+            <Button size="sm" onClick={save} disabled={saving}>{saving ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Save className="w-3.5 h-3.5 mr-1" />}保存规则</Button>
+            <Button size="sm" variant="outline" onClick={test} disabled={testing || (!provider.configured && !quotaAuth?.header)}>{testing ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Play className="w-3.5 h-3.5 mr-1" />}测试查询</Button>
+            <Button size="sm" variant="ghost" onClick={() => { setText(JSON.stringify(quotaTemplate(provider), null, 2)); setResult(null); setError(""); }}>恢复模板</Button>
+            <Button size="sm" variant="ghost" onClick={() => { setText(JSON.stringify(subscriptionQuotaTemplate, null, 2)); setResult(null); setError(""); }}>订阅额度模板</Button>
+          </div>
+          {!provider.configured && !quotaAuth?.header && <p className="text-[11px] text-amber-600 dark:text-amber-400">需先保存 Provider API Key 才能测试查询。</p>}
+          {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
+          {result && <div className="rounded-md bg-muted/50 px-2 py-1.5 text-[11px] space-y-1"><p>查询结果：{result.balance !== undefined ? `余额 ${result.balance}` : ""}{result.used !== undefined ? ` 已用 ${result.used}` : ""}{result.total !== undefined ? ` / ${result.total}` : ""}{result.unit ? ` ${result.unit}` : ""}{result.resetAt ? ` · 下次重置 ${new Date(result.resetAt).toLocaleString()}` : ""}</p><details><summary className="cursor-pointer text-muted-foreground">查看脱敏响应预览</summary><pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap">{result.responsePreview}</pre></details></div>}
         </div>
       )}
     </div>

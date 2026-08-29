@@ -1,9 +1,50 @@
-import { memo, useMemo, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Code } from "lucide-react";
 import { AxonSpark } from "@/components/AxonSpark";
 import type { ChatMessage, TextSegment } from "./types";
 import { formatElapsed } from "./format";
 import { renderSegments } from "./renderSegments";
+
+/**
+ * 运行中计时格式：随耗时递进切换单位，避免长任务显示一串难读的纯秒数。
+ * < 1 秒：毫秒；< 1 分钟：秒；< 1 小时：分+秒；< 1 天：时+分+秒；
+ * < 1 月（按 30 天）：日+时+分；更久：月+日+时。
+ */
+function formatLiveElapsed(ms: number): string {
+  if (ms < 1_000) return `${ms}ms`;
+  const totalSeconds = Math.floor(ms / 1_000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const seconds = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes}m ${seconds}s`;
+  const minutes = totalMinutes % 60;
+  const totalHours = Math.floor(totalMinutes / 60);
+  if (totalHours < 24) return `${totalHours}h ${minutes}m ${seconds}s`;
+  const hours = totalHours % 24;
+  const totalDays = Math.floor(totalHours / 24);
+  if (totalDays < 30) return `${totalDays}d ${hours}h ${minutes}m`;
+  const days = totalDays % 30;
+  const months = Math.floor(totalDays / 30);
+  return `${months}mo ${days}d ${hours}h`;
+}
+
+/** AI 运行计时：每 100ms 刷新，和左侧 AxonSpark 同步带轻微呼吸动画。 */
+function LiveElapsedTimer({ startedAt }: { startedAt: number }) {
+  const [elapsed, setElapsed] = useState(() => Math.max(0, Date.now() - startedAt));
+
+  useEffect(() => {
+    const tick = () => setElapsed(Math.max(0, Date.now() - startedAt));
+    tick();
+    const timer = window.setInterval(tick, 100);
+    return () => window.clearInterval(timer);
+  }, [startedAt]);
+
+  return (
+    <span className="ml-1 text-[10px] tabular-nums text-muted-foreground/55 animate-pulse" title="本次任务已运行时长">
+      {formatLiveElapsed(elapsed)}
+    </span>
+  );
+}
 
 /**
  * AI 回复的头部：品牌图标 + 名称 +（本轮进行中时）实时状态文字。
@@ -15,10 +56,13 @@ import { renderSegments } from "./renderSegments";
 export function AssistantTurnHeader({
   streaming,
   liveStatus,
+  startedAt,
   children,
 }: {
   streaming?: boolean;
   liveStatus?: string;
+  /** 本次任务的本地起始时间戳；仅 streaming 时显示实时计时 */
+  startedAt?: number;
   children?: ReactNode;
 }) {
   return (
@@ -39,6 +83,7 @@ export function AssistantTurnHeader({
           {liveStatus}
         </span>
       )}
+      {streaming && startedAt > 0 && <LiveElapsedTimer startedAt={startedAt} />}
       {children}
     </div>
   );
@@ -47,6 +92,7 @@ export function AssistantTurnHeader({
 function AssistantTurnImpl({
   message,
   liveStatus,
+  startedAt,
   onAcceptEdit,
   onRejectEdit,
   onUndoEdit,
@@ -54,6 +100,8 @@ function AssistantTurnImpl({
   message: ChatMessage;
   /** 本轮进行中的状态文字；仅最后一条 assistant 消息在流式期间会收到 */
   liveStatus?: string;
+  /** 本次任务起点；仅当前流式回复传入 */
+  startedAt?: number;
   onAcceptEdit?: (path: string) => void;
   onRejectEdit?: (path: string) => void;
   onUndoEdit?: (path: string) => void;
@@ -80,7 +128,7 @@ function AssistantTurnImpl({
 
   return (
     <div className="flex flex-col">
-      <AssistantTurnHeader streaming={message.streaming} liveStatus={liveStatus}>
+      <AssistantTurnHeader streaming={message.streaming} liveStatus={liveStatus} startedAt={startedAt}>
         {!message.streaming && rawContent && (
           <button
             onClick={() => setShowRaw(!showRaw)}

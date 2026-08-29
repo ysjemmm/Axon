@@ -63,7 +63,7 @@ export class ProviderRegistry {
 
     // 1) 内置目录（apiKey 由 builtinApiKeys 覆盖，baseUrl 由 builtinBaseUrls 覆盖，models 由 builtinModels 覆盖）
     for (const def of BUILTIN_PROVIDERS) {
-      byName.set(def.name, this.fromBuiltin(def, file.builtinApiKeys?.[def.name], file.builtinBaseUrls?.[def.name], file.builtinModels?.[def.name]));
+      byName.set(def.name, this.fromBuiltin(def, file.builtinApiKeys?.[def.name], file.builtinBaseUrls?.[def.name], file.builtinModels?.[def.name], file.builtinQuota?.[def.name]));
     }
 
     // 2) 自定义 provider（保留名不可占用）
@@ -84,7 +84,7 @@ export class ProviderRegistry {
 
   /** 合并读取用户级 + 各工作区级 providers.json，同时追踪每个自定义 provider 的来源层级 */
   private async readMergedConfig(): Promise<ProviderConfigFile & { _providerLevels?: Record<string, "user" | "workspace"> }> {
-    const merged: ProviderConfigFile = { providers: {}, builtinApiKeys: {}, builtinBaseUrls: {}, builtinModels: {} };
+    const merged: ProviderConfigFile = { providers: {}, builtinApiKeys: {}, builtinBaseUrls: {}, builtinModels: {}, builtinQuota: {} };
     const levels: Record<string, "user" | "workspace"> = {};
 
     const userCfg = await this.readFile(userProviderConfigPath(this.homeDir));
@@ -92,6 +92,7 @@ export class ProviderRegistry {
     Object.assign(merged.builtinApiKeys!, userCfg.builtinApiKeys || {});
     Object.assign(merged.builtinBaseUrls!, userCfg.builtinBaseUrls || {});
     Object.assign(merged.builtinModels!, userCfg.builtinModels || {});
+    Object.assign(merged.builtinQuota!, userCfg.builtinQuota || {});
     if (userCfg.visionFallbackModel) merged.visionFallbackModel = userCfg.visionFallbackModel;
     for (const name of Object.keys(userCfg.providers || {})) levels[name] = "user";
 
@@ -101,6 +102,7 @@ export class ProviderRegistry {
       Object.assign(merged.builtinApiKeys!, wsCfg.builtinApiKeys || {});
       Object.assign(merged.builtinBaseUrls!, wsCfg.builtinBaseUrls || {});
       Object.assign(merged.builtinModels!, wsCfg.builtinModels || {});
+      Object.assign(merged.builtinQuota!, wsCfg.builtinQuota || {});
       if (wsCfg.visionFallbackModel) merged.visionFallbackModel = wsCfg.visionFallbackModel;
       for (const name of Object.keys(wsCfg.providers || {})) levels[name] = "workspace";
     }
@@ -126,7 +128,7 @@ export class ProviderRegistry {
   }
 
   /** 内置定义 → ResolvedProvider */
-  private fromBuiltin(def: BuiltinProviderDef, keyOverride?: string, baseUrlOverride?: string, modelsOverride?: unknown[]): ResolvedProvider {
+  private fromBuiltin(def: BuiltinProviderDef, keyOverride?: string, baseUrlOverride?: string, modelsOverride?: unknown[], quota?: import("./providerTypes.js").ProviderQuotaConfig): ResolvedProvider {
     const apiKey = (keyOverride || envApiKey(def.name)).trim();
     const baseUrl = (baseUrlOverride?.trim() || def.baseUrl);
     return {
@@ -137,6 +139,7 @@ export class ProviderRegistry {
       apiKeyHeader: def.apiKeyHeader || "bearer",
       protocol: def.protocol,
       models: Array.isArray(modelsOverride) && modelsOverride.length > 0 ? modelsOverride as typeof def.models : def.models,
+      quota,
       builtin: true,
       locked: def.locked,
       configured: !!apiKey,
@@ -155,6 +158,7 @@ export class ProviderRegistry {
       apiKeyHeader: entry.apiKeyHeader || "bearer",
       protocol: entry.protocol === "responses" || entry.protocol === "anthropic" ? entry.protocol : "chat",
       models: Array.isArray(entry.models) ? entry.models : [],
+      quota: entry.quota,
       builtin: false,
       locked: false,
       configured: !!apiKey && !!entry.baseUrl,

@@ -116,6 +116,7 @@ export const AGENT_EVENT = {
 export const CONTROL_CMD = {
   CANCEL: "cancel",
   SET_EDIT_MODE: "set_edit_mode",
+  SET_ACTIVE_PROVIDER: "set_active_provider",
   USER_MESSAGE: "user_message",
   ADD_CONTEXT: "add_context",
   NAVIGATE_PARALLEL: "navigate_parallel",

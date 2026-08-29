@@ -949,7 +949,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                     一旦 assistant 消息建好，改由它自己的头部显示（见下方 liveStatus）。 */}
                 {showPendingAssistantHeader && (
                   <div className="py-1 animate-fade-in">
-                    <AssistantTurnHeader streaming liveStatus={session.statusText} />
+                    <AssistantTurnHeader streaming liveStatus={session.statusText} startedAt={session.turnStartTime} />
                   </div>
                 )}
                 <div ref={bottomRef} />
@@ -960,6 +960,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                 <MessageBubble
                   message={msg as any}
                   liveStatus={idx === session.chatHistory.length - 1 ? liveAssistantStatus : undefined}
+                  startedAt={idx === session.chatHistory.length - 1 && !!(msg as any).streaming ? session.turnStartTime : undefined}
                   onAcceptEdit={session.acceptEdits}
                   onRejectEdit={session.rejectEdits}
                   onUndoEdit={session.undoEdits}

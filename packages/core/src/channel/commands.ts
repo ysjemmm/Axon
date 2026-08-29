@@ -63,6 +63,8 @@ export type ControlCommandPayload =
   // 工作区
   | { type: "set_workspace"; workspace: string; workspaces?: string[] }
   | { type: "set_workspace_group"; groupId: string }
+  /** 前端模型选择切换时同步当前 Provider，供 IDE 状态栏展示对应额度。 */
+  | { type: "set_active_provider"; provider?: string }
   // 执行控制
   | { type: "cancel" }
   | { type: "edit_user_message"; messageId: string; content: string; displayText?: string; userIndex?: number; images?: string[]; attachedFiles?: unknown[] }

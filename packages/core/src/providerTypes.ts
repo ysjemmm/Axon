@@ -92,6 +92,8 @@ export interface ResolvedProvider {
   /** 旧配置兼容：provider 级默认协议；新配置推荐写到 model.protocol */
   protocol: ProviderProtocol;
   models: ProviderModel[];
+  /** 当前生效的额度查询规则，不包含 API Key */
+  quota?: ProviderQuotaConfig;
   /** 是否内置（esign / zhipu） */
   builtin: boolean;
   /** 仅 esign：除 apiKey 外（baseUrl / 协议 / 模型目录）均锁定不可改 */
@@ -109,10 +111,56 @@ export interface RawProviderEntry {
   label?: string;
   baseUrl?: string;
   apiKey?: string;
+  /** 可选的额度查询规则；实际请求由宿主执行，避免向网页暴露 API Key */
+  quota?: ProviderQuotaConfig;
   /** 认证头格式：bearer（默认）= Authorization: Bearer / x-api-key（Anthropic 等） */
   apiKeyHeader?: ApiKeyHeader;
   protocol?: ProviderProtocol;
   models?: ProviderModel[];
+}
+
+/** Provider 额度查询的声明式规则。字段路径只支持 $.data.balance 这类受限 JSONPath。 */
+export interface ProviderQuotaConfig {
+  enabled?: boolean;
+  url: string;
+  method?: "GET" | "POST";
+  headers?: Record<string, string>;
+  query?: Record<string, string>;
+  body?: unknown;
+  /** 独立额度令牌认证；缺省时沿用 Provider API Key。 */
+  auth?: {
+    header?: string;
+    prefix?: string;
+    /** 独立 Cookie 的请求头名，通常为 "cookie"；Cookie 内容由安全存储保管。 */
+    cookieHeader?: string;
+    /** 距过期不足该秒数时主动刷新；0 表示仅在 401/403 后刷新。 */
+    refreshBeforeSeconds?: number;
+    /** 配置后额度 access token 视为短期令牌；refreshToken 由安全存储保管。 */
+    refresh?: {
+      url: string;
+      method?: "GET" | "POST";
+      headers?: Record<string, string>;
+      query?: Record<string, string>;
+      body?: unknown;
+      accessTokenPath: string;
+      refreshTokenPath?: string;
+      expiresInPath?: string;
+      expiresAtPath?: string;
+    };
+  };
+  fields: {
+    balance?: string;
+    used?: string;
+    total?: string;
+    unit?: string;
+    expiresAt?: string;
+    /** 下次额度重置时间；支持 Unix 秒或毫秒时间戳。 */
+    resetAt?: string;
+  };
+  /** 展示换算：提取到的余额/已用/总额均除以此值，例如 500000。 */
+  scale?: number;
+  /** 响应中没有单位字段时使用的展示单位，例如 "$" 或 "Credits"。 */
+  unit?: string;
 }
 
 /** providers.json 文件结构 */
@@ -125,6 +173,8 @@ export interface ProviderConfigFile {
   builtinBaseUrls?: Record<string, string>;
   /** 覆盖内置 provider 的模型列表（增删后整存；不设则取 providerCatalog 默认模型） */
   builtinModels?: Record<string, unknown[]>;
+  /** 内置 Provider 的额度查询规则（与 API Key 分开保存） */
+  builtinQuota?: Record<string, ProviderQuotaConfig>;
   /**
    * 识图兜底模型 id（全局一个）。
    * 当主模型不支持图片（vision === false）时，用该模型把图片转成文字描述再喂给主模型。

@@ -320,16 +320,22 @@ export function activate(context: vscode.ExtensionContext): void {
   // REST 请求路由（webview 形态下替代 Express）
   const router = new RequestRouter({
     storage,
+    secrets: context.secrets,
     isValidDir,
     browse: vscodeBrowse,
     defaultWorkspace,
   });
 
+  let usageStatusBar: ReturnType<typeof registerAxonUsageStatusBar> | undefined;
   const provider = new AxonViewProvider(
     context,
     channel,
     async (cmd: ControlCommand) => {
       try {
+        if (cmd.type === "set_active_provider") {
+          await usageStatusBar?.setActiveProvider(cmd.provider);
+          return;
+        }
         await hub.dispatch(cmd);
       } catch (err) {
         const error = err as Error;
@@ -1130,7 +1136,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // 底部状态栏 Axon 入口（点击打开右侧 AI 对话栏）
   registerAxonStatusBar(context);
   // 底部状态栏 Credits 用量：独立按钮，priority=101，显示在 Axon(100) 左边。
-  const usageStatusBar = registerAxonUsageStatusBar(context);
+  usageStatusBar = registerAxonUsageStatusBar(context, defaultWorkspace);
   context.subscriptions.push(vscode.commands.registerCommand("axon.usage.refresh", () => usageStatusBar.refresh()));
 
   // 编辑器行号右键菜单：使用 Git 追溯注解（对标 IDEA Annotate）

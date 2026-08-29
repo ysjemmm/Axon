@@ -1626,6 +1626,10 @@ export class AgentSession {
     this.trace("turn.start", { input: truncateForTrace(input, 2000), model: model || this.model, provider: provider || this.provider }, this.turnCount);
     // 新一轮：重置本轮 Credits 预算门状态（软提醒标记 + 硬暂停阈值回到配置基线）
     this.creditBudgetGate.resetForTurn();
+    // 失败保护状态严格限定在一次用户对话内：此前把 LoopGuard 快照跨消息 restore，
+    // 会让旧问题的失败/反思配额污染新问题，导致新问题过早触发“多次尝试均未成功”。
+    // 用户再次发送消息即视为一个新的对话边界，必须从干净 guard 开始。
+    this.loopGuardSnapshot = null;
     // 动态切换模型和 provider
     if (model && model !== this.model) {
       this.model = model;
@@ -1931,8 +1935,6 @@ export class AgentSession {
 
       // 工具执行后更新 token 用量（tools 部分会增加）
       this.updateAndSendTokenUsage();
-      // 保存跨轮 LoopGuard 快照：同一未解决根因在用户下一轮说“继续”时不从零重演
-      this.loopGuardSnapshot = guard.snapshot();
       // 本轮工具结果已并入 messages，增量落盘：即便此刻切走，已完成的工具轮次也不丢
       this.persistMessages();
 

@@ -11,13 +11,15 @@ import * as vscode from "vscode";
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { RelayStore, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, supportsThinking, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry } from "@axon/core";
+import { RelayStore, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, supportsThinking, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry, type ProviderQuotaConfig } from "@axon/core";
 import { createVSCodeAgentHost } from "@axon/host-vscode";
+import { queryProviderQuota, quotaTokenStore, validateQuotaQuery } from "./quotaService.js";
 
 const execFileAsync = promisify(execFile);
 
 export interface RouterDeps {
   storage: SessionStorage;
+  secrets: vscode.SecretStorage;
   isValidDir: (p: string) => Promise<boolean>;
   browse: (path?: string) => Promise<unknown>;
   defaultWorkspace: string;
@@ -631,6 +633,57 @@ export class RequestRouter {
       }
       return { models: await probeProviderModels(url, key) };
     }
+    const providerQuotaMatch = path.match(/^\/api\/providers\/(user|workspace)\/([^/]+)\/quota$/);
+    if (providerQuotaMatch && method === "PUT") {
+      const level = providerQuotaMatch[1] as "user" | "workspace";
+      const name = decodeURIComponent(providerQuotaMatch[2]);
+      const quota = (body as { quota?: ProviderQuotaConfig | null } | undefined)?.quota;
+      const config = await readProviderConfig(level, query.get("workspace") || d.defaultWorkspace);
+      if (quota) validateQuotaQuery(quota);
+      if (RESERVED_PROVIDER_NAMES.includes(name)) {
+        config.builtinQuota = config.builtinQuota || {};
+        if (quota) config.builtinQuota[name] = quota;
+        else delete config.builtinQuota[name];
+      } else {
+        const entry = config.providers?.[name];
+        if (!entry) throw new Error(`provider 不存在：${name}`);
+        if (quota) entry.quota = quota;
+        else delete entry.quota;
+      }
+      await writeProviderConfig(level, config, query.get("workspace") || d.defaultWorkspace);
+      return { ok: true };
+    }
+    const providerQuotaTestMatch = path.match(/^\/api\/providers\/([^/]+)\/quota\/test$/);
+    if (providerQuotaTestMatch && method === "POST") {
+      const name = decodeURIComponent(providerQuotaTestMatch[1]);
+      const ws = query.get("workspace") || d.defaultWorkspace;
+      const resolved = await resolveProviders(ws);
+      const provider = resolved.find((item) => item.name === name);
+      if (!provider) throw new Error(`provider 不存在：${name}`);
+      const quota = (body as { quota?: ProviderQuotaConfig } | undefined)?.quota;
+      if (!quota) throw new Error("额度查询规则不能为空");
+      return queryProviderQuota(provider, quota, quotaTokenStore(d.secrets, name));
+    }
+    const providerQuotaTokensMatch = path.match(/^\/api\/providers\/([^/]+)\/quota\/tokens$/);
+    if (providerQuotaTokensMatch && method === "GET") {
+      const name = decodeURIComponent(providerQuotaTokensMatch[1]);
+      const store = quotaTokenStore(d.secrets, name);
+      const [accessToken, refreshToken, cookie] = await Promise.all([
+        store.getAccessToken(),
+        store.getRefreshToken(),
+        store.getCookie(),
+      ]);
+      return { hasAccessToken: !!accessToken?.value, hasRefreshToken: !!refreshToken, hasCookie: !!cookie };
+    }
+    if (providerQuotaTokensMatch && method === "PUT") {
+      const name = decodeURIComponent(providerQuotaTokensMatch[1]);
+      const tokens = (body || {}) as { accessToken?: string; refreshToken?: string; cookie?: string };
+      const store = quotaTokenStore(d.secrets, name);
+      if (tokens.accessToken?.trim()) await store.setAccessToken(tokens.accessToken.trim(), undefined);
+      if (tokens.refreshToken?.trim()) await store.setRefreshToken(tokens.refreshToken.trim());
+      if (tokens.cookie?.trim()) await store.setCookie(tokens.cookie.trim());
+      return { ok: true };
+    }
     const providerKeyMatch = path.match(/^\/api\/providers\/(user|workspace)\/builtin-key$/);
     if (providerKeyMatch && method === "PUT") {
       const level = providerKeyMatch[1] as "user" | "workspace";
@@ -747,10 +800,11 @@ async function readProviderConfig(level: "user" | "workspace", workspace?: strin
       builtinApiKeys: parsed.builtinApiKeys || {},
       builtinBaseUrls: parsed.builtinBaseUrls || {},
       builtinModels: parsed.builtinModels || {},
+      builtinQuota: parsed.builtinQuota || {},
       ...(parsed.visionFallbackModel ? { visionFallbackModel: parsed.visionFallbackModel } : {}),
     };
   } catch {
-    return { providers: {}, builtinApiKeys: {}, builtinBaseUrls: {} };
+    return { providers: {}, builtinApiKeys: {}, builtinBaseUrls: {}, builtinQuota: {} };
   }
 }
 
@@ -763,6 +817,7 @@ async function writeProviderConfig(level: "user" | "workspace", config: Provider
     builtinApiKeys: config.builtinApiKeys || {},
     builtinBaseUrls: config.builtinBaseUrls || {},
     builtinModels: config.builtinModels || {},
+    builtinQuota: config.builtinQuota || {},
     ...(config.visionFallbackModel ? { visionFallbackModel: config.visionFallbackModel } : {}),
   };
   const p = providerConfigPath(level, workspace);
