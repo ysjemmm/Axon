@@ -1,25 +1,15 @@
 /**
  * 内置 provider 出厂目录（唯一真源）—— 从前端 ModelSelector.MODELS 上移到核心层。
  *
- * 内置 provider 的 baseUrl / 协议 / 模型目录都固定在代码里：
- *  - zhipu：智谱直连，免费模型
+ * 内置 provider 的 baseUrl / 协议 / 模型目录都固定在代码里。
  *
  * 自定义 provider 不走这里，走 providers.json（见 ProviderRegistry）。
  */
 
-import { ZHIPU_PROVIDER, AXON_PROVIDER, type ProviderModel, type ProviderProtocol } from "./providerTypes.js";
+import { AXON_PROVIDER, type ProviderModel, type ProviderProtocol } from "./providerTypes.js";
 
 // 把"值"常量经由本模块对外导出，供 server / extension 运行时使用。
-export { ZHIPU_PROVIDER, AXON_PROVIDER, RESERVED_PROVIDER_NAMES, type ApiKeyHeader } from "./providerTypes.js";
-
-/**
- * 默认模型 id：调用方没有显式指定模型时的兜底（如前端未带 model 的防御分支、
- * 会话记录初始化）。收口在此，避免各处各写一份字面量。
- *
- * 这里曾经是 "auto" 伪模型 id（配合"按任务自动挑模型"的 Auto 功能）。Auto 已移除，
- * 继续用它会往会话记录里写一个解析不到任何真实模型的 id，等于把问题推迟到调用时才炸。
- */
-export const DEFAULT_MODEL_ID = "gpt-5.5";
+export { AXON_PROVIDER, RESERVED_PROVIDER_NAMES, type ApiKeyHeader } from "./providerTypes.js";
 
 /** 内置 provider 定义（apiKey 不在此处，运行时从 env / providers.json 注入） */
 export interface BuiltinProviderDef {
@@ -36,17 +26,6 @@ export interface BuiltinProviderDef {
 
 /** 内置 provider 目录 */
 export const BUILTIN_PROVIDERS: BuiltinProviderDef[] = [
-  {
-    name: ZHIPU_PROVIDER,
-    label: "智谱",
-    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-    protocol: "chat",
-    locked: false,
-    models: [
-      { id: "glm-4-flash", name: "GLM-4 Flash", contextWindow: 128_000, vision: false, free: true, thinking: false, description: "免费，快速响应", group: "智谱" },
-      { id: "glm-4-flashx", name: "GLM-4 FlashX", contextWindow: 128_000, vision: false, free: true, thinking: false, description: "免费，极速推理", group: "智谱" },
-    ],
-  },
   {
     // Axon 官方 provider：出厂内置 Claude 模型目录，baseUrl/协议/模型清单锁定，
     // apiKey 默认空，前期由官方分发给用户手动粘贴，后续接入登录系统后自动注入。

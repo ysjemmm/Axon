@@ -42,8 +42,33 @@ import { VirtualMessageList, type VirtualMessageListHandle } from "./chat/Virtua
 import { AgentSelector } from "./AgentSelector";
 import { CONTROL_CMD } from "@/lib/constants";
 
+/** 时间线默认保留的最近消息数；早期消息可按需从顶部逐批展开。 */
+const VISIBLE_HISTORY_LIMIT = 32;
+const RESTORE_HISTORY_BATCH_SIZE = 24;
+
 export function ChatPanel({ clientId, sessionId, mode, connected, active, send, onSessionCreated, onCompactionMigrated, onStreamingChange }: ChatPanelProps) {
   const session = useChatSession({ clientId, sessionId, mode, connected, send, onSessionCreated, onCompactionMigrated, onStreamingChange });
+  const [hiddenMessageCount, setHiddenMessageCount] = useState(0);
+
+  // 虚拟列表只减少 DOM 数量，不会缩短滚动比例。每轮结束后把较早的 UI 消息折叠，
+  // 但绝不修改 session.chatHistory：后端持久化、上下文压缩和历史恢复仍持有完整记录。
+  useEffect(() => {
+    if (session.isLoading) return;
+    setHiddenMessageCount((previous) => Math.max(previous, session.chatHistory.length - VISIBLE_HISTORY_LIMIT, 0));
+  }, [session.chatHistory.length, session.isLoading]);
+
+  // 切换到另一会话时，不能沿用上一会话的折叠数量。
+  useEffect(() => {
+    setHiddenMessageCount(0);
+  }, [sessionId]);
+
+  const visibleHistory = useMemo(
+    () => session.chatHistory.slice(hiddenMessageCount),
+    [session.chatHistory, hiddenMessageCount],
+  );
+  const restoreEarlierMessages = useCallback(() => {
+    setHiddenMessageCount((count) => Math.max(0, count - RESTORE_HISTORY_BATCH_SIZE));
+  }, []);
 
   // ── AI 回复状态的落位 ─────────────────────────────────────────────────
   // 状态（图标 + "思考中…"）跟着 AI 回复走，不再挂在输入框上方：
@@ -124,6 +149,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   /** 当前模型是否支持图片（含自定义 provider 模型，故走合并列表） */
   const models = useModels();
   const currentModelVision = models.find((m) => m.id === session.model)?.vision ?? false;
+  const hasConfiguredSelection = models.some((m) => m.id === session.model && m.provider === session.provider);
 
   /** 识图兜底模型是否已配置（配置后，非多模态模型的图片行为与多模态一致，后端负责识图转文字） */
   const [visionFallbackModel, setVisionFallbackModelState] = useState<string | null>(null);
@@ -243,7 +269,10 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   }, [session.isLoadingSession, session.chatHistory.length]);
 
   // 流式输出时自动跟随底部：用 wheel 事件精确判断用户意图。
-  // 向上滚一次 → 停止追底；滚回底部 → 恢复追底。简单、可靠、无竞态。
+  // 向上滚一次 → 停止追底；滚回底部 → 恢复追底。
+  // 终端卡、信任面板等会在不新增消息的情况下改变现有消息高度；Virtuoso 不会把
+  // 这种变化当作 followOutput。这里用 MutationObserver 检测实际内容变化，再单帧合并
+  // 为一次 Virtuoso API 调用，避免旧版 60ms 原生 scrollTo 轮询与虚拟列表锚点打架。
   const autoScrollUserOverride = useRef(false);
   useEffect(() => {
     if (!session.isLoading) {
@@ -268,27 +297,27 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     };
     container.addEventListener("wheel", onWheel, { passive: true });
 
-    // 内容高度变化追底：tool card 执行完成/输出展开/footer(思考中) 等会让内容变高，
-    // 但 totalCount 不变、virtuoso 的 followOutput 不触发。直接轮询 scrollHeight，
-    // 它能捕获所有高度变化（含 footer 兄弟节点）。用户未手动离开底部时保持贴底。
-    // 注意：只在真正没在底部时才 scrollTo，避免频繁调用导致 reflow 打断 CSS 动画。
-    let prevScrollHeight = container.scrollHeight;
-    const poller = setInterval(() => {
-      const sh = container.scrollHeight;
-      if (sh !== prevScrollHeight) {
-        prevScrollHeight = sh;
+    let resizeFrame: number | null = null;
+    let previousHeight = container.scrollHeight;
+    const followContentGrowth = () => {
+      if (resizeFrame !== null) return;
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = null;
+        const nextHeight = container.scrollHeight;
+        if (nextHeight === previousHeight) return;
+        previousHeight = nextHeight;
         if (!autoScrollUserOverride.current) {
-          const distanceToBottom = sh - container.scrollTop - container.clientHeight;
-          if (distanceToBottom > 2) {
-            container.scrollTo({ top: sh, behavior: "instant" });
-          }
+          virtualListRef.current?.scrollToBottom("instant");
         }
-      }
-    }, 60);
+      });
+    };
+    const contentObserver = new MutationObserver(followContentGrowth);
+    contentObserver.observe(container, { childList: true, characterData: true, subtree: true });
 
     return () => {
       container.removeEventListener("wheel", onWheel);
-      clearInterval(poller);
+      contentObserver.disconnect();
+      if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
     };
   }, [session.isLoading]);
 
@@ -313,6 +342,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
   // ── 发送 ──────────────────────────────────────────────────────────────────
   const doSend = (text: string, sendImgs: string[], sendFileList: AttachedFile[], segments: UserSegment[]) => {
+    if (!hasConfiguredSelection) return;
     const sendImages = canSendImages ? sendImgs : [];
     const sendFiles = [...sendFileList];
 
@@ -927,20 +957,32 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         ) : (
           <VirtualMessageList
             ref={virtualListRef}
-            messages={session.chatHistory}
+            messages={visibleHistory}
             estimateHeight={200}
             overscan={300}
             onScroll={stableOnScroll}
-            onTopItemChange={handleTopItemChange}
+            onTopItemChange={(index) => handleTopItemChange(index + hiddenMessageCount)}
             followOutput={false}
             initialBottom={!session.isLoadingSession && session.chatHistory.length > 0}
             header={
-              !connected && session.chatHistory.length > 0 ? (
-                <div className="flex items-center justify-center gap-2 py-2 px-4 rounded-lg bg-destructive/10 text-destructive text-xs">
-                  <X className="w-3.5 h-3.5" />
-                  连接已断开，请稍后重试
-                </div>
-              ) : undefined
+              <>
+                {hiddenMessageCount > 0 && (
+                  <div className="flex justify-center py-2">
+                    <button
+                      onClick={restoreEarlierMessages}
+                      className="rounded-full border border-border bg-muted/40 px-3 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                    >
+                      已折叠较早的 {hiddenMessageCount} 条消息，点击展开 {Math.min(RESTORE_HISTORY_BATCH_SIZE, hiddenMessageCount)} 条
+                    </button>
+                  </div>
+                )}
+                {!connected && session.chatHistory.length > 0 && (
+                  <div className="flex items-center justify-center gap-2 py-2 px-4 rounded-lg bg-destructive/10 text-destructive text-xs">
+                    <X className="w-3.5 h-3.5" />
+                    连接已断开，请稍后重试
+                  </div>
+                )}
+              </>
             }
             footer={
               <>
@@ -959,8 +1001,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               <CommandApprovalContext.Provider value={commandApprovalCtx}>
                 <MessageBubble
                   message={msg as any}
-                  liveStatus={idx === session.chatHistory.length - 1 ? liveAssistantStatus : undefined}
-                  startedAt={idx === session.chatHistory.length - 1 && !!(msg as any).streaming ? session.turnStartTime : undefined}
+                  liveStatus={idx === visibleHistory.length - 1 ? liveAssistantStatus : undefined}
+                  startedAt={idx === visibleHistory.length - 1 && !!(msg as any).streaming ? session.turnStartTime : undefined}
                   onAcceptEdit={session.acceptEdits}
                   onRejectEdit={session.rejectEdits}
                   onUndoEdit={session.undoEdits}
@@ -1317,8 +1359,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
           <div className="px-3 pr-10 pt-2 pb-1">
             <MentionEditor
               ref={editorRef}
-              disabled={!connected}
-              placeholder={connected ? (canSendImages ? "给 Axon 发消息...（可粘贴或拖拽图片）" : "给 Axon 发消息...") : "等待连接..."}
+              disabled={!connected || !hasConfiguredSelection}
+              placeholder={!connected ? "等待连接..." : !hasConfiguredSelection ? "请先配置 Provider 并选择模型" : canSendImages ? "给 Axon 发消息...（可粘贴或拖拽图片）" : "给 Axon 发消息..."}
               onChange={handleEditorChange}
               onKeyDown={(e) => {
                 // 吉祥物只是旁观者：先记一笔按键类型，不影响后续任何消费判定
@@ -1520,7 +1562,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                 <Button
                   size="sm"
                   onClick={handleSend}
-                  disabled={!connected || (composerEmpty && images.length === 0) || !!session.compactionMigrated || session.isCompacting || session.contextOverflow}
+                  disabled={!connected || !hasConfiguredSelection || (composerEmpty && images.length === 0) || !!session.compactionMigrated || session.isCompacting || session.contextOverflow}
                   className="h-7 w-7 rounded-full shrink-0"
                 >
                   <Send className="w-3.5 h-3.5" />

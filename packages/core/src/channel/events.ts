@@ -32,13 +32,13 @@ export type AgentEventPayload =
   | { type: "stream_start" }
   | { type: "stream_delta"; content: string }
   | { type: "stream_pause" }
-  | { type: "stream_end"; elapsed: number; tokens: number; model?: string; credits?: number; creditDetail?: CreditDetail }
+  | { type: "stream_end"; elapsed: number; tokens: number; model?: string; modelName?: string; credits?: number; creditDetail?: CreditDetail }
   /**
    * 本轮非正常结束。reason 区分"用户主动取消"与"provider/网关异常"——
    * 两者都走这个事件，但对用户的含义完全不同（"我停的" vs "它挂了"）。
    * 可选是为了向后兼容：缺省时呈现端按 cancelled 处理，行为与该字段引入前一致。
    */
-  | { type: "turn_cancelled"; elapsed: number; tokens: number; model?: string; credits?: number; creditDetail?: CreditDetail; reason?: "cancelled" | "error" }
+  | { type: "turn_cancelled"; elapsed: number; tokens: number; model?: string; modelName?: string; credits?: number; creditDetail?: CreditDetail; reason?: "cancelled" | "error" }
   | { type: "reasoning_delta"; content: string; partIndex?: number; itemId?: string }
   | { type: "status"; content: string }
   | { type: "retry"; attempt: number; maxRetries: number; error: string; status: "retrying" | "failed" }

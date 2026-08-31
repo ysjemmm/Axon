@@ -100,7 +100,7 @@ export class ProviderConfigService {
     await this.write(fromLevel, fromConfig, workspace);
   }
 
-  /** 设置内置 provider（zhipu）的 apiKey 覆盖 */
+  /** 设置内置 provider 的 API Key 覆盖 */
   async setBuiltinKey(level: ProviderLevel, name: string, apiKey: string, workspace?: string): Promise<void> {
     if (!RESERVED_PROVIDER_NAMES.includes(name)) throw new Error(`「${name}」不是内置 provider`);
     const config = await this.read(level, workspace);

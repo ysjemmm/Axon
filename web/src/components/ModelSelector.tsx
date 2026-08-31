@@ -2,7 +2,7 @@
  * 模型选择器组件 - 两级菜单：一级 provider，点击展开二级模型列表（同时只展开一个）
  *
  * 数据驱动：从 /api/providers 拉取内置 + 自定义 provider 及其模型（实时刷新）。
- * 内置 MODELS 仅作离线兜底。打开下拉时会重新拉取，配置改动即时反映。
+ * 打开下拉时会重新拉取，配置改动即时反映。
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -29,25 +29,6 @@ export interface ModelOption {
 }
 
 /**
- * Provider 键名常量（必须与后端 @axon/core 的 ZHIPU_PROVIDER 保持一致）。
- * web 是独立工程、引用不到 @axon/core，故在此本地镜像一份，集中收口，
- * 避免 provider 字面量散落到每个模型条目里、改名时漏改。
- */
-const PROVIDER_ZHIPU = "zhipu";
-
-export const MODELS: ModelOption[] = [
-  // ── 智谱 ──
-  { id: "glm-4-flash", name: "GLM-4 Flash", contextWindow: 128000, description: "免费，快速响应", free: true, vision: false, provider: PROVIDER_ZHIPU, group: "智谱" },
-  { id: "glm-4-flashx", name: "GLM-4 FlashX", contextWindow: 128000, description: "免费，极速推理", free: true, vision: false, provider: PROVIDER_ZHIPU, group: "智谱" },
-];
-
-/**
- * 默认模型 id。收口在此（而不是各面板各写一份字面量）：
- * 模型知识归 ModelSelector 所有，聊天面板与并行面板都从这里取同一个默认值。
- */
-export const DEFAULT_MODEL_ID = "glm-4-flash";
-
-/**
  * 曾经存在的 "auto" 伪模型 id —— 按任务自动挑模型的 Auto 已移除。
  *
  * 老用户的 localStorage 里可能还存着它。必须在读取处归一化掉：
@@ -58,7 +39,7 @@ const LEGACY_AUTO_MODEL_ID = "auto";
 
 /**
  * 归一化持久化的模型 id：已移除的 "auto" 视为"没存过"，返回 null。
- * 调用方据此回退到自己的默认值（通常是 DEFAULT_MODEL_ID）。
+ * 调用方据此视为未选择模型。
  */
 export function normalizeStoredModelId(stored: string | null | undefined): string | null {
   if (!stored || stored === LEGACY_AUTO_MODEL_ID) return null;
@@ -73,14 +54,11 @@ let _loaded = false;
 let _loading = false;
 const _subs = new Set<() => void>();
 
-/** 内置 provider 的展示名兜底 */
-const BUILTIN_LABELS: Record<string, string> = { [PROVIDER_ZHIPU]: "智谱" };
-
 function _notify(): void {
   for (const fn of _subs) fn();
 }
 
-/** 拉取最新 provider/模型（失败静默，回退到内置 MODELS） */
+/** 拉取最新 provider/模型（失败时保留空列表，提示用户配置 Provider） */
 export async function refreshModels(): Promise<void> {
   if (_loading) return;
   _loading = true;
@@ -114,20 +92,12 @@ function _toOption(providerName: string, group: string, m: ProviderModelInfo): M
 export interface ProviderGroup { name: string; label: string; builtin: boolean; configured: boolean; models: ModelOption[] }
 
 export function getProviderGroups(): ProviderGroup[] {
-  // 兜底：后端不可用时，从内置 MODELS 按 provider 分组
-  if (_providers.length === 0) {
-    const map = new Map<string, ModelOption[]>();
-    for (const m of MODELS) {
-      if (!map.has(m.provider)) map.set(m.provider, []);
-      map.get(m.provider)!.push(m);
-    }
-    return [...map.entries()].map(([name, models]) => ({ name, label: BUILTIN_LABELS[name] || name, builtin: true, configured: true, models }));
-  }
+  if (_providers.length === 0) return [];
   // 显示所有 provider（含未配置），未配置的模型的 disabledModels 由 UI 层处理
   const groups = _providers
     .map((p) => ({
       name: p.name,
-      label: p.label || BUILTIN_LABELS[p.name] || p.name,
+      label: p.label || p.name,
       builtin: p.builtin,
       configured: p.configured,
       models: p.models.filter((m) => !m.disabled).map((m) => _toOption(p.name, p.label || p.name, m)),
@@ -314,7 +284,7 @@ export function ModelSelector({ value, provider, onChange, disabledModels = [], 
       onClick={() => { if (!disabled) setOpen(!open); }}
       title={showThinkOff ? "深度思考已关闭" : undefined}
     >
-      {current?.name || value}
+      {current?.name || value || "选择模型"}
       {/* 用 lucide 自带的 off 图标表达关闭态。不要给普通图标加 line-through——
           那是文本装饰，对 SVG 不生效，只会得到一个和开启态看起来一样的图标。 */}
       {showThinkOff && <LightbulbOff className="w-3 h-3 shrink-0 opacity-50" />}
@@ -349,6 +319,15 @@ export function ModelSelector({ value, provider, onChange, disabledModels = [], 
         collisionPadding={8}
         className="w-[250px] max-h-[70vh] overflow-y-auto p-1 gap-0 ring-1 ring-border shadow-lg [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-transparent [&::-webkit-scrollbar-track]:bg-transparent hover:[&::-webkit-scrollbar-thumb]:bg-muted-foreground/25 [scrollbar-width:thin] [scrollbar-color:transparent_transparent] hover:[scrollbar-color:rgba(128,128,128,0.25)_transparent]"
       >
+        {groups.length === 0 ? (
+          <button
+            onClick={openProviderPanel}
+            className="flex items-center gap-1.5 w-full py-2 px-1.5 rounded text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+          >
+            <Settings className="w-3 h-3 shrink-0 opacity-60" />
+            配置自定义 Provider
+          </button>
+        ) : <>
         {/* provider 一级 + 点击内联展开二级模型（同时只展开一个） */}
         {/* side="top" 向上弹出时，底部离按钮最近。将当前选中的 provider 排到最后（最靠近按钮）以减少误触 */}
         {[...groups].sort((a, b) => {
@@ -433,6 +412,7 @@ export function ModelSelector({ value, provider, onChange, disabledModels = [], 
           <Settings className="w-3 h-3 shrink-0 opacity-60" />
           配置自定义 Provider
         </button>
+        </>}
       </PopoverContent>
     </Popover>
   );

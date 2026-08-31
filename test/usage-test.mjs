@@ -37,16 +37,6 @@ for (const m of axonModels) {
   TESTS.push({ label: `Axon/${m}`, model: m, protocol: "anthropic", baseUrl: axonBaseUrl, headers: { "x-api-key": axonKey, "anthropic-version": "2023-06-01", "content-type": "application/json" } });
 }
 
-// 智谱（Chat Completions）- 需要环境变量 PROVIDER_ZHIPU_API_KEY
-const zhipuKey = process.env.PROVIDER_ZHIPU_API_KEY || "";
-if (zhipuKey) {
-  for (const m of ["glm-4-flash", "glm-4-flashx"]) {
-    TESTS.push({ label: `Zhipu/${m}`, model: m, protocol: "chat", baseUrl: "https://open.bigmodel.cn/api/paas/v4", headers: { "authorization": `Bearer ${zhipuKey}`, "content-type": "application/json" } });
-  }
-} else {
-  console.log("⚠ 智谱 key 未配置，跳过智谱模型测试\n");
-}
-
 // 自定义 provider
 for (const prov of customProviders) {
   const key = prov.apiKey || "";

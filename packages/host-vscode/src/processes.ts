@@ -19,7 +19,7 @@ import type {
   BackgroundProcessInfo,
   BackgroundProcessStatus,
 } from "@axon/core";
-import { timedOutRegistry } from "./terminalDisplay.js";
+import { interruptTimedOutTask, timedOutRegistry } from "./terminalDisplay.js";
 
 interface ProcEntry {
   terminalId: string;
@@ -146,14 +146,16 @@ export class VSCodeProcessManager implements HostProcessManager {
 
   async stop(terminalId: string): Promise<boolean> {
     const entry = this.procs.get(terminalId);
-    if (!entry) return false;
-    entry.status = "stopped";
-    try {
-      entry.terminal.dispose();
-    } catch {
-      /* 忽略 */
+    if (entry) {
+      entry.status = "stopped";
+      try {
+        entry.terminal.dispose();
+      } catch {
+        /* 忽略 */
+      }
+      return true;
     }
-    return true;
+    return interruptTimedOutTask(terminalId);
   }
 
   async list(): Promise<BackgroundProcessInfo[]> {

@@ -4,7 +4,7 @@
  * compacting_start / compaction_needed / compaction_migrated / compacting_end
  */
 
-import { MODELS } from "@/components/ModelSelector";
+import { getModels } from "@/components/ModelSelector";
 import {
   exploreDisplayText, formatLineSuffix,
   isRelayTool, relayToolLabel, firstLine, OUTPUT_TOOLS,
@@ -262,7 +262,7 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
   ctx.setChatHistory(restored);
 
   if (totalTokens > 0) {
-    const currentModel = MODELS.find((m) => m.id === ctx.modelRef.current);
+    const currentModel = getModels().find((m) => m.id === ctx.modelRef.current);
     ctx.setTokenUsage((prev) => ({ ...prev, used: totalTokens, max: currentModel?.contextWindow || prev.max }));
   }
 

@@ -16,8 +16,6 @@
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { AgentSession } from "../agentSession.js";
 import { CommandGate } from "../tools/index.js";
-import { ZHIPU_PROVIDER } from "../providers.js";
-import { DEFAULT_MODEL_ID } from "../providerCatalog.js";
 import { RelayStore } from "../relay/relayStore.js";
 import { SnapshotManager } from "../snapshot/snapshotManager.js";
 import type { Snapshot } from "../snapshot/types.js";
@@ -622,13 +620,16 @@ export class SessionHub {
     allWorkspaces: string[],
     primaryWorkspace: string,
   ): Promise<void> {
+    if (!cmd.model?.trim() || !cmd.provider?.trim()) {
+      throw new Error("请先选择已配置的 Provider 和模型");
+    }
     const ws_dir = (typeof cmd.workspace === "string" && cmd.workspace) ? cmd.workspace : primaryWorkspace;
     const mode = cmd.mode === "quest" ? "quest" : "agent";
     const created = await this.storage.createSession({
       id: cmd.sessionId || "",
       title: "新对话",
-      model: cmd.model || DEFAULT_MODEL_ID,
-      provider: cmd.provider || ZHIPU_PROVIDER,
+      model: cmd.model,
+      provider: cmd.provider,
       workspace: ws_dir,
       mode,
       messages: [],
@@ -662,6 +663,9 @@ export class SessionHub {
     migrateData: { messages: ChatCompletionMessageParam[]; userInput: { content: string; model?: string; images?: string[]; provider?: string; userMeta?: Record<string, unknown> } },
     clientId: string | undefined,
   ): Promise<void> {
+    if (!migrateData.userInput.model?.trim() || !migrateData.userInput.provider?.trim()) {
+      throw new Error("压缩迁移缺少当前 Provider 或模型");
+    }
     const { all: allWorkspaces, primary: primaryWorkspace } = this.resolveWorkspaces();
     // 从父会话获取工作区和模式
     const parentSaved = await this.storage.getSession(parentSessionId);
@@ -677,8 +681,8 @@ export class SessionHub {
     const created = await this.storage.createSession({
       id: "",
       title,
-      model: migrateData.userInput.model || DEFAULT_MODEL_ID,
-      provider: migrateData.userInput.provider || ZHIPU_PROVIDER,
+      model: migrateData.userInput.model,
+      provider: migrateData.userInput.provider,
       workspace: ws_dir,
       workspaces: ws_dirs.length > 1 ? ws_dirs : undefined,
       mode,
@@ -731,7 +735,7 @@ export class SessionHub {
         const errMsg = `❌ ${error.message}`;
         session.getMessages().push({ role: "assistant", content: errMsg } as any);
         this.sendTo(created.id, clientId, { type: "stream_delta", content: errMsg } as AgentEvent);
-        this.sendTo(created.id, clientId, { type: "stream_end", elapsed: 0, tokens: 0, model: migrateData.userInput.model || DEFAULT_MODEL_ID } as AgentEvent);
+        this.sendTo(created.id, clientId, { type: "stream_end", elapsed: 0, tokens: 0, model: migrateData.userInput.model } as AgentEvent);
       }
     } finally {
       this.runningSessions.delete(created.id);
@@ -804,6 +808,10 @@ export class SessionHub {
     // 并行模式标记：仍走 agent 会话，但 content 前注入编排指令引导 AI 自动拆分并使用 parallel_execute
     const isParallel = cmd.mode === "parallel";
 
+    if (!cmd.model?.trim() || !cmd.provider?.trim()) {
+      throw new Error("请先在模型菜单中选择已配置的 Provider 和模型");
+    }
+
     // 会话不存在：惰性创建（采用前端传入的 sessionId，若无则由存储生成）
     if (!session) {
       const ws_dir = (typeof cmd.workspace === "string" && cmd.workspace) ? cmd.workspace : primaryWorkspace;
@@ -813,8 +821,8 @@ export class SessionHub {
       const created = await this.storage.createSession({
         id: cmd.sessionId || "",
         title: "新对话",
-        model: cmd.model || DEFAULT_MODEL_ID,
-        provider: cmd.provider || ZHIPU_PROVIDER,
+        model: cmd.model,
+        provider: cmd.provider,
         workspace: ws_dir,
         workspaces: ws_dirs.length > 1 ? ws_dirs : undefined,
         mode,

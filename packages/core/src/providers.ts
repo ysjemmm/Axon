@@ -14,11 +14,8 @@ import { ChatCompletionsStrategy } from "./llm/chatCompletionsStrategy.js";
 import { ResponsesStrategy } from "./llm/responsesStrategy.js";
 import { AnthropicMessagesStrategy } from "./llm/anthropicMessagesStrategy.js";
 import type { LLMStrategy } from "./llm/types.js";
-import { ZHIPU_PROVIDER, type ProviderProtocol, type ResolvedProvider, type ApiKeyHeader } from "./providerTypes.js";
+import { type ProviderProtocol, type ResolvedProvider, type ApiKeyHeader } from "./providerTypes.js";
 import type { ProviderRegistry } from "./providerRegistry.js";
-
-// 重新导出，保持 `import { ZHIPU_PROVIDER } from "@axon/core"` 的公开 API 不变
-export { ZHIPU_PROVIDER } from "./providerTypes.js";
 
 /** Provider 运行时配置（client 创建所需的最小信息） */
 export interface ProviderConfig {
@@ -60,6 +57,18 @@ export async function refreshProviders(registry: ProviderRegistry): Promise<Reso
 /** 当前已注入的 provider 列表（未注入返回空数组） */
 export function getResolvedProviders(): ResolvedProvider[] {
   return _resolved ? [..._resolved.values()] : [];
+}
+
+/**
+ * 获取模型的展示名称。优先限定在当前 provider，避免相同模型 ID 在多个中转站中产生歧义。
+ * 未配置名称或尚未注入 provider 目录时返回 undefined，由呈现端回退显示模型 ID。
+ */
+export function getModelDisplayName(modelId: string, preferredProvider?: string): string | undefined {
+  if (!_resolved) return undefined;
+
+  const provider = preferredProvider ? _resolved.get(normalizeProvider(preferredProvider)) : undefined;
+  const model = provider?.models.find((item) => item.id === modelId);
+  return model?.name?.trim() || undefined;
 }
 
 /**

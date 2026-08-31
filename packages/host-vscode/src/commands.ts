@@ -10,12 +10,12 @@
  */
 
 import type { HostCommandRunner, ExecOptions, ExecResult } from "@axon/core";
-import { runInTerminalCaptured, waitForTerminalIdle } from "./terminalDisplay.js";
+import { runInTerminalCaptured } from "./terminalDisplay.js";
 
 let cmdSeq = 0;
 
 export class VSCodeCommandRunner implements HostCommandRunner {
-  // 命令队列：同一终端的命令必须串行执行，防止并发中断
+  // 命令队列：正常命令串行执行，避免同一终端上的命令互相干扰。
   private queue: Promise<unknown> = Promise.resolve();
 
   // 每个 session（即每个 VSCodeCommandRunner 实例）独享一个终端。
@@ -28,23 +28,17 @@ export class VSCodeCommandRunner implements HostCommandRunner {
   }
 
   async exec(command: string, opts: ExecOptions): Promise<ExecResult> {
-    // 队列占用门：正常结束时立即释放；超时（命令仍在终端运行）时保持占用，
-    // 直到该命令真正结束——否则下一条命令发到同一终端会与还在跑的命令冲突。
-    let releaseGate: (() => void) | null = null;
-    const gate = new Promise<void>((r) => { releaseGate = r; });
-
     // 串行化：每条命令排队等待前一条完成后再执行
     const task = this.queue.then(async () => {
       const result = await runInTerminalCaptured(command, opts.cwd, opts.timeoutMs, opts.signal, this.terminalKey, opts.onWaitingInput);
 
-      // 超时：命令仍在终端里运行（clone/install/构建等长任务）。AI 回合先继续，
-      // 但队列保持占用，命令结束后自动释放，期间新命令排队等待、不会与它冲突。
-      // 同时该命令已注册进 timedOutRegistry，AI 可用 get_process_output(terminalKey) 查询进度。
+      // 超时：terminalDisplay 已向原终端发送 Ctrl+C。Shell 可能仍在收尾，因此原终端
+      // 继续保持 busy；但队列必须立刻放行，下一条命令会由终端池分配全新的终端执行，
+      // 不能因一条无法确认退出的命令把整个 session 永久堵住。
       if (result.reason === "timeout") {
-        void waitForTerminalIdle(this.terminalKey).then(() => releaseGate?.());
         return {
-          stdout: result.stdout,
-          stderr: "",
+          stdout: result.stdout || "已向终端发送 Ctrl+C 请求终止该命令。原终端可能仍在收尾，后续命令将使用新的 Axon 终端执行。",
+          stderr: "命令执行超时，已请求终止。",
           timedOut: true,
           exitCode: result.exitCode,
           cwd: result.cwd,
@@ -53,9 +47,6 @@ export class VSCodeCommandRunner implements HostCommandRunner {
           terminalId: this.terminalKey,
         } satisfies ExecResult;
       }
-
-      // 正常结束（或取消/被篡改/终端关闭等）：立即释放队列
-      releaseGate?.();
 
       // Shell Integration 不可用：命令已在终端执行，但拿不到输出
       if (!result.captured) {
@@ -100,8 +91,9 @@ export class VSCodeCommandRunner implements HostCommandRunner {
       } satisfies ExecResult;
     });
 
-    // 队列 = 本次执行 + 超时占用门（命令未结束时 gate 未释放，后续命令继续排队）
-    this.queue = task.then(() => gate);
+    // 不允许一次执行失败或超时毒化后续队列；超时后的旧终端由终端池保持 busy，
+    // 下一条命令会自动取得新终端，而不会和旧命令混跑。
+    this.queue = task.catch(() => undefined);
 
     return task;
   }

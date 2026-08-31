@@ -530,8 +530,8 @@ export async function executeToolCall(
       }
       const ok = await host.processes.stop(args.terminalId as string);
       return ok
-        ? `已停止后台进程 ${args.terminalId}。`
-        : `未找到后台进程 ${args.terminalId}（可能已退出或 id 有误）。用 list_processes 确认。`;
+        ? `已向进程或超时终端命令 ${args.terminalId} 发送终止请求。`
+        : `未找到运行中的后台进程或超时终端命令 ${args.terminalId}（可能已退出或 id 有误）。用 get_process_output 确认。`;
     }
     case "list_processes": {
       if (!host.processes) {

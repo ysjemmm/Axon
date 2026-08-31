@@ -10,7 +10,7 @@
 import { useState, useRef, useCallback } from "react";
 import { Send, GitBranch, Zap, Square, Trash2, Loader2, Circle, CheckCircle2, XCircle } from "lucide-react";
 import { useParallelSession } from "./useParallelSession";
-import { ModelSelector, findModel, normalizeStoredModelId, DEFAULT_MODEL_ID } from "@/components/ModelSelector";
+import { ModelSelector, findModel, normalizeStoredModelId, useModels } from "@/components/ModelSelector";
 import { MentionEditor, type MentionEditorHandle } from "@/components/chat/MentionEditor";
 import { AgentDetail } from "./AgentDetail";
 import { BatchProgressBar } from "./BatchProgressBar";
@@ -33,13 +33,15 @@ import { STORAGE } from "@/lib/constants";
 export function ParallelPanel({ connected, send }: ParallelPanelProps) {
   const { state, thinking, thinkingStatus, submit, cancelBatch, deleteBatch, undoFile, setActiveBatch } = useParallelSession({ connected, send });
   const [model, setModel] = useState(() => {
-    try { return normalizeStoredModelId(localStorage.getItem(STORAGE.PARALLEL_MODEL)) || DEFAULT_MODEL_ID; } catch { return DEFAULT_MODEL_ID; }
+    try { return normalizeStoredModelId(localStorage.getItem(STORAGE.PARALLEL_MODEL)) || ""; } catch { return ""; }
   });
   // provider 需与 model 一起持久化：多个 provider 下存在同名模型时，
   // 仅存 model id 无法区分具体是哪一个，会在下次打开时误配到第一个同名模型
   const [provider, setProvider] = useState<string | undefined>(() => {
     try { return localStorage.getItem(STORAGE.PARALLEL_PROVIDER) || undefined; } catch { return undefined; }
   });
+  const models = useModels();
+  const hasConfiguredSelection = models.some((item) => item.id === model && item.provider === provider);
 
   // 模型选择持久化
   const handleModelChange = useCallback((m: string, providerName?: string) => {
@@ -56,7 +58,7 @@ export function ParallelPanel({ connected, send }: ParallelPanelProps) {
 
   const handleSubmit = useCallback(() => {
     const { text } = editorRef.current?.read() ?? { text: "" };
-    if (!text.trim()) return;
+    if (!text.trim() || !hasConfiguredSelection) return;
     // provider 没持久化下来时（老数据/单 provider 场景）按模型 id 反查补齐
     let actualProvider: string | undefined = provider;
     if (!actualProvider) {
@@ -67,7 +69,7 @@ export function ParallelPanel({ connected, send }: ParallelPanelProps) {
     editorRef.current?.clear();
     setComposerEmpty(true);
     editorRef.current?.focus();
-  }, [model, provider, submit]);
+  }, [hasConfiguredSelection, model, provider, submit]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -124,15 +126,15 @@ export function ParallelPanel({ connected, send }: ParallelPanelProps) {
           <div className="flex-1 min-w-0 rounded-lg border border-border bg-background px-3 py-2 focus-within:ring-1 focus-within:ring-ring">
             <MentionEditor
               ref={editorRef}
-              disabled={!connected || hasRunning}
-              placeholder={hasRunning ? "等待当前任务完成..." : "描述你的需求，AI 会自动拆分为多个并行子任务..."}
+              disabled={!connected || hasRunning || !hasConfiguredSelection}
+              placeholder={hasRunning ? "等待当前任务完成..." : !hasConfiguredSelection ? "请先配置 Provider 并选择模型" : "描述你的需求，AI 会自动拆分为多个并行子任务..."}
               onChange={() => setComposerEmpty(editorRef.current?.isEmpty() ?? true)}
               onKeyDown={handleKeyDown}
             />
           </div>
           <button
             onClick={handleSubmit}
-            disabled={!connected || composerEmpty || hasRunning}
+            disabled={!connected || composerEmpty || hasRunning || !hasConfiguredSelection}
             className="shrink-0 p-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <Send className="w-4 h-4" />
@@ -147,6 +149,9 @@ export function ParallelPanel({ connected, send }: ParallelPanelProps) {
           />
           {!connected && (
             <p className="text-[11px] text-destructive">未连接到 Agent 服务</p>
+          )}
+          {connected && !hasConfiguredSelection && (
+            <p className="text-[11px] text-muted-foreground">请先配置 Provider 并选择模型</p>
           )}
         </div>
       </div>

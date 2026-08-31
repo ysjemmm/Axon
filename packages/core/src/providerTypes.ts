@@ -2,7 +2,7 @@
  * Provider / Model 的数据模型（零形态依赖，纯类型 + 常量）
  *
  * 这是"可自定义 provider"功能的数据契约：
- *  - 内置 provider（zhipu）由 providerCatalog.ts 提供出厂目录
+ *  - 内置 provider（Axon 官方）由 providerCatalog.ts 提供出厂目录
  *  - 自定义 provider 来自 ~/.axon/settings/providers.json（用户级）/ <ws>/.axon/settings/providers.json（工作区级）
  *  - ProviderRegistry 把两者合并成 ResolvedProvider[]，供 getClient / getStrategy / 前端选择器消费
  */
@@ -21,22 +21,11 @@ export type ProviderProtocol = "chat" | "responses" | "anthropic";
 /** 认证头类型：bearer = Authorization: Bearer <key>（默认）；x-api-key = x-api-key: <key>（Anthropic 等） */
 export type ApiKeyHeader = "bearer" | "x-api-key";
 
-/** provider 名常量（唯一真源，避免字面量散落） */
-export const ZHIPU_PROVIDER = "zhipu";
-
-/**
- * 兜底模型 id：仅在调用方没有显式指定模型时使用（正常路径下前端总会带上）。
- *
- * 收口成常量是因为它原本散落在多处，且会话创建/迁移处曾用 "auto" 兜底——
- * 那是模型选择器里"按任务自动挑模型"的伪 id，Auto 移除后它不对应任何真实模型，
- * 真走到兜底分支就会拿着 "auto" 去调接口。兜底值必须是一个真的能跑的模型。
- */
-export const FALLBACK_MODEL_ID = "gpt-5.5";
 /** Axon 官方 provider：出厂内置 Claude 模型目录，apiKey 默认空，由官方分发或后续登录系统注入 */
 export const AXON_PROVIDER = "axon";
 
 /** 内置 provider 的保留名（自定义 provider 不允许占用） */
-export const RESERVED_PROVIDER_NAMES = [ZHIPU_PROVIDER, AXON_PROVIDER];
+export const RESERVED_PROVIDER_NAMES = [AXON_PROVIDER];
 
 /** 单个模型的元数据 */
 export interface ProviderModel {
@@ -69,7 +58,7 @@ export interface ProviderModel {
   protocol?: ProviderProtocol;
   /** 一句话描述（下拉里展示） */
   description?: string;
-  /** 厂商（openai / anthropic / qwen / zhipu 等），后端据此做厂商兼容 */
+  /** 厂商（openai / anthropic / qwen 等），后端据此做厂商兼容 */
   vendor?: string;
   /** 下拉分组标签（厂商/来源） */
   group?: string;
@@ -94,7 +83,7 @@ export interface ResolvedProvider {
   models: ProviderModel[];
   /** 当前生效的额度查询规则，不包含 API Key */
   quota?: ProviderQuotaConfig;
-  /** 是否内置（esign / zhipu） */
+  /** 是否内置 Provider */
   builtin: boolean;
   /** 仅 esign：除 apiKey 外（baseUrl / 协议 / 模型目录）均锁定不可改 */
   locked: boolean;

@@ -25,8 +25,7 @@ import { looksLikeIncompleteReply, LoopGuard, policyForModel, isSoftToolFailure,
 import { McpRegistry } from "./mcp/mcpRegistry.js";
 import { modelContextWindow } from "./llm/modelContext.js";
 import { SYSTEM_PROMPT, QUEST_SYSTEM_PROMPT } from "./systemPrompt.js";
-import { getStrategy, ZHIPU_PROVIDER, findProviderForModel, declaredThinkingFor, declaredCacheControlFor, declaredVisionFor, getVisionFallbackModel } from "./providers.js";
-import { DEFAULT_MODEL_ID } from "./providerCatalog.js";
+import { getStrategy, findProviderForModel, declaredThinkingFor, declaredCacheControlFor, declaredVisionFor, getVisionFallbackModel, getModelDisplayName } from "./providers.js";
 import { PromptBuilder, messageText } from "./session/promptBuilder.js";
 import { flattenToolHistory } from "./messageSanitizer.js";
 import {
@@ -229,8 +228,8 @@ export class AgentSession {
 
   constructor(cwd: string, channel: AgentChannel, host: AgentHost, existingMessages?: ChatCompletionMessageParam[], workspaces?: string[], homeDir?: string, web?: WebCapability, mode: "agent" | "quest" = "agent", mcp?: McpCapability, commandGate?: CommandGate) {
     this.mode = mode;
-    this.model = process.env.DEFAULT_MODEL || DEFAULT_MODEL_ID;
-    this.provider = process.env.DEFAULT_PROVIDER || ZHIPU_PROVIDER;
+    this.model = "";
+    this.provider = "";
     this.messages = existingMessages && existingMessages.length > 0
       ? existingMessages
       : [{ role: "system", content: mode === "quest" ? QUEST_SYSTEM_PROMPT : SYSTEM_PROMPT }];
@@ -1207,7 +1206,7 @@ export class AgentSession {
     });
     this.messages = out.messages;
     this.persistMessages(); // 最终回复落盘，切走也保留
-    this.send("stream_end", { elapsed: out.elapsed, tokens: out.turnTokens, model: this.model, credits: out.credits, creditDetail: out.creditDetail });
+    this.send("stream_end", { elapsed: out.elapsed, tokens: out.turnTokens, model: this.model, modelName: getModelDisplayName(this.model, this.provider), credits: out.credits, creditDetail: out.creditDetail });
     this.rollingSummaryAccumulated = out.nextRollingSummaryAccumulated;
     if (out.shouldTriggerRollingSummary) {
       this.maybeRollingSummary();
@@ -2071,7 +2070,7 @@ export class AgentSession {
     };
     const summaryCredits = calculateCredits(this.model, summaryBreakdown);
     const summaryCreditDetail = buildCreditDetail(this.model, summaryBreakdown);
-    this.send("stream_end", { elapsed: Date.now() - turnStartTime, tokens: summaryTokens, model: this.model, credits: summaryCredits, creditDetail: summaryCreditDetail });
+    this.send("stream_end", { elapsed: Date.now() - turnStartTime, tokens: summaryTokens, model: this.model, modelName: getModelDisplayName(this.model, this.provider), credits: summaryCredits, creditDetail: summaryCreditDetail });
   }
 }
 

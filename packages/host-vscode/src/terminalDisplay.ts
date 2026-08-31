@@ -122,6 +122,17 @@ interface PooledTerminal {
 const terminalPools = new Map<string, PooledTerminal[]>();
 let poolCounter = 0;
 
+/** 显式中断一条 execute_command 超时后仍在运行的终端命令。 */
+export function interruptTimedOutTask(terminalKey: string): boolean {
+  const task = timedOutRegistry.get(terminalKey);
+  if (!task || task.status !== "running") return false;
+  const pool = terminalPools.get(terminalKey);
+  const busyTerminal = pool?.find((entry) => entry.busy && !entry.terminal.exitStatus)?.terminal;
+  if (!busyTerminal) return false;
+  busyTerminal.sendText("\u0003", false);
+  return true;
+}
+
 // 全局监听终端关闭，从池中清理退出的终端
 vscode.window.onDidCloseTerminal((closed) => {
   for (const pool of terminalPools.values()) {
@@ -748,7 +759,8 @@ function waitForCompletion(cfg: WaitForCompletionConfig): Promise<{ code: number
     // ② 终端关闭
     disposables.push(cfg.onClose(() => finish(null)));
 
-    // ③ 超时：标记 reason="timeout"，让上层明确知道是超时而非普通失败
+    // ③ 超时只结束本次等待，不自动终止命令。AI 可通过 get_process_output 决定继续等待、
+    // 显式 stop_process，或直接让后续命令使用新终端继续执行。
     const timeoutTimer = setTimeout(() => finish(null, undefined, "timeout"), cfg.timeoutMs);
 
     // ④ idle poller：输出静默 → 交互输入检测 / 补偿丢失的 end 事件

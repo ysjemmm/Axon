@@ -18,14 +18,14 @@ import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/reso
 
 const CONFIG = {
   apiKey: process.env.LLM_API_KEY || "",
-  baseUrl: process.env.LLM_BASE_URL || "https://open.bigmodel.cn/api/paas/v4",
-  model: process.env.LLM_MODEL || "glm-4-plus",
+  baseUrl: process.env.LLM_BASE_URL || "",
+  model: process.env.LLM_MODEL || "",
 };
 
 const CWD = process.env.WORKSPACE_DIR || process.cwd();
 
-if (!CONFIG.apiKey) {
-  console.error("❌ 请设置 LLM_API_KEY 环境变量");
+if (!CONFIG.apiKey || !CONFIG.baseUrl || !CONFIG.model) {
+  console.error("❌ 请设置 LLM_API_KEY、LLM_BASE_URL 和 LLM_MODEL 环境变量");
   process.exit(1);
 }
 

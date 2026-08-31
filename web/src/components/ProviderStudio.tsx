@@ -2,7 +2,7 @@
  * ProviderStudio —— 全局 Provider 配置管理器（编辑器 Tab WebView，view=providers）
  *
  * 管理 .axon/settings/providers.json：
- *   - 内置 provider（zhipu）：只暴露 API Key 输入
+ *   - 内置 provider：按目录权限展示配置项
  *   - 自定义 provider：name / baseUrl / apiKey / 协议 / 模型，可增删
  *   - 写入层级：用户级（全局）/ 工作区级（仅当前项目）
  *
@@ -45,15 +45,15 @@ function isInVSCode(): boolean {
 }
 
 interface ProviderStudioProps {
-  /** 当前工作区路径（空则只能写用户级） */
+  /** 保留参数以兼容独立页面路由；Provider 配置当前统一使用用户级。 */
   workspace: string;
 }
 
 export function ProviderStudio({ workspace }: ProviderStudioProps) {
-  const [level, setLevel] = useState<ProviderLevel>("user");
+  const level: ProviderLevel = "user";
   const [providers, setProviders] = useState<ResolvedProviderInfo[]>([]);
   const [visionFallbackModel, setVisionFallbackModelState] = useState<string | null>(null);
-  const [savingVision, setSavingVision] = useState(false);
+  const [, setSavingVision] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -99,8 +99,11 @@ export function ProviderStudio({ workspace }: ProviderStudioProps) {
   }
 
   const builtins = providers.filter((p) => p.builtin);
-  const customs = providers.filter((p) => !p.builtin && p.customLevel === level);
-  const wsArg = workspace || undefined;
+  // Provider 管理暂时只开放用户级配置。缺少 customLevel 的旧运行时载荷同样按用户级展示。
+  const customs = providers.filter((p) => !p.builtin && (
+    p.customLevel === "user" || p.customLevel === undefined
+  ));
+  const wsArg = undefined;
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
@@ -110,10 +113,7 @@ export function ProviderStudio({ workspace }: ProviderStudioProps) {
           <span className="text-sm font-medium">Provider 配置</span>
         </div>
         <div className="flex items-center justify-between">
-          <div className="flex gap-1">
-            <LevelButton active={level === "user"} onClick={() => setLevel("user")} label="用户级（全局）" />
-            <LevelButton active={level === "workspace"} onClick={() => setLevel("workspace")} label="工作区级" disabled={!workspace} />
-          </div>
+          <span className="text-xs font-medium text-muted-foreground">用户级（全局）</span>
           {isInVSCode() && (
             <Button size="sm" variant="outline" onClick={() => openProviderConfigInEditor(level, wsArg)}>
               在编辑器中打开
@@ -121,7 +121,7 @@ export function ProviderStudio({ workspace }: ProviderStudioProps) {
           )}
         </div>
         <div className="text-[11px] text-muted-foreground mt-2">
-          写入目标：{level === "user" ? "~/.axon/settings/providers.json" : "<工作区>/.axon/settings/providers.json"}
+          写入目标：~/.axon/settings/providers.json
         </div>
       </div>
 
@@ -165,18 +165,6 @@ export function ProviderStudio({ workspace }: ProviderStudioProps) {
         <AddCustomForm level={level} workspace={wsArg} onChanged={refresh} />
       </div>
     </div>
-  );
-}
-
-function LevelButton({ active, onClick, label, disabled }: { active: boolean; onClick: () => void; label: string; disabled?: boolean }) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className={`px-3 py-1.5 text-xs rounded-md transition-colors ${active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"} disabled:opacity-40 disabled:cursor-not-allowed`}
-    >
-      {label}
-    </button>
   );
 }
 
@@ -445,7 +433,7 @@ function CustomCard({ provider, level, workspace, onChanged }: { provider: Resol
   );
 }
 
-const quotaTemplate = (provider: ResolvedProviderInfo): ProviderQuotaConfig => ({
+const quotaTemplate = (_provider: ResolvedProviderInfo): ProviderQuotaConfig => ({
   enabled: true,
   url: "{{origin}}/user/api/usage",
   method: "GET",
@@ -786,6 +774,18 @@ function ModelRow({ model, editable, confirmDelete, onToggle, onEdit, onDelete }
 }
 
 /** 模型新增/编辑表单 */
+function ProtocolButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`px-2 py-1 text-[11px] rounded transition-colors ${active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+    >
+      {label}
+    </button>
+  );
+}
+
 function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo; onSave: (m: ProviderModelInfo) => void; onCancel: () => void }) {
   const [id, setId] = useState(initial?.id || "");
   const [name, setName] = useState(initial?.name || "");
@@ -799,7 +799,6 @@ function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo;
     { id: "openai", label: "OpenAI" },
     { id: "anthropic", label: "Anthropic" },
     { id: "qwen", label: "Qwen" },
-    { id: "zhipu", label: "Zhipu" },
     { id: "ollama", label: "Ollama" },
   ];
 
@@ -837,9 +836,9 @@ function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo;
       </div>
       <div className="flex items-center gap-2">
         <Input placeholder="上下文窗口" value={win} onChange={(e) => setWin(e.target.value)} className="h-7 text-xs w-32" />
-        <LevelButton active={protocol === "chat"} onClick={() => setProtocol("chat")} label="Chat" />
-        <LevelButton active={protocol === "responses"} onClick={() => setProtocol("responses")} label="Responses" />
-        <LevelButton active={protocol === "anthropic"} onClick={() => setProtocol("anthropic")} label="Anthropic" />
+        <ProtocolButton active={protocol === "chat"} onClick={() => setProtocol("chat")} label="Chat" />
+        <ProtocolButton active={protocol === "responses"} onClick={() => setProtocol("responses")} label="Responses" />
+        <ProtocolButton active={protocol === "anthropic"} onClick={() => setProtocol("anthropic")} label="Anthropic" />
         <label className="flex items-center gap-1 text-xs text-muted-foreground cursor-pointer">
           <input type="checkbox" checked={vision} onChange={(e) => setVision(e.target.checked)} className="w-3 h-3 accent-primary" />
           多模态

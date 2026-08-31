@@ -107,20 +107,6 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
           align: "end",
           behavior: smooth ? "smooth" : "auto",
         });
-        // scrollToIndex 只滚到最后一条消息，footer（思考中/loading）在消息列表之外，
-        // 需要额外把容器滚到真正底部，把 footer 也带进视口。
-        const scrollContainerToBottom = () => {
-          const el = scrollContainerRef.current;
-          if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
-        };
-        if (smooth) {
-          // 平滑模式：等 virtuoso 渲染末尾后再滚容器，保留动画
-          requestAnimationFrame(scrollContainerToBottom);
-        } else {
-          // instant 模式：多帧兜底，确保虚拟列表测量滞后时也能到底
-          scrollContainerToBottom();
-          requestAnimationFrame(scrollContainerToBottom);
-        }
       },
       scrollToIndex(index: number, behavior: ScrollBehavior = "smooth") {
         virtuosoRef.current?.scrollToIndex({

@@ -6,7 +6,7 @@
  * relay_updated / relay_deleted
  */
 
-import { MODELS, findModel } from "@/components/ModelSelector";
+import { getModels, findModel } from "@/components/ModelSelector";
 import { getRelay, type RelayData } from "@/lib/apiClient";
 import { segEditUnits, extractBasename } from "../utils";
 import type { CommandApproval } from "../useChatSession";
@@ -327,4 +327,4 @@ export function clearWaitingInput(ctx: EventHandlerCtx): void {
 }
 
 /** 从 path 提取 basename（重导出供其他 handler 用） */
-export { extractBasename, MODELS, findModel };
+export { extractBasename, getModels, findModel };

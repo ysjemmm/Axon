@@ -46,7 +46,6 @@ Axon 背后接的不是一个模型，是一整个模型矩阵：
 | **OpenAI** | GPT 系列旗舰与轻量模型 |
 | **Anthropic Claude** | Claude Opus、Claude Sonnet 系列 |
 | **通义千问** | Qwen-Max、Qwen-Plus |
-| **智谱** | GLM 系列 |
 | **自定义接入** | 任何兼容 OpenAI 接口协议的模型，自己在设置里填一下就能用 |
 
 写代码用哪个、做代码审查用哪个、随手问个小问题用哪个，自己挑，不用将就。

@@ -3,7 +3,7 @@
  * 产出归一化的 ResolvedProvider[]（零形态依赖，读文件走注入的 host.fs）。
  *
  * 来源与优先级（同名后者覆盖前者）：
- *   · 内置目录（zhipu）：baseUrl/协议/模型固定，apiKey 由 env 或 providers.json.builtinApiKeys 注入
+ *   · 内置目录：baseUrl/协议/模型固定，apiKey 由 env 或 providers.json.builtinApiKeys 注入
  *   · 用户级：  ~/.axon/settings/providers.json
  *   · 工作区级：<workspace>/.axon/settings/providers.json
  *   · 纯 env：  PROVIDER_<NAME>_API_KEY/_BASE_URL（无模型元数据，仅保证 getClient 可用，向后兼容）

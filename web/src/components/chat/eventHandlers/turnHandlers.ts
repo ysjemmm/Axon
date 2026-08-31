@@ -53,6 +53,7 @@ export function handleTurnCancelled(msg: WsMessage, ctx: EventHandlerCtx): void 
     elapsed: (msg as any).elapsed || 0,
     tokens: (msg as any).tokens || 0,
     model: (msg as any).model as string | undefined,
+    modelName: (msg as any).modelName as string | undefined,
     credits: (msg as any).credits as number | undefined,
     creditDetail: (msg as any).creditDetail as CreditDetail | undefined,
   };

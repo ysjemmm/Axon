@@ -468,7 +468,7 @@ export interface ProviderModelInfo {
   vision?: boolean;
   protocol?: ProviderProtocol;
   description?: string;
-  /** 厂商（openai / anthropic / qwen / zhipu 等），后端据此做厂商兼容 */
+  /** 厂商（openai / anthropic / qwen 等），后端据此做厂商兼容 */
   vendor?: string;
   group?: string;
   free?: boolean;

@@ -83,7 +83,7 @@ export function AssistantTurnHeader({
           {liveStatus}
         </span>
       )}
-      {streaming && startedAt > 0 && <LiveElapsedTimer startedAt={startedAt} />}
+      {streaming && typeof startedAt === "number" && startedAt > 0 && <LiveElapsedTimer startedAt={startedAt} />}
       {children}
     </div>
   );
@@ -189,7 +189,9 @@ function AssistantTurnImpl({
             )}
             {" · "}Elapsed: {formatElapsed(message.turnStats.elapsed)}
             {uncertain ? "(?)" : ""}
-            {message.turnStats.model ? ` · ${message.turnStats.model}` : ""}
+            {message.turnStats.modelName || message.turnStats.model
+              ? ` · ${message.turnStats.modelName || message.turnStats.model}`
+              : ""}
           </div>
         )}
       </div>

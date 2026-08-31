@@ -1,6 +1,6 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { MODELS, findModel, getModels, useModels, normalizeStoredModelId, DEFAULT_MODEL_ID } from "@/components/ModelSelector";
+import { findModel, getModels, useModels, normalizeStoredModelId } from "@/components/ModelSelector";
 import { isToolInFlight, type ToolStatus } from "@/components/ToolCallItem";
 import { listRelays, type RelayData } from "@/lib/apiClient";
 import { useSessionEvents } from "@/hooks/useSessionEvents";
@@ -14,12 +14,12 @@ import type { EventHandlerCtx } from "./eventHandlers/types";
 import { useTypewriter } from "./useTypewriter";
 import { useToolCallQueue } from "./useToolCallQueue";
 
-/** 读取持久化的模型选择；已移除的 "auto" 视为没存过，回退到默认模型 */
+/** 读取持久化的模型选择；无记录或旧的 "auto" 都视为未选择。 */
 function readStoredModelId(): string {
   try {
-    return normalizeStoredModelId(localStorage.getItem(STORAGE.LAST_MODEL)) || DEFAULT_MODEL_ID;
+    return normalizeStoredModelId(localStorage.getItem(STORAGE.LAST_MODEL)) || "";
   } catch {
-    return DEFAULT_MODEL_ID;
+    return "";
   }
 }
 
@@ -76,7 +76,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const [isLoadingSession, setIsLoadingSession] = useState(!!sessionId);
   const [tokenUsage, setTokenUsage] = useState<{ used: number; max: number; cumulative: number }>(() => {
     const savedModel = readStoredModelId();
-    const currentModel = findModel(savedModel) || MODELS.find((m) => m.id === savedModel);
+    const currentModel = findModel(savedModel);
     return { used: 0, max: currentModel?.contextWindow || TIMEOUT.DEFAULT_CONTEXT_WINDOW, cumulative: 0 };
   });
   const [model, setModelState] = useState(() => {
