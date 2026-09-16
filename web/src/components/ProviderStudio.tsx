@@ -44,6 +44,17 @@ function isInVSCode(): boolean {
   return typeof window !== "undefined" && !!(window as any).__axonVSCode;
 }
 
+/**
+ * 同一 provider 下 model id 必须唯一（见 @axon/core 的 assertUniqueModelIds）。
+ * web 是独立工程、引用不到 core，所以这里做一份等价的轻量判定：只给即时反馈用，
+ * 真正的强制校验在后端写入时——重复提交会被服务端拒绝并报错。
+ */
+function isDuplicateModelId(id: string, otherIds: readonly string[]): boolean {
+  const trimmed = id.trim();
+  if (!trimmed) return false;
+  return otherIds.some((other) => other.trim() === trimmed);
+}
+
 interface ProviderStudioProps {
   /** 保留参数以兼容独立页面路由；Provider 配置当前统一使用用户级。 */
   workspace: string;
@@ -650,17 +661,22 @@ function ModelManager({ models, editable, onSave, providerName, level, workspace
   };
 
   const applyImport = (picks: ProbedModelInfo[]) => {
-    const existing = new Set(models.map((m) => m.id));
-    const added: ProviderModelInfo[] = picks
-      .filter((p) => !existing.has(p.id))
-      .map((p) => ({
+    // 同一 provider 内 model id 唯一：既要跳过已有模型，也要挡住端点自己返回的重复 id
+    // （后端写入时同样会校验，先在这里收敛，避免整批导入被拒）。
+    const taken = new Set(models.map((m) => m.id));
+    const added: ProviderModelInfo[] = [];
+    for (const p of picks) {
+      if (taken.has(p.id)) continue;
+      taken.add(p.id);
+      added.push({
         id: p.id,
         name: p.name || p.id,
         contextWindow: p.contextWindow ?? 128000,
         vision: p.vision ?? false,
         protocol: p.protocol,
         vendor: p.vendor,
-      }));
+      });
+    }
     setProbed(null);
     if (added.length > 0) onSave?.([...models, ...added]);
   };
@@ -672,7 +688,7 @@ function ModelManager({ models, editable, onSave, providerName, level, workspace
       )}
       {models.map((m, i) =>
         editing === i ? (
-          <ModelForm key={i} initial={m} onSave={(mm) => saveOne(mm, i)} onCancel={() => setEditing(null)} />
+          <ModelForm key={i} initial={m} existingIds={models.filter((_, idx) => idx !== i).map((mm) => mm.id)} onSave={(mm) => saveOne(mm, i)} onCancel={() => setEditing(null)} />
         ) : (
           <ModelRow
             key={i}
@@ -698,7 +714,7 @@ function ModelManager({ models, editable, onSave, providerName, level, workspace
         </div>
       )}
       {editable && editing === "new" && (
-        <ModelForm onSave={(mm) => saveOne(mm, "new")} onCancel={() => setEditing(null)} />
+        <ModelForm existingIds={models.map((mm) => mm.id)} onSave={(mm) => saveOne(mm, "new")} onCancel={() => setEditing(null)} />
       )}
       {probed && <ImportPanel probed={probed} existingIds={models.map((m) => m.id)} onApply={applyImport} onCancel={() => setProbed(null)} />}
     </div>
@@ -707,8 +723,14 @@ function ModelManager({ models, editable, onSave, providerName, level, workspace
 
 /** 端点导入结果选择面板 */
 function ImportPanel({ probed, existingIds, onApply, onCancel }: { probed: ProbedModelInfo[]; existingIds: string[]; onApply: (picks: ProbedModelInfo[]) => void; onCancel: () => void }) {
-  const existing = new Set(existingIds);
-  const selectable = probed.filter((p) => !existing.has(p.id));
+  // 端点自身可能返回重复 id：按「已有 + 已收录」双集合去重，否则面板里会出现两条同 id 项，
+  // 而且它们共用一个勾选状态（Set<string> 以 id 为键），勾一条会连带另一条。
+  const taken = new Set(existingIds);
+  const selectable = probed.filter((p) => {
+    if (taken.has(p.id)) return false;
+    taken.add(p.id);
+    return true;
+  });
   const [picked, setPicked] = useState<Set<string>>(new Set(selectable.map((p) => p.id)));
 
   const toggle = (id: string) => setPicked((prev) => {
@@ -786,7 +808,7 @@ function ProtocolButton({ active, onClick, label }: { active: boolean; onClick: 
   );
 }
 
-function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo; onSave: (m: ProviderModelInfo) => void; onCancel: () => void }) {
+function ModelForm({ initial, existingIds = [], onSave, onCancel }: { initial?: ProviderModelInfo; existingIds?: readonly string[]; onSave: (m: ProviderModelInfo) => void; onCancel: () => void }) {
   const [id, setId] = useState(initial?.id || "");
   const [name, setName] = useState(initial?.name || "");
   const [win, setWin] = useState(String(initial?.contextWindow || 128000));
@@ -806,15 +828,30 @@ function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo;
   // 走 chat 协议即可，只有该端点【只】提供原生 Anthropic Messages API 时才需要手动
   // 把下方协议切到 Anthropic（该端点没有 /v1/chat/completions，会 404）。
 
+  const trimmedId = id.trim();
+  // 同一 provider 内 model id 唯一：与已有模型（编辑时不含自身）重名就不允许提交。
+  // 后端写入时同样会拦（见 @axon/core 的 assertUniqueModelIds），这里只是省掉一次白跑的请求。
+  const duplicateId = isDuplicateModelId(trimmedId, existingIds);
+
   const submit = () => {
-    if (!id.trim()) return;
+    if (!trimmedId || duplicateId) return;
     const contextWindow = /^\d+$/.test(win.trim()) ? parseInt(win.trim(), 10) : 128000;
-    onSave({ id: id.trim(), name: name.trim() || id.trim(), contextWindow, vision, cacheControl: cacheControl || undefined, protocol, vendor: vendor || undefined, disabled: initial?.disabled });
+    onSave({ id: trimmedId, name: name.trim() || trimmedId, contextWindow, vision, cacheControl: cacheControl || undefined, protocol, vendor: vendor || undefined, disabled: initial?.disabled });
   };
 
   return (
     <div className="p-2 rounded-md border border-border bg-background space-y-1.5 my-1">
-      <Input placeholder="模型 id（发给 API 的那个，如 gpt-4o）" value={id} onChange={(e) => setId(e.target.value)} className="h-7 text-xs" />
+      <Input
+        placeholder="模型 id（发给 API 的那个，如 gpt-4o）"
+        value={id}
+        onChange={(e) => setId(e.target.value)}
+        className={`h-7 text-xs ${duplicateId ? "border-red-500 focus-visible:ring-red-500" : ""}`}
+      />
+      {duplicateId && (
+        <div className="text-[10px] text-red-600 dark:text-red-400">
+          该 provider 下已存在模型 id「{trimmedId}」，同一个 provider 不能重复添加。
+        </div>
+      )}
       <div className="flex items-center gap-2">
         <Input placeholder="显示名（可选）" value={name} onChange={(e) => setName(e.target.value)} className="h-7 text-xs flex-1" />
         <Select value={vendor} onValueChange={setVendor}>
@@ -848,7 +885,7 @@ function ModelForm({ initial, onSave, onCancel }: { initial?: ProviderModelInfo;
           缓存
         </label>
         <div className="ml-auto flex gap-1">
-          <Button size="sm" onClick={submit} disabled={!id.trim()}>保存</Button>
+          <Button size="sm" onClick={submit} disabled={!trimmedId || duplicateId}>保存</Button>
           <Button size="sm" variant="ghost" onClick={onCancel}>取消</Button>
         </div>
       </div>
@@ -923,7 +960,7 @@ function ModelEditor({ models, onChange }: { models: ProviderModelInfo[]; onChan
     <div className="space-y-1">
       {models.map((m, i) =>
         editing === i ? (
-          <ModelForm key={i} initial={m} onSave={(mm) => { save(mm, i); setEditing(null); }} onCancel={() => setEditing(null)} />
+          <ModelForm key={i} initial={m} existingIds={models.filter((_, idx) => idx !== i).map((mm) => mm.id)} onSave={(mm) => { save(mm, i); setEditing(null); }} onCancel={() => setEditing(null)} />
         ) : (
           <div key={i} className="flex items-center gap-2 px-2 py-1 rounded group/m">
             <span className="text-xs font-medium flex-1 truncate">{m.name || m.id}</span>
@@ -937,7 +974,7 @@ function ModelEditor({ models, onChange }: { models: ProviderModelInfo[]; onChan
         ),
       )}
       {editing === "new" ? (
-        <ModelForm onSave={(mm) => { save(mm, "new"); setEditing(null); }} onCancel={() => setEditing(null)} />
+        <ModelForm existingIds={models.map((mm) => mm.id)} onSave={(mm) => { save(mm, "new"); setEditing(null); }} onCancel={() => setEditing(null)} />
       ) : (
         <button onClick={() => setEditing("new")} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mt-1">
           <Plus className="w-3.5 h-3.5" />添加模型

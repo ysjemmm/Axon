@@ -15,6 +15,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { ModelSelector, useModels, findModel, getModels } from "@/components/ModelSelector";
 import { getVisionFallbackModel } from "@/lib/apiClient";
+import { updateDiagState } from "@/lib/diagnostics";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
 import { WorkspaceGroupManager, type WorkspaceGroup } from "@/components/WorkspaceGroupManager";
 import { AxonLogo } from "@/components/AxonLogo";
@@ -39,6 +40,7 @@ import { DEFAULT_SLASH_COMMANDS } from "./chat/slash/commands";
 import { CommandApprovalContext } from "./chat/commandApprovalContext";
 import { QuestionListPanel } from "./chat/QuestionListPanel";
 import { VirtualMessageList, type VirtualMessageListHandle } from "./chat/VirtualMessageList";
+import { nextHiddenCount, safeHiddenCount } from "./chat/scrollAnchor";
 import { AgentSelector } from "./AgentSelector";
 import { CONTROL_CMD } from "@/lib/constants";
 
@@ -49,22 +51,57 @@ const RESTORE_HISTORY_BATCH_SIZE = 24;
 export function ChatPanel({ clientId, sessionId, mode, connected, active, send, onSessionCreated, onCompactionMigrated, onStreamingChange }: ChatPanelProps) {
   const session = useChatSession({ clientId, sessionId, mode, connected, send, onSessionCreated, onCompactionMigrated, onStreamingChange });
   const [hiddenMessageCount, setHiddenMessageCount] = useState(0);
+  /** 列表当前是否贴底（由虚拟列表按真实滚动位置上报，非猜测） */
+  const [listAtBottom, setListAtBottom] = useState(true);
+  /** 上一次的会话消息总数：用于区分"追加消息"与"压缩/编辑后变短" */
+  const prevHistoryLenRef = useRef(session.chatHistory.length);
 
   // 虚拟列表只减少 DOM 数量，不会缩短滚动比例。每轮结束后把较早的 UI 消息折叠，
   // 但绝不修改 session.chatHistory：后端持久化、上下文压缩和历史恢复仍持有完整记录。
+  //
+  // 两条硬约束（都来自"视界不能跳"这条要求）：
+  // · 不在底部时不动可见窗口——从头部折叠消息会让整屏内容位移，用户正看着中间就被抽走一段；
+  // · 计数必须能随消息变少而收缩——上下文压缩会把 chatHistory 从几十条换成几条，
+  //   陈旧的大计数会让 slice() 直接切空，对话区白屏（见 scrollAnchor.nextHiddenCount）。
   useEffect(() => {
-    if (session.isLoading) return;
-    setHiddenMessageCount((previous) => Math.max(previous, session.chatHistory.length - VISIBLE_HISTORY_LIMIT, 0));
-  }, [session.chatHistory.length, session.isLoading]);
+    const len = session.chatHistory.length;
+    const prevLen = prevHistoryLenRef.current;
+    prevHistoryLenRef.current = len;
+    if (len === 0) return;
+    // 内容被整体替换（压缩 / 编辑 / 删除后变少）：必须立即纠正，且不受"只在贴底时才动窗口"
+    // 的限制——它改变的是窗口对应的内容本身，不纠正就会显示错内容（甚至切空）。
+    const shrank = len < prevLen;
+    if (!shrank && (session.isLoading || !listAtBottom)) return;
+    setHiddenMessageCount((previous) => nextHiddenCount(previous, prevLen, len, VISIBLE_HISTORY_LIMIT));
+  }, [session.chatHistory.length, session.isLoading, listAtBottom]);
 
   // 切换到另一会话时，不能沿用上一会话的折叠数量。
   useEffect(() => {
     setHiddenMessageCount(0);
   }, [sessionId]);
 
+  const historyLen = session.chatHistory.length;
+  /** 期望折叠数：窗口保留最近 VISIBLE_HISTORY_LIMIT 条 */
+  const wantHidden = Math.max(0, historyLen - VISIBLE_HISTORY_LIMIT);
+  /**
+   * 渲染期修正折叠计数（React 支持的"渲染中调整 state"模式：立即重渲染，不产生额外已绘制帧）。
+   *
+   * 触发条件是"折叠数超过了上限 len-1"，只有一种情况会造成它——上下文压缩把 chatHistory
+   * 从几十条替换成几条，而计数还停在旧的大值上。不修正的话，下面这一帧的 slice 就会切空，
+   * 对话区变成一片空白（白屏）。
+   *
+   * 为什么放在渲染期而不是 effect：effect 要等 paint 之后才跑，中间会真实绘制一帧
+   * "只剩最后一条消息"的中间态——那看起来就是闪一下。修正后接 setState 立即重渲染，
+   * 这个中间态不会被画出来。
+   */
+  if (hiddenMessageCount > Math.max(0, historyLen - 1)) {
+    setHiddenMessageCount(wantHidden);
+  }
+
   const visibleHistory = useMemo(
-    () => session.chatHistory.slice(hiddenMessageCount),
-    [session.chatHistory, hiddenMessageCount],
+    // 再钳一道：即便上面那帧修正还没落地，也保证永远不切空
+    () => session.chatHistory.slice(safeHiddenCount(hiddenMessageCount, historyLen)),
+    [session.chatHistory, hiddenMessageCount, historyLen],
   );
   const restoreEarlierMessages = useCallback(() => {
     setHiddenMessageCount((count) => Math.max(0, count - RESTORE_HISTORY_BATCH_SIZE));
@@ -114,6 +151,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   // 顶部 sticky：当前视图所属 AI 回答对应的用户提问
   const [stickyQuestion, setStickyQuestion] = useState<{ id: string; text: string } | null>(null);
   const lastStickyIdRef = useRef<string | null>(null);
+  const pendingStickyQuestionRef = useRef<{ id: string; text: string } | null>(null);
+  const stickyUpdateFrameRef = useRef<number | null>(null);
 
   const virtualListRef = useRef<VirtualMessageListHandle>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -138,7 +177,21 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   const slash = useSlashCommands({ host: slashHost, editor: slashEditorBridge, commands: slashCommands });
 
   // 输入框上沿的吉祥物：按 焦点 / 击键 / AI 忙 / 静默 切换表情
-  const mascot = useMascotMood(session.isLoading);
+  const mascotAiState = session.isLoading
+    ? (assistantTurnStarted ? "thinking" : "waiting")
+    : lastMessage?.role === "assistant" && lastMessage.turnStatus === "error"
+      ? "error"
+      : lastMessage?.role === "assistant" && lastMessage.turnStatus === "cancelled"
+        ? "cancelled"
+        : lastMessage?.role === "assistant" && lastMessage.turnStatus === "success"
+          ? "done"
+          : "idle";
+  const mascot = useMascotMood(mascotAiState);
+
+  // 把"AI 是否正在输出"同步给诊断模块：界面卡死时用它判断"卡灰"是否与流式同时发生
+  useEffect(() => {
+    updateDiagState({ streaming: session.isLoading });
+  }, [session.isLoading]);
 
   /** 编辑器内容变化：刷新空态 + 驱动斜杠检测 */
   const handleEditorChange = useCallback((before: string) => {
@@ -181,6 +234,12 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     }
     return map;
   }, [session.chatHistory]);
+  const chatHistoryRef = useRef(session.chatHistory);
+  const questionTextByIdRef = useRef(questionTextById);
+  const hiddenMessageCountRef = useRef(hiddenMessageCount);
+  chatHistoryRef.current = session.chatHistory;
+  questionTextByIdRef.current = questionTextById;
+  hiddenMessageCountRef.current = hiddenMessageCount;
 
   /** 点击 sticky 条：平滑滚动到对应提问处，落点刚好在 sticky 条下方一点 */
   const scrollToQuestion = useCallback((id: string) => {
@@ -192,13 +251,11 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   const [showScrollBtn, setShowScrollBtn] = useState(false);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "instant") => {
-    autoScrollUserOverride.current = false;
     setShowScrollBtn(false);
     virtualListRef.current?.scrollToBottom(behavior);
   }, []);
 
   const animatedScrollToBottom = useCallback(() => {
-    autoScrollUserOverride.current = false;
     setShowScrollBtn(false);
     virtualListRef.current?.scrollToBottom("smooth");
   }, []);
@@ -208,22 +265,42 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
   // sticky user question 检测：基于顶部可见消息 index，在数据数组里往前找最近的用户消息。
   // 不依赖 DOM（虚拟列表会移除滚出视口的元素），所以靠近底部也能稳定显示。
-  const handleTopItemChange = useCallback((topIndex: number) => {
-    const history = session.chatHistory;
+  const handleTopItemChange = useCallback((visibleTopIndex: number) => {
+    const history = chatHistoryRef.current;
+    const topIndex = visibleTopIndex + hiddenMessageCountRef.current;
     let current: { id: string; text: string } | null = null;
     for (let i = Math.min(topIndex, history.length - 1); i >= 0; i--) {
       const m = history[i];
       if (m.role === "user") {
-        current = { id: m.id, text: questionTextById.get(m.id) || "" };
+        current = { id: m.id, text: questionTextByIdRef.current.get(m.id) || "" };
         break;
       }
     }
     const nextId = current?.id ?? null;
-    if (nextId !== lastStickyIdRef.current) {
-      lastStickyIdRef.current = nextId;
-      setStickyQuestion(current && current.text ? current : null);
-    }
-  }, [session.chatHistory, questionTextById]);
+    // rangeChanged 发生在 Virtuoso 的同步测量过程中。不能在这里直接 setState：
+    // 流式内容变高 → 测量范围变化 → 更新 sticky → 列表重新测量，会形成嵌套更新循环。
+    // 合并到下一帧后，测量与 React 更新不再位于同一个调用栈。
+    pendingStickyQuestionRef.current = current && current.text ? current : null;
+    if (stickyUpdateFrameRef.current !== null) return;
+    if (nextId === lastStickyIdRef.current) return;
+    stickyUpdateFrameRef.current = requestAnimationFrame(() => {
+      stickyUpdateFrameRef.current = null;
+      const next = pendingStickyQuestionRef.current;
+      pendingStickyQuestionRef.current = null;
+      const pendingId = next?.id ?? null;
+      if (pendingId === lastStickyIdRef.current) return;
+      lastStickyIdRef.current = pendingId;
+      setStickyQuestion(next);
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (stickyUpdateFrameRef.current !== null) {
+        cancelAnimationFrame(stickyUpdateFrameRef.current);
+      }
+    };
+  }, []);
 
   handleScrollRef.current = (scrollTopVal: number) => {
     const state = virtualListRef.current?.getScrollState();
@@ -243,6 +320,13 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     const t = setTimeout(() => session.setUndoNotice(null), 3000);
     return () => clearTimeout(t);
   }, [session.undoNotice, session.setUndoNotice]);
+
+  // 命令风险提醒：停留久一些（安全信息值得看清），但也会自动消失，避免长期占位
+  useEffect(() => {
+    if (!session.commandRiskNotice) return;
+    const t = setTimeout(() => session.setCommandRiskNotice(null), 8000);
+    return () => clearTimeout(t);
+  }, [session.commandRiskNotice, session.setCommandRiskNotice]);
 
   // 会话清空时重置顶部 sticky 提问条
   useEffect(() => {
@@ -268,58 +352,9 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     setTimeout(scroll, 300);
   }, [session.isLoadingSession, session.chatHistory.length]);
 
-  // 流式输出时自动跟随底部：用 wheel 事件精确判断用户意图。
-  // 向上滚一次 → 停止追底；滚回底部 → 恢复追底。
-  // 终端卡、信任面板等会在不新增消息的情况下改变现有消息高度；Virtuoso 不会把
-  // 这种变化当作 followOutput。这里用 MutationObserver 检测实际内容变化，再单帧合并
-  // 为一次 Virtuoso API 调用，避免旧版 60ms 原生 scrollTo 轮询与虚拟列表锚点打架。
-  const autoScrollUserOverride = useRef(false);
-  useEffect(() => {
-    if (!session.isLoading) {
-      autoScrollUserOverride.current = false;
-      return;
-    }
-    // 启动时滚到底部
-    virtualListRef.current?.scrollToBottom("instant");
-
-    const container = virtualListRef.current?.getScrollContainer();
-    if (!container) return;
-
-    const onWheel = (e: WheelEvent) => {
-      if (e.deltaY < 0) {
-        // 向上滚 → 用户想离开底部
-        autoScrollUserOverride.current = true;
-      } else {
-        // 向下滚 → 检测是否已到底部
-        const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 40;
-        if (atBottom) autoScrollUserOverride.current = false;
-      }
-    };
-    container.addEventListener("wheel", onWheel, { passive: true });
-
-    let resizeFrame: number | null = null;
-    let previousHeight = container.scrollHeight;
-    const followContentGrowth = () => {
-      if (resizeFrame !== null) return;
-      resizeFrame = requestAnimationFrame(() => {
-        resizeFrame = null;
-        const nextHeight = container.scrollHeight;
-        if (nextHeight === previousHeight) return;
-        previousHeight = nextHeight;
-        if (!autoScrollUserOverride.current) {
-          virtualListRef.current?.scrollToBottom("instant");
-        }
-      });
-    };
-    const contentObserver = new MutationObserver(followContentGrowth);
-    contentObserver.observe(container, { childList: true, characterData: true, subtree: true });
-
-    return () => {
-      container.removeEventListener("wheel", onWheel);
-      contentObserver.disconnect();
-      if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
-    };
-  }, [session.isLoading]);
+  // 流式跟随已下沉到 VirtualMessageList 内部：由它按真实滚动位置（距底部 ≤ 10px）
+  // 决定"钉底"还是"保持视界"。放在这里做不到——本组件拿不到滚轮以外的用户滚动
+  // （拖滚动条、键盘翻页），也判断不出收尾那几帧的布局变化。
 
   // 切回该会话（变为可见）时自动滚到底部
   useEffect(() => {
@@ -391,7 +426,13 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
     const queued = session.submit(payload);
     if (!queued) {
-      requestAnimationFrame(() => scrollToBottom("smooth"));
+      // submit 会先更新 chatHistory/isLoading，footer 的“思考中...”占位随后才挂载；
+      // 发送瞬间滚动时 Virtuoso 还看不到这个 footer，导致视口停在上一条消息上。
+      // 连续补两帧，分别覆盖 React 提交和 Virtuoso 测量完成后的时序。
+      requestAnimationFrame(() => {
+        scrollToBottom("smooth");
+        requestAnimationFrame(() => scrollToBottom("instant"));
+      });
       editorRef.current?.focus();
     }
   };
@@ -961,7 +1002,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             estimateHeight={200}
             overscan={300}
             onScroll={stableOnScroll}
-            onTopItemChange={(index) => handleTopItemChange(index + hiddenMessageCount)}
+            onTopItemChange={handleTopItemChange}
+            onAtBottomChange={setListAtBottom}
             followOutput={false}
             initialBottom={!session.isLoadingSession && session.chatHistory.length > 0}
             header={
@@ -1295,43 +1337,25 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               </button>
             </div>
           )}
-          {/* 危险命令被安全策略拦截：可关闭的警告横幅。
-                dangerous 模式下提供"拒绝"和"仍要执行"两个选择；
-                旧版（无 requestId）仅展示关闭按钮。 */}
-          {session.commandBlocked && (
-            <div className="flex items-start gap-2 px-3 py-2 bg-destructive/5 border border-destructive/20 rounded-lg mb-2">
-              <ShieldAlert className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+          {/* 命令风险提醒：已信任的命令命中风险模式（如递归删除）时照常执行，
+                这里只做提示、不需要应答。8 秒后自动消失，也可手动关闭。 */}
+          {session.commandRiskNotice && (
+            <div className="flex items-start gap-2 px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded-lg mb-2">
+              <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium text-destructive">已拦截危险命令</p>
+                <p className="text-xs font-medium text-amber-700 dark:text-amber-500">风险提醒（命令已执行）</p>
                 <p className="text-[11px] text-muted-foreground mt-0.5 break-all font-mono">
-                  {session.commandBlocked.command}
+                  {session.commandRiskNotice.command}
                 </p>
-                <p className="text-[11px] text-muted-foreground mt-0.5">原因：{session.commandBlocked.reason}</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">原因：{session.commandRiskNotice.reason}</p>
               </div>
-              {session.commandBlocked.dangerous && session.commandBlocked.requestId ? (
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <button
-                    onClick={() => session.respondToDangerousCommand(session.commandBlocked!.requestId!, false)}
-                    className="px-2.5 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
-                  >
-                    拒绝
-                  </button>
-                  <button
-                    onClick={() => session.respondToDangerousCommand(session.commandBlocked!.requestId!, true)}
-                    className="px-2.5 py-1 rounded-md text-xs font-medium bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
-                  >
-                    仍要执行
-                  </button>
-                </div>
-              ) : (
-                <button
-                  onClick={session.dismissCommandBlocked}
-                  className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors shrink-0"
-                  title="关闭"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
+              <button
+                onClick={session.dismissCommandRiskNotice}
+                className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors shrink-0"
+                title="关闭"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
             </div>
           )}
           {/* 命令信任授权改为内联在对应命令卡片下方（无感模式），见 ToolCallItem。此处不再用模态弹窗 */}
@@ -1515,13 +1539,19 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                 </TooltipProvider>
               )}
               <TokenIndicator used={session.tokenUsage.used} max={session.tokenUsage.max} cumulative={session.tokenUsage.cumulative} />
-              {/* 压缩上下文按钮 */}
+              {/*
+                压缩上下文按钮。禁用只由三件事决定：压缩进行中 / 上下文已超限 / 用量未达 35%。
+                ⚠️ 刻意【不】用"消息条数"做门槛（曾有一条 chatHistory.length < 6）：一个 agent 回合
+                无论中间跑多少轮工具，在 UI 上都只占 2 条（user + 合并后的 assistant），于是
+                "一句提问 + 大量工具轮"这种最需要压缩的形态，条数永远卡在 2，手动压缩永远点不动。
+                有没有东西可压，一律以 token 用量为准。
+              */}
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
                       onClick={() => session.compactSession()}
-                      disabled={session.isCompacting || session.contextOverflow || session.chatHistory.length < 6 || (session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35)}
+                      disabled={session.isCompacting || session.contextOverflow || (session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35)}
                       className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                     >
                       {session.isCompacting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Minimize2 className="w-3.5 h-3.5" />}

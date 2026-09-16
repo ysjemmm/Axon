@@ -1,10 +1,10 @@
 /**
- * CommandGate 测试 —— 三层门控的关键安全不变量。
+ * CommandGate 测试 —— 门控的关键不变量。
  *
  * 重点：
- * - 灾难命令即便处于信任白名单（甚至 `*`）仍被硬拦，且触发 emitBlocked。
- * - 内置只读默认集免确认。
+ * - 已信任命令直接放行；命中风险模式（如递归删除）时**只给提醒、不二次确认**。
  * - 未信任命令走人工授权：reject / once / exact / prefix 的行为与持久化语义。
+ * - 内置只读默认集免确认。
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -17,34 +17,61 @@ type Decision = { choice: "exact" | "prefix" | "all" | "once" | "reject"; patter
 /** 构造一套可断言的 gate 依赖，requestApproval 由用例指定决策 */
 function makeDeps(decision: Decision) {
   const persisted: TrustRule[] = [];
-  const blocked: { command: string; reason: string }[] = [];
   const requestApproval = vi.fn(async () => decision);
   const deps: GateDeps = {
     requestApproval,
-    emitBlocked: (command, reason) => { blocked.push({ command, reason }); },
     persist: (rule) => { persisted.push(rule); },
   };
-  return { deps, persisted, blocked, requestApproval };
+  return { deps, persisted, requestApproval };
 }
 
-describe("危险命令走人工确认（当前设计：不再硬拦，弹确认并透传 danger 标记）", () => {
-  it("危险命令即便已信任也要弹人工确认；用户选 all 时放行", async () => {
+describe("风险检测只产出提醒，不触发二次确认", () => {
+  it("已信任 + 命中风险 → 直接放行、不弹确认，并回传 warning", async () => {
     const gate = new CommandGate(["*"]);
+    // 用 reject 做探针：若真弹了确认，下面 allow 就会是 false
+    const { deps, requestApproval } = makeDeps({ choice: "reject" });
+    const outcome = await gate.gate("rm -rf /tmp/x", deps);
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(outcome.allow).toBe(true);
+    expect(outcome.warning).toBeTruthy();
+  });
+
+  it("已信任 + 无风险 → 放行且不带 warning", async () => {
+    const gate = new CommandGate(["*"]);
+    const { deps, requestApproval } = makeDeps({ choice: "reject" });
+    const outcome = await gate.gate("npm test", deps);
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(outcome.allow).toBe(true);
+    expect(outcome.warning).toBeUndefined();
+  });
+
+  it("未信任 + 命中风险 → 仍走人工确认，并把风险原因透传给确认弹窗", async () => {
+    const gate = new CommandGate([]);
     const { deps, requestApproval } = makeDeps({ choice: "all" });
-    const outcome = await gate.gate("rm -rf /", deps);
-    // 当前设计：危险命令不再硬拦，而是把 danger 透传给审批弹窗，由用户决定
+    const outcome = await gate.gate("Remove-Item -Force -Recurse C:\\data", deps);
     expect(requestApproval).toHaveBeenCalledTimes(1);
-    const dangerArg = requestApproval.mock.calls[0][2];
-    expect(dangerArg).toBeTruthy(); // 第三个参数为 danger 原因，非空表示命中危险规则
+    expect(requestApproval.mock.calls[0][2]).toBeTruthy(); // 第三个参数：风险原因
     expect(outcome.allow).toBe(true);
   });
 
-  it("危险命令被用户拒绝时不放行，并给出危险相关文案", async () => {
-    const gate = new CommandGate(["*"]);
+  it("未信任 + 用户拒绝 → 不放行，并给出风险相关文案", async () => {
+    const gate = new CommandGate([]);
     const { deps } = makeDeps({ choice: "reject" });
     const outcome = await gate.gate("Remove-Item -Recurse -Force C:\\data", deps);
     expect(outcome.allow).toBe(false);
     expect(outcome.aiMessage).toBeTruthy();
+  });
+});
+
+describe("风险模式的参数顺序无关（修复漏报）", () => {
+  it("-Recurse 排在 -Force 之后同样被识别", async () => {
+    const gate = new CommandGate(["*"]);
+    const { deps } = makeDeps({ choice: "reject" });
+    const normal = await gate.gate("Remove-Item -Recurse -Force D:/tmp", deps);
+    const swapped = await gate.gate("Remove-Item -Force -Recurse D:/tmp", deps);
+    expect(normal.warning).toBeTruthy();
+    // 旧实现的正则要求 -Recurse 在 -Force 之前，这里会漏报成 undefined
+    expect(swapped.warning).toBeTruthy();
   });
 });
 

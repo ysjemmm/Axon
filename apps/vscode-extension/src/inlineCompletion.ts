@@ -9,7 +9,7 @@
  */
 
 import * as vscode from "vscode";
-import { getClient, getResolvedProviders } from "@axon/core";
+import { getClient, getResolvedProviders, resolveProviderName } from "@axon/core";
 
 // ── 配置 ──────────────────────────────────────────────────────────────────
 
@@ -130,6 +130,24 @@ function detectModel(providerName: string): string {
 
 // ── 主入口 ────────────────────────────────────────────────────────────────
 
+/** 已提示过的非法 provider 值：同一个值只提示一次，避免每次击键都刷屏 */
+let warnedInvalidProvider = "";
+
+/**
+ * 配置里的 provider 解析失败时给一次可操作的提示。
+ * 内联补全挂在每次输入上，同一个配置问题会被触发成百上千次——只提示一次，
+ * 并直接把可用的 provider key 列出来，免得用户对着「未知 provider」猜。
+ */
+function warnInvalidProvider(value: string): void {
+  if (warnedInvalidProvider === value) return;
+  warnedInvalidProvider = value;
+  const valid = getResolvedProviders().map((p) => p.name).join(", ") || "（无）";
+  console.warn(
+    `[axon] 内联补全：配置项 axon.inlineCompletion.provider 的 "${value}" 不是有效的 provider，` +
+    `已跳过补全。可用 provider：${valid}。（填 provider key 或它的展示名都可以，建议清空该项改用自动探测）`,
+  );
+}
+
 export function registerInlineCompletion(context: vscode.ExtensionContext): void {
   const cfg = getConfig();
   if (!cfg.enabled) return;
@@ -141,8 +159,14 @@ export function registerInlineCompletion(context: vscode.ExtensionContext): void
       const cfg = getConfig();
       if (!cfg.enabled) return [];
 
-      const providerName = cfg.provider || detectProvider();
-      if (!providerName) return [];
+      // provider 可能被填成展示名（label）而不是 key，统一解析成规范 name。
+      // 解析不出来时不要拿它去 getClient（那会抛异常），而是提示一次并跳过本轮。
+      const configured = cfg.provider.trim();
+      const providerName = configured ? (resolveProviderName(configured) ?? "") : detectProvider();
+      if (!providerName) {
+        if (configured) warnInvalidProvider(configured);
+        return [];
+      }
 
       // 至少要有一定量的前置上下文才触发
       const prefix = getPrefix(document, position, cfg.maxPrefixLines);

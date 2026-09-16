@@ -1,8 +1,11 @@
 import { StrictMode, Component, type ErrorInfo, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
-import "katex/dist/katex.min.css";
 import App from "./App";
+import { installDiagnostics } from "./lib/diagnostics";
+
+// 尽早挂载诊断：它要在应用渲染前就位，才能捕获到启动阶段及后续的偶发卡死
+installDiagnostics();
 
 /**
  * 全局 Error Boundary：捕获 React 渲染阶段的错误，打印完整组件栈到 console。

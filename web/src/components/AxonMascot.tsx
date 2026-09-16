@@ -22,7 +22,7 @@
  *    眨眼是眼睛 scaleY），避免同一小块区域出现多重明暗振荡。
  */
 
-export type MascotMood = "idle" | "focused" | "typing" | "deleting" | "thinking" | "sleeping";
+export type MascotMood = "idle" | "focused" | "typing" | "deleting" | "waiting" | "thinking" | "done" | "error" | "cancelled" | "sleeping";
 
 interface MoodLook {
   /** 整体（身体 + 触须 + 五官）的姿态动画类 */
@@ -61,6 +61,22 @@ const LOOKS: Record<MascotMood, MoodLook> = {
   thinking: {
     bodyClass: "axon-mascot-bob", antennaClass: "", eyeClass: "",
     pupilDx: 0, pupilDy: -0.7, eyesShut: false, sparkle: true, mouth: "o",
+  },
+  waiting: {
+    bodyClass: "axon-mascot-waiting", antennaClass: "", eyeClass: "axon-mascot-blink",
+    pupilDx: 0, pupilDy: 1.2, eyesShut: false, sparkle: false, mouth: "flat",
+  },
+  done: {
+    bodyClass: "axon-mascot-done", antennaClass: "", eyeClass: "axon-mascot-blink",
+    pupilDx: 0, pupilDy: 0, eyesShut: false, sparkle: false, mouth: "smile",
+  },
+  error: {
+    bodyClass: "axon-mascot-error", antennaClass: "", eyeClass: "axon-mascot-squint",
+    pupilDx: 0, pupilDy: 0.8, eyesShut: false, sparkle: false, mouth: "flat",
+  },
+  cancelled: {
+    bodyClass: "axon-mascot-cancelled", antennaClass: "", eyeClass: "",
+    pupilDx: -0.8, pupilDy: 0, eyesShut: false, sparkle: false, mouth: "flat",
   },
   sleeping: {
     bodyClass: "axon-mascot-sleep", antennaClass: "", eyeClass: "",
@@ -158,6 +174,27 @@ export function AxonMascot({ mood, size = 26, className = "" }: AxonMascotProps)
         >
           z
         </text>
+      )}
+
+      {mood === "waiting" && (
+        <g className="axon-mascot-hourglass" aria-hidden="true">
+          <path d="M30 15 H37 M30 27 H37 M31 15 C31 19 36 19 36 23 C36 25 34 26 33.5 27 M36 15 C36 19 31 19 31 23 C31 25 33 26 33.5 27" stroke="#f59e0b" strokeWidth="1.3" strokeLinecap="round" fill="none" />
+          <path d="M32 17.2 H35 L33.5 20 Z M32 24.8 H35 L33.5 22 Z" fill="#fbbf24" />
+        </g>
+      )}
+      {mood === "thinking" && (
+        <g className="axon-mascot-thoughts" aria-hidden="true">
+          <circle cx="33" cy="10" r="1.5" fill="#38bdf8" />
+          <circle cx="37" cy="7" r="2.2" fill="#818cf8" />
+        </g>
+      )}
+      {(mood === "done" || mood === "error" || mood === "cancelled") && (
+        <g className="axon-mascot-badge" aria-hidden="true">
+          <circle cx="34" cy="9" r="5" fill={mood === "done" ? "#22c55e" : mood === "error" ? "#ef4444" : "#94a3b8"} />
+          {mood === "done" && <path d="M31.5 9 L33.3 10.8 L36.7 7.3" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />}
+          {mood === "error" && <path d="M34 6.5 V9.5 M34 11.5 V11.6" stroke="white" strokeWidth="1.5" strokeLinecap="round" />}
+          {mood === "cancelled" && <path d="M31.5 9 H36.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" />}
+        </g>
       )}
 
       <defs>

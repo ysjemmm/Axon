@@ -114,6 +114,74 @@ export interface ToolSpec {
   contentLimit?: number;
 }
 
+/**
+ * “不截断”哨兵值：给那些结果一旦被砍就补不回来的工具用。
+ * 内容上限设为无穷大，使各处 `len > limit` 的判定恒为 false。
+ */
+export const NO_CONTENT_LIMIT = Number.POSITIVE_INFINITY;
+
+/**
+ * 不截断工具：结果必须原样保留，任何环节都不得裁剪。只含结论型——
+ *   · 结论型（delegate_task / parallel_research / parallel_execute）：子 Agent 的最终交付物，
+ *     不像 read_file 那样能“换个范围再读一次”，砍掉即永久丢失。
+ *
+ * ⚠️ 终端类（execute_command / get_process_output）曾经也在本集合里，现已移出，见 TERMINAL_OUTPUT_TOOLS。
+ * 原因是实测事故：它们“重跑有代价”所以不该随便裁，但**没有上限**会出事——某会话因一条跨仓库
+ * 递归搜索的命令输出（1168 万字符）把上下文顶到 327 万 token，是 1M 窗口的 3 倍多，界面直接 100% 卡死。
+ * 现在改为：单次结果有硬上限（TERMINAL_OUTPUT_CAP，超出保留头尾），旧轮次允许被裁剪。
+ *
+ * 覆盖的裁剪环节：
+ *   · 存入对话历史：toolOutcomeRecorder / SubAgentRunner 读 contentLimit
+ *   · 旧轮次裁剪：compactor.pruneOldToolResults
+ *   · 请求组装的历史摘要：promptBuilder
+ *   · 发往前端的实时事件：见 FULL_RESULT_TOOLS（结论型仍走完整结果）
+ *
+ * 注意：host 层的 MAX_BUFFER_CHARS 是采集侧的内存保护（进程输出缓冲自动滚出旧内容），
+ * 不属于“对结果的裁剪”，不在此列。
+ */
+export const NO_TRUNCATE_TOOLS: Set<string> = new Set([
+  ToolName.DelegateTask,
+  ToolName.ParallelResearch,
+  ToolName.ParallelExecute,
+]);
+
+/**
+ * 终端类工具：输出体量由外部命令决定，我们控制不了。
+ *
+ * 与结论型的处理策略刻意不同：
+ *   · 结论型——任何环节都不裁（永久保留，不可复得）
+ *   · 终端类——单次结果有硬上限（TERMINAL_OUTPUT_CAP）；旧轮次允许被裁剪
+ *     （把“重跑一次”当作可接受的代价，换取上下文不再被历史输出长期占用）
+ *
+ * 为什么旧轮次可以裁：这类输出几十 KB 起步，信息早已被模型提炼进回复，
+ * 留在历史里对后续判断几乎零价值，却要每一轮请求都重发一遍。
+ */
+export const TERMINAL_OUTPUT_TOOLS: Set<string> = new Set([
+  ToolName.ExecuteCommand,
+  ToolName.GetProcessOutput,
+]);
+
+/**
+ * 单次终端输出保留的最大字符数（≈2.8 万 token，约 1M 窗口的 2.8%）。
+ *
+ * 取这个量级的理由：正常构建日志/搜索结果远达不到，不会误伤；
+ * 而病态输出（递归全盘搜索、无过滤的巨型 JSON）被挡在这里，
+ * 不至于一条命令就把上下文顶爆。
+ */
+export const TERMINAL_OUTPUT_CAP = 100_000;
+
+/**
+ * 发往前端实时事件时保留完整结果（不降为 500 字符预览）的工具。
+ * = 结论型 ∪ 终端类：终端输出正是用户在卡片上要看的主体内容。
+ *
+ * 注意它只决定“发多少给前端”，不决定“旧轮次是否允许被裁剪”——后者看 NO_TRUNCATE_TOOLS。
+ * 这两件事过去共用一个集合，所以“要不要在历史里保留”和“要不要发给前端看”被绑死了。
+ */
+export const FULL_RESULT_TOOLS: Set<string> = new Set([
+  ...NO_TRUNCATE_TOOLS,
+  ...TERMINAL_OUTPUT_TOOLS,
+]);
+
 const S = (content: string, phase: string) => ({ content, phase });
 
 /**
@@ -124,9 +192,9 @@ export const TOOL_CATALOG: Record<ToolName, ToolSpec> = {
   [ToolName.CreateFile]: { status: S("正在创建文件...", "editing"), requiresArgs: true, snapshot: true, editPersist: true },
   [ToolName.StrReplace]: { status: S("正在修改文件...", "editing"), requiresArgs: true, snapshot: true, editPersist: true, softFailProne: true },
   [ToolName.ApplyPatch]: { requiresArgs: true, snapshot: true, editPersist: true, softFailProne: true },
-  [ToolName.ExecuteCommand]: { status: S("正在执行命令...", "running"), requiresArgs: true, transientAggressive: true },
+  [ToolName.ExecuteCommand]: { status: S("正在执行命令...", "running"), requiresArgs: true, contentLimit: TERMINAL_OUTPUT_CAP },
   [ToolName.StartProcess]: { status: S("正在启动后台进程...", "running"), requiresArgs: true },
-  [ToolName.GetProcessOutput]: { status: S("正在读取进程输出...", "running"), requiresArgs: true },
+  [ToolName.GetProcessOutput]: { status: S("正在读取进程输出...", "running"), requiresArgs: true, contentLimit: TERMINAL_OUTPUT_CAP },
   [ToolName.StopProcess]: { status: S("正在停止后台进程...", "running"), requiresArgs: true },
   [ToolName.ListProcesses]: { status: S("正在列出后台进程...", "running") },
   [ToolName.OpenBrowser]: { status: S("正在打开浏览器...", "running"), requiresArgs: true },
@@ -155,14 +223,14 @@ export const TOOL_CATALOG: Record<ToolName, ToolSpec> = {
   [ToolName.WebFetch]: { status: S("正在获取网页...", "searching"), requiresArgs: true, readOnly: true, transient: true, contentLimit: 10_000 },
   [ToolName.UseSkill]: { status: S("正在加载 Skill...", "thinking"), requiresArgs: true, readOnly: true },
   [ToolName.ActivatePower]: { requiresArgs: true, readOnly: true },
-  [ToolName.DelegateTask]: { status: S("正在委托子 Agent...", "delegating"), requiresArgs: true },
+  [ToolName.DelegateTask]: { status: S("正在委托子 Agent...", "delegating"), requiresArgs: true, contentLimit: NO_CONTENT_LIMIT },
   [ToolName.RelayCreate]: { status: S("正在创建工作流...", "planning"), requiresArgs: true },
   [ToolName.RelaySaveDoc]: { requiresArgs: true },
   [ToolName.RelayAdvance]: { requiresArgs: true },
   [ToolName.RelayUpdateTask]: { requiresArgs: true },
   [ToolName.RelayReviewTask]: { requiresArgs: true },
-  [ToolName.ParallelResearch]: { status: S("正在并行调研...", "delegating"), requiresArgs: true },
-  [ToolName.ParallelExecute]: { status: S("正在并行执行...", "delegating"), requiresArgs: true },
+  [ToolName.ParallelResearch]: { status: S("正在并行调研...", "delegating"), requiresArgs: true, contentLimit: NO_CONTENT_LIMIT },
+  [ToolName.ParallelExecute]: { status: S("正在并行执行...", "delegating"), requiresArgs: true, contentLimit: NO_CONTENT_LIMIT },
 };
 
 const DEFAULT_CONTENT_LIMIT = 3_000;
@@ -200,4 +268,29 @@ export function statusForTool(toolName: string): { content: string; phase: strin
 /** 存入对话历史的内容上限（字符）。 */
 export function contentLimitForTool(toolName: string): number {
   return TOOL_CATALOG[toolName as ToolName]?.contentLimit ?? DEFAULT_CONTENT_LIMIT;
+}
+
+/**
+ * 按工具的内容上限裁剪结果（存入对话历史 / 发往前端共用同一份实现）。
+ *
+ * - 未超限：原样返回（结论型上限是 Infinity，自然走这一支）
+ * - 超限且是终端类：保留**头 + 尾**，中间省略。终端输出的尾部通常是报错与最终结论，
+ *   比开头更重要（与 compactor.shouldKeepTail 的判断一致），只留开头会把最该看的部分丢掉。
+ * - 超限且非终端类：保留开头。
+ *
+ * 裁剪后附一句可执行的提示，让模型知道该换什么方式取（而不是反复重试同一条命令）。
+ */
+export function capToolContent(toolName: string, content: string, limit = contentLimitForTool(toolName)): string {
+  if (content.length <= limit) return content;
+  if (TERMINAL_OUTPUT_TOOLS.has(toolName)) {
+    const head = Math.floor(limit * 0.4);
+    const tail = limit - head;
+    return (
+      content.slice(0, head) +
+      `\n\n[⋯ 已省略中间 ${content.length - limit} 字符（原始 ${content.length} 字符，超出单次上限 ${limit}）⋯]\n` +
+      `[提示：输出过长。后续请改用管道过滤（如 | Select-Object -First 50）或更精确的命令分次获取，不要重复执行整条命令]\n\n` +
+      content.slice(-tail)
+    );
+  }
+  return content.slice(0, limit) + `\n\n[内容已截断，原始长度 ${content.length} 字符。如需更多内容，请用更大的行范围一次性读取，不要分多次零碎读取]`;
 }

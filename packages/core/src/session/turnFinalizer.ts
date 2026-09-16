@@ -59,6 +59,16 @@ export class TurnFinalizer {
       turnStats: { elapsed, tokens: turnTokens, model: input.model, credits, creditDetail },
     } as any];
 
+    // ⚠️ 这里的持久化裁剪仍受 compressionEnabled 约束，是有意的——不要再把它去掉。
+    //
+    // 它写回 this.messages 并落盘，是【破坏性】的：裁掉的历史工具结果不可恢复。
+    // 而关闭滚动压缩的用户，其诉求正是"完整保留每一条原始消息"（见 CompactionUserConfig
+    // 与设置项说明），所以这条路径保持跟随开关。
+    //
+    // 那"工具结果裁剪仍生效"的承诺由谁兑现？由请求组装侧兑现：
+    // promptBuilder 会按 toolResultKeepTurns 裁剪【发给模型的副本】，不改动存储的历史。
+    // 两处配合的结果是：关闭压缩时——存储完整、上行精简；开启压缩时——两者都裁。
+    // 若在此处去掉门控，等于把"关闭压缩"也变成破坏性的，与该设置的存在意义相矛盾。
     const prunedMessages = input.compactionEnabled
       ? pruneOldToolResults(nextMessages, input.toolResultKeepTurns)
       : nextMessages;

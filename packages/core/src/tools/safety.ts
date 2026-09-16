@@ -19,8 +19,11 @@ export function isWithinWorkspaces(absPath: string, roots: string[]): boolean {
 }
 
 /**
- * 危险命令检测：返回非空字符串表示命中危险规则（拒绝理由），空串表示放行。
- * 只拦截“大范围、难以挽回”的破坏性操作，覆盖 PowerShell 与 cmd 常见写法。
+ * 危险命令检测：返回非空字符串表示命中风险规则（提示原因），空串表示未命中。
+ *
+ * ⚠️ 这是**风险提示**，不是放行判据——命中与否都不决定命令是否执行
+ * （放行由 CommandGate 的"信任白名单 + 未信任人工确认"决定）。
+ * 命中原因透传给用户，作用是让"已经信任该命令"的场景仍然看得见破坏性操作。
  */
 export function detectDangerousCommand(command: string): string {
   const cmd = (command || "").trim();
@@ -28,9 +31,14 @@ export function detectDangerousCommand(command: string): string {
   const lower = cmd.toLowerCase();
 
   const rules: { pattern: RegExp; reason: string }[] = [
-    { pattern: /remove-item\b[^\n]*-recurse[^\n]*-force/i, reason: "递归强制删除（Remove-Item -Recurse -Force）" },
+    // Remove-Item 递归删除：两个**独立**前瞻分别要求 -Recurse 与 -Force，顺序无关。
+    // 旧写法 /remove-item[^\n]*-recurse[^\n]*-force/ 要求 -Recurse 必须排在 -Force 之前，
+    // 于是 `Remove-Item -Force -Recurse X` 这种同样致命的写法被静默漏报。
+    { pattern: /remove-item\b(?=[^\n]*-recurse\b)(?=[^\n]*-force\b)/i, reason: "递归强制删除（Remove-Item -Recurse -Force）" },
+    { pattern: /remove-item\b(?=[^\n]*-recurse\b)/i, reason: "递归删除（Remove-Item -Recurse）" },
     { pattern: /\brd\b\s+\/s|\brmdir\b\s+\/s/i, reason: "递归删除目录（rmdir /s）" },
-    { pattern: /\brm\b\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)/i, reason: "递归强制删除（rm -rf）" },
+    // rm 递归强制删除：同样容忍 -rf / -fr / -r -f / -f -r（旧写法只认合并旗标）
+    { pattern: /\brm\b(?=[^\n]*\s-[a-z]*r[a-z]*\b)(?=[^\n]*\s-[a-z]*f[a-z]*\b)/i, reason: "递归强制删除（rm -rf）" },
     { pattern: /\brm\b\s+-rf\s+[/~]/i, reason: "对根/家目录递归删除" },
     { pattern: /\bformat\b\s+[a-z]:/i, reason: "磁盘格式化（format）" },
     { pattern: /format-volume|clear-disk/i, reason: "磁盘卷格式化/清除" },

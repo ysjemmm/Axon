@@ -447,9 +447,30 @@ export function renderSegments(
           break;
         }
       }
-      // 消歧：同名文件补最短区分路径，否则只显示文件名
+      // 默认仅显示文件名；只有同批读取里出现“同名但不同绝对路径”时，
+      // 才对冲突项展示完整路径，以便用户明确区分来源。
+      const isAbsolutePath = (path: string) => /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(path);
       const displayNames = disambiguatePaths(raw.map((r) => r.fullPath));
-      const files = raw.map((r, idx) => ({ name: displayNames[idx], range: r.range, path: r.fullPath, startLine: r.startLine, endLine: r.endLine }));
+      const pathsByBaseName = new Map<string, Set<string>>();
+      for (const r of raw) {
+        const baseName = r.fullPath.replace(/\\/g, "/").split("/").filter(Boolean).pop() || r.fullPath;
+        const paths = pathsByBaseName.get(baseName) || new Set<string>();
+        paths.add(r.fullPath);
+        pathsByBaseName.set(baseName, paths);
+      }
+      const files = raw.map((r, idx) => {
+        const baseName = r.fullPath.replace(/\\/g, "/").split("/").filter(Boolean).pop() || r.fullPath;
+        const hasSameNameAtDifferentPaths = (pathsByBaseName.get(baseName)?.size || 0) > 1;
+        const showFullPath = isAbsolutePath(r.fullPath) && hasSameNameAtDifferentPaths;
+        return {
+          name: showFullPath ? r.fullPath : displayNames[idx],
+          range: r.range,
+          path: r.fullPath,
+          startLine: r.startLine,
+          endLine: r.endLine,
+          isAbsolute: showFullPath,
+        };
+      });
       const groupSeg = segments[groupStart] as ToolSegment;
       const group: ReadFileGroupData = { id: groupSeg.id, pending, queuedOnly: pending && !executing, hasError, files };
       nodes.push(<ReadFileGroupItem key={`read-${groupSeg.id}`} group={group} />);

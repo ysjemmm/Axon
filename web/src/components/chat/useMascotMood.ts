@@ -23,6 +23,7 @@ const ACTIVITY_MS = 850;
 const SLEEP_MS = 45_000;
 
 export type KeyActivity = "typing" | "deleting";
+export type MascotAiState = "idle" | "waiting" | "thinking" | "done" | "error" | "cancelled";
 
 export interface MascotController {
   mood: MascotMood;
@@ -37,13 +38,15 @@ export interface MascotController {
 /**
  * @param busy AI 是否正在生成（session.isLoading）
  */
-export function useMascotMood(busy: boolean): MascotController {
+export function useMascotMood(aiState: MascotAiState): MascotController {
   const [focused, setFocused] = useState(false);
   const [activity, setActivity] = useState<KeyActivity | null>(null);
   const [asleep, setAsleep] = useState(false);
+  const [completed, setCompleted] = useState(false);
 
   const activityTimer = useRef<number | null>(null);
   const sleepTimer = useRef<number | null>(null);
+  const wasBusy = useRef(false);
 
   /** 有交互 → 醒过来，并把打瞌睡的倒计时重新开始 */
   const wake = useCallback(() => {
@@ -63,6 +66,7 @@ export function useMascotMood(busy: boolean): MascotController {
     if (!kind) return;
 
     wake();
+    setCompleted(false);
     setActivity(kind);
     if (activityTimer.current !== null) window.clearTimeout(activityTimer.current);
     activityTimer.current = window.setTimeout(() => setActivity(null), ACTIVITY_MS);
@@ -84,17 +88,31 @@ export function useMascotMood(busy: boolean): MascotController {
     };
   }, []);
 
+  const busy = aiState === "waiting" || aiState === "thinking";
+
   // AI 开始干活也算"有动静"：否则一个长任务跑完，吉祥物已经睡着了
   useEffect(() => {
-    if (busy) wake();
-  }, [busy, wake]);
+    if (busy) {
+      wasBusy.current = true;
+      setCompleted(false);
+      wake();
+    } else if (wasBusy.current && aiState === "idle") {
+      wasBusy.current = false;
+      setCompleted(true);
+    }
+  }, [aiState, busy, wake]);
 
-  // 优先级：AI 在干活 > 手上正在改字 > 焦点在输入框 > 打瞌睡 > 空闲。
+  // 优先级：AI 在干活 > 手上正在改字 > 本轮刚完成 > 焦点在输入框 > 打瞌睡 > 空闲。
   // busy 放最前是因为它是"整个界面此刻在做什么"，比局部的输入状态更值得表达。
   const mood: MascotMood =
-    busy ? "thinking"
+    aiState === "waiting" ? "waiting"
+    : aiState === "thinking" ? "thinking"
+    : aiState === "error" ? "error"
+    : aiState === "cancelled" ? "cancelled"
+    : aiState === "done" || completed ? "done"
     : activity === "deleting" ? "deleting"
     : activity === "typing" ? "typing"
+    : completed ? "done"
     : focused ? "focused"
     : asleep ? "sleeping"
     : "idle";

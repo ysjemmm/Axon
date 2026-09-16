@@ -43,13 +43,15 @@ export interface EventHandlerCtx {
   setToolConfirm: (c: { toolName: string; title: string; kind?: string } | null) => void;
   setWaitingInputIds: (s: Set<string> | ((prev: Set<string>) => Set<string>)) => void;
   setCommandApprovals: (c: Record<string, CommandApproval> | ((prev: Record<string, CommandApproval>) => Record<string, CommandApproval>)) => void;
-  setCommandBlocked: (c: { requestId?: string; command: string; reason: string; dangerous?: boolean } | null) => void;
+  setCommandRiskNotice: (c: { id?: string; command: string; reason: string } | null) => void;
   setContextOverflow: (b: boolean) => void;
   setToolHistoryMismatch: (m: { model: string } | null) => void;
 
   // ── refs（跨事件共享的可变状态） ──
   cancelled: MutableRefObject<boolean>;
   cancelledTurnMsgId: MutableRefObject<string | null>;
+  /** 用户主动取消时记录其轮次；用于忽略已被下一轮超越的迟到取消事件。 */
+  cancelledTurnGeneration: MutableRefObject<number | null>;
   turnGeneration: MutableRefObject<number>;
   modelRef: MutableRefObject<string>;
   statusPhaseRef: MutableRefObject<string>;

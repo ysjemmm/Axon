@@ -104,6 +104,17 @@ export class AgentSession {
   /** @internal */ lastTotalTokens = 0;
   /** @internal */ lastPromptTokens = 0;
   /** @internal */ lastCompletionTokens = 0;
+  /**
+   * 端点实报 prompt_tokens ÷ 本地估算（最近一次请求反推得出）。1 = 尚未校准。
+   *
+   * 为什么需要：本地字符估算对代码密集内容系统性偏低——实测 deepseek 会话偏低 17%
+   * （估算 418k，端点实收 481k），于是界面上"已用上下文"长期低于后台实收值，两处对不上。
+   * 端点每轮都会返回真实 prompt_tokens，用它反推一个系数去校正本地估算，
+   * 既保留估算的稳定性（不随端点口径跳变），又让显示与端点实收一致。
+   */
+  /** @internal */ promptCalibration = 1;
+  /** 该校准系数对应的模型：换模型后 tokenizer 不同，系数作废 */
+  /** @internal */ promptCalibrationModel = "";
   /** @internal */ lastCachedTokens = 0;
   /** @internal */ cumulativeTokens = 0;
   /** @internal */ lastTurnTokens = 0;
@@ -916,8 +927,8 @@ export class AgentSession {
           delegateId: data.delegateId,
         }, this.turnCount || undefined);
         break;
-      case "command_blocked":
-        this.trace("command.blocked", data, this.turnCount || undefined);
+      case "command_risk_notice":
+        this.trace("command.risk_notice", data, this.turnCount || undefined);
         break;
       case "confirm_tool_request":
         this.trace("tool.confirm_request", data, this.turnCount || undefined);

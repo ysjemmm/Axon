@@ -49,6 +49,14 @@ export function finalizeStreamingTurnAsError(ctx: EventHandlerCtx): void {
 }
 
 export function handleTurnCancelled(msg: WsMessage, ctx: EventHandlerCtx): void {
+  const cancelledGeneration = ctx.cancelledTurnGeneration.current;
+  if (cancelledGeneration !== null && cancelledGeneration < ctx.turnGeneration.current) {
+    // 用户停止上一轮后已开始新一轮时，旧轮的异步 turn_cancelled 不能再影响当前 loading。
+    // 上一轮已由 cancelTurn 在本地落终态，此处无需再处理。
+    ctx.cancelledTurnMsgId.current = null;
+    ctx.cancelledTurnGeneration.current = null;
+    return;
+  }
   const stats = {
     elapsed: (msg as any).elapsed || 0,
     tokens: (msg as any).tokens || 0,
@@ -64,6 +72,7 @@ export function handleTurnCancelled(msg: WsMessage, ctx: EventHandlerCtx): void 
   const reason: "cancelled" | "error" = (msg as any).reason === "error" ? "error" : "cancelled";
   const targetMsgId = ctx.cancelledTurnMsgId.current;
   ctx.cancelledTurnMsgId.current = null;
+  ctx.cancelledTurnGeneration.current = null;
   const fallbackId = `assistant-${reason}-${Date.now()}`;
   ctx.setChatHistory((prev) => {
     let found = false;

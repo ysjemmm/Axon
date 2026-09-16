@@ -13,7 +13,7 @@
 
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { sanitizeToolPairing } from "../messageSanitizer.js";
-import { TRANSIENT_TOOLS, TRANSIENT_TOOLS_AGGRESSIVE } from "../tools/catalog.js";
+import { TRANSIENT_TOOLS, TRANSIENT_TOOLS_AGGRESSIVE, NO_TRUNCATE_TOOLS } from "../tools/catalog.js";
 import type { AgentSession } from "../agentSession.js";
 
 const ENHANCED_RENDERING_PROTOCOL =
@@ -196,6 +196,10 @@ export class PromptBuilder {
           const content = (m as any).content as string;
           if (!content || content.length <= SUMMARY_LIMIT) return m;
           const toolName = (m as any)._toolName as string || "";
+          // 结论型工具（子 Agent 交付物）不做历史摘要截断——它们没有“重跑 / 重读”的回捞手段。
+          // 终端类（execute_command / get_process_output）已移出该集合：旧轮次允许被截断，
+          // 否则一条大输出会永久占用每一轮请求的上下文（见 catalog.ts 的 TERMINAL_OUTPUT_TOOLS）。
+          if (NO_TRUNCATE_TOOLS.has(toolName)) return m;
           const preview = content.slice(0, SUMMARY_LIMIT);
           const truncatedContent = `${preview}\n\n[内容已截断（原 ${content.length} 字符）。这是 ${toolName} 的历史结果，如需完整内容请重新调用该工具。]`;
           return { ...m, content: truncatedContent };

@@ -14,6 +14,7 @@
 import { join } from "node:path";
 import type { AgentHost } from "./host/index.js";
 import { BUILTIN_PROVIDERS, type BuiltinProviderDef } from "./providerCatalog.js";
+import { dedupeModelsById } from "./providerModels.js";
 import {
   RESERVED_PROVIDER_NAMES,
   type ProviderConfigFile,
@@ -131,6 +132,7 @@ export class ProviderRegistry {
   private fromBuiltin(def: BuiltinProviderDef, keyOverride?: string, baseUrlOverride?: string, modelsOverride?: unknown[], quota?: import("./providerTypes.js").ProviderQuotaConfig): ResolvedProvider {
     const apiKey = (keyOverride || envApiKey(def.name)).trim();
     const baseUrl = (baseUrlOverride?.trim() || def.baseUrl);
+    const models = Array.isArray(modelsOverride) && modelsOverride.length > 0 ? modelsOverride as typeof def.models : def.models;
     return {
       name: def.name,
       label: def.label,
@@ -138,7 +140,9 @@ export class ProviderRegistry {
       apiKey,
       apiKeyHeader: def.apiKeyHeader || "bearer",
       protocol: def.protocol,
-      models: Array.isArray(modelsOverride) && modelsOverride.length > 0 ? modelsOverride as typeof def.models : def.models,
+      // 兜底去重：手工编辑过的 providers.json 可能含重复 model id，读取阶段就收敛掉
+      // （正常写入路径另有硬校验，见 providerModels.assertUniqueModelIds）
+      models: dedupeModelsById(models),
       quota,
       builtin: true,
       locked: def.locked,
@@ -157,7 +161,7 @@ export class ProviderRegistry {
       apiKey,
       apiKeyHeader: entry.apiKeyHeader || "bearer",
       protocol: entry.protocol === "responses" || entry.protocol === "anthropic" ? entry.protocol : "chat",
-      models: Array.isArray(entry.models) ? entry.models : [],
+      models: dedupeModelsById(Array.isArray(entry.models) ? entry.models : []),
       quota: entry.quota,
       builtin: false,
       locked: false,

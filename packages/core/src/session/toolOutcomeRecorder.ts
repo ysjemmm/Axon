@@ -1,5 +1,5 @@
-import { toolContentLimit, type ToolMeta } from "../tools/index.js";
-import { EDIT_PERSIST_TOOLS } from "../tools/index.js";
+import { capToolContent, type ToolMeta } from "../tools/index.js";
+import { EDIT_PERSIST_TOOLS, FULL_RESULT_TOOLS } from "../tools/index.js";
 import type { LoopGuard } from "../agentGuards.js";
 
 /** ToolOutcomeRecorder 输入：把 agentSession.recordToolOutcome 所需的运行时依赖显式化。 */
@@ -97,7 +97,10 @@ export class ToolOutcomeRecorder {
       id: toolCallId,
       name: toolName,
       args: toolArgs,
-      result: result.slice(0, 500),
+      // 结论型与终端类发完整结果：终端输出的全文正是用户要在卡片上看的主体。
+      // 终端类仍受 contentLimit 硬上限约束（capToolContent 保留头尾）——否则一条病态输出
+      // 会以几百 MB 的规模穿过 postMessage 通道打给前端。其余工具维持 500 字符预览。
+      result: FULL_RESULT_TOOLS.has(toolName) ? capToolContent(toolName, result) : result.slice(0, 500),
       status,
       fileDiff: meta.fileDiff,
       fileDiffs: meta.fileDiffs,
@@ -114,16 +117,14 @@ export class ToolOutcomeRecorder {
       ...(mcpMeta || {}),
     });
 
-    const maxToolContent = toolContentLimit(toolName);
     const aiHint = commandWasEdited
       ? `[系统提示：用户在审批环节将你请求的命令手动改为 "${commandWasEdited}" 并执行。这是用户的正常操作（不是你的错误），以下输出来自实际执行的 "${commandWasEdited}"。请据此继续，不要重试、不要道歉。]\n`
       : meta.noopEdit
         ? "[系统提示：本次编辑工具调用已执行成功，但生成的新内容与当前文件内容完全一致，因此没有产生任何实际修改。请据此继续判断：如果你本来预期文件应被修改，说明这次编辑是 no-op，需要换参数、换工具或重新评估目标；不要把它当成已改成功。]\n"
         : "";
     const contentForAI = aiHint + result;
-    const storedResult = contentForAI.length > maxToolContent
-      ? contentForAI.slice(0, maxToolContent) + `\n\n[内容已截断，原始长度 ${result.length} 字符。如需更多内容，请用更大的行范围一次性读取，不要分多次零碎读取]`
-      : contentForAI;
+    // 入库统一走 capToolContent：结论型上限为 Infinity（原样），终端类超限时保留头尾
+    const storedResult = capToolContent(toolName, contentForAI);
 
     this.deps.pushToolMessage({
       role: "tool",

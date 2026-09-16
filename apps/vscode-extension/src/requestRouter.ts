@@ -11,7 +11,7 @@ import * as vscode from "vscode";
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { RelayStore, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, supportsThinking, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry, type ProviderQuotaConfig } from "@axon/core";
+import { RelayStore, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, assertUniqueModelIds, supportsThinking, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry, type ProviderQuotaConfig } from "@axon/core";
 import { createVSCodeAgentHost } from "@axon/host-vscode";
 import { queryProviderQuota, quotaTokenStore, validateQuotaQuery } from "./quotaService.js";
 
@@ -831,6 +831,7 @@ async function addCustomProvider(level: "user" | "workspace", name: string, entr
   if (!key) throw new Error("provider 名称不能为空");
   if (RESERVED_PROVIDER_NAMES.includes(key)) throw new Error(`「${key}」是内置 provider 的保留名，不能自定义`);
   if (!entry.baseUrl?.trim()) throw new Error("baseUrl 必填");
+  assertUniqueModelIds(entry.models, key);
   const config = await readProviderConfig(level, workspace);
   config.providers = config.providers || {};
   const existing = config.providers[key];
@@ -901,6 +902,7 @@ async function setBuiltinProviderBaseUrl(level: "user" | "workspace", name: stri
 /** 覆盖某自定义 provider 的模型数组（增/删/改/禁用整存；apiKey 等其它字段保留） */
 async function setCustomProviderModels(level: "user" | "workspace", name: string, models: ProviderModel[], workspace?: string): Promise<void> {
   if (RESERVED_PROVIDER_NAMES.includes(name)) throw new Error(`「${name}」是内置 provider，请用 builtin-models 接口`);
+  assertUniqueModelIds(models, name);
   const config = await readProviderConfig(level, workspace);
   const entry = (config.providers || {})[name] as RawProviderEntry | undefined;
   if (!entry) throw new Error(`provider 不存在：${name}`);
@@ -911,6 +913,7 @@ async function setCustomProviderModels(level: "user" | "workspace", name: string
 /** 覆盖内置 provider 的模型数组（增/删整存；与 builtinApiKeys/builtinBaseUrls 同级持久化） */
 async function setBuiltinProviderModels(level: "user" | "workspace", name: string, models: ProviderModel[], workspace?: string): Promise<void> {
   if (!RESERVED_PROVIDER_NAMES.includes(name)) throw new Error(`「${name}」不是内置 provider`);
+  assertUniqueModelIds(models, name);
   const config = await readProviderConfig(level, workspace);
   config.builtinModels = config.builtinModels || {};
   if (Array.isArray(models) && models.length > 0) {

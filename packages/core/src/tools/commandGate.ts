@@ -1,12 +1,15 @@
 /**
- * 命令信任门 —— 把 execute_command 的"灾难硬拦 → 信任白名单 → 人工确认"三层决策
+ * 命令信任门 —— 把 execute_command 的"信任白名单 → 人工确认"两层决策
  * 收敛到独立模块，agentSession 只做薄接线（避免继续撑大 agentSession）。
  *
- * 三层（按顺序）：
- *  ① detectDangerousCommand：灾难命令永远硬拦（rm -rf / 等），trust 也越不过；双提示。
- *  ② CommandTrustTrie.isTrusted：命中白名单直接放行。
- *  ③ 人工确认：未信任 → 弹三档（exact/prefix/all）+ 仅本次 + 拒绝；批准则按档写入白名单。
+ * 两层（按顺序）：
+ *  ① CommandTrustTrie.isTrusted：命中白名单直接放行。
+ *  ② 人工确认：未信任 → 弹三档（exact/partial/prefix/all）+ 仅本次 + 拒绝；批准则按档写入白名单。
  *     `all`(*) 仅本会话生效、不持久化。
+ *
+ * 风险检测（detectDangerousCommand）只产出**提醒**，不参与放行决策：
+ * · 命中白名单的命令照常执行，不因风险二次确认（原因经 GateOutcome.warning 回传给前端展示）；
+ * · 未信任的命令本来就要人工确认，风险原因作为附加信息一并展示。
  */
 
 import { detectDangerousCommand } from "./safety.js";
@@ -56,11 +59,6 @@ export interface ApprovalDecision {
 export interface GateDeps {
   /** 弹出审批请求并等待用户决策。danger 非空时前端会闪烁红色警示。 */
   requestApproval: (command: string, options: ReturnType<typeof buildTrustOptions>, danger?: string) => Promise<ApprovalDecision>;
-  /** 危险命令确认弹窗：返回 true=仍要执行（仅本次，不信任），false=拒绝 */
-  requestDangerousApproval?: (command: string, reason: string) => Promise<boolean>;
-  /** 灾难命令被拦时，给用户一个可见提示（与给 AI 的错误分开）。
-   *  仅在 requestDangerousApproval 未提供或超时时作为兜底。 */
-  emitBlocked: (command: string, reason: string) => void;
   /** 持久化一条新批准的规则（exact/prefix；all 不持久化）。无则不落盘 */
   persist?: (rule: TrustRule, target?: "user" | "workspace") => void;
 }
@@ -74,6 +72,11 @@ export interface GateOutcome {
   userMessage?: string;
   /** 用户编辑后的替代命令（有值时执行方应用此替代原命令） */
   editedCommand?: string;
+  /**
+   * 风险提醒（命中 detectDangerousCommand 时给出），**不影响是否放行**。
+   * 命令已放行，调用方应把它作为可见提示透传给用户。
+   */
+  warning?: string;
 }
 
 export class CommandGate {
@@ -128,9 +131,8 @@ export class CommandGate {
 
   /** 对一条命令执行门控，返回是否放行 */
   async gate(command: string, deps: GateDeps): Promise<GateOutcome> {
-    const danger = detectDangerousCommand(command);
-    // 危险命令不再硬拦：与普通命令一样走人工确认，
-    // 但把 danger 作为标记透传给前端，让工具卡片闪烁红色警示。
+    // 风险检测：只作为"提醒"透传，不决定是否放行（见文件头）。
+    const warning = detectDangerousCommand(command) || undefined;
     let alreadyTrusted = this.trie.isTrusted(command);
     // reload 后配置未就绪时，trie 可能是空的——从磁盘重新加载一次再检查
     if (!alreadyTrusted && this.reloadFromDisk) {
@@ -140,16 +142,18 @@ export class CommandGate {
         alreadyTrusted = this.trie.isTrusted(command);
       }
     }
-    if (alreadyTrusted && !danger) return { allow: true };
+    // 已信任：直接放行。命中风险模式时**不再二次确认**，只把原因回传给前端做提醒——
+    // 用户已经明确信任过这条命令，再弹一次确认正是被投诉的那类打扰。
+    if (alreadyTrusted) return { allow: true, warning };
 
-    const decision = await deps.requestApproval(command, buildTrustOptions(command), danger);
+    const decision = await deps.requestApproval(command, buildTrustOptions(command), warning);
     if (decision.choice === "reject") {
       return {
         allow: false,
-        aiMessage: danger
-          ? `用户拒绝执行危险命令（${danger}）。请改用更精确、可控的方式，或由用户在终端手动执行。`
+        aiMessage: warning
+          ? `用户拒绝执行风险命令（${warning}）。请改用更精确、可控的方式，或由用户在终端手动执行。`
           : "用户拒绝执行该命令。请不要重试此命令；如确有必要，向用户说明用途后再请求，或改用其他方式完成任务。",
-        userMessage: danger ? `已拒绝危险命令：${command}` : "用户拒绝执行命令",
+        userMessage: warning ? `已拒绝风险命令：${command}` : "用户拒绝执行命令",
       };
     }
     if (decision.choice === "once") return { allow: true, editedCommand: decision.editedCommand }; // 仅本次执行，不写白名单

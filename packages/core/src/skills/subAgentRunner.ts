@@ -12,7 +12,7 @@
  */
 
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { executeToolCall, getToolDefinitions, getReadOnlyToolDefinitions, toolContentLimit, ToolCallStatus, type ToolMeta, type SkillLoaderFn, type WebCapability, type GateOutcome } from "../tools/index.js";
+import { executeToolCall, getToolDefinitions, getReadOnlyToolDefinitions, capToolContent, FULL_RESULT_TOOLS, ToolCallStatus, type ToolMeta, type SkillLoaderFn, type WebCapability, type GateOutcome } from "../tools/index.js";
 import type { LLMStrategy, ToolDef, LLMStreamCallbacks } from "../llm/types.js";
 import type { LoadedSkill } from "./skillLoader.js";
 import type { AgentHost } from "../host/index.js";
@@ -41,7 +41,6 @@ const SUB_AGENT_SYSTEM_PROMPT = `你是一个子 Agent（subagent），由主 Ag
 4. 行动优先：能直接做就做，走完任务所有步骤，不中途停下等指示。但只有任务明确要求修改时才动文件——纯分析/调研/总结任务绝不改代码，只看不动
 5. 全程中文回复，禁止输出英文内心 OS（如 "Let me check"）
 6. 不暴露内部实现：最终结论里禁止提及工具名（read_file/search 等）、工具参数（如"深度2"、startLine）、内部机制。用自然语言描述做了什么，这些实现细节对用户无意义
-7. 数学公式用 KaTeX 定界符：行内 $...$，行间 $$...$$；不要输出无定界符的裸 LaTeX（如直接写 \\boxed 或用 [ ] 包裹公式）
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 修改文件的规则（硬性约束）
@@ -500,17 +499,15 @@ export class SubAgentRunner {
       guard.recordToolResult(status === "success", softFail, { toolName, args: toolArgs });
 
       this.deps.emit("tool_result", {
-        id: tc.id, name: toolName, args: toolArgs, result: result.slice(0, 500), status,
+        // 与主 Agent 同一口径：结论型/终端类发完整结果（终端类受硬上限约束），其余 500 字符预览
+        id: tc.id, name: toolName, args: toolArgs, result: FULL_RESULT_TOOLS.has(toolName) ? capToolContent(toolName, result) : result.slice(0, 500), status,
         fileDiff: meta.fileDiff, readRange: meta.readRange, diagnostics: meta.diagnostics,
         searchResults: (meta as Record<string, unknown>).searchResults,
         fetchResult: (meta as Record<string, unknown>).fetchResult,
         userMessage: meta.userMessage,
       });
 
-      const maxToolContent = toolContentLimit(toolName);
-      const stored = result.length > maxToolContent
-        ? result.slice(0, maxToolContent) + `\n\n[内容已截断，原始长度 ${result.length} 字符。如需更多内容，请用更大的行范围一次性读取，不要分多次零碎读取]`
-        : result;
+      const stored = capToolContent(toolName, result);
       messages.push({ role: "tool", tool_call_id: tc.id, content: stored } as ChatCompletionMessageParam);
     }
   }

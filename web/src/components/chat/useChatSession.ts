@@ -157,7 +157,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const [toolConfirm, setToolConfirm] = useState<{ toolName: string; title: string; kind?: string } | null>(null);
   const [waitingInputIds, setWaitingInputIds] = useState<Set<string>>(new Set());
   const [commandApprovals, setCommandApprovals] = useState<Record<string, CommandApproval>>({});
-  const [commandBlocked, setCommandBlocked] = useState<{ requestId?: string; command: string; reason: string; dangerous?: boolean } | null>(null);
+  const [commandRiskNotice, setCommandRiskNotice] = useState<{ id?: string; command: string; reason: string } | null>(null);
   const [contextOverflow, setContextOverflow] = useState(false);
   const [toolHistoryMismatch, setToolHistoryMismatch] = useState<{ model: string } | null>(null);
   const [messageQueue, setMessageQueue] = useState<Array<{ id: string; payload: SubmitPayload }>>([]);
@@ -165,6 +165,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
   // ── refs ───────────────────────────────────────────────────────────
   const cancelled = useRef(false);
   const cancelledTurnMsgId = useRef<string | null>(null);
+  const cancelledTurnGeneration = useRef<number | null>(null);
   const turnStartTime = useRef<number>(0);
   /** 当前任务开始时间：state 用于让首个“思考中...”占位头部立刻重渲染并开始计时 */
   const [turnStartedAt, setTurnStartedAt] = useState(0);
@@ -223,9 +224,9 @@ export function useChatSession(opts: UseChatSessionOptions) {
     setEditMode, setIsCompacting, setCompactingMessage, setCompactionNeeded, setCompactionMigrated,
     setCreditBudgetPaused,
     setPendingPaths, setPendingDiffs, setPendingExpanded, setUndoNotice,
-    setToolConfirm, setWaitingInputIds, setCommandApprovals, setCommandBlocked,
+    setToolConfirm, setWaitingInputIds, setCommandApprovals, setCommandRiskNotice,
     setContextOverflow, setToolHistoryMismatch,
-    cancelled, cancelledTurnMsgId, turnGeneration,
+    cancelled, cancelledTurnMsgId, cancelledTurnGeneration, turnGeneration,
     modelRef, statusPhaseRef, toolResultResetTimer,
     compactionMigratedRef, onSessionCreatedRef, onCompactionMigratedRef,
     ownedSessionId,
@@ -437,6 +438,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
       const last = updated[updated.length - 1];
       if (last?.role === "assistant" && last.streaming) {
         cancelledTurnMsgId.current = last.id;
+        cancelledTurnGeneration.current = turnGeneration.current;
         const elapsed = turnStartTime.current ? Date.now() - turnStartTime.current : 0;
         const tokens = (last.segments || [])
           .filter((s): s is TextSegment => s.type === "text")
@@ -539,13 +541,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
     }
   }, [send]);
 
-  const respondToDangerousCommand = useCallback((requestId: string, executeAnyway: boolean) => {
-    setCommandBlocked(null);
-    send({ type: "confirm_command", requestId, choice: executeAnyway ? "once" : "reject" });
-  }, [send]);
-
-  /** 单纯关闭危险提示（无 requestId 的旧版硬拦） */
-  const dismissCommandBlocked = useCallback(() => setCommandBlocked(null), []);
+  /** 关闭命令风险提醒（提醒不需要应答，命令已执行） */
+  const dismissCommandRiskNotice = useCallback(() => setCommandRiskNotice(null), []);
 
   /** 关闭上下文超限提示条 */
   const dismissContextOverflow = useCallback(() => setContextOverflow(false), []);
@@ -588,7 +585,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     pendingPaths, pendingDiffs, pendingExpanded, setPendingExpanded,
     messageQueue, toolConfirm,
     waitingInputIds,
-    commandApprovals, commandBlocked,
+    commandApprovals, commandRiskNotice, setCommandRiskNotice,
     contextOverflow, dismissContextOverflow, forceCompact,
     toolHistoryMismatch,
     flattenToolHistory: () => { setToolHistoryMismatch(null); send({ type: CONTROL_CMD.FLATTEN_TOOL_HISTORY }); },
@@ -601,7 +598,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     // 动作
     submit, removeFromQueue, cancelTurn,
     toggleEditMode, acceptEdits, rejectEdits, undoEdits, editUserMessage, confirmTool,
-    approveCommand, dismissCommandBlocked, respondToDangerousCommand,
+    approveCommand, dismissCommandRiskNotice,
     setModel, selectWorkspace, selectGroup, groupUpdated,
     listSnapshots: () => send({ type: "list_snapshots" }),
     restoreSnapshot: (id: string) => send({ type: "restore_snapshot", snapshotId: id }),

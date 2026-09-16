@@ -20,7 +20,7 @@ import {
   handleEditsUpdated, handleEditUndoResult,
   handleWorkspaceSet, handleEditModeSet, handleWorkspaceError,
   handleConfirmToolRequest, handleToolConfirmTimeout, handleToolWaitingInput,
-  handleConfirmCommandRequest, handleCommandBlocked, handleToolHistoryMismatch,
+  handleConfirmCommandRequest, handleCommandRiskNotice, handleToolHistoryMismatch,
   handleFocusRelay, handleRelayUpdated, handleRelayDeleted,
   clearWaitingInput,
 } from "./stateHandlers";
@@ -137,8 +137,8 @@ export function createEventHandler(ctx: EventHandlerCtx): (msg: WsMessage) => vo
       case AGENT_EVENT.CONFIRM_COMMAND_REQUEST:
         handleConfirmCommandRequest(msg, ctx);
         return;
-      case AGENT_EVENT.COMMAND_BLOCKED:
-        handleCommandBlocked(msg, ctx);
+      case AGENT_EVENT.COMMAND_RISK_NOTICE:
+        handleCommandRiskNotice(msg, ctx);
         return;
       case AGENT_EVENT.TOOL_HISTORY_MISMATCH:
         handleToolHistoryMismatch(msg, ctx);

@@ -40,7 +40,17 @@ if (!noBuild) {
     cwd: webRoot,
     stdio: "inherit",
     shell: process.platform === "win32",
-    env: { ...process.env, AXON_WEB_BASE: "./" },
+    // ⚠️ NODE_ENV 必须显式钉成 production，绝不能随 process.env 透传。
+    //
+    // IDE 的集成终端里 NODE_ENV 往往已被设成 development（Electron / Code OSS 会带这个值）。
+    // Vite 见到环境里已有的 NODE_ENV 就不用 mode 覆盖它，转而启用 development 解析条件，
+    // react-dom 于是被解析到 react-dom-client.development.js —— 开发版 React 直接进产物。
+    //
+    // 开发版 React 带 Performance Tracks：它把组件 props 塞进 performance.measure 的
+    // detail 选项，而 detail 会被结构化克隆。props 里只要有函数、DOM 节点这类不可克隆的值，
+    // 就抛 DataCloneError；该异常抛在 React 提交阶段内部（不在任何组件里），Error Boundary
+    // 拦不住，React 只能卸载整棵树 —— 表现就是"AI 回复到一半界面整片变灰"。
+    env: { ...process.env, NODE_ENV: "production", AXON_WEB_BASE: "./" },
   });
 
   // 成功判定分两道，缺一不可：
@@ -69,6 +79,61 @@ try {
   console.error(`[copy-web] 未找到 web 构建产物：${webDist}`);
   process.exit(1);
 }
+
+/**
+ * 产物守门：拒绝把含「开发版 React」的前端产物拷进扩展。
+ *
+ * 为什么必须拦：开发版 React 自带 Performance Tracks，会把组件 props 塞进
+ * `performance.measure(name, { detail })`。`detail` 会被结构化克隆，props 里只要有函数、
+ * DOM 节点这类不可克隆的值就抛 DataCloneError。该异常抛出在 React 提交阶段【内部】，
+ * 不在任何组件里，Error Boundary 拦不到 —— React 只能卸载整棵树，表现就是
+ * 「AI 回复到一半界面整片变灰」。
+ *
+ * 判定依据：`react.dev/link` 是开发版专属的错误文档链接；生产版把同样的报错压成
+ * `Minified React error #xx`，不会出现这个域名。所以命中即等价于「这是开发版」。
+ * 典型成因是构建时环境变量里带了 NODE_ENV=development（见上方 vite 调用的注释）。
+ */
+async function assertProductionBundle() {
+  let html;
+  try {
+    html = await readFile(join(webDist, "index.html"), "utf8");
+  } catch (err) {
+    console.error(`[copy-web] 守门校验无法读取 web/dist/index.html：${err.message}`);
+    process.exit(1);
+  }
+
+  // 从 index.html 找出入口脚本（webview 实际加载的就是它），据此定位要检查的产物
+  const match = html.match(/src="([^"]*index-[^"]+\.js)"/);
+  if (!match) {
+    console.error(
+      "[copy-web] 守门校验失败：index.html 里找不到入口脚本（形如 assets/index-*.js），" +
+      "无法确认产物是生产版，拒绝拷贝。",
+    );
+    process.exit(1);
+  }
+  const entryPath = join(webDist, match[1].replace(/^\.?\//, ""));
+
+  let bundle;
+  try {
+    bundle = await readFile(entryPath, "utf8");
+  } catch (err) {
+    console.error(`[copy-web] 守门校验无法读取入口产物 ${entryPath}：${err.message}`);
+    process.exit(1);
+  }
+
+  if (bundle.includes("react.dev/link")) {
+    console.error(
+      "[copy-web] ⛔ 产物里含 React【开发版】（命中 react.dev/link），已拒绝拷贝。\n" +
+      "  开发版会启用 Performance Tracks：performance.measure 的 detail 结构化克隆组件 props，\n" +
+      "  遇到函数/DOM 节点即抛 DataCloneError；异常在 React 提交阶段内部抛出，Error Boundary\n" +
+      "  拦不住，整棵树被卸载 —— 用户看到的是界面整片变灰。\n" +
+      "  常见成因：构建时环境里有 NODE_ENV=development（检查 IDE 集成终端 / CI 的环境变量）。",
+    );
+    process.exit(1);
+  }
+}
+
+await assertProductionBundle();
 
 async function normalizeAssetBase(dir) {
   const entries = await readdir(dir, { withFileTypes: true });

@@ -1,8 +1,9 @@
 /**
  * CommandGateController —— 命令信任门（从 AgentSession 解耦，状态自持）
  *
- * 把 execute_command 的"灾难硬拦 + 白名单 + 人工授权（含危险确认）"收敛到一处：
- * 主循环与子 Agent 共用同一个 gate，保证三层语义一致、批准结果父子共享。
+ * 把 execute_command 的"白名单 + 人工授权"收敛到一处：主循环与子 Agent 共用同一个 gate，
+ * 保证两层语义一致、批准结果父子共享。风险检测（detectDangerousCommand）只产出提醒，
+ * 由本控制器在放行后透传给前端（command_risk_notice）。
  *
  * 与其它协作者不同，本控制器【自持全部相关状态】（CommandGate 实例、审批 resolver 表、
  * 自增序号、信任规则持久化回调）——这些状态原本只被本组方法使用，搬迁后是真正的状态内聚，
@@ -56,13 +57,16 @@ export class CommandGateController {
    * 保证白名单、灾难硬拦、人工授权三层语义一致，且批准结果在父子间共享。
    * @param toolCallId 触发该命令的工具调用 id，透传给前端做内联审批定位
    */
-  gate(command: string, toolCallId?: string): Promise<GateOutcome> {
-    return this.commandGate.gate(command, {
+  async gate(command: string, toolCallId?: string): Promise<GateOutcome> {
+    const outcome = await this.commandGate.gate(command, {
       requestApproval: (cmd, options, danger) => this.requestCommandApproval(cmd, options, toolCallId, danger),
-      requestDangerousApproval: (cmd, reason) => this.requestDangerousCommandApproval(cmd, reason),
-      emitBlocked: (cmd, reason) => this.s.send("command_blocked", { command: cmd, reason }),
       persist: (rule, target) => this.onApproved?.(rule, target),
     });
+    // 风险提醒：命令已在门内放行，这里只把风险原因透传给前端做可见提示（无需用户应答）。
+    if (outcome.warning) {
+      this.s.send("command_risk_notice", { command, reason: outcome.warning, id: toolCallId });
+    }
+    return outcome;
   }
 
   /** 弹出命令审批请求并阻塞，等待用户三档决策（exact/prefix/all/once/reject） */
@@ -81,17 +85,4 @@ export class CommandGateController {
     });
   }
 
-  /**
-   * 危险命令确认弹窗：发送 command_blocked（带 requestId），等待用户点"拒绝"或"仍要执行"。
-   * 返回 true=仍要执行，false=拒绝。
-   */
-  private requestDangerousCommandApproval(command: string, reason: string): Promise<boolean> {
-    const requestId = `danger_${Date.now()}_${this.approvalSeq++}`;
-    this.s.send("command_blocked", { requestId, command, reason, dangerous: true });
-    return new Promise<boolean>((resolve) => {
-      this.commandApprovalResolvers.set(requestId, (decision) => {
-        resolve(decision.choice === "once"); // "once" = 仍要执行，"reject" = 拒绝
-      });
-    });
-  }
 }

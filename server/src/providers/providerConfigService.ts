@@ -11,7 +11,7 @@
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { RESERVED_PROVIDER_NAMES, type ProviderConfigFile, type ProviderModel, type RawProviderEntry } from "@axon/core";
+import { RESERVED_PROVIDER_NAMES, assertUniqueModelIds, type ProviderConfigFile, type ProviderModel, type RawProviderEntry } from "@axon/core";
 
 export type ProviderLevel = "user" | "workspace";
 
@@ -67,6 +67,7 @@ export class ProviderConfigService {
     if (!key) throw new Error("provider 名称不能为空");
     if (RESERVED_PROVIDER_NAMES.includes(key)) throw new Error(`「${key}」是内置 provider 的保留名，不能自定义`);
     if (!entry.baseUrl?.trim()) throw new Error("baseUrl 必填");
+    assertUniqueModelIds(entry.models, key);
     const config = await this.read(level, workspace);
     config.providers = config.providers || {};
     config.providers[key] = entry;
@@ -113,9 +114,11 @@ export class ProviderConfigService {
   /**
    * 覆盖某自定义 provider 的模型数组（add/edit/delete/disable 都由前端在数组上算好后整存）。
    * 只动 models，apiKey / baseUrl 等其它字段原样保留；内置 provider 不允许改模型。
+   * 同一 provider 内 model id 必须唯一：发现重复直接抛错，不静默去重（避免用户以为加成功了）。
    */
   async setCustomProviderModels(level: ProviderLevel, name: string, models: ProviderModel[], workspace?: string): Promise<void> {
     if (RESERVED_PROVIDER_NAMES.includes(name)) throw new Error(`「${name}」是内置 provider，模型不可修改`);
+    assertUniqueModelIds(models, name);
     const config = await this.read(level, workspace);
     const entry = config.providers?.[name];
     if (!entry) throw new Error(`provider 不存在：${name}`);

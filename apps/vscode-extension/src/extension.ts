@@ -29,6 +29,7 @@ import { openOrFocusPanel, postToPanel } from "./panelManager.js";
 import { registerGitBlameAnnotation } from "./gitBlameAnnotation.js";
 import { registerInlineCompletion } from "./inlineCompletion.js";
 import { registerAskAxonCodeAction } from "./codeActionProvider.js";
+import { showDiagLog } from "./webviewWatchdog.js";
 
 /** 批量导入结果（单条） */
 interface ImportResult {
@@ -430,6 +431,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("axon.newSession", () => provider.postToWebview({ type: "command:new_session" })),
+    // 打开诊断输出面板：界面卡灰后可在此查看记录（含卡死时刻与当时的操作）
+    vscode.commands.registerCommand("axon.showDiagnostics", () => showDiagLog()),
     vscode.commands.registerCommand("axon.focusChat", () => {
       // 先确保辅助侧栏可见，再聚焦 Axon chat view
       vscode.commands.executeCommand("workbench.action.focusAuxiliaryBar");

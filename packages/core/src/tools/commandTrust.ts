@@ -1,16 +1,18 @@
 /**
- * 命令信任白名单 —— 锚定 token 字典树（trie）+ 包含去重 + 元字符闸门
+ * 命令信任白名单 —— 锚定 token 字典树（trie）+ 包含去重
  *
  * 设计要点（与形态无关的纯逻辑，不碰文件系统/进程）：
  * - 默认全拒：空 trie 时任何命令都不被信任，需用户授权。
- * - 三档粒度：exact（整条）/ prefix（前缀子树 `npm run *`）/ all（`*`）。
+ * - 四档粒度：exact（整条）/ partial（两段前缀 `npm run *`）/ prefix（根命令 `npm *`）/ all（`*`）。
  * - 锚定匹配：命令必须从【开头】匹配信任前缀，绝不做"任意位置子串"匹配
  *   （那会让 `echo npm run && rm -rf /` 被误判命中 `npm run *`）。故用普通 trie，
  *   而非 AC 自动机——AC 的 failure link 是为多模式子串搜索设计的，这里既无用又危险。
  * - 包含去重：加 wildcard 时剪掉其整棵子树；在已有祖先 wildcard 下加规则则 no-op。
  *   于是先 `npm run *` 后 `npm *` → 自动只剩 `npm *`。
- * - 元字符闸门：含 `&& || ; | \` $() > < &` 等拼接/扩展符的命令，不走 wildcard 匹配，
- *   只允许命中"精确整条"规则；防止前缀信任被命令拼接绕过。
+ * - 拼接命令不再由信任层拦截：历史上的"元字符闸门"（含 `&&` `;` `|` 反引号 `$()` `>` `<`
+ *   即不走 wildcard 匹配）已被移除，前缀信任会覆盖 `a && b`、`a | b` 这类拼接形式。
+ *   安全兜底交给 CommandGate 的风险提醒（detectDangerousCommand，仅覆盖 rm -rf 等固定模式）。
+ *   ⚠️ 若要恢复该闸门，需同时改回 isTrusted 并翻转 test/eval 里的元字符用例。
  */
 
 export type TrustScope = "exact" | "partial" | "prefix" | "all";
@@ -97,21 +99,6 @@ export class CommandTrustTrie {
     this.addPrefix(tokenize(normalizeCommand(rule.pattern)));
   }
 
-  /** 检查含元字符的命令是否已被 trie 中的某个 prefix 覆盖 */
-  private isPrefixCovered(norm: string): boolean {
-    // 取 ; 或其他元字符之前的部分作为"第一条命令"来匹配 trie
-    const firstCmd = norm.split(/[;&`]/)[0].trim();
-    if (!firstCmd) return false;
-    let node = this.root;
-    for (const t of tokenize(firstCmd)) {
-      const child = node.children.get(t);
-      if (!child) return false;
-      if (child.wildcard) return true;
-      node = child;
-    }
-    return false;
-  }
-
   private addExact(tokens: string[]): void {
     if (tokens.length === 0 || this.root.wildcard) return;
     let node = this.root;
@@ -157,7 +144,7 @@ export class CommandTrustTrie {
 
     // 管道命令：只看 | 左边第一个命令。管道只是把输出传给下游，
     // 下游 Select-Object/Sort-Object 等格式化工具不会造成安全风险，
-    // 真正的危险命令已被 detectDangerousCommand 硬拦。
+    // 真正的危险命令由 detectDangerousCommand 标记为风险并提醒用户。
     // 要求两边都信任会导致用户永远没机会单独信任 Select-Object
     // （AI 不会单独调它），从而每次管道都要手动确认——体验极差。
     if (norm.includes("|")) {

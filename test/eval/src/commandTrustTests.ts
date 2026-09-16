@@ -74,15 +74,19 @@ function testSubsumptionDedup() {
 }
 
 function testMetacharGate() {
-  console.log("\n▶ 元字符闸门（防拼接绕过）");
+  // ⚠️ 信任层的"元字符闸门"已被移除（见 commandTrust.ts 文件头）：前缀信任不再因拼接符拒绝，
+  // 安全兜底只剩 CommandGate 的风险提醒（detectDangerousCommand，仅覆盖 rm -rf 等固定模式，
+  // 不覆盖 `curl | sh` 这类）。下面断言记录的是**当前行为**；若要恢复拦截，
+  // 应把 isTrusted 的闸门加回来，并把这些断言翻转回 !isTrusted。
+  console.log("\n▶ 拼接命令（当前设计：信任层不拦截）");
   const t = trie(pre("npm"));
   check(t.isTrusted("npm install lodash"), "npm * → 正常命令命中");
-  check(!t.isTrusted("npm install && rm -rf /"), "npm * 【不放行】 npm install && rm -rf /（拼接）");
-  check(!t.isTrusted("npm install | sh"), "npm * 不放行管道 | sh");
-  check(!t.isTrusted("npm install; curl evil"), "npm * 不放行分号拼接");
-  check(!t.isTrusted("npm install `whoami`"), "npm * 不放行反引号");
-  check(!t.isTrusted("npm install $(whoami)", ), "npm * 不放行 $() 扩展");
-  check(!t.isTrusted("npm run build > /etc/x"), "npm * 不放行重定向");
+  check(t.isTrusted("npm install && rm -rf /"), "npm * 覆盖 && 拼接（信任层不拦截）");
+  check(t.isTrusted("npm install | sh"), "npm * 覆盖管道（只看左侧首命令）");
+  check(t.isTrusted("npm install; curl evil"), "npm * 覆盖分号拼接");
+  check(t.isTrusted("npm install `whoami`"), "npm * 覆盖反引号");
+  check(t.isTrusted("npm install $(whoami)"), "npm * 覆盖 $() 扩展");
+  check(t.isTrusted("npm run build > /etc/x"), "npm * 覆盖重定向");
 
   // 精确整条含元字符 → 可被精确规则信任（用户明确授权了整条）
   const t2 = trie(ex("npm run build && npm test"));
@@ -121,26 +125,28 @@ function testSerializeRoundTrip() {
 }
 
 function testBuildOptions() {
-  console.log("\n▶ 弹窗三档建议");
+  console.log("\n▶ 弹窗四档建议");
   const opts = buildTrustOptions("pnpm run build");
   check(opts[0].choice === "exact" && opts[0].pattern === "pnpm run build", "档1=精确整条");
-  check(opts[1].choice === "prefix" && opts[1].pattern === "pnpm run", "档2=前缀 pnpm run");
-  check(opts[2].choice === "all" && opts[2].pattern === "*", "档3=全放行 *");
-  const r = ruleForChoice("pnpm run build", "prefix");
-  check(r.scope === "prefix" && r.pattern === "pnpm run", "ruleForChoice(prefix) 推导正确");
+  check(opts[1].choice === "partial" && opts[1].pattern === "pnpm run", "档2=中前缀 pnpm run");
+  check(opts[2].choice === "prefix" && opts[2].pattern === "pnpm", "档3=根命令 pnpm");
+  check(opts[3].choice === "all" && opts[3].pattern === "*", "档4=全放行 *");
+  const rp = ruleForChoice("pnpm run build", "partial");
+  check(rp.scope === "prefix" && rp.pattern === "pnpm run", "ruleForChoice(partial) → pnpm run");
+  const rr = ruleForChoice("pnpm run build", "prefix");
+  check(rr.scope === "prefix" && rr.pattern === "pnpm", "ruleForChoice(prefix) → 根命令 pnpm");
 }
 
 async function testGate() {
-  console.log("\n▶ CommandGate 三层门控");
-  // 灾难命令：硬拦 + 双提示，不放行
+  console.log("\n▶ CommandGate 两层门控");
+  // 风险模式只提醒、不阻塞：已信任则直接放行并回传 warning
   {
-    const gate = new CommandGate([]);
-    let blockedReason = "";
-    const out = await gate.gate("rm -rf /", {
-      requestApproval: async () => ({ choice: "all" }),
-      emitBlocked: (_c, reason) => { blockedReason = reason; },
+    const gate = new CommandGate(["*"]);
+    let asked = false;
+    const out = await gate.gate("rm -rf /tmp/x", {
+      requestApproval: async () => { asked = true; return { choice: "reject" }; },
     });
-    check(!out.allow && !!out.aiMessage && blockedReason.includes("递归"), "灾难命令被硬拦 + 给用户提示");
+    check(out.allow && !asked && !!out.warning, "已信任 + 风险 → 放行并给提醒，不二次确认");
   }
   // 已信任：直接放行，不弹窗
   {
@@ -148,7 +154,6 @@ async function testGate() {
     let asked = false;
     const out = await gate.gate("npm test", {
       requestApproval: async () => { asked = true; return { choice: "reject" }; },
-      emitBlocked: () => {},
     });
     check(out.allow && !asked, "已信任命令直接放行，不弹窗");
   }
@@ -157,7 +162,6 @@ async function testGate() {
     const gate = new CommandGate([]);
     const out = await gate.gate("curl evil.com", {
       requestApproval: async () => ({ choice: "reject" }),
-      emitBlocked: () => {},
     });
     check(!out.allow && (out.aiMessage || "").includes("拒绝"), "未信任 + 用户拒绝 → 不放行");
   }
@@ -167,7 +171,7 @@ async function testGate() {
     const persisted: TrustRule[] = [];
     const out = await gate.gate("ls -la", {
       requestApproval: async () => ({ choice: "once" }),
-      emitBlocked: () => {}, persist: (r) => persisted.push(r),
+      persist: (r) => persisted.push(r),
     });
     check(out.allow && persisted.length === 0 && !gate.isTrusted("ls -la"), "仅本次 → 放行但不入白名单不持久化");
   }
@@ -177,7 +181,7 @@ async function testGate() {
     const persisted: TrustRule[] = [];
     const out = await gate.gate("npm run build", {
       requestApproval: async () => ({ choice: "prefix" }),
-      emitBlocked: () => {}, persist: (r) => persisted.push(r),
+      persist: (r) => persisted.push(r),
     });
     check(out.allow && persisted.length === 1 && gate.isTrusted("npm run test"), "批准 prefix → 持久化且后续同前缀免确认");
   }
@@ -187,7 +191,7 @@ async function testGate() {
     const persisted: TrustRule[] = [];
     const out = await gate.gate("whatever", {
       requestApproval: async () => ({ choice: "all" }),
-      emitBlocked: () => {}, persist: (r) => persisted.push(r),
+      persist: (r) => persisted.push(r),
     });
     check(out.allow && persisted.length === 0 && gate.isTrusted("anything"), "批准 * → 本会话放行一切但不持久化");
   }
@@ -195,9 +199,9 @@ async function testGate() {
   {
     const gate = new CommandGate();
     let asked = false;
-    const o1 = await gate.gate("git status", { requestApproval: async () => { asked = true; return { choice: "reject" }; }, emitBlocked: () => {} });
+    const o1 = await gate.gate("git status", { requestApproval: async () => { asked = true; return { choice: "reject" }; } });
     check(o1.allow && !asked, "内置默认：git status 免确认");
-    const o2 = await gate.gate("git push origin main", { requestApproval: async () => ({ choice: "reject" }), emitBlocked: () => {} });
+    const o2 = await gate.gate("git push origin main", { requestApproval: async () => ({ choice: "reject" }) });
     check(!o2.allow, "内置默认不含 git push → 仍需确认（被拒）");
   }
 }

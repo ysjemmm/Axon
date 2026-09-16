@@ -60,6 +60,42 @@ export function getResolvedProviders(): ResolvedProvider[] {
 }
 
 /**
+ * 把"用户填写的 provider 标识"解析成规范 provider name。
+ *
+ * 为什么需要：面向用户的配置项（如 `axon.inlineCompletion.provider`）是自由文本，
+ * 而 provider 有两个不同的标识——name（key，如 `esign-now`）与 label（展示名，如 `公司中转站`）。
+ * 用户在界面里看到的是 label，很容易把 label 填进配置；而 getClient / getStrategy
+ * 只认 name，于是抛「未知 provider: 公司中转站」，且内联补全每次击键都会重报一次。
+ *
+ * 解析顺序：
+ *   1) 精确匹配 name（先做历史别名归一化 normalizeProvider）
+ *   2) 大小写不敏感匹配 label；命中多个（不同 provider 用了同名展示名）时不猜，返回 undefined
+ * 都未命中返回 undefined，由调用方决定回退还是报错——不在这里偷偷替换成别的 provider。
+ */
+export function resolveProviderName(input: string): string | undefined {
+  const raw = (input || "").trim();
+  if (!raw) return undefined;
+
+  const normalized = normalizeProvider(raw);
+  const list = getResolvedProviders();
+  if (list.length === 0) return undefined;
+
+  // 1) name 精确匹配（name 是内部 key，区分大小写）
+  if (list.some((p) => p.name === normalized)) return normalized;
+
+  // 2) label 匹配：用户填的是展示名。大小写不敏感，但歧义时不猜
+  const lower = normalized.toLowerCase();
+  const byLabel = list.filter((p) => (p.label || "").trim().toLowerCase() === lower);
+  if (byLabel.length === 1) return byLabel[0].name;
+  if (byLabel.length > 1) {
+    console.warn(
+      `[providers] 展示名 "${raw}" 同时对应多个 provider（${byLabel.map((p) => p.name).join(", ")}），存在歧义，请改用 provider key`,
+    );
+  }
+  return undefined;
+}
+
+/**
  * 获取模型的展示名称。优先限定在当前 provider，避免相同模型 ID 在多个中转站中产生歧义。
  * 未配置名称或尚未注入 provider 目录时返回 undefined，由呈现端回退显示模型 ID。
  */
@@ -209,7 +245,10 @@ const clients: Record<string, OpenAI> = {};
 
 /** 获取或创建指定 provider 的 OpenAI client，可选传 model 以根据模型厂商自动选择认证头 */
 export function getClient(provider: string, model?: string): OpenAI {
-  const name = normalizeProvider(provider);
+  // 兼容传入展示名（label）的情况：统一解析成规范 name 再查配置。
+  // 解析不出时回退到归一化后的原值，让下面照常抛出「未知 provider」——
+  // 保持原有报错语义，不把无法识别的输入悄悄换掉。
+  const name = resolveProviderName(provider) ?? normalizeProvider(provider);
   const conf = configFor(name);
   if (!conf) {
     const known = getResolvedProviders().map((p) => p.name).join(", ") || "（无）";
@@ -259,7 +298,7 @@ function protocolForModel(provider: string, model: string): ProviderProtocol {
  * - 其他 → ChatCompletionsStrategy
  */
 export function getStrategy(provider: string, model: string): LLMStrategy {
-  const name = normalizeProvider(provider);
+  const name = resolveProviderName(provider) ?? normalizeProvider(provider);
   const protocol = protocolForModel(name, model);
 
   if (protocol === "anthropic") {

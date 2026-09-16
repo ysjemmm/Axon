@@ -89,7 +89,7 @@ export const AGENT_EVENT = {
   CONFIRM_TOOL_REQUEST: "confirm_tool_request",
   TOOL_CONFIRM_TIMEOUT: "tool_confirm_timeout",
   CONFIRM_COMMAND_REQUEST: "confirm_command_request",
-  COMMAND_BLOCKED: "command_blocked",
+  COMMAND_RISK_NOTICE: "command_risk_notice",
   // ── Relay ──
   FOCUS_RELAY: "focus_relay",
   RELAY_UPDATED: "relay_updated",

@@ -1331,7 +1331,7 @@ export interface ReadFileGroupData {
   queuedOnly?: boolean; // 组内全在排队、无一在执行 → 静态时钟（缺省按旧行为转圈）
   hasError: boolean;   // 组内是否有失败
   /** 每个文件：文件名 + 可选行号区间（如 "1-10" / "2-EOF"）+ 完整路径（点击打开用）+ 起止行号（点击跳转选中用） */
-  files: { name: string; range?: string; path?: string; startLine?: number; endLine?: number }[];
+  files: { name: string; range?: string; path?: string; startLine?: number; endLine?: number; isAbsolute?: boolean }[];
 }
 
 /**
@@ -1364,7 +1364,7 @@ export function ReadFileGroupItem({ group }: { group: ReadFileGroupData }) {
             title={f.path || f.name}
           >
             <FileTypeIcon fileName={f.name} />
-            <span className="text-foreground break-all">{f.name}</span>
+            <span className={`text-foreground break-all ${f.isAbsolute ? "underline underline-offset-2" : ""}`}>{f.name}</span>
             {f.range && <span className="text-muted-foreground/70 whitespace-nowrap shrink-0">{f.range}</span>}
           </span>
         ))}

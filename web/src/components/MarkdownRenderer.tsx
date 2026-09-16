@@ -1,7 +1,7 @@
 /**
  * Markdown 渲染组件
  *
- * - 基于 renderMarkdown (markdown-it + hljs + KaTeX) 产出 HTML
+ * - 基于 renderMarkdown (markdown-it + hljs) 产出 HTML
  * - 后处理：把 <code> 标签内的文件/目录路径转为可点击链接
  * - 点击路径通过 postMessage 通知扩展宿主打开文件
  * - 增强渲染：SVG / Mermaid / HTML 代码块内联渲染为图表
@@ -11,6 +11,7 @@ import { useRef, useEffect, useLayoutEffect, useState, useCallback, memo } from 
 import mermaid from "mermaid";
 import { renderMarkdown } from "@/lib/markdown";
 import { useThemeVersion } from "@/lib/theme";
+import { beginSpan, endSpan, recordIncident } from "@/lib/diagnostics";
 
 /**
  * 匹配文件/目录路径——只认【绝对路径】（Windows `C:\...`、Unix `/...`）或【显式相对路径】（`./`、`../` 开头）。
@@ -319,6 +320,13 @@ if (typeof document !== "undefined") {
   });
 }
 
+/**
+ * "重渲染提交"耗时超过该值才记一条归因（ms）。
+ * 取 80ms 而非诊断模块默认的 200ms：提交每轮流式要跑几十次，
+ * 阈值太高会漏掉"单次不致命、连续叠起来把主线程占满"的那类提交。
+ */
+const SLOW_COMMIT_MS = 80;
+
 interface MarkdownRendererProps { content: string; }
 
 
@@ -328,9 +336,19 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: Mark
   // setTimeout 句柄（早先叫 rafRef，但里面装的从来不是 requestAnimationFrame 的返回值）
   const parseTimerRef = useRef<number | null>(null);
   const pendingContentRef = useRef<string>(content);
+  /** 归因埋点：请求重渲染的时刻（提交完成后在 layout effect 里结算） */
+  const commitStartRef = useRef(0);
 
   const computeHtml = useCallback((text: string): string => {
-    return wrapTables(linkifyPaths(renderMarkdown(text)));
+    // 这条链路是整条消息的全量重解析 + 两次整段 HTML 正则扫描（linkifyPaths / wrapTables），
+    // 成本随内容长度增长，而流式期间每约 32ms 就要重来一次。
+    // 内容较大时写入持久化标记：万一主线程卡死在这一步，下次启动即可从标记读出规模与耗时。
+    beginSpan("markdown-parse", { persist: text.length > 8000, detail: `${(text.length / 1024).toFixed(0)}KB` });
+    try {
+      return wrapTables(linkifyPaths(renderMarkdown(text)));
+    } finally {
+      endSpan("markdown-parse");
+    }
   }, []);
 
   const [html, setHtml] = useState<string>(() => {
@@ -349,7 +367,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: Mark
   // 打字机切好的细粒度在这一层被重新量化掉了，观感恰好回到它想避免的那种颗粒感。
   //
   // 降到 32ms（约 30fps，每次约 8 个字）。之所以现在敢降，是因为 markdown.ts 给
-  // highlight.js 与 KaTeX 都加了按输入的缓存：流式重解析时靠前的代码块/公式逐字未变，
+  // highlight.js 加了按输入的缓存：流式重解析时靠前的代码块逐字未变，
   // 直接命中缓存，重解析的成本基本只剩 markdown-it 的 token 化。在那之前每次重解析都要
   // 全量重跑高亮（无语言标注还要 highlightAuto 逐个试语言），80ms 是被成本逼出来的。
   //
@@ -366,6 +384,10 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: Mark
       parseTimerRef.current = null;
       const text = pendingContentRef.current;
       lastContentRef.current = text;
+      // 归因埋点起点：记下"请求重渲染"的时刻，提交完成后在下面结算。
+      // 用 per-instance 的 ref 而非 beginSpan/endSpan —— 同一个提交里可能有多个
+      // MarkdownRenderer 同时更新，而 beginSpan 按名字索引，会互相覆盖。
+      commitStartRef.current = performance.now();
       setHtml(computeHtml(text));
     }, PARSE_THROTTLE_MS);
   }, [content, computeHtml]);
@@ -373,6 +395,33 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: Mark
   useEffect(() => {
     return () => { if (parseTimerRef.current !== null) { clearTimeout(parseTimerRef.current); parseTimerRef.current = null; } };
   }, []);
+
+  /**
+   * 归因埋点：结算"请求重渲染 → DOM 提交完成"这段耗时。
+   *
+   * 这段（React 渲染 + 协调 + DOM 变更 + 大内容的同步布局）是此前完全没有覆盖的区间，
+   * 而卡顿诊断里那批没有归因的长任务正落在它里面。
+   */
+  useLayoutEffect(() => {
+    const startedAt = commitStartRef.current;
+    if (startedAt <= 0) return;
+    commitStartRef.current = 0;
+    const commitMs = performance.now() - startedAt;
+    if (commitMs >= SLOW_COMMIT_MS) {
+      recordIncident("slow:md-commit", commitMs, `html=${(html.length / 1024).toFixed(0)}KB`);
+    }
+    // 大内容时顺带量一次强制同步布局：HTML 字符串换成 DOM 子树后，浏览器要重算样式与布局，
+    // 这段同样没有归因。只在内容较大时量，避免给常态渲染加开销。
+    const el = ref.current;
+    if (el && html.length > 20000) {
+      const t0 = performance.now();
+      void el.offsetHeight;
+      const layoutMs = performance.now() - t0;
+      if (layoutMs >= SLOW_COMMIT_MS) {
+        recordIncident("slow:md-layout", layoutMs, `html=${(html.length / 1024).toFixed(0)}KB`);
+      }
+    }
+  }, [html]);
 
   // 事件委托（React 合成事件）
   const handleContentClick = useCallback((e: React.MouseEvent) => {
@@ -540,6 +589,9 @@ function cleanupMermaidErrorArtifacts(root: ParentNode = document): void {
 
 async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: (el: HTMLElement) => void): Promise<void> {
   block.dataset.hydrated = "1";
+  // mermaid 的图布局计算是同步重活（复杂图可达数秒），且流式期间每次内容变化都可能被重新触发。
+  // 持久化标记：如果卡死发生在这里，它就是判断根因最直接的证据。
+  beginSpan("mermaid-render", { persist: true, detail: `${(content.length / 1024).toFixed(1)}KB` });
   let renderId = "";
   let renderHost: HTMLDivElement | null = null;
   try {
@@ -618,6 +670,8 @@ async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: 
     if (renderId) cleanupMermaidRenderArtifacts(renderId);
     cleanupMermaidErrorArtifacts();
     block.dataset.hydrated = "0";
+  } finally {
+    endSpan("mermaid-render");
   }
 }
 

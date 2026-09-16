@@ -67,7 +67,7 @@
           "type": "string",
           "default": "",
           "scope": "resource",
-          "markdownDescription": "内联补全使用的 LLM Provider。留空则自动探测第一个已配置的 provider。"
+          "markdownDescription": "内联补全使用的 LLM Provider。填 provider key（如 `esign-now`）或它的展示名均可，两者都会自动识别；留空则自动探测第一个已配置的 provider。"
         },
         "axon.inlineCompletion.model": {
           "type": "string",
@@ -378,6 +378,10 @@
         "command": "axon.openProvider",
         "title": "Axon: 打开 Provider 配置",
         "icon": "$(add)"
+      },
+      {
+        "command": "axon.showDiagnostics",
+        "title": "Axon: 查看诊断日志（界面卡死排查）"
       },
       {
         "command": "axon.provider.refresh",

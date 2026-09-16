@@ -31,6 +31,20 @@ import {
 export class TokenAccountant {
   constructor(private readonly s: AgentSession) {}
 
+  /**
+   * 校准系数的可信区间。
+   *
+   * 端点实报 prompt_tokens 与本地估算的比值落在这个区间内才采信。实测的正常偏差是
+   * 15% 上下（deepseek 会话：估算 418k vs 实收 481k）；而网关把计费数字塞进 usage 时
+   * 会出现 26 倍虚高、恒报 0 这类明显不是 prompt 规模的取值——那些必须丢弃，
+   * 否则会把上下文统计和压缩决策一起带偏。
+   */
+  private static readonly CALIBRATION_MIN = 0.5;
+  private static readonly CALIBRATION_MAX = 2.5;
+
+  /** 已就"端点报数不可信"提示过一次，避免逐轮刷屏 */
+  private warnedImplausible = false;
+
   /** 获取最近一次的累计上下文 token 数 */
   getLastTotalTokens(): number {
     return this.s.lastTotalTokens;
@@ -51,12 +65,20 @@ export class TokenAccountant {
   /**
    * 推送当前上下文 token 占用给前端。
    *
-   * 口径固定为本地估算。这里刻意**不**优先采用 API 返回的 prompt_tokens——那个值换个 provider
-   * 就换一套口径，同一段历史能差 3.5 倍，而这个数还同时驱动压缩决策
-   * （compactionController 读 lastTotalTokens），一旦虚高就会无端砍掉对话历史。
+   * 口径 = 本地估算 × 校准系数。校准系数由端点实报的 prompt_tokens 反推（见 updateCalibration），
+   * 目的是让界面显示的"已用上下文"与端点实际收到的 prompt 规模一致——此前纯本地估算对代码密集
+   * 内容系统性偏低（实测 deepseek 会话偏低 17%），界面上看到的是 400k、后台实收却是 490k。
+   *
+   * 仍然以估算为基（而不是直接取端点报数），是因为估算单调、稳定、不随端点口径跳变；
+   * 端点报数只用它的**比值**来校正尺度，异常值由可信区间挡掉。
+   * 这个值同时驱动压缩决策（compactionController 读 lastTotalTokens），所以校准后触发时机也更准。
    */
   updateAndSendTokenUsage(): void {
-    const total = this.estimateContextTokens();
+    const estimate = this.estimateContextTokens();
+    // 换模型后 tokenizer 不同，旧系数作废，退回未校准的估算
+    const total = this.s.promptCalibrationModel === this.s.model
+      ? Math.round(estimate * this.s.promptCalibration)
+      : estimate;
 
     this.s.lastTotalTokens = total;
     this.s.send("token_usage", {
@@ -64,6 +86,45 @@ export class TokenAccountant {
       max: this.s.getContextWindow(),
       cumulative: this.s.cumulativeTokens, // 本任务累计消耗（含子 Agent），与 used（当前上下文占用）区分
     });
+  }
+
+  /**
+   * 用端点实报的 prompt_tokens 反推本地估算的校正系数。
+   *
+   * 调用时机是"某回合的 usage 刚回来"，此刻 this.s.messages 与本次请求体一致，
+   * 因此 realPromptTokens ÷ estimateContextTokens() 就是这次请求上真实的估算偏差。
+   * 每轮都重算，所以换模型、换端点、开/关压缩都能自动跟上，不需要额外的失效逻辑。
+   */
+  private updateCalibration(realPromptTokens: number): void {
+    const estimate = this.estimateContextTokens();
+    if (estimate <= 0) return;
+
+    const ratio = realPromptTokens / estimate;
+    if (ratio < TokenAccountant.CALIBRATION_MIN || ratio > TokenAccountant.CALIBRATION_MAX) {
+      // 端点报数明显不是 prompt 规模（网关计费口径 / 恒报 0）→ 丢弃校准，退回纯本地估算
+      this.s.promptCalibration = 1;
+      this.s.promptCalibrationModel = "";
+      if (!this.warnedImplausible) {
+        this.warnedImplausible = true;
+        console.warn(
+          `[token] 端点实报 prompt_tokens=${realPromptTokens} 与本地估算 ${estimate} 相差 ${ratio.toFixed(2)}×，` +
+          `超出可信区间 [${TokenAccountant.CALIBRATION_MIN}, ${TokenAccountant.CALIBRATION_MAX}]，` +
+          `上下文统计退回本地估算口径（此提示只出现一次）。`,
+        );
+      }
+      return;
+    }
+
+    const prev = this.s.promptCalibrationModel === this.s.model ? this.s.promptCalibration : 1;
+    this.s.promptCalibration = ratio;
+    this.s.promptCalibrationModel = this.s.model;
+    // 只在系数明显变化时打一行，便于用户/日志核对"显示值是否已与后台对齐"
+    if (Math.abs(ratio - prev) / prev > 0.05) {
+      console.log(
+        `[token] 上下文口径已校准：端点实报 ${realPromptTokens} ÷ 本地估算 ${estimate} = ${ratio.toFixed(3)}×` +
+        `（此后界面"已用上下文"与端点实收一致）`,
+      );
+    }
   }
 
   /**
@@ -75,6 +136,8 @@ export class TokenAccountant {
   recordTurnUsage(usage?: { promptTokens: number; completionTokens: number; totalTokens: number; cachedTokens?: number }): void {
     if (usage && usage.promptTokens > 0) {
       this.s.lastPromptTokens = usage.promptTokens;
+      // 端点实报值：顺手用它校正上下文统计的尺度（详见 updateCalibration）
+      this.updateCalibration(usage.promptTokens);
     }
     if (usage && usage.completionTokens > 0) {
       this.s.lastCompletionTokens = usage.completionTokens;

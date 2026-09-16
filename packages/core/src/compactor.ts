@@ -14,6 +14,7 @@
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { DEFAULT_CONTEXT_WINDOW } from "./llm/modelContext.js";
 import type { LLMStrategy } from "./llm/types.js";
+import { NO_TRUNCATE_TOOLS } from "./tools/catalog.js";
 
 /** 压缩配置 */
 interface CompactConfig {
@@ -480,6 +481,10 @@ export function pruneOldToolResults(
     // 这些工具结果不在裁剪范围内，直接跳过。
     const toolName = extractToolName(messages, i);
     if (toolName === "read_file" || toolName === "list_dir") continue;
+    // 结论型工具（子 Agent 交付物）一律不裁：它们没有“重新读一次”的回捞手段。
+    // 终端类（execute_command / get_process_output）已移出该集合——输出体积由外部命令决定、
+    // 旧轮次价值极低，故允许按下方的 keepTail 规则裁剪（保留尾部：报错与最终结论在末尾）。
+    if (NO_TRUNCATE_TOOLS.has(toolName)) continue;
 
     toPrune.push({ idx: i, originalLen: content.length });
   }

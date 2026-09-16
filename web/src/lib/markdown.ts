@@ -1,30 +1,31 @@
 /**
- * Markdown 渲染 - 基于 markdown-it + highlight.js + KaTeX（直接渲染，无插件）
+ * Markdown 渲染 - 基于 markdown-it + highlight.js（直接渲染，无插件）
  *
- * KaTeX 策略：不依赖任何 markdown-it 插件（它们在 Vite 浏览器环境有反斜杠被吞的 bug）。
- * 改为：normalizeMath → 手动提取 $$/$$ 和 $$ → katex.renderToString → 占位符保护 → markdown-it 渲染 → 还原。
- * 这样 markdown-it 完全不碰数学内容，反斜杠绝对不会被吃。
+ * 刻意不做数学公式渲染：公式按普通文本原样输出，不再解析任何数学定界符。
+ * 数学标记需要"提取定界符 → 占位符 → 渲染后还原"三步，其中还原步骤的成本随
+ * 公式数与消息长度相乘增长；而流式输出每约 32ms 就要拿整条消息重解析一次，
+ * 长回复上足以占满渲染进程主线程（表现为界面变灰、失去响应）。
+ * 为几乎用不到的能力付这个代价不划算，故整条链路移除。
  */
 
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
-import katex from "katex";
 
 /**
  * ── 渲染结果缓存（流式输出的关键优化）──
  *
  * 流式期间 MarkdownRenderer 会把**整条消息**反复从头重新解析（内容每增长一次就重来一遍），
- * 而这条链路里最贵的两步——highlight.js 语法高亮与 KaTeX 公式渲染——输入几乎完全没变：
- * 一条回复里靠前的代码块/公式在后续每一次重解析中都逐字相同，却每次都要重算一遍。
+ * 而这条链路里最贵的一步——highlight.js 语法高亮——输入几乎完全没变：
+ * 一条回复里靠前的代码块在后续每一次重解析中都逐字相同，却每次都要重算一遍。
  * 长回复里这是几十次全量高亮，也正是当初不得不把重解析节流到 80ms 的原因——
  * 代价是可见更新掉到 12.5fps，把打字机精心切细的出字粒度又重新量化成"一簇字蹦一下"
  * （打字机压到 5 字/帧就是为了避免这种颗粒感，见 useTypewriter 的 BASE_BATCH 注释）。
  *
- * 三个调用点都是纯函数（同样输入必得同样 HTML），所以按输入缓存是安全的。
+ * 两个调用点都是纯函数（同样输入必得同样 HTML），所以按输入缓存是安全的。
  * 命中后重解析基本只剩 markdown-it 自身的 token 化，节流才降得下来。
  *
- * 与主题无关：hljs 产出的是 class 名（hljs-keyword 等）、KaTeX 产出的是结构化标记，
- * 配色全靠 CSS，所以主题切换不需要让缓存失效。
+ * 与主题无关：hljs 产出的是 class 名（hljs-keyword 等），配色全靠 CSS，
+ * 所以主题切换不需要让缓存失效。
  *
  * 用 Map + FIFO 淘汰而非 LRU：这里的访问模式是"同一批 key 在一轮流式内被反复命中"，
  * 容量够装下单条消息的全部块就行，不必按热度排序。
@@ -46,12 +47,11 @@ function memoized(cache: Map<string, string>, key: string, compute: () => string
 }
 
 /**
- * 三个缓存必须各自独立：同一份 (lang, code) 在"未知语言"分支下的产出并不相同
+ * 两个缓存必须各自独立：同一份 (lang, code) 在"未知语言"分支下的产出并不相同
  * （autoCache 会去猜语言，escapeCache 只做转义），共用一个 Map 会串味。
  */
 const highlightAutoCache = new Map<string, string>();
 const highlightEscapeCache = new Map<string, string>();
-const katexCache = new Map<string, string>();
 
 /** 缓存 key 分隔符：lang / displayMode 里不可能出现 NUL，不会与内容混淆 */
 const CACHE_KEY_SEP = "\u0000";
@@ -95,9 +95,9 @@ function highlightOrEscape(code: string, lang: string): string {
 }
 
 const md = new MarkdownIt({
-  html: false, // 禁止历史/普通回复里的裸 HTML 进入 dangerouslySetInnerHTML；KaTeX 通过占位符在渲染后恢复
+  html: false, // 禁止历史/普通回复里的裸 HTML 进入 dangerouslySetInnerHTML
   linkify: true,
-  typographer: false, // 关闭：防止 typographer 对占位符周围的引号做智能替换
+  typographer: false, // 关闭智能标点替换：引号/连字符保持原样，避免代码与命令里的符号被换成弯引号或破折号
   breaks: true,
   highlight: (str, lang) => highlightWithAutoFallback(str, lang),
 });
@@ -128,7 +128,6 @@ md.renderer.rules.link_open = function (tokens, idx, options, env, self) {
 // 代码块：带高亮 + 复制按钮。只有显式 opt-in 的 SVG / Mermaid / HTML 才增强渲染。
 const ENHANCED_LANGS = new Set(["svg", "mermaid", "html"]);
 const ENHANCED_RENDER_MARKER = "axon-render";
-const MATH_PLACEHOLDER_PREFIX = "AXON_MATH_PLACEHOLDER_";
 
 md.renderer.rules.fence = function (tokens, idx) {
   const token = tokens[idx];
@@ -176,14 +175,10 @@ md.renderer.rules.fence = function (tokens, idx) {
 };
 
 /**
- * 主渲染入口：归一化定界符 → 预渲染数学（直接 katex.renderToString）→ markdown-it 渲染 → 还原数学 HTML。
+ * 主渲染入口：修复畸形代码围栏 → markdown-it 渲染。
  */
 export function renderMarkdown(text: string): string {
-  const fenced = normalizeFences(text);
-  const normalized = normalizeMath(fenced);
-  const { cleaned, placeholders } = extractAndRenderMath(normalized);
-  const html = md.render(cleaned);
-  return restoreMath(html, placeholders);
+  return md.render(normalizeFences(text));
 }
 
 /** 解析一行是否为代码围栏行；返回围栏长度与其后的 info string（语言标识） */
@@ -315,121 +310,4 @@ function normalizeFences(text: string): string {
 function isLikelyLanguage(info: string): boolean {
   const first = info.split(/\s+/)[0] || "";
   return /^[a-zA-Z][\w+#.-]*$/.test(first) && first.length <= 20;
-}
-
-/**
- * 从文本中提取 $$...$$ 和 $...$ 块，用 katex.renderToString 预渲染成 HTML，
- * 原位替换为唯一占位符（markdown-it 不会碰这些占位符），最后再还原。
- */
-function extractAndRenderMath(text: string): { cleaned: string; placeholders: Map<string, string> } {
-  const placeholders = new Map<string, string>();
-  let seq = 0;
-
-  // 保护代码围栏（```...```）不被数学提取误伤
-  const fences: string[] = [];
-  let guarded = text.replace(/```[\s\S]*?```/g, (m) => {
-    fences.push(m);
-    return `<!--FENCE${fences.length - 1}-->`;
-  });
-
-  // 行间 $$...$$（支持跨行，贪心最短匹配）
-  guarded = guarded.replace(/\$\$([\s\S]*?)\$\$/g, (_m, inner) => {
-    const id = `@@${MATH_PLACEHOLDER_PREFIX}${seq++}@@`;
-    const html = renderKatex(inner.trim(), true);
-    placeholders.set(id, html);
-    return id;
-  });
-
-  // 行内 $...$（不跨行，内部不含 $）
-  guarded = guarded.replace(/\$([^\n$]+?)\$/g, (_m, inner) => {
-    const id = `@@${MATH_PLACEHOLDER_PREFIX}${seq++}@@`;
-    const html = renderKatex(inner.trim(), false);
-    placeholders.set(id, html);
-    return id;
-  });
-
-  // 还原代码围栏
-  guarded = guarded.replace(/<!--FENCE(\d+)-->/g, (_m, i) => fences[Number(i)]);
-
-  return { cleaned: guarded, placeholders };
-}
-
-/**
- * 调用 KaTeX 渲染（带缓存），出错时降级为原文（红色提示）。
- * 缓存键含 displayMode：同一段 latex 行内/行间渲染出的 HTML 不同。
- * 降级分支的结果一并缓存——它同样只取决于 latex，重算不会有不同结果。
- */
-function renderKatex(latex: string, displayMode: boolean): string {
-  return memoized(katexCache, `${displayMode ? "d" : "i"}${CACHE_KEY_SEP}${latex}`, () => {
-    try {
-      return katex.renderToString(latex, { displayMode, throwOnError: false });
-    } catch {
-      return `<span style="color:#cc0000" title="KaTeX 渲染失败">${escapeHtml(latex)}</span>`;
-    }
-  });
-}
-
-/** 把占位符还原为预渲染的 KaTeX HTML */
-function restoreMath(html: string, placeholders: Map<string, string>): string {
-  for (const [id, rendered] of placeholders) {
-    // 占位符可能被 markdown-it 包进 <p> 或转义了 NUL，用宽松匹配
-    html = html.replace(id, rendered);
-  }
-  return html;
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-/**
- * 定界符归一化：把 \[...\]、\(...\)、裸 [...] 统一转成 $$/$。
- */
-function normalizeMath(text: string): string {
-  // 保护代码围栏
-  const fences: string[] = [];
-  const guarded = text.replace(/```[\s\S]*?```/g, (m) => {
-    fences.push(m);
-    return `<!--NFENCE${fences.length - 1}-->`;
-  });
-
-  let result = guarded;
-
-  // \[ ... \] → $$ ... $$
-  result = result.replace(/\\\[([\s\S]*?)\\\]/g, (_m, inner) => `\n$$\n${inner.trim()}\n$$\n`);
-
-  // \( ... \) → $ ... $
-  result = result.replace(/\\\(([\s\S]*?)\\\)/g, (_m, inner) => `$${inner.trim()}$`);
-
-  // 裸 [...] 包裹的公式
-  result = normalizeBareBrackets(result);
-
-  // 还原代码围栏
-  result = result.replace(/<!--NFENCE(\d+)-->/g, (_m, i) => fences[Number(i)]);
-
-  return result;
-}
-
-function normalizeBareBrackets(text: string): string {
-  const lines = text.split("\n");
-  const out: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
-    if (trimmed === "[") {
-      const block: string[] = [];
-      let j = i + 1;
-      while (j < lines.length && lines[j].trim() !== "]") { block.push(lines[j]); j++; }
-      const hasClose = j < lines.length && lines[j].trim() === "]";
-      const inner = block.join("\n");
-      if (hasClose && /\\[a-zA-Z]+/.test(inner)) {
-        out.push("$$", inner.trim(), "$$");
-        i = j;
-        continue;
-      }
-    }
-    const single = trimmed.match(/^\[\s*(.+\\[a-zA-Z]+.*?)\s*\]$/);
-    if (single) { out.push(`$$${single[1]}$$`); continue; }
-    out.push(lines[i]);
-  }
-  return out.join("\n");
 }

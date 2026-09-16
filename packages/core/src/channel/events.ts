@@ -104,7 +104,11 @@ export type AgentEventPayload =
       /** 发起方：主 Agent 或某个子 Agent（用于 UI 标注来源） */
       delegateId?: string;
     }
-  | { type: "command_blocked"; command: string; reason: string }
+  /**
+   * 命令风险提醒：已信任的命令命中风险模式（如递归删除）时**照常执行**，
+   * 只把原因推给前端做可见提示——无需用户应答，因此没有 requestId。
+   */
+  | { type: "command_risk_notice"; command: string; reason: string; id?: string }
 
   // ── 工具确认门（relay_create 创建确认 / MCP 工具调用审批） ──
   | {
@@ -157,7 +161,6 @@ export type AgentEventPayload =
 
   // ── 命令信任与安全 ──
   | { type: "confirm_command_request"; requestId: string; command: string; options: { choice: string; pattern: string; label: string }[]; id?: string }
-  | { type: "command_blocked"; requestId?: string; command: string; reason: string; dangerous?: boolean }
 
   // ── 子 Agent / 并行调研 ──
   | { type: "sub_agent_start"; delegateId: string; toolCallId: string; intent: string; skill: string | null; prompt: string }

@@ -16,11 +16,14 @@ import * as vscode from "vscode";
 import type { ControlCommand } from "@axon/core";
 import type { VSCodeChannel } from "./vscodeChannel.js";
 import type { RequestRouter } from "./requestRouter.js";
+import { WebviewStallWatchdog, type DiagHeartbeat } from "./webviewWatchdog.js";
 
 export class AxonViewProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "axon.chat";
 
   private view: vscode.WebviewView | null = null;
+  /** 监视 webview 是否失去响应（独立进程视角，卡死时唯一还能记录的一方） */
+  private watchdog: WebviewStallWatchdog | null = null;
 
   constructor(
     private context: vscode.ExtensionContext,
@@ -65,10 +68,21 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
     // 出站：绑定 channel
     this.channel.setWebview(view.webview);
 
+    // 启动失响应观察器：webview 心跳停了就说明界面卡了，由宿主侧记下现场
+    this.watchdog?.dispose();
+    this.watchdog = new WebviewStallWatchdog(() => view.visible);
+    this.watchdog.start();
+
     // 入站分流
     view.webview.onDidReceiveMessage(async (msg: unknown) => {
       if (!msg || typeof msg !== "object") return;
       const m = msg as Record<string, unknown>;
+
+      // 诊断心跳：只用于观察器判定存活，不参与任何业务逻辑
+      if (m.type === "diag_heartbeat") {
+        this.watchdog?.noteHeartbeat((m.payload ?? {}) as DiagHeartbeat);
+        return;
+      }
 
       // 聚焦 Axon 终端（从工具卡片"打开终端"按钮）
       if (m.type === "focus_terminal") {
@@ -337,6 +351,8 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
     view.onDidDispose(() => {
       this.channel.setWebview(null);
       this.view = null;
+      this.watchdog?.dispose();
+      this.watchdog = null;
     });
 
     view.webview.html = await this.buildHtml(view.webview, webRoot);

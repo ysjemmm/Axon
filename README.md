@@ -99,7 +99,7 @@ Axon/
 | Agent 服务 | TypeScript + Express + WebSocket |
 | 前端 UI | React 19 + Vite + Tailwind CSS + shadcn/ui |
 | 核心库 | TypeScript（零运行时依赖） |
-| 代码渲染 | Monaco Editor + highlight.js + KaTeX |
+| 代码渲染 | Monaco Editor + highlight.js |
 | 包管理 | pnpm + Turborepo |
 
 ## License

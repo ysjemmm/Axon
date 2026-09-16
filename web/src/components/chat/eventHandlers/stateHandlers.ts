@@ -2,7 +2,7 @@
  * stateHandlers —— 状态类事件处理
  * status / reasoning_delta / edits_updated / edit_undo_result / token_usage /
  * workspace_set / edit_mode_set / workspace_error / confirm_tool_request /
- * tool_waiting_input / confirm_command_request / command_blocked / focus_relay /
+ * tool_waiting_input / confirm_command_request / command_risk_notice / focus_relay /
  * relay_updated / relay_deleted
  */
 
@@ -287,12 +287,15 @@ export function handleConfirmCommandRequest(msg: WsMessage, ctx: EventHandlerCtx
   }));
 }
 
-export function handleCommandBlocked(msg: WsMessage, ctx: EventHandlerCtx): void {
-  ctx.setCommandBlocked({
-    requestId: (msg as any).requestId as string | undefined,
+/**
+ * 命令风险提醒：命中风险模式但已信任的命令**照常执行**，本事件只用于把它显示出来。
+ * 与审批不同，它不需要用户应答，所以只落一条可关闭/自动消失的提示。
+ */
+export function handleCommandRiskNotice(msg: WsMessage, ctx: EventHandlerCtx): void {
+  ctx.setCommandRiskNotice({
+    id: (msg as any).id as string | undefined,
     command: (msg as any).command as string,
     reason: (msg as any).reason as string,
-    dangerous: (msg as any).dangerous as boolean | undefined,
   });
 }
 

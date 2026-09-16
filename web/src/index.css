@@ -521,6 +521,51 @@ input[type="file"],
   transition: transform 0.18s ease-out;
 }
 
+/* done：本轮回复已完成，即使用户滚到历史区域也保留一个明确的完成姿态 */
+.axon-mascot-done {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  transform: scale(1.05) translateY(-0.8px);
+  transition: transform 0.18s ease-out;
+}
+
+/* waiting：身体轻轻左右晃，右侧沙漏翻转，表达正在等首个响应 */
+@keyframes axon-mascot-waiting {
+  0%, 100% { transform: rotate(0deg) translateY(0); }
+  25% { transform: rotate(-4deg) translateY(-0.5px); }
+  75% { transform: rotate(4deg) translateY(-0.5px); }
+}
+.axon-mascot-waiting {
+  transform-origin: center bottom;
+  animation: axon-mascot-waiting 1.1s ease-in-out infinite;
+}
+.axon-mascot-hourglass {
+  transform-origin: 33.5px 21px;
+  animation: axon-mascot-hourglass 1.4s ease-in-out infinite;
+}
+@keyframes axon-mascot-hourglass {
+  0%, 70%, 100% { transform: rotate(0deg); }
+  82% { transform: rotate(180deg); }
+}
+
+/* done/error/cancelled：结果徽章弹一下，让状态变化在小尺寸下也可察觉 */
+@keyframes axon-mascot-badge {
+  0% { transform: scale(0.5); opacity: 0; }
+  70% { transform: scale(1.12); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.axon-mascot-badge {
+  transform-origin: 34px 9px;
+  animation: axon-mascot-badge 0.35s ease-out both;
+}
+.axon-mascot-thoughts circle {
+  animation: axon-mascot-thought 1s ease-in-out infinite alternate;
+}
+@keyframes axon-mascot-thought {
+  from { opacity: 0.35; transform: translateY(1px); }
+  to { opacity: 1; transform: translateY(-1px); }
+}
+
 /* typing：触须快速摆动。绕触须根部旋转 */
 @keyframes axon-mascot-wiggle {
   0%, 100% { transform: rotate(-7deg); }
