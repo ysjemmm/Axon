@@ -20,7 +20,7 @@ function userMessageText(message: ChatMessage): string {
   return message.content || "";
 }
 
-function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRejectEdit, onUndoEdit, onQuoteToInput, onEditUserMessage, onImagePreview, replyingToMessageId }: { message: ChatMessage; liveStatus?: string; /** 当前运行任务起点；仅流式回复传入 */ startedAt?: number; onAcceptEdit?: (path: string) => void; onRejectEdit?: (path: string) => void; onUndoEdit?: (path: string) => void; onQuoteToInput?: (message: ChatMessage) => void; onEditUserMessage?: (messageId: string, content: string, images?: string[], attachedFiles?: AttachedFile[]) => void; onImagePreview?: (src: string) => void; replyingToMessageId?: string }) {
+function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRejectEdit, onUndoEdit, onQuoteToInput, onEditUserMessage, onImagePreview, replyingToMessageId }: { message: ChatMessage; liveStatus?: string; /** 当前运行任务起点；仅流式回复传入 */ startedAt?: number; onAcceptEdit?: (path: string) => void; onRejectEdit?: (path: string) => void; onUndoEdit?: (path: string) => void; onQuoteToInput?: (message: ChatMessage) => void; onEditUserMessage?: (messageId: string, content: string, images?: string[], attachedFiles?: AttachedFile[]) => void; onImagePreview?: (images: string[], index: number) => void; replyingToMessageId?: string }) {
   const [userExpanded, setUserExpanded] = useState(false);
   const [editingUser, setEditingUser] = useState(false);
   const [draftUserText, setDraftUserText] = useState("");
@@ -167,7 +167,7 @@ function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRej
                       src={img}
                       alt=""
                       className="max-w-48 max-h-32 object-contain rounded-lg cursor-zoom-in hover:opacity-90 transition-opacity"
-                      onDoubleClick={() => onImagePreview?.(img)}
+                      onDoubleClick={() => onImagePreview?.(message.images!, i)}
                       title="双击放大"
                     />
                   ))}

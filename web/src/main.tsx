@@ -1,4 +1,4 @@
-import { StrictMode, Component, type ErrorInfo, type ReactNode } from "react";
+import { StrictMode, Component, useLayoutEffect, type ErrorInfo, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App";
@@ -6,6 +6,21 @@ import { installDiagnostics } from "./lib/diagnostics";
 
 // 尽早挂载诊断：它要在应用渲染前就位，才能捕获到启动阶段及后续的偶发卡死
 installDiagnostics();
+
+/**
+ * 移除 index.html 里内置的启动占位页（#axon-boot）。
+ *
+ * 放在 useLayoutEffect 里而不是渲染前手动删除，有两个原因：
+ * 1. 它在 React 提交 DOM 之后、浏览器绘制之前执行，中间不会出现空白帧（先删后渲染会有一帧空白）；
+ * 2. 不依赖 React 对「容器已有子节点」的清理行为——无论 React 是否清空 #root，
+ *    这里都会把占位移除，避免万一没清干净、占位永久盖住界面。
+ */
+function BootSplashRemover() {
+  useLayoutEffect(() => {
+    document.getElementById("axon-boot")?.remove();
+  }, []);
+  return null;
+}
 
 /**
  * 全局 Error Boundary：捕获 React 渲染阶段的错误，打印完整组件栈到 console。
@@ -46,6 +61,7 @@ class GlobalErrorBoundary extends Component<{ children: ReactNode }, { hasError:
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
+    <BootSplashRemover />
     <GlobalErrorBoundary>
       <App />
     </GlobalErrorBoundary>

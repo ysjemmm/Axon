@@ -8,11 +8,11 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Send, Loader2, Copy, ImagePlus, X, Paperclip, Plus, Camera, Feather, Check, ChevronDown, ListChecks, Globe, ShieldAlert, Undo2, Minimize2, AlertTriangle } from "lucide-react";
+import { Send, Loader2, ImagePlus, X, Paperclip, Plus, Camera, Feather, Check, ChevronDown, ListChecks, Globe, ShieldAlert, Undo2, Minimize2, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { ImageViewer } from "./chat/ImageViewer";
 import { ModelSelector, useModels, findModel, getModels } from "@/components/ModelSelector";
 import { getVisionFallbackModel } from "@/lib/apiClient";
 import { updateDiagState } from "@/lib/diagnostics";
@@ -145,7 +145,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [groupManagerOpen, setGroupManagerOpen] = useState(false);
   const [skillStudioOpen, setSkillStudioOpen] = useState(false);
-  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  /** 图片查看器状态：当前图片组 + 索引（输入框图片与历史消息图片共用） */
+  const [previewState, setPreviewState] = useState<{ images: string[]; index: number } | null>(null);
   // 问题列表 Popover 受控状态
   const [questionListOpen, setQuestionListOpen] = useState(false);
   // 顶部 sticky：当前视图所属 AI 回答对应的用户提问
@@ -1059,7 +1060,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                     if (qMsg.images && qMsg.images.length > 0) setImages((prev) => [...prev, ...qMsg.images!]);
                     setComposerEmpty(editorRef.current?.isEmpty() ?? false);
                   }}
-                  onImagePreview={setPreviewImage}
+                  onImagePreview={(imgs, idx) => setPreviewState({ images: imgs, index: idx })}
                 />
               </CommandApprovalContext.Provider>
             )}
@@ -1140,7 +1141,13 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             <div className="flex gap-2 px-4 pt-3 pr-12 flex-wrap">
               {images.map((img, i) => (
                 <div key={i} className="relative group">
-                  <img src={img} alt="" className="w-16 h-16 object-cover rounded-lg border border-border" />
+                  <img
+                    src={img}
+                    alt=""
+                    className="w-16 h-16 object-cover rounded-lg border border-border cursor-zoom-in hover:opacity-90 transition-opacity"
+                    onClick={() => setPreviewState({ images, index: i })}
+                    title="点击查看大图"
+                  />
                   <button
                     onClick={() => removeImage(i)}
                     className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
@@ -1620,64 +1627,14 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         onGroupUpdated={(group: WorkspaceGroup) => session.groupUpdated(group)}
       />
 
-      {/* 图片预览 Modal */}
-      <Dialog open={!!previewImage} onOpenChange={(open) => !open && setPreviewImage(null)}>
-        <DialogContent className="max-w-[90vw] max-h-[90vh] p-2 bg-background/95 border-border shadow-xl flex flex-col items-center gap-2" showCloseButton={false}>
-          {previewImage && (
-            <>
-              <img src={previewImage} alt="" className="max-w-full max-h-[80vh] object-contain rounded-lg" />
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={async (e) => {
-                    const btn = e.currentTarget;
-                    const setStatus = (text: string, ok: boolean) => {
-                      btn.dataset.status = ok ? "ok" : "err";
-                      const label = btn.querySelector("span");
-                      if (label) label.textContent = text;
-                      setTimeout(() => {
-                        delete btn.dataset.status;
-                        if (label) label.textContent = "复制图片";
-                      }, 1800);
-                    };
-                    try {
-                      const res = await fetch(previewImage);
-                      const blob = await res.blob();
-                      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
-                      setStatus("已复制", true);
-                    } catch {
-                      try {
-                        const parts = previewImage.split(",");
-                        const mime = parts[0].match(/:(.*?);/)?.[1] || "image/png";
-                        const binary = atob(parts[1]);
-                        const bytes = new Uint8Array(binary.length);
-                        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-                        const blob = new Blob([bytes], { type: mime });
-                        await navigator.clipboard.write([new ClipboardItem({ [mime]: blob })]);
-                        setStatus("已复制", true);
-                      } catch (err) {
-                        setStatus("复制失败", false);
-                        console.warn("[axon] 复制图片失败:", err);
-                      }
-                    }
-                  }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-muted hover:bg-muted/80 text-foreground transition-colors data-[status=ok]:bg-green-500/15 data-[status=ok]:text-green-600 dark:data-[status=ok]:text-green-400 data-[status=err]:bg-red-500/15 data-[status=err]:text-red-600 dark:data-[status=err]:text-red-400"
-                  title="复制图片到剪贴板"
-                >
-                  <Copy className="w-3.5 h-3.5" />
-                  <span>复制图片</span>
-                </button>
-                <button
-                  onClick={() => setPreviewImage(null)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-muted hover:bg-muted/80 text-muted-foreground transition-colors"
-                >
-                  <X className="w-3.5 h-3.5" />
-                  关闭
-                </button>
-              </div>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
+      {/* 图片查看器（输入框图片 / 历史消息图片共用：翻页 + 缩放 + 旋转） */}
+      <ImageViewer
+        open={!!previewState}
+        images={previewState?.images ?? []}
+        index={previewState?.index ?? 0}
+        onIndexChange={(index) => setPreviewState((prev) => (prev ? { ...prev, index } : prev))}
+        onClose={() => setPreviewState(null)}
+      />
     </div>
   );
 }
