@@ -22,41 +22,69 @@ export function ReasoningBlock({ content, streaming }: { content: string; stream
     }
   }, [streaming]);
 
-  // 流式更新时自动滚动到内部底部
+  // 内部滚动区是否"贴底"：用户往上翻过就不再自动跟随，否则流式期间每来一段内容
+  // 都会把视口拽回底部，滚动条根本没法滚。
+  const stickRef = useRef(true);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 8;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [expanded]); // 滚动区仅在展开态存在，展开/折叠会重建它，故按 expanded 重挂监听
+
+  // 流式更新时自动滚动到内部底部（仅当用户本来就在底部）
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !expanded) return;
+    if (!stickRef.current) return;
     el.scrollTop = el.scrollHeight;
   }, [cleanedContent, expanded]);
 
-  // 折叠态：极简一行，不用 border/背景，视觉极轻
-  if (!expanded) {
-    return (
-      <button
-        onClick={() => setExpanded(true)}
-        className="flex items-center gap-1.5 py-0.5 text-[11px] text-muted-foreground/60 hover:text-muted-foreground transition-colors cursor-pointer"
-      >
-        <Brain className="w-3.5 h-3.5 shrink-0" />
-        <span>思考过程</span>
-      </button>
-    );
-  }
-
-  // 展开态：轻量容器 + 内容
+  // ── 只渲染【一棵树】，折叠靠高度过渡，而不是切换两套结构 ──
+  //
+  // ⚠️ 这里曾经是 `if (!expanded) return <button/>` + 另一个分支返回"标签+内容"的两棵树。
+  // React 对"同 key 换结构"是卸载+重挂载，于是上面的 effect 把 expanded 置 false 的那一刻，
+  // 整个内容区**在一帧内被卸载**：大片高度瞬间消失，下方内容整体上移、腾出来的位置露出页面底色。
+  // 这就是用户反复报、并且被误当成"重渲染问题"去修的「回复完白屏刷一下」——
+  // 它与渲染路径无关，是纯粹的高度跳变；而且每逢思考块收尾必现，与回复内容无关。
+  //
+  // 现在内容常驻挂载（也因此不再有挂载/卸载带来的重解析与 re-hydrate），只让容器高度动画：
+  // grid-template-rows 1fr ↔ 0fr 是可过渡的，且**不需要预先知道内容高度** ——
+  // reasoning 长度差异极大，用 max-height 写死上限会让动画时长严重失真（短内容几乎不动、长内容半途跳完）。
+  //
+  // 折叠态外观与旧版一致（一行标签、视觉极轻）；差别仅是内容仍在 DOM 里但高度为 0。
   return (
-    <div className="mb-2 text-xs">
+    <div
+      className={`text-xs transition-[margin] duration-200 ease-out motion-reduce:transition-none ${
+        expanded ? "mb-2" : "mb-0"
+      }`}
+    >
       <button
-        onClick={() => setExpanded(false)}
-        className="flex items-center gap-1.5 py-0.5 mb-1 text-[11px] text-muted-foreground/70 hover:text-muted-foreground transition-colors cursor-pointer"
+        onClick={() => setExpanded((v) => !v)}
+        className={`flex items-center gap-1.5 py-0.5 text-[11px] hover:text-muted-foreground transition-colors cursor-pointer ${
+          expanded ? "text-muted-foreground/70" : "text-muted-foreground/60"
+        }`}
       >
         <Brain className="w-3.5 h-3.5 shrink-0" />
         <span>思考过程</span>
       </button>
       <div
-        ref={scrollRef}
-        className="pl-4 border-l-2 border-muted-foreground/15 max-h-52 overflow-y-auto [&_.prose]:text-muted-foreground/70 [&_.prose]:text-xs [&_.prose]:leading-snug [&_.prose_p]:my-0.5 [&_.prose_ul]:my-0.5 [&_.prose_ol]:my-0.5"
+        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
+        style={{ gridTemplateRows: expanded ? "1fr" : "0fr", opacity: expanded ? 1 : 0 }}
+        aria-hidden={!expanded}
       >
-        <MarkdownRenderer content={cleanedContent} />
+        {/* min-h-0 是必须的：grid 子项默认 min-height:auto，高度不会被压到 0 */}
+        <div className="min-h-0 overflow-hidden">
+          <div
+            ref={scrollRef}
+            className="pl-4 border-l-2 border-muted-foreground/15 max-h-52 overflow-y-auto [&_.prose]:text-muted-foreground/70 [&_.prose]:text-xs [&_.prose]:leading-snug [&_.prose_p]:my-0.5 [&_.prose_ul]:my-0.5 [&_.prose_ol]:my-0.5"
+          >
+            <MarkdownRenderer content={cleanedContent} streaming={streaming} />
+          </div>
+        </div>
       </div>
     </div>
   );

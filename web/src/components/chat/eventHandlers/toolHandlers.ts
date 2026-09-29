@@ -12,11 +12,14 @@ import {
 import { isToolInFlight, type ToolStatus } from "@/components/ToolCallItem";
 import type { ToolSegment } from "../types";
 import type { EventHandlerCtx, WsMessage } from "./types";
+import { clearPendingRetry } from "./stateHandlers";
 import { TOOL, TIMEOUT } from "@/lib/constants";
 
 export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
   if (ctx.cancelled.current) return;
   if (msg.name === TOOL.DELEGATE_TASK) return;
+  // 工具卡片出现 = 重试已恢复，收掉「正在重试」提示（覆盖重试后只出工具、不出正文的场景）
+  clearPendingRetry(ctx);
   // 工具卡片出现 → 该思考块已经讲完，标记 streaming=false 让它自动折叠。
   //
   // ⚠️ 这里只表达"折叠"这一 UI 意图。reasoning 段的**归属**绝不能依赖这个标志：
@@ -57,13 +60,28 @@ export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
     const msgStatus = (msg as any).status as string | undefined;
     const args = (msg.args as Record<string, unknown>) || {};
     const eventId = (msg as any).id as string || "";
+    const waitingFor = Array.isArray((msg as any).waitingFor)
+      ? ((msg as any).waitingFor as { id: string; name: string }[])
+      : undefined;
 
     if (msgStatus === "success") {
       // 软失败工具延迟展示：tool_result 紧随其后，这里不创建段
       return prev;
     }
 
-    // status="executing"：宿主真正开始跑这一个 → 把它从"排队中"转成"执行中"并回填参数。
+    // 完整工具列表到齐后，后端会补发 queued 更新，为流式阶段已出现的卡片补上真实依赖。
+    if (last?.role === "assistant" && last.segments && msgStatus === "queued" && eventId && waitingFor) {
+      const idx = last.segments.findIndex((s) => s.type === "tool" && s.id === eventId);
+      if (idx >= 0) {
+        const segs = [...last.segments];
+        const seg = segs[idx] as ToolSegment;
+        segs[idx] = { ...seg, waitingFor };
+        updated[updated.length - 1] = { ...last, segments: segs };
+        return updated;
+      }
+    }
+
+    // status="executing"：宿主真正开始跑这一个 → 把它从"待执行"转成"执行中"并回填参数。
     // 匹配用 isToolInFlight（queued 或 pending）：绝大多数情况命中的是流式阶段那张 queued 卡。
     if (last?.role === "assistant" && last.segments && msgStatus === "executing") {
       const segs = [...last.segments];
@@ -75,10 +93,11 @@ export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
           if (s.type === "tool" && s.id === eventId) { idx = i; break; }
         }
         // ② 再按工具名回退（该段还没绑定过 id）。必须**正向**扫，取最早的那个：
-        //    后端严格串行、按模型给出的顺序执行，事件是 FIFO 到达的。
+        //    无 id 时无法区分同名并发调用，只能按模型产出顺序认领最早的未绑定卡片；
+        //    正常协议都有 id，并发完成顺序由上面的精确匹配处理。
         //    早先这里和 ① 合在一个倒序循环里，同名工具一轮出现多次时会认领到最后那个，
         //    于是后来的卡片被提前改成执行中，而最早那张永远等不到自己的事件、
-        //    卡在"排队中/执行中"不动——表现就是"某张卡的完成态没渲染出来"。
+        //    卡在"待执行/执行中"不动——表现就是"某张卡的完成态没渲染出来"。
         if (idx < 0) {
           for (let i = 0; i < segs.length; i++) {
             const s = segs[i];
@@ -130,9 +149,8 @@ export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
       id: eventId || `tool-${Date.now()}-${msg.name}`,
       boundId: !!eventId,
       name: msg.name || "",
-      // 流式阶段的提前卡（后端 onToolCallDetected 发 status="queued"）只是"已规划、排队等执行"，
-      // 此刻工具一个都没开始跑，必须落成 queued 而不是 pending——否则卡片会转圈+写"执行命令中..."，
-      // 而后端是严格串行的，同一时刻只有一个工具真在执行。
+      // 流式阶段的提前卡（后端 onToolCallDetected 发 status="queued"）只是"已规划、尚未执行"，
+      // 此刻宿主还没开始跑它，必须落成 queued 而不是 pending——否则会提前显示执行中。
       status: msgStatus === "queued" ? "queued" : "pending",
       description: formatToolDescription(msg.name || "", undefined, args),
       args,
@@ -143,6 +161,7 @@ export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
         : undefined,
       mcpServer: (msg as any).mcpServer,
       mcpTool: (msg as any).mcpTool,
+      waitingFor,
     };
 
     if (!last || last.role !== "assistant") {
@@ -248,7 +267,7 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
         }
       }
       // 按 id 没匹配上时才按工具名回退，且**正向**扫描取最早的未完成段：
-      // 后端串行执行、结果 FIFO 到达，所以第一条 tool_result 属于最早那个调用。
+      // 无 id 时无法可靠区分同名并发调用，只能按产出顺序兜底；正常协议按 id 支持乱序完成。
       // 早先这里倒序扫描取最后一个，一轮里出现多次同名工具（如连续 create_file）时，
       // 第一个结果会被记到最后那张卡上，最早那张卡则永远停在未完成态——
       // 用户看到的就是"排队/执行中的卡都在，成功的卡没出现"。

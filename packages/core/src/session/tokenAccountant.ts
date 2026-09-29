@@ -74,18 +74,33 @@ export class TokenAccountant {
    * 这个值同时驱动压缩决策（compactionController 读 lastTotalTokens），所以校准后触发时机也更准。
    */
   updateAndSendTokenUsage(): void {
-    const estimate = this.estimateContextTokens();
-    // 换模型后 tokenizer 不同，旧系数作废，退回未校准的估算
-    const total = this.s.promptCalibrationModel === this.s.model
-      ? Math.round(estimate * this.s.promptCalibration)
-      : estimate;
-
-    this.s.lastTotalTokens = total;
+    const total = this.recomputeTokenUsage();
     this.s.send("token_usage", {
       used: total,
       max: this.s.getContextWindow(),
       cumulative: this.s.cumulativeTokens, // 本任务累计消耗（含子 Agent），与 used（当前上下文占用）区分
     });
+  }
+
+  /**
+   * 只重算 lastTotalTokens，**不推送 UI**。
+   *
+   * 供"内部需要最新占用、但不该让界面数字变化"的场景使用——目前是 compactionController
+   * 在判定手动压缩阈值前的那次重算。
+   *
+   * 为什么必须与 updateAndSendTokenUsage 分开：占用值 = 估算 × 校准系数，而校准系数会被端点
+   * 每轮实报数改写（区间 0.5~2.5，超区间还会重置为 1）。于是"重算并推送"本身就是一个会改变
+   * 界面数字的动作。之前在**尚未决定要不要压缩**的时候就推送，用户点一下按钮、数字先跳变，
+   * 紧接着还弹"无需压缩"——什么也没压，占用却从 39% 变成 26%，随后问一句话又回到 39%。
+   */
+  recomputeTokenUsage(): number {
+    const estimate = this.estimateContextTokens();
+    // 换模型后 tokenizer 不同，旧系数作废，退回未校准的估算
+    const total = this.s.promptCalibrationModel === this.s.model
+      ? Math.round(estimate * this.s.promptCalibration)
+      : estimate;
+    this.s.lastTotalTokens = total;
+    return total;
   }
 
   /**

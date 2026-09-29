@@ -1,7 +1,7 @@
 /**
  * 工具结果的裁剪策略 —— 分两类，别混：
  *
- *   · 结论型（delegate_task / parallel_research / parallel_execute）= NO_TRUNCATE_TOOLS。
+ *   · 结论型（delegate_task）= NO_TRUNCATE_TOOLS。
  *     子 Agent 的最终交付物，没有“重新读一次就能补回”的手段，故**任何环节都不裁**：
  *     ① contentLimit = Infinity  ② 旧轮次裁剪  ③ 请求组装的历史摘要截断  ④ 前端事件完整发送
  *
@@ -55,10 +55,8 @@ function buildAgedHistory() {
 }
 
 describe("不截断工具的内容上限", () => {
-  it("delegate_task / parallel_research / parallel_execute 不设上限", () => {
+  it("delegate_task 不设上限", () => {
     expect(contentLimitForTool("delegate_task")).toBe(NO_CONTENT_LIMIT);
-    expect(contentLimitForTool("parallel_research")).toBe(NO_CONTENT_LIMIT);
-    expect(contentLimitForTool("parallel_execute")).toBe(NO_CONTENT_LIMIT);
   });
 
   it("终端类改为有硬上限（事故修复：原先 Infinity 会把上下文顶爆）", () => {
@@ -70,14 +68,17 @@ describe("不截断工具的内容上限", () => {
   it("上限为无穷大，任何长度都不会触发截断判定", () => {
     const huge = "x".repeat(500_000);
     expect(huge.length > contentLimitForTool("delegate_task")).toBe(false);
-    expect(huge.length > contentLimitForTool("parallel_research")).toBe(false);
   });
 
-  it("可回捞工具的既有上限不受影响（回归）", () => {
+  it("可回捞工具的上限（回归）", () => {
     expect(contentLimitForTool("read_file")).toBe(12_000);
     expect(contentLimitForTool("web_fetch")).toBe(10_000);
-    expect(contentLimitForTool("search")).toBe(4_000);
-    expect(contentLimitForTool("list_dir")).toBe(4_000);
+    // search / list_dir 由 4_000 收紧到 2_500 / 3_000（实测驱动的调整）：
+    // 4_000 远超实际需要，而真正一直生效的是「总长闸」—— 见 tools/search.ts 的 MAX_MATCHES。
+    // read_file 保持 12_000 不动：它的收紧靠「单轮累计预算」（TURN_EXPLORATION_BUDGET），
+    // 单次再往下压只会把一份文件切成两次读，总量不减、反而多烧一轮。
+    expect(contentLimitForTool("search")).toBe(2_500);
+    expect(contentLimitForTool("list_dir")).toBe(3_000);
     expect(contentLimitForTool("check_diagnostics")).toBe(8_000);
   });
 
@@ -89,10 +90,8 @@ describe("不截断工具的内容上限", () => {
 });
 
 describe("裁剪集合的成员划分", () => {
-  it("NO_TRUNCATE_TOOLS 只剩结论型三个工具", () => {
-    expect([...NO_TRUNCATE_TOOLS].sort()).toEqual(
-      ["delegate_task", "parallel_execute", "parallel_research"],
-    );
+  it("NO_TRUNCATE_TOOLS 只剩结论型工具", () => {
+    expect([...NO_TRUNCATE_TOOLS].sort()).toEqual(["delegate_task"]);
   });
 
   it("终端类单独成集，与结论型互不重叠", () => {
@@ -102,7 +101,7 @@ describe("裁剪集合的成员划分", () => {
 
   it("FULL_RESULT_TOOLS = 结论型 ∪ 终端类（两类都要给前端看完整结果）", () => {
     expect([...FULL_RESULT_TOOLS].sort()).toEqual(
-      ["delegate_task", "execute_command", "get_process_output", "parallel_execute", "parallel_research"],
+      ["delegate_task", "execute_command", "get_process_output"],
     );
   });
 });
@@ -119,27 +118,6 @@ describe("旧轮次裁剪放行结论型工具", () => {
     // 普通工具：仍然按原有规则裁剪（证明豁免不是"整体失效"）
     expect(pruned[4].content).toContain("已裁剪");
     expect(pruned[4].content.length).toBeLessThan(fetched.length);
-  });
-
-  it("parallel_research 的聚合结论同样不被裁剪", () => {
-    const aggregated = longContent("多路调研汇总");
-    const messages = [
-      { role: "system", content: "sys" },
-      { role: "user", content: "u1" },
-      {
-        role: "assistant",
-        content: null,
-        tool_calls: [
-          { id: "c-research", type: "function", function: { name: "parallel_research", arguments: "{}" } },
-        ],
-      },
-      { role: "tool", tool_call_id: "c-research", content: aggregated },
-      { role: "user", content: "u2" },
-      { role: "user", content: "u3" },
-    ] as never[];
-
-    const pruned = pruneOldToolResults(messages, 2) as { content: string }[];
-    expect(pruned[3].content).toBe(aggregated);
   });
 
   it("不修改入参数组（原消息保持原样）", () => {

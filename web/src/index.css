@@ -145,6 +145,93 @@ code:not(.hljs):not(.prose code) {
   background: #4b5563; /* gray-600 */
 }
 
+/* 图表滚动槽（SVG / Mermaid 增强块）：图表按固有尺寸显示，只有容器装不下、
+   且已到缩放下限（见 diagramFit 的 MIN_DIAGRAM_SCALE）时才横向滚动。
+
+   ⚠️ 原生滚动条必须**完全不占位**，可见的滑块由 lib/overlayScrollbar.ts 浮层绘制。
+   两种原生写法都不行：
+   · hover 时 scrollbar-width 由 none 切到 thin → 多占 6px，下面的内容整体被挤下去（外部抖动）；
+   · 始终 thin、只换颜色 → 外面不跳了，但那 6px 始终算在滚动槽里，内容区始终被吃掉一截。
+   Chromium 114 起 overflow:overlay 退化为 auto，已没有"浮在内容上"的原生滚动条可用。 */
+.axon-diagram-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.axon-diagram-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── 悬浮滚动条（lib/overlayScrollbar.ts）──
+   轨道绝对定位在宿主内部边缘，不参与布局；默认透明，宿主 hover / 正在滚动 / 拖动时显出。 */
+.axon-ovsb-host {
+  position: relative;
+}
+
+.axon-ovsb {
+  position: absolute;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.axon-ovsb-x {
+  left: 2px;
+  right: 2px;
+  bottom: 2px;
+  height: 6px;
+}
+
+.axon-ovsb-y {
+  top: 2px;
+  bottom: 2px;
+  right: 2px;
+  width: 6px;
+}
+
+.axon-ovsb-host:hover > .axon-ovsb,
+.axon-ovsb.is-active,
+.axon-ovsb-dragging > .axon-ovsb {
+  opacity: 1;
+}
+
+.axon-ovsb-thumb {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-radius: 9999px;
+  background: #d1d5db; /* gray-300 */
+  cursor: default;
+}
+
+.axon-ovsb-x > .axon-ovsb-thumb {
+  height: 100%;
+}
+
+.axon-ovsb-y > .axon-ovsb-thumb {
+  width: 100%;
+}
+
+.axon-ovsb-thumb:hover,
+.axon-ovsb-dragging .axon-ovsb-thumb {
+  background: #9ca3af; /* gray-400 */
+}
+
+.dark .axon-ovsb-thumb {
+  background: #4b5563; /* gray-600 */
+}
+
+.dark .axon-ovsb-thumb:hover,
+.dark .axon-ovsb-dragging .axon-ovsb-thumb {
+  background: #6b7280; /* gray-500 */
+}
+
+/* 拖动期间别让文字被选中 */
+.axon-ovsb-dragging {
+  user-select: none;
+}
+
 /* 文件路径链接：文件图标徽章 + 文件名，点击可打开文件 */
 .axon-path-link {
   display: inline-flex !important;
@@ -196,8 +283,8 @@ code:not(.hljs):not(.prose code) {
   max-width: 100%;
 }
 
-/* 表格：外层 .axon-table-wrap 负责横向滚动，table 自身宽度自适应内容并铺满容器。
-   提升字号/行高/留白，统一边框与圆角，表头浅底突出。 */
+/* Markdown 表格：轻量横线结构。
+   外层负责横向滚动和圆角外框；单元格之间不画竖线，只保留行分隔。 */
 .axon-table-wrap {
   margin: 0.75rem 0;
   overflow-x: auto;
@@ -214,7 +301,7 @@ code:not(.hljs):not(.prose code) {
   line-height: 1.6;
 }
 .prose .axon-table-wrap thead {
-  background: var(--muted);
+  background: color-mix(in oklab, var(--foreground) 5%, var(--background));
 }
 .prose .axon-table-wrap th,
 .prose .axon-table-wrap td {
@@ -222,14 +309,9 @@ code:not(.hljs):not(.prose code) {
   text-align: left;
   vertical-align: top;
   border-bottom: 1px solid var(--border);
-  border-right: 1px solid var(--border);
   font-size: 13px;
   line-height: 1.6;
   word-break: break-word;       /* 长内容换行，不撑爆列宽 */
-}
-.prose .axon-table-wrap th:last-child,
-.prose .axon-table-wrap td:last-child {
-  border-right: none;
 }
 .prose .axon-table-wrap th {
   font-weight: 600;
@@ -264,9 +346,31 @@ input[type="file"],
 @custom-variant dark (&:is(.dark *, .vscode-dark *));
 
 @theme inline {
-    --font-heading: var(--font-sans);
-    --font-sans: 'Geist Variable', "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
-    --font-mono: 'JetBrains Mono Variable', ui-monospace, 'Cascadia Code', Consolas, monospace;
+    /* 标题（--font-heading）：拉丁走 Lora——衬线，取它的"编辑感"做 Axon 自己的辨识度
+       （不与 Claude 同构：Claude 正文是纯无衬线，衬线是它的标题专属，我们把它作为标记）。
+       Lora 没有汉字字形，中文必须单独排在其后，否则中文会掉进浏览器默认字体、与拉丁明显不搭；
+       中文配对选思源宋体 Noto Serif SC（中英同为衬线，气质一致）。
+       注意：本机 Lora 只装了 Medium(500) / Bold(700)、没有 Regular(400)；
+       标题常用 500/600/700，会命中 Medium/Bold，不受影响——
+       但若日后有 400 字重的正文用 Lora，浏览器会拿 Medium 伪合成，字形会发飘。 */
+    --font-heading: 'Lora', "Noto Serif SC", "Source Han Serif SC", "Songti SC", "SimSun", serif;
+    /* ── 三路字体契约（改这里的值，同时改下面 :root 里那份，两处必须一致）──
+       ① 正文（--font-sans）：英文 Geist，中文交给为中文设计的黑体族。
+          中英文分开列、各取所需——不要把中文字族放到英文字体前面（会抢走拉丁字形），
+          也不要不列中文字族（中文会掉进浏览器默认字体，与英文明显不搭）。 */
+    /* 中文字族按"平台上最接近苹方风格"的顺序排：
+       PingFang SC（macOS 原生，即苹方）→ HarmonyOS Sans SC / MiSans（装了就更接近苹方的字形）
+       → Microsoft YaHei（Windows 默认中文 UI 字体，没装上面那些时的落点）
+       → Noto Sans SC / Source Han Sans SC（Linux / 安卓常见）
+       → Hiragino Sans GB（旧 macOS 中文）。
+       注意：PingFang 是 macOS 专有，Windows 上不存在，所以这条不是"加了就有"，
+       它只对 Mac 生效；Windows 上真正生效的是 YaHei 那一档。 */
+    --font-sans: 'Geist Variable', "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei", "Noto Sans SC", "Source Han Sans SC", "Hiragino Sans GB", sans-serif;
+    /* ② 代码（--font-mono）：拉丁部分用 JetBrains Mono；**中文字族排在其后**，
+       专门给代码块/路径/命令里的中文兜底。缺了这一段，代码里的中文会掉到默认字体，
+       与旁边的 JetBrains Mono 完全不是一套。中文优先选等宽黑体（更纱黑体等），
+       取不到时退到正经的中文黑体（至少不丑），最后才是通用 monospace。 */
+    --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, 'SF Mono', Menlo, "Sarasa Mono SC", "等距更纱黑体 SC", "Sarasa Nerd", "Sarasa Term SC", "Sarasa Term SC Nerd", "Noto Sans Mono CJK SC", "Source Han Mono SC", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", monospace;
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -405,6 +509,25 @@ input[type="file"],
   animation: relay-breath 1.8s ease-in-out infinite;
 }
 
+/* 滚动到底部按钮：下方仍在生成时，外圈蓝色脉动。
+   用户翻上去看历史时，一眼知道"底下还有内容在产出"，不必凭感觉猜是否已结束。
+   与 relay-breath 同一套写法（外扩光环 + 边框亮度呼吸）；蓝色取 tailwind blue-500，
+   与按钮内图标用同一个色值，避免出现两种蓝。 */
+@keyframes scroll-btn-running-ring {
+  0%, 100% {
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1), 0 0 0 0 rgba(59, 130, 246, 0.5);
+    border-color: rgba(59, 130, 246, 0.55);
+  }
+  50% {
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1), 0 0 0 5px rgba(59, 130, 246, 0);
+    border-color: rgba(59, 130, 246, 1);
+  }
+}
+
+.scroll-btn-running {
+  animation: scroll-btn-running-ring 1.4s ease-in-out infinite;
+}
+
 /* 并行进度条运行段 shimmer 流光动画 */
 @keyframes shimmer {
   0% { transform: translateX(-100%); }
@@ -482,6 +605,74 @@ input[type="file"],
     color: transparent;
     -webkit-text-fill-color: transparent;
     animation: axon-text-shimmer 2.4s linear infinite;
+  }
+}
+
+/* ── 吉祥物右侧「正在执行」状态文字的三色流光 ──────────────────────────
+   ── 为什么是流动渐变，而不是复用上面的扫光 ──
+   扫光是"一道白光掠过"（底色恒定，只有窄高光带平移），克制但存在感弱——这里要的是
+   "一眼看出它还在动"，所以让品牌三色（logo 的 indigo / cyan / violet）持续流过文字。
+   渐变按位置循环、与文字内容无关，因此 statusText 频繁切换时不会跳变。
+   ── 配色为什么分浅/深两套 ──
+   品牌三色在深色底上好看，但青（#38bdf8）落在白底上对比度不够；故浅色默认取同色系深一档，
+   深色主题再切回亮色。做法与上方 --hl-* 调色板一致。 */
+:root {
+  --axon-flow-1: #4f46e5;
+  --axon-flow-2: #0284c7;
+  --axon-flow-3: #7c3aed;
+}
+body.vscode-dark,
+body.vscode-high-contrast {
+  --axon-flow-1: #818cf8;
+  --axon-flow-2: #38bdf8;
+  --axon-flow-3: #a78bfa;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --axon-flow-1: #818cf8;
+    --axon-flow-2: #38bdf8;
+    --axon-flow-3: #a78bfa;
+  }
+}
+
+/* 渐变首尾同色（A…A）+ background-size 200%：一个周期恰好平移一个图案宽度，循环无缝。
+   只动 background-position，不动元素宽度 —— 状态文字长短变化不会顶动输入框。 */
+@keyframes axon-mascot-status-flow {
+  0% { background-position: 200% 50%; }
+  100% { background-position: 0% 50%; }
+}
+@keyframes axon-mascot-status-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.axon-mascot-status {
+  /* 不支持 background-clip:text 时的兜底色。必须留着——下面把 color 设成 transparent，
+     万一 @supports 没生效而 color 已透明，文字就整段消失了。 */
+  color: var(--axon-flow-1);
+  /* 这条入场动画同时兼任「文案切换」的过场：MascotStatusText 用 key=文案 让 span 重挂载，
+     于是每次换字都会重放一次淡入上滑。取 0.2s —— 切换只做提示，不宜拖沓。 */
+  animation: axon-mascot-status-in 0.2s ease-out both;
+}
+
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .axon-mascot-status {
+    background-image: linear-gradient(
+      90deg,
+      var(--axon-flow-1),
+      var(--axon-flow-2),
+      var(--axon-flow-3),
+      var(--axon-flow-1)
+    );
+    background-size: 200% 100%;
+    background-repeat: repeat;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    animation:
+      axon-mascot-status-in 0.2s ease-out both,
+      axon-mascot-status-flow 4s linear infinite;
   }
 }
 
@@ -628,6 +819,12 @@ input[type="file"],
     border-color: rgba(99, 102, 241, 0.8);
   }
 
+  /* 停掉脉动，但保留蓝色边框 —— 边框本身就是"下面还在跑"信息，删了等于丢信息 */
+  .scroll-btn-running {
+    animation: none;
+    border-color: rgba(59, 130, 246, 0.85);
+  }
+
   /* 吉祥物退回静止姿态：循环动画全停，静态姿态（perk/lean/squint）保留——
      那些不是动画，而是"当前心情长什么样"，去掉反而丢信息。
      Zzz 直接隐藏：停在某一帧会留下一个莫名的静态字符。 */
@@ -657,6 +854,14 @@ input[type="file"],
     color: var(--muted-foreground);
     -webkit-text-fill-color: currentColor;
   }
+
+  /* 状态文字同理退回纯色：渐变与切换过场一起撤掉（对动效敏感的用户不需要"文字飘进来"） */
+  .axon-mascot-status {
+    animation: none;
+    background-image: none;
+    color: var(--axon-flow-1);
+    -webkit-text-fill-color: currentColor;
+  }
 }
 
 
@@ -666,7 +871,9 @@ input[type="file"],
    Tailwind 的 font-mono 全局引用 --font-mono，这里一处改所有 font-mono 都生效：
    markdown 代码块、diff 面板、工具卡片路径标签等。 */
 :root {
-  --font-mono: "JetBrains Mono", "JetBrains Mono Variable", "Cascadia Code", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace;
+  /* ⚠️ 必须与上方 @theme inline 里的 --font-mono 保持一致（这里会覆盖那一份，
+     漏改就会出现"Tailwind 工具类一个字体、直接 var() 引用另一个字体"的割裂）。 */
+  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, 'SF Mono', Menlo, "Sarasa Mono SC", "等距更纱黑体 SC", "Sarasa Nerd", "Sarasa Term SC", "Sarasa Term SC Nerd", "Noto Sans Mono CJK SC", "Source Han Mono SC", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", monospace;
 }
 
 
@@ -684,6 +891,24 @@ body[class*="vscode"] {
   font-family: var(--vscode-font-family, 'Geist Variable', sans-serif);
   font-size: var(--vscode-font-size, 13px);
   line-height: 1.5;
+}
+
+/* 对话正文跟随 VS Code 主题字体（--vscode-font-family），与输入框保持同一套 ——
+   输入框本身没有字体声明，继承的就是上面 body 的这套，所以正文对齐它即可"看到什么输什么"。
+   独立运行时（没有 --vscode-* 变量）回退到 --font-sans，不会掉进浏览器默认字体。
+   注意：主题字体（如 Segoe WPC / Segoe UI）不含汉字，中文仍由系统 CJK 回退决定，
+   在 Windows 上落点依旧是微软雅黑——换的主要是拉丁部分（Geist → Segoe UI）。
+   代码块不受影响：仍由 --font-mono 钉死。 */
+.axon-chat-prose {
+  font-family: var(--vscode-font-family, var(--font-sans));
+}
+
+/* 对话里的标题（markdown h1~h6）单独切到标题这一路（衬线）。
+   .axon-chat-prose 上面已把整块锁成无衬线，标题必须显式声明，
+   否则会被一起带成无衬线——那样改 --font-heading 只影响 Card/Dialog 标题，
+   对话里看不到任何变化。 */
+.axon-chat-prose :is(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--font-heading);
 }
 
 /* 深色主题：VS Code 注入 body.vscode-dark 时应用深色变量 */
@@ -795,28 +1020,10 @@ body.vscode-high-contrast {
   animation: danger-pulse 1.2s ease-in-out infinite;
 }
 
-/* HTML 预览 iframe 滚动条：默认隐藏，hover wrapper 时显示 */
+/* HTML 预览：iframe 内部文档的原生滚动条由 HTML_PREVIEW_PRELUDE 完全隐藏，
+   可见滑块由 lib/overlayScrollbar.ts 画在 wrapper 上（见 .axon-ovsb）。 */
 .axon-html-preview {
   overflow: hidden;
-}
-.axon-html-preview iframe {
-  scrollbar-width: none; /* Firefox */
-}
-.axon-html-preview iframe::-webkit-scrollbar {
-  width: 6px;
-}
-.axon-html-preview iframe::-webkit-scrollbar-thumb {
-  background: transparent;
-  border-radius: 9999px;
-}
-.axon-html-preview:hover iframe {
-  scrollbar-width: thin; /* Firefox */
-}
-.axon-html-preview:hover iframe::-webkit-scrollbar-thumb {
-  background: #d1d5db;
-}
-.dark .axon-html-preview:hover iframe::-webkit-scrollbar-thumb {
-  background: #4b5563;
 }
 
 /* 虚拟列表消息入场动画：避免向上滚动时内容突然出现的闪烁感 */
@@ -826,6 +1033,53 @@ body.vscode-high-contrast {
 }
 .animate-fade-in {
   animation: fade-in 0.2s ease-out;
+}
+/*
+ * 回复底部统计信息（Credits / Elapsed / 模型）从下往上浮现。
+ *
+ * 适用理由：这块是"出现一次"的元素 —— 条件为 !streaming && turnStats，
+ * 即本轮落终态、统计首次拿到时才挂载，所以入场动画在这里是恰当的
+ * （与之相对，VirtualMessageList 的列表项会被滚动反复挂载，那里就不能加，见该文件注释）。
+ *
+ * ⚠️ 已知代价：它挂载一次播一次，因此滚动离开再回来（虚拟列表重挂载）会重播一次。
+ * 这是入场动画在虚拟列表里的固有性质，不是 bug；位移只有 6px、时长 0.32s，观感是"浮现"而非"跳"。
+ * 若确实不想要重播，得改成"只对刚结束的那一轮播"（需在消息上记一个已播标记），而不是靠 CSS 能做到的。
+ */
+.animate-rise-in {
+  animation: axon-rise-in 0.32s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+/*
+ * 流式吐字：每批新到的字淡入。
+ *
+ * 只作用于"刚追加的那一批"——包裹与解包都在 MarkdownRenderer 的写 html 那一步完成，
+ * 同一时刻只会存在一个 .axon-chunk，已显示的文字不受影响（否则就是整段闪烁）。
+ * 时长取 0.35s：比渲染节流 PARSE_THROTTLE_MS(32ms) 长一个数量级，
+ * 于是前一批还没淡完、后一批已经开始 —— 连续覆盖，这是"丝滑"而不是"一批批蹦出来"的关键。
+ * 只做 opacity，不做位移：位移正是"跳动感"的来源。
+ */
+.axon-chunk {
+  animation: axon-chunk-in 0.35s ease-out both;
+}
+/* 整块淡入：一批里新开的段落 / 标题 / 列表 / 表格。
+   打字机收尾或排空时一批能倒出上百字、跨好几个块，只给最后一段挂行内淡入的话，
+   同批其余新块会硬出现（"前面在淡入，后面唰地整段出来"）。 */
+.axon-chunk-block {
+  animation: axon-chunk-in 0.35s ease-out both;
+}
+@keyframes axon-chunk-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .axon-chunk,
+  .axon-chunk-block { animation: none; }
+}
+@keyframes axon-rise-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise-in { animation: none; }
 }
 
 /* ── 列表样式优化 ──
@@ -873,4 +1127,141 @@ body.vscode-high-contrast {
    absolute 无 top/left 时停留在文档流末尾，撑大 body 滚动区域 → 外层出现多余滚动条 */
 .mermaidTooltip {
   display: none !important;
+}
+
+/* 附件读取 / 图片压缩中的光波占位：只在真实异步处理期间显示。 */
+.axon-attachment-processing {
+  isolation: isolate;
+}
+
+.axon-attachment-processing::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--primary) 7%, transparent), transparent 46%),
+    linear-gradient(180deg, color-mix(in oklab, var(--background) 45%, transparent), transparent);
+  pointer-events: none;
+}
+
+.axon-attachment-processing__wave {
+  position: absolute;
+  z-index: 0;
+  top: -45%;
+  bottom: -45%;
+  left: -65%;
+  width: 52%;
+  transform: skewX(-18deg);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklab, var(--primary) 8%, transparent) 20%,
+    color-mix(in oklab, var(--primary) 28%, var(--background)) 50%,
+    color-mix(in oklab, var(--primary) 8%, transparent) 80%,
+    transparent
+  );
+  filter: blur(5px);
+  opacity: 0.72;
+  animation: axon-attachment-wave 1.65s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  pointer-events: none;
+}
+
+@keyframes axon-attachment-wave {
+  0% {
+    transform: translateX(-25%) skewX(-18deg);
+  }
+  100% {
+    transform: translateX(335%) skewX(-18deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .axon-attachment-processing__wave {
+    animation: none;
+    left: 24%;
+    opacity: 0.28;
+  }
+}
+
+/* 发送 / 停止：同一 SVG 内交叉变形，状态切换时按钮节点保持稳定。 */
+.axon-send-stop-button {
+  overflow: hidden;
+  transition:
+    background-color 180ms ease,
+    box-shadow 220ms ease,
+    transform 160ms ease;
+}
+
+.axon-send-stop-button:not(:disabled):hover {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent);
+  transform: translateY(-1px);
+}
+
+.axon-send-stop-button:not(:disabled):active {
+  transform: translateY(0) scale(0.93);
+}
+
+.axon-send-stop-icon {
+  overflow: visible;
+}
+
+.axon-send-stop-icon__plane,
+.axon-send-stop-icon__stop,
+.axon-send-stop-icon__trail {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition:
+    opacity 240ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 360ms cubic-bezier(0.22, 1, 0.36, 1),
+    stroke-dashoffset 280ms ease;
+}
+
+.axon-send-stop-icon__trail {
+  stroke-dasharray: 6;
+  stroke-dashoffset: 0;
+}
+
+.axon-send-stop-icon__trail--top {
+  transition-delay: 35ms;
+}
+
+.axon-send-stop-icon.is-ready .axon-send-stop-icon__plane {
+  opacity: 1;
+  transform: translate(0, 0) rotate(0deg) scale(1);
+}
+
+.axon-send-stop-icon.is-ready .axon-send-stop-icon__stop {
+  opacity: 0;
+  transform: rotate(-35deg) scale(0.15);
+}
+
+.axon-send-stop-icon.is-ready .axon-send-stop-icon__trail {
+  opacity: 0.72;
+  stroke-dashoffset: 0;
+  transform: translateX(0);
+}
+
+.axon-send-stop-icon.is-stopping .axon-send-stop-icon__plane {
+  opacity: 0;
+  transform: translate(2px, -2px) rotate(28deg) scale(0.28);
+}
+
+.axon-send-stop-icon.is-stopping .axon-send-stop-icon__stop {
+  opacity: 1;
+  transform: rotate(0deg) scale(1);
+}
+
+.axon-send-stop-icon.is-stopping .axon-send-stop-icon__trail {
+  opacity: 0;
+  stroke-dashoffset: -6;
+  transform: translateX(3px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .axon-send-stop-button,
+  .axon-send-stop-icon__plane,
+  .axon-send-stop-icon__stop,
+  .axon-send-stop-icon__trail {
+    transition-duration: 0.01ms !important;
+  }
 }

@@ -9,6 +9,7 @@
  */
 
 import type { CreditDetail } from "../credits.js";
+import type { WikiGenerationEvent } from "../wiki/wikiController.js";
 
 /** relay/skill 等复杂载荷暂以宽松类型占位，阶段 1 迁移 relay 模块时替换为精确类型 */
 type Json = Record<string, unknown>;
@@ -32,13 +33,13 @@ export type AgentEventPayload =
   | { type: "stream_start" }
   | { type: "stream_delta"; content: string }
   | { type: "stream_pause" }
-  | { type: "stream_end"; elapsed: number; tokens: number; model?: string; modelName?: string; credits?: number; creditDetail?: CreditDetail }
+  | { type: "stream_end"; elapsed: number; tokens: number; model?: string; modelName?: string; providerName?: string; effort?: string; credits?: number; creditDetail?: CreditDetail }
   /**
    * 本轮非正常结束。reason 区分"用户主动取消"与"provider/网关异常"——
    * 两者都走这个事件，但对用户的含义完全不同（"我停的" vs "它挂了"）。
    * 可选是为了向后兼容：缺省时呈现端按 cancelled 处理，行为与该字段引入前一致。
    */
-  | { type: "turn_cancelled"; elapsed: number; tokens: number; model?: string; modelName?: string; credits?: number; creditDetail?: CreditDetail; reason?: "cancelled" | "error" }
+  | { type: "turn_cancelled"; elapsed: number; tokens: number; model?: string; modelName?: string; providerName?: string; effort?: string; credits?: number; creditDetail?: CreditDetail; reason?: "cancelled" | "error" }
   | { type: "reasoning_delta"; content: string; partIndex?: number; itemId?: string }
   | { type: "status"; content: string }
   | { type: "retry"; attempt: number; maxRetries: number; error: string; status: "retrying" | "failed" }
@@ -48,6 +49,18 @@ export type AgentEventPayload =
   | { type: "compacting_end"; success: boolean; message: string }
   | { type: "compaction_needed"; currentTokens: number; maxTokens: number; percent: number }
   | { type: "compaction_migrated"; newSessionId?: string; parentSessionId?: string; migratedToNewSession?: boolean }
+  // Wiki 生成进度（规划完成 / 逐页落盘 / 收尾）。
+  // 子 Agent 的内部过程刻意不在此转发 —— 那会让聊天界面被十几张卡片灌满，
+  // 且这些过程对用户没有决策价值。这里只给「共几页、完成几页、结果如何」。
+  | { type: "wiki_generation"; event: WikiGenerationEvent }
+  /**
+   * 记忆召回：本轮把哪些 Wiki 页面注入了上下文。
+   *
+   * 只在召回集合【发生变化】时发出（首次 / 页面增删 / 某页转陈旧），稳定期静默 ——
+   * 它表达的是「记忆变了，值得看一眼」，不是「本轮又注入了一次」。每轮都发会把
+   * 真正的变化淹没在一串重复卡片里。
+   */
+  | { type: "wiki_recall"; total: number; pages: { title: string; stale: boolean }[] }
   | { type: "error"; content: string }
 
   // ── Credits 预算门（成本护栏：本轮花费达到硬暂停阈值，等待用户选择继续/停止） ──
@@ -62,6 +75,8 @@ export type AgentEventPayload =
       cwd: string;
       /** queued=已规划排队（流式阶段提前出卡）；executing=宿主正在真正执行这一个 */
       status: "queued" | "pending" | "executing";
+      /** 当前调用开始前必须完成的工具；仅 queued 更新事件携带。 */
+      waitingFor?: { id: string; name: string }[];
       /** MCP 工具专用：真实 server 名 / 工具名（前端卡片展示用） */
       mcpServer?: string;
       mcpTool?: string;
@@ -128,6 +143,23 @@ export type AgentEventPayload =
       toolName: string;
     }
 
+  // ── 选项问答（ask_user 工具：Agent 一次抛 1~N 个问题 + 选项，用户逐题单选/多选作答） ──
+  | {
+      type: "ask_user_request";
+      /** 关联的工具调用 id */
+      toolCallId: string;
+      /** 问题列表（1~N 个；前端用「第 n / N 题」步进器逐题作答） */
+      questions: {
+        question: string;
+        /** 选项列表（id 回传用、label 展示、description 为可选说明） */
+        options: { id: string; label: string; description?: string }[];
+        /** true=多选（checkbox），false=单选（radio） */
+        multi: boolean;
+        /** 是否允许用户自己输入「其他」答案 */
+        allowOther: boolean;
+      }[];
+    }
+
   // ── 编辑模式 / 待确认改动 ──
   | { type: "edit_mode_set"; mode: "auto" | "manual" }
   | {
@@ -153,6 +185,8 @@ export type AgentEventPayload =
   // ── 会话生命周期 ──
   | { type: "session_created"; sessionId: string; workspace: string; workspaces?: string[] }
   | { type: "session_loaded"; sessionId: string; [k: string]: unknown }
+  /** get_diff_content 的应答。found=false 表示已找不到该次改动的正文（例如会话被压缩过） */
+  | { type: "diff_content"; requestId: string; found: boolean; oldContent?: string; newContent?: string }
   | { type: "session_title_updated"; title: string }
 
   // ── 工作区 ──
@@ -162,12 +196,10 @@ export type AgentEventPayload =
   // ── 命令信任与安全 ──
   | { type: "confirm_command_request"; requestId: string; command: string; options: { choice: string; pattern: string; label: string }[]; id?: string }
 
-  // ── 子 Agent / 并行调研 ──
+  // ── 子 Agent ──
   | { type: "sub_agent_start"; delegateId: string; toolCallId: string; intent: string; skill: string | null; prompt: string }
   | { type: "sub_agent_event"; delegateId: string; event: Json }
   | { type: "sub_agent_end"; delegateId: string; result: string }
-  | { type: "parallel_research_start"; batchId: string; toolCallId: string; [k: string]: unknown }
-  | { type: "parallel_research_end"; batchId: string; results: { delegateId: string; ok: boolean }[] }
 
   // ── Relay 长任务工作流 ──
   | { type: "relay_updated"; relay: Json }

@@ -10,7 +10,9 @@ import { getModels, findModel } from "@/components/ModelSelector";
 import { getRelay, type RelayData } from "@/lib/apiClient";
 import { segEditUnits, extractBasename } from "../utils";
 import type { CommandApproval } from "../useChatSession";
-import type { ReasoningSegment } from "../types";
+import type { ReasoningSegment, WikiRecallSegment } from "../types";
+import { locateReasoning } from "../reasoningPlacement";
+import { stripPendingRetry } from "../retryLifecycle";
 import type { EventHandlerCtx, WsMessage } from "./types";
 
 /**
@@ -30,6 +32,10 @@ import type { EventHandlerCtx, WsMessage } from "./types";
  *   块号让它们各自独立成段；块号在每轮内从 0 重新开始，所以必须与 round 组合。
  * · 两者都没有（Chat Completions 的 reasoning_content 是单一无分块流）→ 固定 "0"，
  *   本轮所有思考增量并入同一段，正是期望行为。
+ *
+ * ⚠️ 但「本轮所有思考并入同一段」只在思考连续输出时成立。模型可能在一轮内先出正文、
+ *   之后再继续吐思考（已从 trace 验证确实存在），此时同一 key 的思考会被正文打断。
+ *   打断后必须另起一块（key 加 `#n` 后缀）并落到末尾，见 reasoningPlacement.ts。
  */
 function reasoningKeyOf(msg: WsMessage): string {
   const round = (msg as any).round as number | undefined;
@@ -81,6 +87,29 @@ export function handleRetry(msg: WsMessage, ctx: EventHandlerCtx): void {
   });
 }
 
+/**
+ * 清除「正在重试」的 retry 段 —— 重试已恢复（又有产出）时调用。
+ *
+ * 为什么不能只靠 stream_start 清：后端只在「重试中 / 重试次数已用尽」时发 retry 事件，
+ * 成功时不发任何"恢复"信号，只能由前端按"是否又有产出"自行判断。而重试可能发生在
+ * 【本轮已经输出过正文之后】——那时轮级的 turnStreamStarted 已是 true，重试成功后继续
+ * 输出不会再发 stream_start，只挂在 stream_start 上的清除逻辑就永远不会触发，
+ * 「正在重新连接 N/M」于是永久留在消息里（即"重试样式没被清除"）。
+ *
+ * 幂等：没有待清的段时返回原引用，不触发重渲染。
+ */
+export function clearPendingRetry(ctx: EventHandlerCtx): void {
+  ctx.setChatHistory((prev) => {
+    const last = prev[prev.length - 1];
+    if (!last || last.role !== "assistant" || !last.segments) return prev;
+    const next = stripPendingRetry(last.segments);
+    if (!next) return prev;
+    const updated = [...prev];
+    updated[updated.length - 1] = { ...last, segments: next };
+    return updated;
+  });
+}
+
 export function handleTokenUsage(msg: WsMessage, ctx: EventHandlerCtx): void {
   ctx.setTokenUsage({
     used: msg.used as number,
@@ -92,6 +121,8 @@ export function handleTokenUsage(msg: WsMessage, ctx: EventHandlerCtx): void {
 export function handleReasoningDelta(msg: WsMessage, ctx: EventHandlerCtx): void {
   const content = (msg as any).content as string || "";
   if (!content) return;
+  // 思考增量到达 = 重试已恢复，收掉「正在重试」提示
+  clearPendingRetry(ctx);
   const key = reasoningKeyOf(msg);
 
   ctx.setChatHistory((prev) => {
@@ -112,28 +143,19 @@ export function handleReasoningDelta(msg: WsMessage, ctx: EventHandlerCtx): void
     }
 
     const segs = [...last.segments];
-    // 按 key 精确定位本思考块。不看 streaming 标志——那只表达 UI 折叠状态，
-    // 会被工具卡片/stream_start 提前置 false，用它定位就会把同一个块拆成多段。
-    let idx = -1;
-    for (let i = segs.length - 1; i >= 0; i--) {
-      const s = segs[i];
-      if (s.type === "reasoning" && (s as ReasoningSegment).key === key) { idx = i; break; }
-    }
-
-    if (idx >= 0) {
-      const seg = segs[idx] as ReasoningSegment;
+    // 归属与落位交给纯函数（规则与理由见 reasoningPlacement.ts）：
+    // 命中本块且它在末尾 → 追加；否则（未命中，或命中的块已被正文/工具打断）→ 另起一块放到末尾。
+    const target = locateReasoning(segs, key);
+    if (target.kind === "append") {
+      const seg = segs[target.index] as ReasoningSegment;
       // 重新置 streaming：本块还在继续吐，若之前被提前折叠过则重新展开
-      segs[idx] = { ...seg, content: seg.content + content, streaming: true };
+      segs[target.index] = { ...seg, content: seg.content + content, streaming: true };
     } else {
-      const newSeg: ReasoningSegment = { type: "reasoning", key, content, streaming: true };
-      // 末尾若是 stream_start 预留的空 text 占位段，把思考插到它前面，
-      // 保证思考内容显示在本轮正文之前。
-      const lastSeg = segs[segs.length - 1];
-      if (lastSeg?.type === "text" && !lastSeg.content.trim()) {
-        segs.splice(segs.length - 1, 0, newSeg);
-      } else {
-        segs.push(newSeg);
-      }
+      // 新块一律落到消息末尾：思考是在正文之后恢复的，新块就该显示在最下面。
+      // （早先会把新块插到末尾的空 text 占位段之前，那是为了让思考显示在正文上方；
+      //  但「正文已经出现之后才到达的思考」按定义属于正文之后，插到前面正是那个
+      //  「正文停了、上面的思考还在长」观感的来源。）
+      segs.push({ type: "reasoning", key: target.key, content, streaming: true } as ReasoningSegment);
     }
     updated[updated.length - 1] = { ...last, segments: segs };
     return updated;
@@ -143,6 +165,45 @@ export function handleReasoningDelta(msg: WsMessage, ctx: EventHandlerCtx): void
     ctx.setStatusText("正在推理...");
     ctx.setStatusPhase("reasoning");
   }
+}
+
+/**
+ * 记忆召回：本轮把哪些项目 Wiki 页面注入了上下文。
+ *
+ * 事件在 stream_start 之前到达（预取阶段就发了），所以此时通常还没有 assistant 消息 ——
+ * 需要先建一条来承载它，这与 reasoning 的处理方式一致。
+ *
+ * 段刻意落在消息【最前】而非末尾：召回是这一轮开局的前提，读者应先知道 AI 手里有哪些材料，
+ * 再看它据此怎么回答。
+ *
+ * 后端只在召回集合变化时才发（见 AgentSession.announceWikiRecall），所以这里无需去重 ——
+ * 稳定期根本不会有事件到达。
+ */
+export function handleWikiRecall(msg: WsMessage, ctx: EventHandlerCtx): void {
+  const pages = ((msg as any).pages as { title: string; stale: boolean }[]) || [];
+  if (pages.length === 0) return;
+  const total = ((msg as any).total as number) || pages.length;
+  const seg: WikiRecallSegment = { type: "wikirecall", total, pages };
+
+  ctx.setChatHistory((prev) => {
+    const updated = [...prev];
+    const last = updated[updated.length - 1];
+    // 还没有 assistant 消息（召回先于 stream_start 到达，纯工具轮的常态）→ 建一条
+    if (last?.role !== "assistant" || !last.segments) {
+      updated.push({
+        id: `assistant-${Date.now()}`,
+        role: "assistant",
+        segments: [seg],
+        streaming: true,
+        turnStatus: "running",
+        turnGen: ctx.turnGeneration.current,
+      });
+      return updated;
+    }
+    // 已有本轮消息（同轮内先出过其它段）：插到最前，保持「先材料、后结论」的阅读顺序
+    updated[updated.length - 1] = { ...last, segments: [seg, ...last.segments] };
+    return updated;
+  });
 }
 
 export function handleEditsUpdated(msg: WsMessage, ctx: EventHandlerCtx): void {
@@ -260,6 +321,22 @@ export function handleConfirmToolRequest(msg: WsMessage, ctx: EventHandlerCtx): 
 
 export function handleToolConfirmTimeout(_msg: WsMessage, ctx: EventHandlerCtx): void {
   ctx.setToolConfirm(null);
+}
+
+/** ask_user 提问：把问题与选项交给输入区上方的问答卡片渲染。 */
+export function handleAskUserRequest(msg: WsMessage, ctx: EventHandlerCtx): void {
+  const toolCallId = (msg as any).toolCallId as string;
+  const raw = (msg as any).questions;
+  if (!toolCallId || !Array.isArray(raw) || raw.length === 0) return;
+  ctx.setAskUser({
+    toolCallId,
+    questions: raw.map((q: any) => ({
+      question: typeof q?.question === "string" ? q.question : "",
+      options: Array.isArray(q?.options) ? q.options : [],
+      multi: q?.multi === true,
+      allowOther: q?.allowOther !== false,
+    })),
+  });
 }
 
 export function handleToolHistoryMismatch(msg: WsMessage, ctx: EventHandlerCtx): void {

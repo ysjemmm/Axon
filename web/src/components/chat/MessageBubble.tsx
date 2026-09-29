@@ -9,6 +9,7 @@ import type { AttachedFile, ChatMessage } from "./types";
 import { formatFileSize } from "./format";
 import { AssistantTurn } from "./AssistantTurn";
 import { FileTag } from "./FileTag";
+import { ATTACHMENT_BADGE_CLASS, attachmentTypeLabel, imageTypeLabel } from "./attachmentType";
 
 const USER_MESSAGE_COLLAPSE_CHARS = 700;
 const USER_MESSAGE_COLLAPSE_LINES = 10;
@@ -18,6 +19,51 @@ function userMessageText(message: ChatMessage): string {
     return message.userSegments.map((seg) => seg.type === "text" ? seg.text : seg.tag.name).join("");
   }
   return message.content || "";
+}
+
+/** data URL → Blob。fetch 对 data URL 在个别环境会失败，回退到手动解析（与 ImageViewer 同款）。 */
+async function dataUrlToBlob(src: string): Promise<Blob> {
+  try {
+    const res = await fetch(src);
+    return await res.blob();
+  } catch {
+    const parts = src.split(",");
+    const mime = parts[0].match(/:(.*?);/)?.[1] || "image/png";
+    const binary = atob(parts[1]);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  }
+}
+
+/**
+ * 复制一条消息：文本与图片一起进剪贴板。
+ *
+ * ⚠️ 必须走 clipboard.write + ClipboardItem——writeText 只能写纯文本，图片带不进去，
+ * 这正是"复制不会把图片复制上"的原因。
+ *
+ * 注意：一次 write 里同一 MIME 类型只有最后一项生效，所以多图消息只能带上最后一张。
+ * 这是 Clipboard API 自身的限制，不是这里的选择。
+ * write 不可用（或图片读取失败）时退回纯文本，保证文字仍然复制得到。
+ */
+async function copyMessage(text: string, images: string[]): Promise<void> {
+  if (images.length > 0 && typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+    try {
+      const items: ClipboardItem[] = [];
+      if (text) items.push(new ClipboardItem({ "text/plain": new Blob([text], { type: "text/plain" }) }));
+      for (const src of images) {
+        const blob = await dataUrlToBlob(src);
+        if (blob.size > 0) items.push(new ClipboardItem({ [blob.type || "image/png"]: blob }));
+      }
+      if (items.length > 0) {
+        await navigator.clipboard.write(items);
+        return;
+      }
+    } catch (err) {
+      console.warn("[axon] 复制消息（含图片）失败，退回纯文本:", err);
+    }
+  }
+  await navigator.clipboard.writeText(text);
 }
 
 function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRejectEdit, onUndoEdit, onQuoteToInput, onEditUserMessage, onImagePreview, replyingToMessageId }: { message: ChatMessage; liveStatus?: string; /** 当前运行任务起点；仅流式回复传入 */ startedAt?: number; onAcceptEdit?: (path: string) => void; onRejectEdit?: (path: string) => void; onUndoEdit?: (path: string) => void; onQuoteToInput?: (message: ChatMessage) => void; onEditUserMessage?: (messageId: string, content: string, images?: string[], attachedFiles?: AttachedFile[]) => void; onImagePreview?: (images: string[], index: number) => void; replyingToMessageId?: string }) {
@@ -55,9 +101,10 @@ function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRej
           {(message.content || hasSegments || (message.images && message.images.length > 0)) && (
             <div className="absolute -left-16 bottom-0 flex items-center gap-0.5 opacity-0 group-hover/user:opacity-100 transition-opacity">
               <button
-                onClick={(e) => {
-                  navigator.clipboard.writeText(plainText);
+                onClick={async (e) => {
+                  // 先取 currentTarget：await 之后合成事件的 currentTarget 可能已失效
                   const btn = e.currentTarget;
+                  await copyMessage(plainText, message.images ?? []);
                   btn.setAttribute("data-copied", "true");
                   setTimeout(() => btn.removeAttribute("data-copied"), 1500);
                 }}
@@ -160,16 +207,18 @@ function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRej
           ) : (
             <>
               {message.images && message.images.length > 0 && (
-                <div className="flex gap-2 flex-wrap mb-2">
+                <div className="flex gap-3 flex-wrap mb-3">
                   {message.images.map((img, i) => (
-                    <img
+                    <button
+                      type="button"
                       key={i}
-                      src={img}
-                      alt=""
-                      className="max-w-48 max-h-32 object-contain rounded-lg cursor-zoom-in hover:opacity-90 transition-opacity"
-                      onDoubleClick={() => onImagePreview?.(message.images!, i)}
-                      title="双击放大"
-                    />
+                      onClick={() => onImagePreview?.(message.images!, i)}
+                      className="relative overflow-hidden rounded-xl border border-border bg-background/60 p-1 shadow-sm hover:border-foreground/20 hover:shadow-md transition-all"
+                      title="点击查看大图"
+                    >
+                      <img src={img} alt="" className="w-60 max-w-[65vw] h-44 object-contain rounded-lg" />
+                      <span className={ATTACHMENT_BADGE_CLASS}>{imageTypeLabel(img)}</span>
+                    </button>
                   ))}
                 </div>
               )}
@@ -187,12 +236,17 @@ function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRej
                   {hasFiles && (
                     <div className="flex gap-2 flex-wrap mb-2">
                       {message.attachedFiles!.map((f, i) => (
-                        <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-background/60 border border-border max-w-[200px]">
-                          <FileText className="w-4 h-4 shrink-0 text-muted-foreground" />
-                          <div className="min-w-0">
-                            <div className="text-xs font-medium truncate">{f.name}</div>
-                            <div className="text-[10px] text-muted-foreground">{formatFileSize(f.size)}</div>
+                        <div key={i} className="relative flex min-h-20 w-52 items-center gap-3 rounded-xl bg-background/60 border border-border p-3 shadow-sm">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
+                            <FileText className="w-5 h-5 text-muted-foreground" />
                           </div>
+                          <div className="min-w-0">
+                            <div className="text-[13px] font-medium truncate" title={f.name}>{f.name}</div>
+                            <div className="mt-1 text-[10px] text-muted-foreground">{formatFileSize(f.size)}</div>
+                          </div>
+                          <span className="absolute bottom-2 left-3 rounded-md border border-border bg-background px-1.5 py-px text-[10px] font-semibold text-muted-foreground">
+                            {attachmentTypeLabel(f)}
+                          </span>
                         </div>
                       ))}
                     </div>

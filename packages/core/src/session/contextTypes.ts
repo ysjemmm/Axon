@@ -36,10 +36,6 @@ export interface SessionContext {
   rollingSummaryAccumulated: number;
   /** delegate_task 子 Agent 委托计数器（全局自增） */
   delegateSeq: number;
-  /** parallel_research 批次计数器（全局自增） */
-  researchSeq: number;
-  /** parallel_execute 批次计数器（全局自增） */
-  executionSeq: number;
   /**
    * 按目标（文件路径/搜索词/命令前缀）聚合的累计失败次数。
    * 跨对话保留是合理的——"这个文件/命令老出问题"这一事实不该因为换了个话题就丢失，
@@ -55,8 +51,6 @@ export function createSessionContext(): SessionContext {
     sessionOutputTokens: 0,
     rollingSummaryAccumulated: 0,
     delegateSeq: 0,
-    researchSeq: 0,
-    executionSeq: 0,
     targetFailures: new Map(),
   };
 }
@@ -70,7 +64,7 @@ export interface ConversationContext {
   conversationInputTokens: number;
   /** 本次对话所有 turn 的 output token 之和 */
   conversationOutputTokens: number;
-  /** 本次对话中所有子 Agent（delegate/parallel）消耗的 token 总和 */
+  /** 本次对话中所有子 Agent（delegate / relay review）消耗的 token 总和 */
   conversationSubAgentTokens: number;
   /** 对话开始时 sessionInputTokens 的快照，取消时用差值复原本次对话已消耗量 */
   turnStartInputSnapshot: number;

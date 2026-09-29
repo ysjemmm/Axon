@@ -4,7 +4,6 @@
  * compacting_start / compaction_needed / compaction_migrated / compacting_end
  */
 
-import { getModels } from "@/components/ModelSelector";
 import {
   exploreDisplayText, formatLineSuffix,
   isRelayTool, relayToolLabel, firstLine, OUTPUT_TOOLS,
@@ -79,7 +78,8 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
         : undefined;
       const restoredSegments = (m as any).userSegments as UserSegment[] | undefined;
       const clientMessageId = (m as any).clientMessageId as string | undefined;
-      restored.push({ id: clientMessageId || `hist-u-${seq++}`, role: "user", timestamp: (m as any).timestamp as number | undefined, content: bodyText, images, attachedFiles, userSegments: restoredSegments });
+      const effort = typeof (m as any).effort === "string" ? (m as any).effort : undefined;
+      restored.push({ id: clientMessageId || `hist-u-${seq++}`, role: "user", timestamp: (m as any).timestamp as number | undefined, content: bodyText, images, attachedFiles, userSegments: restoredSegments, effort });
     } else if (m.role === "assistant") {
       const text = typeof m.content === "string" ? (m.content || "").trim() : "";
       const hasToolCalls = m.tool_calls && m.tool_calls.length > 0;
@@ -246,24 +246,16 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
     }
   }
 
-  // 编辑工具段若没有匹配到 tool result（tool 消息被 _transient 过滤），
-  // 说明该次调用失败了——标记 hidden 避免显示误导性的成功状态。
-  for (const msg of restored) {
-    if (msg.role !== "assistant" || !msg.segments) continue;
-    for (const seg of msg.segments) {
-      if (seg.type === "tool" && !seg.diff && !seg.diffs && !seg.output && !seg.diagnostics
-        && (seg.name === "str_replace" || seg.name === "create_file" || seg.name === "apply_patch")
-        && seg.status === "success" && !seg.hidden) {
-        seg.hidden = true;
-      }
-    }
-  }
-
   ctx.setChatHistory(restored);
 
   if (totalTokens > 0) {
-    const currentModel = getModels().find((m) => m.id === ctx.modelRef.current);
-    ctx.setTokenUsage((prev) => ({ ...prev, used: totalTokens, max: currentModel?.contextWindow || prev.max }));
+    // ⚠️ 只填 used 作为占位，**不要**用前端模型注册表的 contextWindow 覆盖 max。
+    // max 必须以后端 token_usage 推来的权威窗口为准——后端判定手动压缩的 35% 阈值、以及
+    // 是否注入「上下文已较满，建议开新会话」提醒，用的都是它自己的 getContextWindow()。
+    // 前端拿注册表的值覆盖分母，会让圆环的分母与后端的分母不是同一个数：中转站的自定义模型名
+    // （如 deepseek-v4-flash）前端报大窗口、后端只认兜底窗口时，圆环显示 18%，
+    // 而后端已按自己的分母判定 ≥60%，直接命令模型提醒用户「上下文快满了」。
+    ctx.setTokenUsage((prev) => ({ ...prev, used: totalTokens }));
   }
 
   const restoredPending = (msg as any).pendingPaths as string[] | undefined;

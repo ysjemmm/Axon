@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Markdown 字体组合对比</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600;6..72,700&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;500;600;700&display=swap"
+  />
+  <style>
+    :root {
+      color-scheme: light;
+      --page: #f7f7f5;
+      --surface: #ffffff;
+      --surface-soft: #f2f2ef;
+      --text: #20201e;
+      --muted: #74746f;
+      --border: #deded9;
+      --accent: #d97757;
+      --code-bg: #f4f3ef;
+      --shadow: 0 16px 48px rgba(27, 27, 24, 0.07);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--page);
+      color: var(--text);
+      font-family: Inter, "Noto Sans SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    .page {
+      width: min(1500px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 42px 0 64px;
+    }
+
+    .page-header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 24px;
+    }
+
+    .page-header h1 {
+      margin: 0 0 8px;
+      font-size: clamp(26px, 3vw, 38px);
+      letter-spacing: -0.035em;
+    }
+
+    .page-header p {
+      max-width: 720px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .reset-button {
+      flex: none;
+      padding: 9px 14px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      transition: background 150ms ease, transform 150ms ease;
+    }
+
+    .reset-button:hover {
+      background: var(--surface-soft);
+    }
+
+    .reset-button:active {
+      transform: scale(0.97);
+    }
+
+    .comparison-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+      align-items: start;
+    }
+
+    .font-card {
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .card-header {
+      padding: 18px;
+      border-bottom: 1px solid var(--border);
+      background: color-mix(in srgb, var(--surface-soft) 72%, white);
+    }
+
+    .card-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .card-title-row h2 {
+      margin: 0;
+      font-size: 15px;
+      letter-spacing: -0.01em;
+    }
+
+    .preset-tag {
+      padding: 3px 7px;
+      border-radius: 999px;
+      background: rgba(217, 119, 87, 0.12);
+      color: #a34e35;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .controls {
+      display: grid;
+      gap: 10px;
+    }
+
+    .font-input-group {
+      display: grid;
+      grid-template-columns: 54px 1fr;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .font-input-group label,
+    .size-control label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .font-input {
+      width: 100%;
+      min-width: 0;
+      height: 30px;
+      padding: 0 9px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      outline: none;
+      background: var(--surface);
+      color: var(--text);
+      font-size: 11px;
+      transition: border-color 150ms ease, box-shadow 150ms ease;
+    }
+
+    .font-input:focus {
+      border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+      box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.12);
+    }
+
+    .size-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 2px;
+    }
+
+    .size-control {
+      min-width: 0;
+    }
+
+    .size-control-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 4px;
+      margin-bottom: 5px;
+    }
+
+    .size-value {
+      color: var(--text);
+      font-size: 10px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    input[type="range"] {
+      display: block;
+      width: 100%;
+      height: 4px;
+      margin: 6px 0;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    .markdown-preview {
+      --body-size: 16px;
+      --heading-size: 25px;
+      --code-size: 14px;
+      --body-font: Georgia, "Noto Serif SC", serif;
+      --heading-font: Inter, "Noto Sans SC", sans-serif;
+      --code-font: "JetBrains Mono", Consolas, monospace;
+      min-height: 680px;
+      padding: 24px;
+      font-family: var(--body-font);
+      font-size: var(--body-size);
+      line-height: 1.72;
+    }
+
+    .markdown-preview h1,
+    .markdown-preview h2,
+    .markdown-preview h3 {
+      font-family: var(--heading-font);
+      color: var(--text);
+      letter-spacing: -0.025em;
+    }
+
+    .markdown-preview h2 {
+      margin: 0 0 14px;
+      font-size: var(--heading-size);
+      line-height: 1.28;
+    }
+
+    .markdown-preview h3 {
+      margin: 25px 0 8px;
+      font-size: calc(var(--heading-size) * 0.7);
+      line-height: 1.35;
+    }
+
+    .markdown-preview p {
+      margin: 0 0 14px;
+    }
+
+    .markdown-preview strong {
+      font-weight: 700;
+    }
+
+    .markdown-preview ul {
+      margin: 8px 0 18px;
+      padding-left: 1.35em;
+    }
+
+    .markdown-preview li {
+      margin: 5px 0;
+      padding-left: 0.15em;
+    }
+
+    .markdown-preview blockquote {
+      margin: 18px 0;
+      padding: 2px 0 2px 16px;
+      border-left: 3px solid var(--accent);
+      color: #5f5f59;
+    }
+
+    .markdown-preview code {
+      padding: 0.1em 0.34em;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--code-bg);
+      color: #9d2929;
+      font-family: var(--code-font);
+      font-size: var(--code-size);
+      line-height: 1.35;
+    }
+
+    .markdown-preview pre {
+      overflow: auto;
+      margin: 18px 0;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: #fbfaf8;
+    }
+
+    .markdown-preview pre code {
+      display: block;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: #30302d;
+      white-space: pre;
+    }
+
+    .markdown-preview table {
+      width: 100%;
+      margin: 18px 0;
+      border: 1px solid var(--border);
+      border-spacing: 0;
+      border-radius: 10px;
+      overflow: hidden;
+      font-family: var(--heading-font);
+      font-size: calc(var(--body-size) * 0.86);
+    }
+
+    .markdown-preview th,
+    .markdown-preview td {
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+    }
+
+    .markdown-preview th {
+      background: var(--surface-soft);
+      font-weight: 650;
+    }
+
+    .markdown-preview tr:last-child td {
+      border-bottom: 0;
+    }
+
+    @media (max-width: 1120px) {
+      .comparison-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .markdown-preview {
+        min-height: 0;
+      }
+    }
+
+    @media (max-width: 620px) {
+      .page {
+        width: min(100% - 20px, 1500px);
+        padding-top: 24px;
+      }
+
+      .page-header {
+        align-items: start;
+        flex-direction: column;
+      }
+
+      .size-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="page-header">
+      <div>
+        <h1>Markdown 字体组合对比</h1>
+        <p>三组面板使用完全相同的 Markdown 内容。可以修改字体栈，也可以独立调整正文、标题和代码字号，快速比较中文、英文和代码混排的阅读效果。</p>
+      </div>
+      <button class="reset-button" id="resetAll" type="button">恢复默认</button>
+    </header>
+
+    <section class="comparison-grid" id="comparisonGrid"></section>
+  </main>
+
+  <template id="cardTemplate">
+    <article class="font-card">
+      <header class="card-header">
+        <div class="card-title-row">
+          <h2 data-role="preset-name"></h2>
+          <span class="preset-tag" data-role="preset-tag"></span>
+        </div>
+
+        <div class="controls">
+          <div class="font-input-group">
+            <label>正文</label>
+            <input class="font-input" data-control="body-font" type="text" />
+          </div>
+          <div class="font-input-group">
+            <label>标题</label>
+            <input class="font-input" data-control="heading-font" type="text" />
+          </div>
+          <div class="font-input-group">
+            <label>代码</label>
+            <input class="font-input" data-control="code-font" type="text" />
+          </div>
+
+          <div class="size-grid">
+            <div class="size-control">
+              <div class="size-control-top">
+                <label>正文字号</label>
+                <span class="size-value" data-value="body-size"></span>
+              </div>
+              <input data-control="body-size" type="range" min="12" max="24" step="1" />
+            </div>
+            <div class="size-control">
+              <div class="size-control-top">
+                <label>标题字号</label>
+                <span class="size-value" data-value="heading-size"></span>
+              </div>
+              <input data-control="heading-size" type="range" min="18" max="38" step="1" />
+            </div>
+            <div class="size-control">
+              <div class="size-control-top">
+                <label>代码字号</label>
+                <span class="size-value" data-value="code-size"></span>
+              </div>
+              <input data-control="code-size" type="range" min="11" max="22" step="1" />
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <section class="markdown-preview" data-role="preview">
+        <h2>想还原 Claude 的观感，可以这样写</h2>
+        <p>字体不只是视觉装饰，它会直接影响内容的<strong>可信度、节奏和信息密度</strong>。中文与英文混排时，需要同时关注字面大小、字重和行高。</p>
+
+        <h3>推荐的字体分工</h3>
+        <ul>
+          <li>正文使用阅读感更强的衬线字体。</li>
+          <li>界面、标题和标签使用清晰的无衬线字体。</li>
+          <li>代码使用等宽字体，保持字符对齐。</li>
+        </ul>
+
+        <blockquote>好的字体组合不会抢夺注意力，而是让用户忘记字体本身，专注于内容。</blockquote>
+
+        <p>例如行内代码 <code>font-family</code>、变量 <code>user_id</code> 和英文单词 Claude，都需要在中文段落中保持稳定的基线与大小。</p>
+
+        <pre><code>.serif {
+  font-family: "Newsreader", "Noto Serif SC", serif;
+}
+
+.sans {
+  font-family: "Instrument Sans", "Noto Sans SC", sans-serif;
+}</code></pre>
+
+        <table>
+          <thead>
+            <tr>
+              <th>用途</th>
+              <th>效果</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>正文</td>
+              <td>舒展、适合长内容阅读</td>
+            </tr>
+            <tr>
+              <td>标题</td>
+              <td>清晰、紧凑、有层级感</td>
+            </tr>
+            <tr>
+              <td>代码</td>
+              <td>对齐稳定、易于扫描</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </article>
+  </template>
+
+  <script>
+    const presets = [
+      {
+        name: "Claude 阅读感",
+        tag: "Serif",
+        bodyFont: 'Newsreader, "Noto Serif SC", Georgia, serif',
+        headingFont: '"Instrument Sans", "Noto Sans SC", system-ui, sans-serif',
+        codeFont: '"JetBrains Mono", ui-monospace, Consolas, monospace',
+        bodySize: 17,
+        headingSize: 27,
+        codeSize: 14,
+      },
+      {
+        name: "Axon 清晰感",
+        tag: "Sans",
+        bodyFont: 'Geist, "Noto Sans SC", system-ui, sans-serif',
+        headingFont: 'Geist, "Noto Sans SC", system-ui, sans-serif',
+        codeFont: '"JetBrains Mono", Consolas, monospace',
+        bodySize: 15,
+        headingSize: 24,
+        codeSize: 13,
+      },
+    ];
+
+    const grid = document.getElementById("comparisonGrid");
+    const template = document.getElementById("cardTemplate");
+    const cards = [];
+
+    function applyPreset(card, preset) {
+      const preview = card.querySelector('[data-role="preview"]');
+      const values = {
+        "body-font": preset.bodyFont,
+        "heading-font": preset.headingFont,
+        "code-font": preset.codeFont,
+        "body-size": preset.bodySize,
+        "heading-size": preset.headingSize,
+        "code-size": preset.codeSize,
+      };
+
+      card.querySelector('[data-role="preset-name"]').textContent = preset.name;
+      card.querySelector('[data-role="preset-tag"]').textContent = preset.tag;
+
+      Object.entries(values).forEach(([key, value]) => {
+        const control = card.querySelector(`[data-control="${key}"]`);
+        control.value = value;
+      });
+
+      preview.style.setProperty("--body-font", preset.bodyFont);
+      preview.style.setProperty("--heading-font", preset.headingFont);
+      preview.style.setProperty("--code-font", preset.codeFont);
+      preview.style.setProperty("--body-size", `${preset.bodySize}px`);
+      preview.style.setProperty("--heading-size", `${preset.headingSize}px`);
+      preview.style.setProperty("--code-size", `${preset.codeSize}px`);
+
+      card.querySelector('[data-value="body-size"]').textContent = `${preset.bodySize}px`;
+      card.querySelector('[data-value="heading-size"]').textContent = `${preset.headingSize}px`;
+      card.querySelector('[data-value="code-size"]').textContent = `${preset.codeSize}px`;
+    }
+
+    function bindCard(card) {
+      const preview = card.querySelector('[data-role="preview"]');
+
+      card.querySelectorAll("[data-control]").forEach((control) => {
+        control.addEventListener("input", () => {
+          const key = control.dataset.control;
+          const isSize = key.endsWith("-size");
+          const value = isSize ? `${control.value}px` : control.value;
+          preview.style.setProperty(`--${key}`, value);
+
+          if (isSize) {
+            card.querySelector(`[data-value="${key}"]`).textContent = value;
+          }
+        });
+      });
+    }
+
+    presets.forEach((preset) => {
+      const card = template.content.firstElementChild.cloneNode(true);
+      applyPreset(card, preset);
+      bindCard(card);
+      grid.appendChild(card);
+      cards.push({ card, preset });
+    });
+
+    document.getElementById("resetAll").addEventListener("click", () => {
+      cards.forEach(({ card, preset }) => applyPreset(card, preset));
+    });
+  </script>
+</body>
+</html>

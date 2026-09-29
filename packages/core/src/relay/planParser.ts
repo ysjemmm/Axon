@@ -123,15 +123,3 @@ export function nextExecutableTask(tasks: RelayTask[]): RelayTask | null {
   }
   return null;
 }
-
-/**
- * 计算当前一批可【并行】执行的任务：所有 pending 且依赖已满足的任务。
- * 编排器据此决定哪些任务可以同时派给子 Agent。
- */
-export function parallelExecutableTasks(tasks: RelayTask[]): RelayTask[] {
-  const doneIds = new Set(tasks.filter((t) => t.status === "completed").map((t) => t.id));
-  return tasks.filter((t) => {
-    if (t.status !== "pending") return false;
-    return !t.deps || t.deps.every((d) => doneIds.has(d));
-  });
-}

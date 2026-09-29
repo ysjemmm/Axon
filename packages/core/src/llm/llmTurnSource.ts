@@ -29,6 +29,8 @@ export interface LLMToolCallDraft {
 export interface LLMTurnRawResult {
   /** 本回合累计正文。 */
   content: string;
+  /** 本回合完整思考内容，供带 tool_calls 的 assistant 历史回传。 */
+  reasoningContent?: string;
   /** 本回合按到达顺序产出的 reasoning 增量序列。 */
   reasoningDeltas: ReasoningDeltaInput[];
   /** 本回合识别出的工具调用草案。 */

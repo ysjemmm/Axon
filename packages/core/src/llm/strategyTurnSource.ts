@@ -32,6 +32,8 @@ export interface StrategyTurnSourceOptions {
   signal?: AbortSignal;
   /** 是否请求模型思考（用户开关）。省略视为 true，见 RunTurnParams.think。 */
   think?: boolean;
+  /** 当前用户选择的实际思考强度值（如 high / xhigh） */
+  effort?: string;
   /** 模型声明的思考能力（provider 目录 / providers.json）。省略时策略回退启发式判定。 */
   modelSupportsThinking?: boolean;
   /** 模型声明的 cache_control 能力。省略时策略回退启发式判定。 */
@@ -88,6 +90,7 @@ export class StrategyTurnSource implements LLMTurnSource {
       signal: this.opts.signal,
       temperature: this.opts.temperature,
       think: this.opts.think,
+      effort: this.opts.effort,
       modelSupportsThinking: this.opts.modelSupportsThinking,
       modelSupportsCacheControl: this.opts.modelSupportsCacheControl,
       modelSupportsVision: this.opts.modelSupportsVision,
@@ -121,6 +124,8 @@ export class StrategyTurnSource implements LLMTurnSource {
     return {
       // 以 strategy 返回的完整 content 为准；流式累计仅在返回为空时兜底。
       content: turn.content || content,
+      // reasoning 必须随带 tool_calls 的 assistant 历史回传给下一轮（DeepSeek V4 硬要求）。
+      reasoningContent: turn.reasoningContent,
       reasoningDeltas,
       toolCalls,
       finishReason: turn.normalizedFinishReason,

@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Axon 字体选型对比</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,200..900;1,200..900&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@400;600;700&family=Noto+Serif:ital,wght@0,400;0,600;1,400&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap"
+    rel="stylesheet"
+  />
+
+  <!-- 不在 Google Fonts 上的两个候选：MiSans（小米）/ HarmonyOS Sans SC（华为）。
+       这两个包在 jsDelivr 上按 unicode-range 切片，CSS 内的 woff2 是相对路径，
+       所以必须整份 CSS 走 CDN 引；只把 CSS 存到本地会导致字体全部 404。 -->
+  <link
+    href="https://cdn.jsdelivr.net/npm/misans@5.0.0/lib/Normal/MiSansVF.min.css"
+    rel="stylesheet"
+  />
+  <link
+    href="https://cdn.jsdelivr.net/npm/harmonyos-sans-sc-webfont-splitted@1.1.0/dist/index.css"
+    rel="stylesheet"
+  />
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg: #f7f6f3;
+      --panel: #ffffff;
+      --ink: #23211e;
+      --ink-2: #6b6862;
+      --ink-3: #9c988f;
+      --line: rgba(0, 0, 0, 0.09);
+      --accent: #b7552f;
+      --code-bg: rgba(0, 0, 0, 0.045);
+      --ui-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Microsoft YaHei", "Noto Sans SC", sans-serif;
+      --mono-font: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+    }
+
+    html[data-theme="dark"] {
+      --bg: #1b1a18;
+      --panel: #232220;
+      --ink: #ecebe7;
+      --ink-2: #a8a49c;
+      --ink-3: #7b776f;
+      --line: rgba(255, 255, 255, 0.11);
+      --accent: #e08a5f;
+      --code-bg: rgba(255, 255, 255, 0.06);
+    }
+
+    body {
+      margin: 0;
+      padding: 0 0 80px;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--ui-font);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 32px;
+      background: color-mix(in srgb, var(--bg) 88%, transparent);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .topbar h1 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+
+    .topbar .sub {
+      margin-left: 10px;
+      font-size: 12px;
+      font-weight: 400;
+      color: var(--ink-3);
+    }
+
+    .btn {
+      padding: 6px 13px;
+      font: 500 12.5px/1 var(--ui-font);
+      color: var(--ink-2);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      cursor: pointer;
+    }
+
+    .btn:hover {
+      color: var(--ink);
+      border-color: var(--ink-3);
+    }
+
+    main {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 30px 32px 0;
+    }
+
+    .lead {
+      margin: 0 0 8px;
+      font-size: 13.5px;
+      line-height: 1.8;
+      color: var(--ink-2);
+    }
+
+    .status {
+      margin: 0 0 30px;
+      font: 400 12px/1.7 var(--mono-font);
+      color: var(--ink-3);
+    }
+
+    .group {
+      margin-bottom: 40px;
+    }
+
+    .group > h2 {
+      margin: 0 0 6px;
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .group > p {
+      margin: 0 0 16px;
+      font-size: 13px;
+      line-height: 1.75;
+      color: var(--ink-2);
+    }
+
+    .card {
+      margin-bottom: 12px;
+      padding: 20px 24px 22px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+    }
+
+    .card-head {
+      display: flex;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 16px;
+      padding-bottom: 11px;
+      border-bottom: 1px dashed var(--line);
+    }
+
+    .card-name {
+      font: 600 13px/1.4 var(--ui-font);
+    }
+
+    .card-note {
+      font: 400 12px/1.4 var(--ui-font);
+      color: var(--ink-3);
+    }
+
+    /* ── 样张基础排版：所有候选共用同一套尺度，只换 font-family ── */
+    .sample h3 {
+      margin: 0 0 12px;
+      font-size: 22px;
+      font-weight: 600;
+      line-height: 1.45;
+    }
+
+    .sample p {
+      margin: 0 0 12px;
+      font-size: 14px;
+      line-height: 1.75;
+    }
+
+    .sample ul {
+      margin: 0 0 12px;
+      padding-left: 22px;
+      font-size: 14px;
+      line-height: 1.75;
+    }
+
+    .sample li {
+      margin-bottom: 4px;
+    }
+
+    .sample code {
+      padding: 1px 5px;
+      font: 12.5px/1.6 var(--mono-font);
+      background: var(--code-bg);
+      border-radius: 4px;
+    }
+
+    .sample pre {
+      margin: 0;
+      padding: 12px 14px;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .sample pre code {
+      padding: 0;
+      font-size: 12.5px;
+      line-height: 1.65;
+      background: none;
+    }
+
+    /* ── 候选字体 ── */
+    .f-system {
+      font-family: var(--ui-font);
+    }
+
+    .f-srcserif,
+    .f-lora,
+    .f-crimson,
+    .f-notoserif {
+      font-family: var(--serif-latin), "Noto Serif SC", "Source Han Serif SC", serif;
+    }
+
+    .f-srcserif {
+      --serif-latin: "Source Serif 4";
+    }
+
+    .f-lora {
+      --serif-latin: "Lora";
+    }
+
+    .f-crimson {
+      --serif-latin: "Crimson Pro";
+    }
+
+    .f-notoserif {
+      --serif-latin: "Noto Serif";
+    }
+
+    .f-notosans {
+      font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif;
+    }
+
+    .f-misans {
+      font-family: "MiSans VF", "Microsoft YaHei", sans-serif;
+    }
+
+    .f-harmonyos {
+      font-family: "HarmonyOS Sans SC", "Microsoft YaHei", sans-serif;
+    }
+
+    /* 混合方案：标题衬线，正文走现代中文黑体 */
+    .f-mix {
+      font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif;
+    }
+
+    .f-mix h3 {
+      font-family: "Source Serif 4", "Noto Serif SC", serif;
+      font-size: 24px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="topbar">
+    <div>
+      <h1>Axon 字体选型对比<span class="sub">同一段样张，只换字体</span></h1>
+    </div>
+    <button class="btn" id="theme-btn">切换深色</button>
+  </div>
+
+  <main>
+    <p class="lead">
+      所有样张共用同一套字号与行高（正文 14px / 1.75），<strong>只有字体不同</strong>，
+      这样对比出来的差异才是字体本身的差异，而不是尺度的差异。
+      请重点看：汉字是否发虚、中英混排是否黏、以及整段读起来是"紧"还是"松"。
+    </p>
+    <p class="status" id="font-status">正在检测字体加载…</p>
+    <div id="groups"></div>
+  </main>
+
+  <!-- 样张片段：各候选复用同一份，保证对比公平 -->
+  <template id="tpl-head">
+    <h3>Why does Chinese look cramped? 中文正文为什么更「挤」</h3>
+  </template>
+
+  <template id="tpl-prose">
+    <p>
+      Chinese glyphs fill their em box far more than Latin letters do. 同样字号下，汉字看起来更大、更密，
+      行距不足时整段就显得局促。
+      这不是字号的问题，而是<strong>字面率</strong>与<strong>字距节奏</strong>的问题。
+    </p>
+    <ul>
+      <li>拉丁字体字面偏小、留白多，天然透气（humanist vs. grotesque 差别就在这里）；</li>
+      <li>中文字面接近满格，需要更大的行距来补偿；</li>
+      <li>中英混排时最明显，比如 <code>read_file</code> 这类标识符和汉字贴在一起。</li>
+    </ul>
+  </template>
+
+  <template id="tpl-code">
+    <pre><code>.axon-chat-prose {
+  font-size: 14px;
+  line-height: 1.75;
+}</code></pre>
+  </template>
+
+  <script>
+    const GROUPS = [
+      {
+        title: 'A · 标题：衬线候选',
+        desc: '拉丁衬线各有性格，中文统一落到思源宋体。看哪一支最像你想要的"编辑感"。',
+        variants: [
+          {
+            name: 'Source Serif 4',
+            cls: 'f-srcserif',
+            note: '笔画对比适中、骨架端正，最接近 Anthropic Serif 的调性',
+            parts: ['head'],
+          },
+          {
+            name: 'Lora',
+            cls: 'f-lora',
+            note: '笔触有轻微起伏、偏温暖，社区模仿 Claude 最常选的一支',
+            parts: ['head'],
+          },
+          {
+            name: 'Crimson Pro',
+            cls: 'f-crimson',
+            note: '书卷气最重，笔画更细、字面更小',
+            parts: ['head'],
+          },
+          {
+            name: 'Noto Serif + 思源宋体',
+            cls: 'f-notoserif',
+            note: '中英同源，摆在一起最不违和，但也最少惊喜',
+            parts: ['head'],
+          },
+        ],
+      },
+      {
+        title: 'B · 正文：中文字体候选',
+        desc: '拉丁固定为系统无衬线，只换中文。这才是"土"的真正来源——当前落到微软雅黑。',
+        variants: [
+          {
+            name: '现状：微软雅黑',
+            cls: 'f-system',
+            note: 'Windows 下当前的实际渲染效果',
+            parts: ['prose'],
+          },
+          {
+            name: '思源黑体 Noto Sans SC',
+            cls: 'f-notosans',
+            note: '字面匀、笔画收得干净，现代感明显强于雅黑',
+            parts: ['prose'],
+          },
+          {
+            name: 'MiSans（小米）',
+            cls: 'f-misans',
+            note: '观感最接近苹方：字面均匀、笔画端点干净',
+            parts: ['prose'],
+          },
+          {
+            name: 'HarmonyOS Sans SC（华为）',
+            cls: 'f-harmonyos',
+            note: '圆润、中宫偏松，同样接近苹方',
+            parts: ['prose'],
+          },
+          {
+            name: '思源宋体 Noto Serif SC',
+            cls: 'f-notoserif',
+            note: '中文也走衬线，整段立刻"书卷化"，但代码术语会有点跳',
+            parts: ['prose'],
+          },
+        ],
+      },
+      {
+        title: 'C · 整套效果（标题 + 正文 + 代码）',
+        desc: '字体从来不是单点决策，看组合起来的气质，以及和代码块搭不搭。',
+        variants: [
+          {
+            name: '全衬线：Source Serif 4 + 思源宋体',
+            cls: 'f-srcserif',
+            note: '最"编辑感"，但整屏衬线在 IDE 里可能偏重',
+            parts: ['head', 'prose', 'code'],
+          },
+          {
+            name: '全衬线：Lora + 思源宋体',
+            cls: 'f-lora',
+            note: '比上一版更暖、更松，代价是密度略低',
+            parts: ['head', 'prose', 'code'],
+          },
+          {
+            name: '混合：标题 Source Serif 4 + 正文思源黑体',
+            cls: 'f-mix',
+            note: '标题给出辨识度，正文保证长文可读性与代码亲和',
+            parts: ['head', 'prose', 'code'],
+          },
+        ],
+      },
+    ];
+
+    function buildSample(variant) {
+      const box = document.createElement('div');
+      box.className = 'sample ' + variant.cls;
+      variant.parts.forEach(function (part) {
+        const tpl = document.getElementById('tpl-' + part);
+        box.appendChild(tpl.content.cloneNode(true));
+      });
+      return box;
+    }
+
+    function render() {
+      const root = document.getElementById('groups');
+      GROUPS.forEach(function (group) {
+        const section = document.createElement('section');
+        section.className = 'group';
+
+        const h2 = document.createElement('h2');
+        h2.textContent = group.title;
+        section.appendChild(h2);
+
+        const desc = document.createElement('p');
+        desc.textContent = group.desc;
+        section.appendChild(desc);
+
+        group.variants.forEach(function (variant) {
+          const card = document.createElement('article');
+          card.className = 'card';
+
+          const head = document.createElement('div');
+          head.className = 'card-head';
+
+          const name = document.createElement('span');
+          name.className = 'card-name';
+          name.textContent = variant.name;
+          head.appendChild(name);
+
+          const note = document.createElement('span');
+          note.className = 'card-note';
+          note.textContent = variant.note;
+          head.appendChild(note);
+
+          card.appendChild(head);
+          card.appendChild(buildSample(variant));
+          section.appendChild(card);
+        });
+
+        root.appendChild(section);
+      });
+    }
+
+    /* 把「页面上每个候选字体是否真的加载成功」直接摊开显示，
+       避免把 CDN 失败误判成"字体本身不好看" */
+    function reportFontStatus() {
+      const el = document.getElementById('font-status');
+      if (!document.fonts || !document.fonts.check) {
+        el.textContent = '当前浏览器不支持字体加载检测';
+        return;
+      }
+      const probes = [
+        'Source Serif 4',
+        'Lora',
+        'Crimson Pro',
+        'Noto Serif',
+        'Noto Serif SC',
+        'Noto Sans SC',
+        'MiSans VF',
+        'HarmonyOS Sans SC',
+      ];
+      /* 必须先显式 load 再判定。只等 fonts.ready 不够：它可能在 CDN 的 CSS 解析完成前
+         就 resolve，导致 check() 报假阴性（曾出现 Source Serif 4 从 ✓ 翻成 ✗ 的自相矛盾）。 */
+      Promise.all(
+        probes.map(function (family) {
+          return document.fonts
+            .load('400 16px "' + family + '"', '中文字体测试Abc')
+            .catch(function () {});
+        })
+      ).then(function () {
+        const lines = probes.map(function (family) {
+          const ok = document.fonts.check('16px "' + family + '"');
+          return (ok ? '✓ ' : '✗ ') + family;
+        });
+        el.textContent =
+          '字体加载状态（✗ 说明 CDN 没取到，该卡片显示的就不是这个字体）  ' +
+          lines.join('   ');
+      });
+    }
+
+    document.getElementById('theme-btn').addEventListener('click', function () {
+      const html = document.documentElement;
+      const dark = html.getAttribute('data-theme') === 'dark';
+      html.setAttribute('data-theme', dark ? 'light' : 'dark');
+      this.textContent = dark ? '切换深色' : '切换浅色';
+    });
+
+    render();
+    reportFontStatus();
+  </script>
+</body>
+</html>

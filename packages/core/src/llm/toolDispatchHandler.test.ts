@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { DefaultToolDispatchHandler } from "./toolDispatchHandler.js";
+import { DefaultToolDispatchHandler, planToolDispatch } from "./toolDispatchHandler.js";
 import type { ToolExecutor, ToolExecuteRequest, ToolExecuteResult } from "./toolExecutor.js";
 import type { ToolDispatchHandlerInput } from "./toolDispatchHandlerContract.js";
 import type { ToolEvent } from "./toolEventModel.js";
 import type { ToolGateDecider, ToolGateDecision } from "./toolGateDecider.js";
 
 /** 构造一个最小工具草案（planned 阶段的 ToolEvent，仅用于测试输入）。 */
-function draft(callId: string, toolName: string, parsedArgs?: Record<string, unknown>): ToolEvent {
+function draft(callId: string, toolName: string, parsedArgs?: Record<string, unknown>, toolKind: ToolEvent["toolKind"] = "read"): ToolEvent {
   return {
     type: "tool.phase",
     ts: "2025-01-01T00:00:00.000Z",
@@ -16,7 +16,7 @@ function draft(callId: string, toolName: string, parsedArgs?: Record<string, unk
     stage: "runtime",
     callId,
     toolName,
-    toolKind: "read",
+    toolKind,
     phase: "planned",
     parsedArgs,
   } as ToolEvent;
@@ -111,6 +111,47 @@ describe("DefaultToolDispatchHandler", () => {
     expect(out.toolContexts).toHaveLength(2);
     // 每个工具各产出 plan/execute/终态 三事件
     expect(out.runtimeEvents).toHaveLength(6);
+  });
+
+  it("同一批命令工具并行启动：慢命令不会阻塞后续命令", async () => {
+    let releaseSlow!: () => void;
+    const slow = new Promise<void>((resolve) => { releaseSlow = resolve; });
+    const started: string[] = [];
+    const executor: ToolExecutor = {
+      async execute(req): Promise<ToolExecuteResult> {
+        started.push(req.callId);
+        if (req.callId === "slow") await slow;
+        return { ok: true, result: req.callId };
+      },
+    };
+    const h = new DefaultToolDispatchHandler(executor);
+    const pending = h.handle(makeInput([
+      draft("slow", "execute_command", { command: "long" }, "command"),
+      draft("fast", "execute_command", { command: "quick" }, "command"),
+    ]));
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(started).toEqual(["slow", "fast"]);
+    releaseSlow();
+    const out = await pending;
+    expect(out.stage).toBe("tool_completed");
+    expect(out.toolContexts).toHaveLength(2);
+  });
+
+  it("调度依赖：并发命令互不等待，后续串行工具等待命令批次", () => {
+    const c1 = draft("c1", "execute_command", {}, "command");
+    const c2 = draft("c2", "execute_command", {}, "command");
+    const read = draft("r1", "read_file", {}, "read");
+    const edit = draft("e1", "str_replace", {}, "edit");
+    const nextCommand = draft("c3", "execute_command", {}, "command");
+
+    const plan = planToolDispatch([c1, c2, read, edit, nextCommand]);
+
+    expect(plan.waitingFor.get("c1")).toEqual([]);
+    expect(plan.waitingFor.get("c2")).toEqual([]);
+    expect(plan.waitingFor.get("r1")).toEqual(["c1", "c2"]);
+    expect(plan.waitingFor.get("e1")).toEqual(["c1", "c2", "r1"]);
+    expect(plan.waitingFor.get("c3")).toEqual(["r1", "e1"]);
   });
 
   describe("门控决策器（方案 B）", () => {

@@ -66,6 +66,8 @@ function flattenModels(providers: ResolvedProvider[]) {
           // web 是独立工程、引用不到 @axon/core，若下发原始声明前端就得自己再抄一份
           // 启发式，两份必然漂移。判定只留在 core 一处。
           thinking: supportsThinking(m.id, m.thinking),
+          effortLevels: m.effortLevels,
+          defaultEffort: m.defaultEffort,
         })),
     );
 }
@@ -140,6 +142,23 @@ export function registerProviderRoutes(app: Express, deps: ProviderRouterDeps): 
     }
   });
 
+  /**
+   * 移除「纯环境变量来源」的 provider：改它的真实来源（.env），而不是 providers.json。
+   * 路径里的 env 是固定段，与上面的 :level 不会混淆（段数不同）。
+   */
+  app.delete("/api/providers/env/:name", async (req, res) => {
+    try {
+      const name = decodeURIComponent(req.params.name);
+      const ws = queryStr(req, "workspace");
+      const result = await service.removeEnvProvider(name);
+      await refresh(ws);
+      // fromSettings 是 IDE 形态才有的概念（VS Code 设置里的 provider）；服务端恒为 false，
+      // 保持与扩展端同一响应形状，前端才能共用一份代码。
+      res.json({ ok: true, removed: result.removed, file: result.files.join(", "), fromSettings: false });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
   /** 在用户级 / 工作区级之间迁移一个自定义 provider（迁移后源层级删除） */
   app.post("/api/providers/move", async (req, res) => {
     try {

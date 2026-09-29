@@ -36,7 +36,7 @@ describe("resolveToolKind", () => {
 
   it("编排类归为 orchestration", () => {
     expect(resolveToolKind(ToolName.DelegateTask)).toBe("orchestration");
-    expect(resolveToolKind(ToolName.ParallelResearch)).toBe("orchestration");
+    expect(resolveToolKind(ToolName.RelayCreate)).toBe("orchestration");
   });
 
   it("未知工具名（如 MCP 动态工具）回退到 other", () => {

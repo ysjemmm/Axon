@@ -11,7 +11,7 @@
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { RESERVED_PROVIDER_NAMES, assertUniqueModelIds, type ProviderConfigFile, type ProviderModel, type RawProviderEntry } from "@axon/core";
+import { RESERVED_PROVIDER_NAMES, assertUniqueModelIds, providerEnvKeys, stripProviderEnvLines, type ProviderConfigFile, type ProviderModel, type RawProviderEntry } from "@axon/core";
 
 export type ProviderLevel = "user" | "workspace";
 
@@ -80,6 +80,43 @@ export class ProviderConfigService {
     if (!config.providers || !(name in config.providers)) throw new Error(`provider 不存在：${name}`);
     delete config.providers[name];
     await this.write(level, config, workspace);
+  }
+
+  /**
+   * 移除「纯环境变量来源」的 provider。
+   *
+   * 为什么必须单独一条：provider 有三个来源（内置 / providers.json / 纯环境变量），
+   * 面板把三类混在一起展示；env 来源的根本不在 providers.json 里，
+   * 走 removeProvider 只会报「provider 不存在」——这正是"删不掉、重启又回来"的原因。
+   * 要真正移除它，必须改它的真实来源。
+   *
+   * 候选文件两处：用户共享的 ~/.axon/.env（与 IDE 形态同一份），
+   * 以及服务端启动时 dotenv 读的 <cwd>/.env。逐行摘除，注释与排版原样保留。
+   */
+  async removeEnvProvider(name: string): Promise<{ removed: string[]; files: string[] }> {
+    const key = name.trim();
+    if (!key) throw new Error("provider 名称不能为空");
+    const candidates = [join(homedir(), ".axon", ".env"), join(process.cwd(), ".env")];
+    const removed: string[] = [];
+    const files: string[] = [];
+    for (const file of candidates) {
+      let text: string;
+      try {
+        text = await fs.readFile(file, "utf8");
+      } catch {
+        continue; // 该文件不存在，跳过
+      }
+      const hit = stripProviderEnvLines(text, key);
+      if (hit.removed.length === 0) continue;
+      await fs.mkdir(dirname(file), { recursive: true });
+      await fs.writeFile(file, hit.text, "utf8");
+      removed.push(...hit.removed);
+      files.push(file);
+    }
+    // 同步清掉进程内 env：core 每次 resolve 都读 process.env，
+    // 删掉后当前进程立即不再解析出它（否则要等下次重启读 .env 才生效）。
+    for (const k of providerEnvKeys(key)) delete process.env[k];
+    return { removed, files };
   }
 
   /** 在用户级 / 工作区级之间迁移一个自定义 provider（迁移后源层级删除） */

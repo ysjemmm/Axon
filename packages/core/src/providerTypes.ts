@@ -21,6 +21,16 @@ export type ProviderProtocol = "chat" | "responses" | "anthropic";
 /** 认证头类型：bearer = Authorization: Bearer <key>（默认）；x-api-key = x-api-key: <key>（Anthropic 等） */
 export type ApiKeyHeader = "bearer" | "x-api-key";
 
+/**
+ * 模型可选的思考强度档位。
+ * label 只用于 UI（如「高级」「Extra」）；value 是原样发给 provider 的协议值（如 high / xhigh）。
+ * 不做内置推断：中转站可能接受任意值，支持哪些档位由用户在 Provider 模型配置里明确声明。
+ */
+export interface ModelEffortLevel {
+  label: string;
+  value: string;
+}
+
 /** Axon 官方 provider：出厂内置 Claude 模型目录，apiKey 默认空，由官方分发或后续登录系统注入 */
 export const AXON_PROVIDER = "axon";
 
@@ -46,6 +56,10 @@ export interface ProviderModel {
    * - false：不请求。用于名字看着像推理模型、但该端点实际不支持的情况。
    */
   thinking?: boolean;
+  /** 可选思考强度档位。未配置或空数组时，输入区不显示强度选择器。 */
+  effortLevels?: ModelEffortLevel[];
+  /** 默认思考强度实际值；必须是 effortLevels 中某一项的 value。缺省表示默认关闭。 */
+  defaultEffort?: string;
   /**
    * 是否支持 OpenAI 兼容的 prompt caching（cache_control / ephemeral breakpoints）。
    *

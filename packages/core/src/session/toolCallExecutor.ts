@@ -29,7 +29,7 @@ import {
 import { resolveToolDispatchRoute } from "./toolDispatchRouter.js";
 import { resolveInWorkspaces } from "../tools/search.js";
 import { MCP_TOOL_PREFIX } from "../mcp/types.js";
-import { DefaultToolDispatchHandler } from "../llm/toolDispatchHandler.js";
+import { DefaultToolDispatchHandler, planToolDispatch } from "../llm/toolDispatchHandler.js";
 import { resolveToolKind } from "../llm/toolKindResolver.js";
 import type { ToolExecutor } from "../llm/toolExecutor.js";
 import type { ToolEvent } from "../llm/toolEventModel.js";
@@ -162,12 +162,16 @@ export class ToolCallExecutor {
     if (!verdict.allowed) {
       result = verdict.message || "调用被拦截。";
       status = "error";
-    } else if (route === "delegate_task" || route === "parallel_research" || route === "parallel_execute") {
+    } else if (route === "delegate_task") {
       const out = await this.s.delegatedToolExecutor.execute({ toolName, toolArgs, toolCallId });
       result = out.result;
       status = out.status;
     } else if (route === "relay") {
       const out = await this.s.relayToolExecutor.execute({ toolName, toolArgs, meta });
+      result = out.result;
+      status = out.status;
+    } else if (route === "ask_user") {
+      const out = await this.s.askUserToolExecutor.execute({ toolName, toolArgs, toolCallId });
       result = out.result;
       status = out.status;
     } else if (route === "command") {
@@ -310,6 +314,20 @@ export class ToolCallExecutor {
       toolKind: resolveToolKind(tc.name),
       rawArgsText: tc.arguments,
     }));
+    const { waitingFor } = planToolDispatch(toolDrafts);
+    for (const tc of toolCalls) {
+      const dependencyIds = waitingFor.get(tc.id) || [];
+      if (dependencyIds.length === 0) continue;
+      this.s.send("tool_call", {
+        id: tc.id,
+        name: tc.name,
+        args: {},
+        cwd: this.s.cwd,
+        status: ToolCallStatus.Queued,
+        waitingFor: dependencyIds.map((id) => ({ id, name: toolCalls.find((item) => item.id === id)?.name || "" })),
+        ...this.s.mcpMetaFor(tc.name),
+      });
+    }
     try {
       const out = await handler.handle({
         requestId: `req-${this.s.turnCount}`,

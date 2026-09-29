@@ -17,17 +17,81 @@ export class ToolDefBuilder {
 
   /** 把 OpenAI Chat 工具定义转成策略层的 ToolDef（主 agent 额外带 delegate_task + relay 工具集） */
   getToolDefs(): ToolDef[] {
-    // Quest 模式：禁用所有工具；仅在开启联网时放行 web_search / web_fetch
+    // Quest 模式：不给读写/命令等「动仓库」的工具；但 ask_user（选项问答）是纯交互、不碰仓库，
+    // 问答场景同样需要它（让 AI 抛选项、用户点选作答），故始终放行；联网工具按开关放行。
     if (this.s.mode === "quest") {
-      if (!this.s.questWebSearch) return [];
-      const base = getToolDefinitions() as unknown as ToolDef[];
-      return base.filter((t) => {
-        const name = (t as { function?: { name?: string } }).function?.name;
-        return name === "web_search" || name === "web_fetch";
-      });
+      const tools: ToolDef[] = [this.getAskUserToolDef()];
+      if (this.s.questWebSearch) {
+        const base = getToolDefinitions() as unknown as ToolDef[];
+        tools.push(
+          ...base.filter((t) => {
+            const name = (t as { function?: { name?: string } }).function?.name;
+            return name === "web_search" || name === "web_fetch";
+          }),
+        );
+      }
+      return tools;
     }
     const base = getToolDefinitions() as unknown as ToolDef[];
-    return [...base, this.getDelegateToolDef(), ...this.getRelayToolDefs(), ...this.s.mcpToolDefsCache];
+    return [...base, this.getDelegateToolDef(), this.getAskUserToolDef(), ...this.getRelayToolDefs(), ...this.s.mcpToolDefsCache];
+  }
+
+  /**
+   * ask_user 工具定义：主 Agent 专用，把"需要用户拍板的选择"变成可点选的问答卡片。
+   * 子 Agent 拿不到用户（会死等），故不放通用工具集，只在这里注入。
+   */
+  private getAskUserToolDef(): ToolDef {
+    return {
+      type: "function",
+      function: {
+        name: "ask_user",
+        description:
+          "当你需要用户在若干方案/选项之间做选择时调用（单选或多选），用户在界面上点选作答，" +
+          "结果会作为本工具的返回值给你。\n\n" +
+          "【什么时候用】你本来打算写一段「你倾向于 A 还是 B？」然后停下等用户回复——这类场景改用它，" +
+          "用户点一下即可，比手打更快也更准确。\n" +
+          "- 让用户在几个实现方案里挑一个 → multi=false\n" +
+          "- 让用户勾选需要包含的可选步骤/内容 → multi=true\n\n" +
+          "【可以一次问多个】questions 是数组，一次可问 1~4 个问题；用户在同一个卡片里用「第 n / N 题」逐题作答，" +
+          "比一轮一轮地问更省事。若几个问题彼此独立、都需要用户拍板，就放进同一个 questions 里。\n\n" +
+          "【不要用在】需要用户提供自由文本、路径、代码这类没有固定选项的输入——那种情况直接在回复里提问即可。\n\n" +
+          "【格式要求】每个问题最多 4 个选项（超出会被截断），每个选项给一个简短 label；" +
+          "必要时加一句 description 说明差异或代价。不要自己写「其他/以上都不是」这类选项——" +
+          "界面会自动提供「其他（自己输入）」入口（除非你显式把 allowOther 设为 false）。" +
+          "用户作答后你会收到「用户的选择：…」（逐题列出），据此继续，不要重复追问。",
+        parameters: {
+          type: "object",
+          properties: {
+            questions: {
+              type: "array",
+              description: "要问用户的问题列表（1~4 个）",
+              items: {
+                type: "object",
+                properties: {
+                  question: { type: "string", description: "问题（简短、明确）" },
+                  options: {
+                    type: "array",
+                    description: "选项列表（2~4 个，最多 4 个）。不要自己加「其他」选项，界面会自动提供",
+                    items: {
+                      type: "object",
+                      properties: {
+                        label: { type: "string", description: "选项标题（简短，显示在选项行上）" },
+                        description: { type: "string", description: "可选：一句话说明该选项的差异/代价/适用场景" },
+                      },
+                      required: ["label"],
+                    },
+                  },
+                  multi: { type: "boolean", description: "true=多选（checkbox），false=单选（radio）。默认 false" },
+                  allowOther: { type: "boolean", description: "是否允许用户自己输入「其他」答案。默认 true" },
+                },
+                required: ["question", "options"],
+              },
+            },
+          },
+          required: ["questions"],
+        },
+      },
+    };
   }
 
   /**
@@ -88,7 +152,7 @@ export class ToolDefBuilder {
             "为一个【大任务/复杂需求】启动 Relay 长任务工作流。\n\n" +
             "【何时用】大任务/多文件改动/重构/搭建子系统 → 先建工作流再推进。一两步小任务直接做。\n\n" +
             "【五阶段】brainstorm（需求）→ design（设计）→ plan（计划）→ executing（执行）→ done：\n\n" +
-            "1. brainstorm：澄清目标/范围/验收标准（苏格拉底式追问），可用 parallel_research 并行调研 → relay_save_doc(phase=\"brainstorm\") 写 requirements.md，分段呈现确认。\n" +
+            "1. brainstorm：澄清目标/范围/验收标准（苏格拉底式追问）→ relay_save_doc(phase=\"brainstorm\") 写 requirements.md，分段呈现确认。\n" +
             "2. design（用户确认后 relay_advance 推进）：架构/模块划分/数据流 → relay_save_doc(phase=\"design\") 写 design.md。\n" +
             "3. plan：拆成小颗粒可独立验证任务清单（2-5min/项），relay_save_doc(phase=\"plan\") 写 plan.md【必须用复选框格式】。\n" +
             "   拆任务铁律：按纵向功能单元拆（导航栏/表单/图表等），严禁按\"HTML一个任务、CSS一个任务\"横切。\n" +
@@ -98,7 +162,7 @@ export class ToolDefBuilder {
             "- auto：全自动推进，不等每阶段确认。\n\n" +
             "【评审门】只有 critical 级别问题才阻断任务完成，major/minor 作为建议不阻断。\n" +
             "【连续执行】进入 executing 后连续推进所有任务，仅评审打回/环境阻塞/全部完成时停下。\n" +
-            "【parallel_research】并发布多个只读子 Agent 调研互不依赖的子问题。\n\n" +
+            "\n" +
             "【模型选择】默认所有阶段和评审都用当前会话模型。仅当用户明确提出\"评审用更强的模型\"" +
             "\"执行阶段换个便宜模型\"等诉求时，才通过 modelOverrides 参数为对应环节指定模型，不要主动询问。",
           parameters: {
@@ -206,74 +270,6 @@ export class ToolDefBuilder {
               taskId: { type: "string", description: "刚完成实现的任务编号" },
             },
             required: ["id", "taskId"],
-          },
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "parallel_research",
-          description:
-            "把一个大调研拆成若干【相互独立】的子问题，同时派发多个【只读】子 Agent 并发探索，最后汇总结论。\n\n" +
-            "【何时用】需要在大范围内并行检索/调研、且各子问题互不依赖时（如\"分别摸清前端路由、后端鉴权、数据库schema三块的现状\"）。" +
-            "尤其适合 Relay 的 brainstorm/design 阶段快速摸清现状。\n\n" +
-            "【限制】子 Agent 只读：只能读文件/搜索/列目录/联网，不能改文件或执行命令。需要动手改代码用 delegate_task 或自己做。\n\n" +
-            "【不要用】子问题之间有依赖、需要顺序推进的，或只有一个调研点的（那直接自己查或用 delegate_task）。",
-          parameters: {
-            type: "object",
-            properties: {
-              intent: { type: "string", description: "一句话说明本次并行调研的总目的，展示给用户" },
-              tasks: {
-                type: "array",
-                description: "并行调研的子任务列表（2~5 个为宜，每个互相独立）",
-                items: {
-                  type: "object",
-                  properties: {
-                    intent: { type: "string", description: "该子任务的一句话目的" },
-                    prompt: { type: "string", description: "交给只读子 Agent 的完整调研描述，必须自包含" },
-                  },
-                  required: ["intent", "prompt"],
-                },
-              },
-            },
-            required: ["intent", "tasks"],
-          },
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "parallel_execute",
-          description:
-            "把一个大实现任务拆成若干【互不依赖、文件不重叠】的子任务，同时派发多个子 Agent 并行执行，各自改代码。\n\n" +
-            "【何时用】需求可以明确拆成多个互不依赖的修改（如\"前端加登录页 + 后端加 auth API + 写集成测试\"），" +
-            "且各子任务操作的文件不重叠时。适合 Relay 的 executing 阶段加速并行任务。\n\n" +
-            "【关键约束】每个子任务必须声明 fileScope（允许修改的文件/目录 glob），不同子任务的 fileScope 不能重叠。" +
-            "越界写入会被系统拦截。\n\n" +
-            "【不要用】子任务之间有代码依赖（如 B 要 import A 的产出）、或文件修改范围有交叉的，用串行 delegate_task。",
-          parameters: {
-            type: "object",
-            properties: {
-              intent: { type: "string", description: "一句话说明本次并行执行的总目标，展示给用户" },
-              tasks: {
-                type: "array",
-                description: "并行执行的子任务列表（2~5 个为宜，每个文件作用域互不重叠）",
-                items: {
-                  type: "object",
-                  properties: {
-                    intent: { type: "string", description: "该子任务的一句话目的" },
-                    prompt: { type: "string", description: "交给子 Agent 的完整实现指令，必须自包含（含背景、目标、验收标准）" },
-                    fileScope: {
-                      type: "array",
-                      description: "允许该子 Agent 修改的文件/目录 glob 列表（如 [\"src/pages/login/**\", \"src/components/LoginForm.tsx\"]）",
-                      items: { type: "string" },
-                    },
-                  },
-                  required: ["intent", "prompt", "fileScope"],
-                },
-              },
-            },
-            required: ["intent", "tasks"],
           },
         },
       },

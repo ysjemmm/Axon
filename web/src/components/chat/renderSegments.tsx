@@ -8,7 +8,7 @@
  */
 
 import { useState, useRef, useEffect, type ReactNode } from "react";
-import { Loader2, Boxes, ListChecks, ChevronRight, ChevronDown, Check, X, Bot, Clock } from "lucide-react";
+import { Loader2, Boxes, ListChecks, ChevronRight, ChevronDown, Check, X, Bot, Clock, BookOpen } from "lucide-react";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import {
   ToolCallItem, SearchGroupItem, ReadFileGroupItem, EditGroupItem,
@@ -16,7 +16,7 @@ import {
   exploreDisplayText, disambiguatePaths, toLineNumber, isToolInFlight,
   type ToolStatus, type SearchGroupData, type ReadFileGroupData, type EditGroupData,
 } from "@/components/ToolCallItem";
-import type { Segment, ToolSegment, SubAgentSegment } from "./types";
+import type { Segment, ToolSegment, SubAgentSegment, WikiRecallSegment } from "./types";
 import { resolveQueuedWaitingIds } from "./toolCardPhase";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { RetryBlock } from "./RetryBlock";
@@ -51,6 +51,53 @@ export function SkillBadgeCard({ skills, pending, queuedOnly }: { skills: string
       {names.map((n) => (
         <span key={n} className="px-1.5 py-0.5 rounded bg-primary/10 text-xs font-mono font-medium text-primary">{n}</span>
       ))}
+    </div>
+  );
+}
+
+/**
+ * 记忆召回卡片 —— 本轮把哪些项目 Wiki 页面注入了上下文。
+ *
+ * 只在召回集合【变化】时出现（首次 / 页面增删 / 某页转陈旧），稳定期完全静默，
+ * 因此「它出现」本身就是信号：记忆变了，值得看一眼 —— 而不是每轮都刷的噪音。
+ * 这与侧栏徽标只在有待复核页时才亮，是同一条原则。
+ *
+ * 用彩色而非灰底：它交代的是「AI 手里有哪些材料」，属于需要被注意的上下文，
+ * 而不是可以略过的过程细节。
+ */
+export function WikiRecallCard({ seg }: { seg: WikiRecallSegment }) {
+  const [expanded, setExpanded] = useState(false);
+  const staleCount = seg.pages.filter((p) => p.stale).length;
+  const omitted = seg.total - seg.pages.length;
+  return (
+    <div className="my-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 overflow-hidden">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center gap-2 w-full py-1.5 px-2.5 text-xs text-left hover:bg-emerald-500/10 transition-colors"
+      >
+        <BookOpen className="w-3.5 h-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+        <span className="font-medium text-foreground shrink-0">记忆召回</span>
+        <span className="text-muted-foreground shrink-0">项目 Wiki {seg.total} 页</span>
+        {staleCount > 0 && (
+          <span className="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-400">
+            {staleCount} 页待复核
+          </span>
+        )}
+        {omitted > 0 && (
+          <span className="shrink-0 text-[10px] text-muted-foreground/70">另有 {omitted} 页未注入</span>
+        )}
+        <ChevronRight className={`w-3.5 h-3.5 shrink-0 ml-auto text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`} />
+      </button>
+      {expanded && (
+        <div className="border-t border-emerald-500/20 px-2.5 py-1.5 space-y-0.5">
+          {seg.pages.map((p) => (
+            <div key={p.title} className="flex items-center gap-1.5 text-xs">
+              <span className={p.stale ? "shrink-0 text-amber-500" : "shrink-0 text-emerald-600/60"}>{p.stale ? "⚠️" : "•"}</span>
+              <span className={p.stale ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"}>{p.title}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -130,20 +177,31 @@ export function RelayProgressCard({ steps, pending, queuedOnly }: { steps: { nam
  */
 export function SubAgentCard({ seg }: { seg: SubAgentSegment }) {
   const [expanded, setExpanded] = useState(false);
-  // 折叠态摘要区自动触底
   const summaryRef = useRef<HTMLDivElement>(null);
+  // 折叠态摘要区是否"贴底"。
+  // 只有用户本来就在底部时才自动跟随新内容；用户一旦往上滚，就不该再把他拽回去。
+  // 原写法是无依赖数组的 effect —— 每次渲染都无条件 `scrollTop = scrollHeight`，
+  // 而流式期间每帧都在渲染，于是视口被反复拉回底部，滚动条实际上滚不动（"被吸住"）。
+  const summaryStickRef = useRef(true);
   useEffect(() => {
     const el = summaryRef.current;
-    if (el && !expanded) {
+    if (!el) return;
+    const onScroll = () => {
+      // 8px 容差：行高/亚像素误差下也算"在底部"
+      summaryStickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 8;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [expanded]); // 摘要区在折叠时才存在，展开会卸载它，故按 expanded 重新挂监听
+  useEffect(() => {
+    const el = summaryRef.current;
+    if (el && !expanded && summaryStickRef.current) {
       el.scrollTop = el.scrollHeight;
     }
   });
 
   const running = seg.status === "running";
   const verb = running ? "Invoking" : "Invoked";
-
-  // 子 agent 最终结论（后端 sub_agent_end 明确返回）
-  const conclusion = !running ? seg.conclusion : null;
 
   return (
     <div className="my-2 rounded-lg border border-border bg-muted/20 overflow-hidden">
@@ -165,29 +223,40 @@ export function SubAgentCard({ seg }: { seg: SubAgentSegment }) {
         )}
         <span className="text-muted-foreground truncate">{seg.intent}</span>
       </button>
-      {/* 折叠态动态摘要：执行中展示最新工具/文字，收尾展示过渡提示，完成展示结论 */}
+      {/* 折叠态动态摘要：执行中展示最新工具/文字；完成后只给一句"已完成"。
+          刻意不把子 Agent 的结论正文塞进来——那是给主 Agent 的交付物，用户不必在折叠卡里再读一遍
+          （想看过程或内容，点开卡片即可）。 */}
       {!expanded && (
         <div ref={summaryRef} className="border-t border-border/50 px-2.5 py-1.5 max-h-40 overflow-y-auto [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-transparent [&::-webkit-scrollbar-track]:bg-transparent [&:hover::-webkit-scrollbar-thumb]:bg-muted-foreground/30">
-          {conclusion ? (
-            <MarkdownRenderer content={conclusion} />
-          ) : running ? (
+          {running ? (
             (() => {
               const visible = seg.inner.filter((s) => !(s.type === "tool" && (s as ToolSegment).hidden));
               const last = visible[visible.length - 1];
               if (last?.type === "tool") {
-                // 执行中：展示最近一次工具卡片
-                return renderSegments([last]);
+                // 只有"还在跑"的工具卡才配当最新活动。已跑完的（如 apply_patch）说明子 Agent
+                // 正在整理结论，继续挂着它会让用户看到"应用补丁中…"迟迟不动。
+                const st = (last as ToolSegment).status;
+                if (st === "queued" || st === "pending") return renderSegments([last]);
               }
               if (last?.type === "text" && seg.innerStreaming) {
                 // 子 agent 正在输出文字（如分析过程）
-                return <MarkdownRenderer content={last.content} />;
+                return <MarkdownRenderer content={last.content} streaming />;
               }
               if (visible.length > 0) {
-                // 收尾过渡态：工具已执行完，子 agent 正在整理结论准备返回
+                // ⚠️ 这里不能写"正在汇总分析结论，准备返回结果"。
+                //
+                // 子 Agent 是连续多步执行的：每一步工具跑完之后、下一步开始之前，最后一段都是"已完成的工具卡"，
+                // 于是这个分支会在**整个执行过程中反复命中**——文案一直宣称"准备返回结果"，
+                // 而子 Agent 其实还在正常干活（用户报的正是"不是正常执行中吗，怎么是返回结论了"）。
+                //
+                // 原注释的假设是"已跑完的工具（如 apply_patch）说明子 Agent 正在整理结论"，这个假设是错的：
+                // 跑完一个工具恰恰说明后面多半还有下一步。数据结构里也没有"即将返回"的真实信号
+                // （SubAgentSegment 只有 status: running/done，外加 innerStreaming），
+                // 所以这里只能给一句对所有中间态都成立的话——不猜它处在哪个阶段。
                 return (
                   <div className="flex items-center gap-1.5">
                     <Loader2 className="w-3 h-3 animate-spin shrink-0 text-muted-foreground" />
-                    <span className="text-xs text-muted-foreground">正在汇总分析结论，准备返回结果...</span>
+                    <span className="text-xs text-muted-foreground">正在继续执行...</span>
                   </div>
                 );
               }
@@ -199,7 +268,12 @@ export function SubAgentCard({ seg }: { seg: SubAgentSegment }) {
                 </div>
               );
             })()
-          ) : null}
+          ) : (
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Check className="w-3.5 h-3.5 shrink-0 text-primary" />
+              <span>子 Agent 已执行完成，AI 已获悉结论</span>
+            </div>
+          )}
         </div>
       )}
       {/* 展开区 */}
@@ -248,9 +322,16 @@ export function renderSegments(
   const nodes: ReactNode[] = [];
   let i = 0;
 
-  // 「排队中」vs「生成中」的判定（判定规则与其理由见 toolCardPhase.ts）。
+  // 「待执行」vs「生成中」的判定（判定规则与其理由见 toolCardPhase.ts）。
   // 抽成纯函数是因为它不该藏在这个几百行的渲染函数里——它是可独立验证的协议推断逻辑。
   const queuedWaitingIds = resolveQueuedWaitingIds(segments);
+  const toolStatusById = new Map(
+    segments.filter((item): item is ToolSegment => item.type === "tool").map((item) => [item.id, item.status]),
+  );
+  const activeWaitingFor = (seg: ToolSegment) => seg.waitingFor?.filter((item) => {
+    const status = toolStatusById.get(item.id);
+    return status === "queued" || status === "pending";
+  });
 
   // turn 级文件名消歧：收集本轮所有编辑过的文件完整路径，统一算一份"路径→展示名"映射，
   // 让分散在多张编辑卡片里的同名文件（如多个 SKILL.md）也能补路径区分，而不是各自只显示文件名。
@@ -298,16 +379,21 @@ export function renderSegments(
         i++;
         continue;
       }
-      if (streaming && isLast) {
-        nodes.push(
-          <div key={`text-${i}`} className="relative">
-            <MarkdownRenderer content={seg.content} />
-            <StreamingCursor />
-          </div>
-        );
-      } else if (seg.content.trim()) {
-        nodes.push(<MarkdownRenderer key={`text-${i}`} content={seg.content} />);
-      }
+      // ⚠️ 下面两个分支必须渲染**同一种元素类型**：只允许差在 streaming 与光标上。
+      // 历史上是一个套 <div class="relative">、另一个直接是裸 MarkdownRenderer —— React 对
+      // 「同 key、不同 type」的处理是**卸载 + 重挂载**，于是"回复完成"那一帧整段文本被 remount：
+      // 重跑 computeHtml + hljs，而由 DOM 手术（hydrateMermaid/hydrateSvg 的 pre.replaceWith）插入的
+      // 已 hydrate 图表随之丢失，要等缓存恢复才回来 —— 用户看到的就是"回复完白屏刷新一下"。
+      // 实测（真实组件 + 逐帧 MutationObserver）：streaming 翻 false 后 6.4ms 记录到
+      // removedNodes=[div.relative]、addedNodes=[div.axon-chat-prose]，prose 节点 id 由 1 跳到 134。
+      // StreamingCursor 在非流式时本就返回 null，所以保留同一个 wrapper 即可，代价仅是多一层 div.relative。
+      nodes.push(
+        <div key={`text-${i}`} className="relative">
+          {/* 整条消息仍在流式时传 streaming：增强渲染（svg/mermaid/html 预览）推迟到终态再 hydrate。 */}
+          <MarkdownRenderer content={seg.content} streaming={streaming} />
+          {streaming && isLast && <StreamingCursor />}
+        </div>
+      );
       i++;
       continue;
     }
@@ -353,6 +439,13 @@ export function renderSegments(
     // 接口重试段
     if (seg.type === "retry") {
       nodes.push(<RetryBlock key={`retry-${i}`} attempt={seg.attempt} maxRetries={seg.maxRetries} error={seg.error} status={seg.status} />);
+      i++;
+      continue;
+    }
+
+    // 记忆召回段：本轮把哪些 Wiki 页面注入了上下文（仅在召回集合变化时出现）
+    if (seg.type === "wikirecall") {
+      nodes.push(<WikiRecallCard key={`recall-${i}`} seg={seg} />);
       i++;
       continue;
     }
@@ -650,7 +743,7 @@ export function renderSegments(
     nodes.push(
       <ToolCallItem
         key={seg.id}
-        tool={{ id: seg.id, name: seg.name, status: seg.status, description: seg.description, command: seg.command, cwd: seg.cwd, output: seg.output, query: seg.query, args: seg.args, diff: seg.diff, diffs: seg.diffs, diagnostics: seg.diagnostics, searchResults: seg.searchResults, fetchResult: seg.fetchResult, powerActivated: seg.powerActivated, pending: seg.pending, rejected: seg.rejected, mcpServer: seg.mcpServer, mcpTool: seg.mcpTool, queuedWaiting: queuedWaitingIds.has(seg.id) }}
+        tool={{ id: seg.id, name: seg.name, status: seg.status, description: seg.description, command: seg.command, cwd: seg.cwd, output: seg.output, query: seg.query, args: seg.args, diff: seg.diff, diffs: seg.diffs, diagnostics: seg.diagnostics, searchResults: seg.searchResults, fetchResult: seg.fetchResult, powerActivated: seg.powerActivated, pending: seg.pending, rejected: seg.rejected, mcpServer: seg.mcpServer, mcpTool: seg.mcpTool, queuedWaiting: queuedWaitingIds.has(seg.id), waitingFor: activeWaitingFor(seg) }}
         onAcceptEdit={onAcceptEdit}
         onRejectEdit={onRejectEdit}
       />

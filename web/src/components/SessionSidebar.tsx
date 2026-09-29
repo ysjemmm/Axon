@@ -38,7 +38,12 @@ export function SessionSidebar({ currentSessionId, connected: _connected, filter
   const loadSessions = async () => {
     try {
       const data = await listSessions();
-      setSessions(data.sessions || []);
+      // 防御性过滤：后端返回的列表若混入非对象/缺 id 项（如磁盘上损坏的会话文件），
+      // 后面 s.id / s.title 的直接访问会抛 TypeError，把整个侧边栏（乃至上层）渲染打崩。
+      const list = (data.sessions || []).filter(
+        (s): s is SessionMeta => !!s && typeof s === "object" && typeof s.id === "string",
+      );
+      setSessions(list);
     } catch {
       // 后端未连接
     }

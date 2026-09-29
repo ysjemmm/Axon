@@ -1,7 +1,7 @@
 /**
  * 子 Agent host 派生（执行端纯逻辑）
  *
- * 子 Agent（delegate_task / parallel_research / relay_review）独占执行、改动直接落盘，
+ * 子 Agent（delegate_task / relay_review）独占执行、改动直接落盘，
  * 必须用【独立 auto 模式】的 EditPresenter——否则它的落盘会写进主 Agent 的 manual 暂存区，
  * 污染待确认列表。同理，命令执行器也必须 fork 独立实例：多个子 Agent 若共用父 Agent 的
  * 终端，命令会挤进同一个终端串行排队、互相干扰。fs / diagnostics / browser / ideContext

@@ -13,8 +13,6 @@ describe("TurnFinalizer", () => {
       lastTurnOutputTokens: 8,
       lastCompletionTokens: 0,
       buildTokenBreakdown: () => ({ memoryTokens: 10, systemTokens: 20, questionTokens: 30 }),
-      compactionEnabled: false,
-      toolResultKeepTurns: 3,
       rollingSummaryAccumulated: 50,
       triggerTokens: 100,
       ...overrides,
@@ -22,9 +20,11 @@ describe("TurnFinalizer", () => {
   }
 
   it("计算 turnStats 并追加 assistant 消息", () => {
-    const out = new TurnFinalizer().finalize(makeInput());
+    const out = new TurnFinalizer().finalize(makeInput({ effort: "xhigh", providerName: "My Router" }));
     expect(out.messages).toHaveLength(1);
     expect((out.messages[0] as any).turnStats.tokens).toBe(12);
+    expect((out.messages[0] as any).turnStats.effort).toBe("xhigh");
+    expect((out.messages[0] as any).turnStats.providerName).toBe("My Router");
     expect((out.messages[0] as any).content).toBe("最终回答");
     expect(out.credits).toBeGreaterThanOrEqual(0);
   });
@@ -35,16 +35,26 @@ describe("TurnFinalizer", () => {
     expect(out.credits).toBeGreaterThanOrEqual(0);
   });
 
-  it("压缩开启时会裁剪旧 tool 结果（至少保持返回消息数组）", () => {
-    const out = new TurnFinalizer().finalize(makeInput({
-      compactionEnabled: true,
-      messages: [
-        { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "read_file", arguments: "{}" } }] } as any,
-        { role: "tool", tool_call_id: "c1", content: "x".repeat(500) } as any,
-      ],
-    }));
-    expect(Array.isArray(out.messages)).toBe(true);
-    expect(out.messages.length).toBeGreaterThan(0);
+  it("回合收尾不改写已有历史：旧工具结果原样保留，只在末尾追加（前缀缓存不断）", () => {
+    // 足够老的工具结果（其后已有 3 次 user 消息），且超过旧裁剪阈值 800 字
+    const oldOutput = "命令输出".repeat(1000);
+    const history = [
+      { role: "system", content: "sys" },
+      { role: "user", content: "u1" },
+      { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "execute_command", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "c1", content: oldOutput },
+      { role: "user", content: "u2" },
+      { role: "user", content: "u3" },
+      { role: "user", content: "u4" },
+    ] as any[];
+    const before = JSON.stringify(history);
+
+    const out = new TurnFinalizer().finalize(makeInput({ messages: history }));
+
+    // 已有部分逐字节不变 = 下一次请求的前缀与上一次完全一致
+    expect(JSON.stringify(out.messages.slice(0, history.length))).toBe(before);
+    expect((out.messages[3] as any).content).toBe(oldOutput);
+    expect(out.messages).toHaveLength(history.length + 1);
   });
 
   it("累计 token 超阈值时返回 shouldTriggerRollingSummary=true", () => {

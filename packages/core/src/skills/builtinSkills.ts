@@ -117,9 +117,11 @@ const REQUESTING_CODE_REVIEW: BuiltinSkill = {
 - import / 依赖是否都用上了、没有冗余？
 
 ## 输出方式
-- 发现的问题按 [critical]/[major]/[minor] 分级列出
-- critical 必须在交付前修掉，不能留给用户
-- 改完重新自检，确认问题真的消除`,
+- ⚠️ 这套自检是【内部动作】，不是给用户看的报告：不要输出 [critical]/[major]/[minor] 这类严重度标签，
+  也不要单起一节叫「交付前自检」——用户看不懂这些黑话，只会一脸懵逼。
+- critical 必须在交付前修掉，不能留给用户；修了什么、怎么验证的，用一句人话写进收尾总结就够。
+- major / minor：顺手能修就修，不修也不必逐个汇报——不要把清单倒给用户来证明自己勤奋。
+- 改完重新自检，确认问题真的消除（这一步同样不必输出）。`,
 };
 
 const ROOT_CAUSE_TRACING: BuiltinSkill = {

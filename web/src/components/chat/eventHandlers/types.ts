@@ -41,6 +41,7 @@ export interface EventHandlerCtx {
   setPendingExpanded: (b: boolean) => void;
   setUndoNotice: (n: { id: number; text: string } | null) => void;
   setToolConfirm: (c: { toolName: string; title: string; kind?: string } | null) => void;
+  setAskUser: (a: AskUserRequest | null) => void;
   setWaitingInputIds: (s: Set<string> | ((prev: Set<string>) => Set<string>)) => void;
   setCommandApprovals: (c: Record<string, CommandApproval> | ((prev: Record<string, CommandApproval>) => Record<string, CommandApproval>)) => void;
   setCommandRiskNotice: (c: { id?: string; command: string; reason: string } | null) => void;
@@ -50,9 +51,23 @@ export interface EventHandlerCtx {
   // ── refs（跨事件共享的可变状态） ──
   cancelled: MutableRefObject<boolean>;
   cancelledTurnMsgId: MutableRefObject<string | null>;
-  /** 用户主动取消时记录其轮次；用于忽略已被下一轮超越的迟到取消事件。 */
+  /**
+   * 用户主动取消时（同步）记录其轮次；用于忽略已被新一轮超越的迟到收尾事件。
+   * 装配后**不再清空**（同一轮取消的收尾事件不止一条，清早了后面的就无从判断），
+   * 直到下一次用户取消把它覆盖。判据见 isStaleCancelledTurnEnd。
+   */
   cancelledTurnGeneration: MutableRefObject<number | null>;
   turnGeneration: MutableRefObject<number>;
+  /** 当前轮的开始时间（sendNow 时写入）。用于判断一条终态事件是否可能属于当前轮。 */
+  turnStartTime: MutableRefObject<number>;
+  /**
+   * 本轮用户消息的 id（sendNow 时写入，与 user_message 一起发给后端的 clientMessageId）。
+   *
+   * 后端会把同一个 id 原样带回在收尾事件上（stream_end / turn_cancelled —— 见 agentSession.send）。
+   * 有了它就不必再用时间线去猜"这条终态事件属于哪一轮"，直接比 id 即可（治本）。
+   * 事件不带该字段时（老后端 / 历史会话）退回 turnStartTime 那套推断（高可用、向后兼容）。
+   */
+  currentTurnClientMessageId: MutableRefObject<string | null>;
   modelRef: MutableRefObject<string>;
   statusPhaseRef: MutableRefObject<string>;
   toolResultResetTimer: MutableRefObject<ReturnType<typeof setTimeout> | null>;
@@ -73,6 +88,22 @@ export interface EventHandlerCtx {
   clientId: string;
   send: (cmd: Record<string, unknown>) => void;
   finishLoading: () => void;
+}
+
+/** ask_user 里的单个问题。 */
+export interface AskUserQuestionData {
+  question: string;
+  options: { id: string; label: string; description?: string }[];
+  /** true=多选（checkbox），false=单选（radio） */
+  multi: boolean;
+  /** 是否允许用户自己输入「其他」 */
+  allowOther: boolean;
+}
+
+/** ask_user 问答请求：Agent 一次抛 1~N 个问题，等用户逐题单选/多选作答。 */
+export interface AskUserRequest {
+  toolCallId: string;
+  questions: AskUserQuestionData[];
 }
 
 export type { WsMessage };

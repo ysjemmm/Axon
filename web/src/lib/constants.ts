@@ -20,6 +20,8 @@ export const STORAGE = {
   TABS: "axon-tabs",
   ACTIVE_KEYS: "axon-active-keys",
   LAST_MODEL: "axon-last-model",
+  /** 按 provider:model 保存用户最后选择的思考强度；值为 null 表示用户显式关闭。 */
+  EFFORT_PREFERENCES: "axon-effort-preferences",
   EDIT_MODE: "axon-edit-mode",
   /**
    * 思考开关（agent / quest 通用）。用新 key 而不是沿用旧的 axon-quest-think：
@@ -28,9 +30,6 @@ export const STORAGE = {
    */
   THINK: "axon-think",
   QUEST_WEBSEARCH: "axon-quest-websearch",
-  PARALLEL_MODEL: "axon-parallel-model",
-  PARALLEL_PROVIDER: "axon-parallel-provider",
-  PARALLEL_BATCHES: "axon-parallel-batches",
   PROVIDER_EXPAND: "axon-provider-expand",
   LAST_PROVIDER: "axon-last-provider",
 } as const;
@@ -58,6 +57,8 @@ export const AGENT_EVENT = {
   STREAM_END: "stream_end",
   // ── 推理 ──
   REASONING_DELTA: "reasoning_delta",
+  // ── 记忆召回（仅在召回集合变化时推送） ──
+  WIKI_RECALL: "wiki_recall",
   // ── 工具调用 ──
   TOOL_CALL: "tool_call",
   TOOL_RESULT: "tool_result",
@@ -88,6 +89,7 @@ export const AGENT_EVENT = {
   // ── 确认门 ──
   CONFIRM_TOOL_REQUEST: "confirm_tool_request",
   TOOL_CONFIRM_TIMEOUT: "tool_confirm_timeout",
+  ASK_USER_REQUEST: "ask_user_request",
   CONFIRM_COMMAND_REQUEST: "confirm_command_request",
   COMMAND_RISK_NOTICE: "command_risk_notice",
   // ── Relay ──
@@ -98,11 +100,6 @@ export const AGENT_EVENT = {
   SUB_AGENT_START: "sub_agent_start",
   SUB_AGENT_EVENT: "sub_agent_event",
   SUB_AGENT_END: "sub_agent_end",
-  // ── 并行 ──
-  PARALLEL_EXECUTE_START: "parallel_execute_start",
-  PARALLEL_EXECUTE_END: "parallel_execute_end",
-  PARALLEL_RESEARCH_START: "parallel_research_start",
-  PARALLEL_RESEARCH_END: "parallel_research_end",
   // ── 错误 ──
   ERROR: "error",
   // ── 模型历史格式不兼容 ──
@@ -119,7 +116,6 @@ export const CONTROL_CMD = {
   SET_ACTIVE_PROVIDER: "set_active_provider",
   USER_MESSAGE: "user_message",
   ADD_CONTEXT: "add_context",
-  NAVIGATE_PARALLEL: "navigate_parallel",
   FLATTEN_TOOL_HISTORY: "flatten_tool_history",
 } as const;
 
@@ -179,15 +175,6 @@ export const MIME = {
   TEXT: "text/plain",
   MARKDOWN: "text/markdown",
   OCTET_STREAM: "application/octet-stream",
-} as const;
-
-// ═══════════════════════════════════════════════════════════════════
-// 并行面板
-// ═══════════════════════════════════════════════════════════════════
-
-export const PARALLEL = {
-  CLIENT_ID: "parallel-panel",
-  MAX_PERSIST_BATCHES: 20,
 } as const;
 
 // ═══════════════════════════════════════════════════════════════════

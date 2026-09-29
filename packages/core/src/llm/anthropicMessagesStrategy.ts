@@ -138,7 +138,7 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
   ) {}
 
   async runTurn(params: RunTurnParams): Promise<LLMTurnResult> {
-    const { model, messages, tools, signal, callbacks, temperature, maxOutputTokens, think, modelSupportsThinking } = params;
+    const { model, messages, tools, signal, callbacks, temperature, maxOutputTokens, think, effort, modelSupportsThinking } = params;
 
     const { system, anthropicMessages } = this.convertMessages(messages);
     const hasTools = tools.length > 0;
@@ -164,7 +164,13 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
       ...(hasTools ? { tools: anthropicTools } : {}),
       // extended thinking 要求 temperature=1 或不传；启用时忽略外部 temperature
       ...(useThinking ? {} : (temperature !== undefined ? { temperature } : {})),
-      ...(useThinking ? { thinking: { type: "enabled", budget_tokens: THINKING_BUDGET_TOKENS } } : {}),
+      // 用户选择了 Provider 配置的 effort 时走 Anthropic adaptive thinking + output_config.effort；
+      // 未选择时保留旧版固定 budget_tokens 行为，避免改变存量模型的默认请求形状。
+      ...(useThinking
+        ? effort
+          ? { thinking: { type: "adaptive" }, output_config: { effort } }
+          : { thinking: { type: "enabled", budget_tokens: THINKING_BUDGET_TOKENS } }
+        : {}),
     };
 
     const res = await fetch(url, {

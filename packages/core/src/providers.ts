@@ -107,6 +107,13 @@ export function getModelDisplayName(modelId: string, preferredProvider?: string)
   return model?.name?.trim() || undefined;
 }
 
+/** 获取 provider 的展示名称；找不到时回退 provider key。 */
+export function getProviderDisplayName(providerName?: string): string | undefined {
+  if (!providerName) return undefined;
+  const provider = _resolved?.get(normalizeProvider(providerName));
+  return provider?.label?.trim() || providerName;
+}
+
 /**
  * 根据模型 id 反查它所属的 provider 名称。用于 Relay 模型覆盖等场景——用户/AI 只给出
  * 一个模型 id（如 "gpt-5.5"），需要找到对应的 provider 才能调用 getStrategy。
@@ -152,13 +159,35 @@ export function declaredThinkingFor(modelId: string, preferredProvider?: string)
   if (preferredProvider) {
     const preferred = _resolved.get(normalizeProvider(preferredProvider));
     const hit = preferred?.models.find((m) => m.id === modelId);
-    if (hit) return hit.thinking;
+    if (hit) return hit.thinking ?? (Array.isArray(hit.effortLevels) && hit.effortLevels.length > 0 ? true : undefined);
   }
 
   const matches = [..._resolved.values()]
     .map((p) => p.models.find((m) => m.id === modelId))
     .filter((m): m is NonNullable<typeof m> => !!m);
-  return matches.length === 1 ? matches[0].thinking : undefined;
+  return matches.length === 1
+    ? matches[0].thinking ?? (Array.isArray(matches[0].effortLevels) && matches[0].effortLevels.length > 0 ? true : undefined)
+    : undefined;
+}
+
+/** 查询某模型在 Provider 中明确配置的思考强度实际值列表。 */
+export function declaredEffortValuesFor(modelId: string, preferredProvider?: string): string[] {
+  if (!_resolved) return [];
+  const values = (levels: { value: string }[] | undefined): string[] =>
+    (Array.isArray(levels) ? levels : [])
+      .map((x) => typeof x?.value === "string" ? x.value.trim() : "")
+      .filter((x): x is string => !!x);
+
+  if (preferredProvider) {
+    const preferred = _resolved.get(normalizeProvider(preferredProvider));
+    const hit = preferred?.models.find((m) => m.id === modelId);
+    if (hit) return values(hit.effortLevels);
+  }
+
+  const matches = [..._resolved.values()]
+    .map((p) => p.models.find((m) => m.id === modelId))
+    .filter((m): m is NonNullable<typeof m> => !!m);
+  return matches.length === 1 ? values(matches[0].effortLevels) : [];
 }
 
 /**

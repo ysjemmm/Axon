@@ -11,6 +11,46 @@ import { ToolCallStateMachine } from "./toolCallStateMachine.js";
 import type { ToolExecutor } from "./toolExecutor.js";
 import type { ToolGateDecider } from "./toolGateDecider.js";
 
+export interface ToolDispatchBatch {
+  parallel: boolean;
+  drafts: ToolEvent[];
+}
+
+/**
+ * 按执行语义规划批次：连续 command 并行，其它工具保持串行。
+ * waitingFor 记录每个调用开始前必须完成的工具，供前端展示真实阻塞关系。
+ */
+export function planToolDispatch(drafts: readonly ToolEvent[]): {
+  batches: ToolDispatchBatch[];
+  waitingFor: Map<string, string[]>;
+} {
+  const batches: ToolDispatchBatch[] = [];
+  const waitingFor = new Map<string, string[]>();
+  let index = 0;
+  let previousBatchIds: string[] = [];
+
+  while (index < drafts.length) {
+    const parallel = drafts[index].toolKind === "command";
+    const group: ToolEvent[] = [];
+    while (index < drafts.length && (drafts[index].toolKind === "command") === parallel) {
+      group.push(drafts[index]);
+      index++;
+    }
+
+    const earlierInGroup: string[] = [];
+    for (const draft of group) {
+      waitingFor.set(draft.callId, parallel
+        ? [...previousBatchIds]
+        : [...previousBatchIds, ...earlierInGroup]);
+      earlierInGroup.push(draft.callId);
+    }
+    batches.push({ parallel, drafts: group });
+    previousBatchIds = group.map((draft) => draft.callId);
+  }
+
+  return { batches, waitingFor };
+}
+
 /**
  * ToolDispatchHandler 实现：用 ToolCallStateMachine 驱动每个工具调用的完整流转。
  *
@@ -51,9 +91,10 @@ export class DefaultToolDispatchHandler implements ToolDispatchHandler, ToolDisp
 
     const runtimeEvents: InternalEvent[] = [];
     const toolContexts: ToolContext[] = [];
+    const executor = this.executor;
     let anyFailed = false;
 
-    for (const draft of input.toolDrafts) {
+    const runDraft = async (draft: ToolEvent): Promise<{ events: InternalEvent[]; context: ToolContext; failed: boolean }> => {
       const machine = new ToolCallStateMachine({
         requestId: input.requestId,
         turnId: input.turnId,
@@ -63,7 +104,7 @@ export class DefaultToolDispatchHandler implements ToolDispatchHandler, ToolDisp
       });
 
       // plan：登记本次工具调用（携带原始参数文本，便于 trace/调试）。
-      runtimeEvents.push(machine.plan(draft.rawArgsText));
+      const events: InternalEvent[] = [machine.plan(draft.rawArgsText)];
 
       // 门控决策（方案 B）：execute 之前统一决定放行/拦截/改写参数。
       // 未注入决策器时默认放行，行为与方案 A 完全一致。
@@ -85,28 +126,31 @@ export class DefaultToolDispatchHandler implements ToolDispatchHandler, ToolDisp
         if (decision.action === "block") {
           // 拦截：工具不执行，收敛为 cancelled 终态（block 内部置 gateState=blocked）。
           const blocked = machine.block(decision.reason) as ToolEvent;
-          runtimeEvents.push(blocked);
-          anyFailed = true;
-          toolContexts.push({
+          events.push(blocked);
+          return {
+            events,
+            failed: true,
+            context: {
             requestId: input.requestId,
             turnId: input.turnId,
             callId: draft.callId,
             toolName: draft.toolName,
             toolKind: draft.toolKind,
             partialToolEvent: blocked,
-          });
-          continue;
+            },
+          };
         }
         // 放行：可能携带改写后的参数（如用户编辑过的命令）。
         if (decision.editedArgs) execArgs = decision.editedArgs;
       }
 
       // execute：宿主开始真正执行（用门控放行后的实际参数）。
-      runtimeEvents.push(machine.execute(execArgs));
+      events.push(machine.execute(execArgs));
 
       let finalEvent: ToolEvent;
+      let failed = false;
       try {
-        const res = await this.executor.execute({
+        const res = await executor.execute({
           callId: draft.callId,
           toolName: draft.toolName,
           parsedArgs: execArgs,
@@ -115,22 +159,43 @@ export class DefaultToolDispatchHandler implements ToolDispatchHandler, ToolDisp
         finalEvent = res.ok
           ? machine.complete(res.result)
           : machine.fail(res.error ?? "工具执行失败");
-        if (!res.ok) anyFailed = true;
+        if (!res.ok) failed = true;
       } catch (err) {
         // 执行器抛异常同样收敛为 fail 事件，绝不静默吞掉。
         finalEvent = machine.fail((err as Error).message || "工具执行异常");
-        anyFailed = true;
+        failed = true;
       }
-      runtimeEvents.push(finalEvent);
+      events.push(finalEvent);
+      return {
+        events,
+        failed,
+        context: {
+          requestId: input.requestId,
+          turnId: input.turnId,
+          callId: draft.callId,
+          toolName: draft.toolName,
+          toolKind: draft.toolKind,
+          partialToolEvent: finalEvent,
+        },
+      };
+    };
 
-      toolContexts.push({
-        requestId: input.requestId,
-        turnId: input.turnId,
-        callId: draft.callId,
-        toolName: draft.toolName,
-        toolKind: draft.toolKind,
-        partialToolEvent: finalEvent,
-      });
+    // 命令工具彼此独立：一个命令超时或长时间运行时，不能阻塞同一批里的其他命令。
+    // 其他工具仍按原顺序执行，避免文件编辑、诊断和上下文操作之间的隐式依赖被打乱。
+    const { batches } = planToolDispatch(input.toolDrafts);
+    for (const batch of batches) {
+      const results = batch.parallel
+        ? await Promise.all(batch.drafts.map(runDraft))
+        : await batch.drafts.reduce<Promise<Awaited<ReturnType<typeof runDraft>>[]>>(async (chain, item) => {
+          const completed = await chain;
+          completed.push(await runDraft(item));
+          return completed;
+        }, Promise.resolve([]));
+      for (const result of results) {
+        runtimeEvents.push(...result.events);
+        toolContexts.push(result.context);
+        anyFailed = anyFailed || result.failed;
+      }
     }
 
     return {

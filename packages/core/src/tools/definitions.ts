@@ -612,6 +612,111 @@ export function getReadOnlyToolDefinitions() {
   return getToolDefinitions().filter((t) => READ_ONLY_TOOLS.has(t.function.name));
 }
 
+/**
+ * Wiki 页面保存工具定义。
+ *
+ * ⚠️ 【刻意不放进 getToolDefinitions()】：那是所有会话与子 Agent 共用的公共列表，
+ * 而这个工具只在【生成 Wiki 流程】中有意义 —— 没有生成作业上下文时调用会被直接拒绝。
+ * 混在公共列表里只会白占每轮请求的工具 schema 篇幅，还可能被误用在无关场景
+ * （模型看到"能保存 Wiki"就可能自作主张写些没人要的文档，把仓库塞满）。
+ * 生成流程通过 getWikiToolDefinitions() 显式取用，由 SubAgentRunner 按需注入。
+ */
+export const WIKI_SAVE_PAGE_DEFINITION = {
+  type: "function" as const,
+  function: {
+    name: "wiki_save_page",
+    description:
+      "保存一页项目 Wiki 文档。\n\n" +
+      "⚠️ 仅在「生成 / 刷新 Wiki」任务中可用，其他场合调用会被拒绝。\n\n" +
+      "【写什么】值得长期留存的结构性知识，读者是未来的同事和你自己：\n" +
+      "- 该写：系统架构、模块职责与边界、关键数据流、外部依赖与集成点、非显而易见的约定与坑\n" +
+      "- 不该写：这次改了什么、待办清单、与代码无关的笔记、看代码一眼就明白的常识\n\n" +
+      "【sources 必须真实】列出本页结论依据了哪些文件（相对工作区根的路径）。" +
+      "必须是你确实读过的文件，不要凭印象填。系统用这些文件的变化判断本页是否已过时 ——" +
+      "填错会让过时检测失效，读者将看到看似新鲜、实际已失真的文档，那比没有文档更糟。\n\n" +
+      "【一页一主题】标题即主题，粒度取「一个模块 / 一个关注点」。" +
+      "太粗（如「整个项目」）会让任意局部改动都导致整页重写；太细则页数膨胀、索引冗长。\n\n" +
+      "保存后立即落盘，不需要再调用其它工具确认。",
+    parameters: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "页面标题，同时作为文件名。用主题命名，如「订单系统」" },
+        summary: { type: "string", description: "一句话说明这页讲什么。会出现在注入模型的索引里，务必简短（建议 40 字内）" },
+        // 分类决定页面在侧边栏归到哪一组。刻意用 description 说明而不加 JSON Schema 的 enum：
+        // enum 属硬校验，模型一旦写成「架构设计」「架构与实现」这类近义变体，整个调用会被判无效，
+        // 而那只是措辞差异、并不影响归类质量。宽松描述 + 代码侧归一更稳。
+        category: { type: "string", description: "本页分类，必须是以下五个词之一：概览、架构、领域、功能、约定。它会决定这页在列表里归入哪一组" },
+        sources: {
+          type: "array",
+          items: { type: "string" },
+          description: "本页结论依据的源文件，相对工作区根的路径（如 src/order/service.ts）。必须是实际读过的文件",
+        },
+        content: { type: "string", description: "Markdown 正文" },
+      },
+      required: ["title", "summary", "category", "sources", "content"],
+    },
+  },
+} as const;
+
+/**
+ * Wiki 规划工具定义：登记本次要产出哪些页面。
+ *
+ * 为什么要有它、而不是让子 Agent 用文本输出清单：文本里的结构化数据只能靠正则/JSON 解析，
+ * 模型稍一自由发挥（加解释、换格式、写进思考块）就解析失败。走工具则参数经 schema 校验，
+ * 拿到的就是干净数据。有了可靠的清单，进度才有真实分母（3/8 而非"已生成 3 页"），
+ * 中断后的续跑也才能精确算出还缺哪些页。
+ *
+ * 同样不并入 getToolDefinitions()：只在规划阶段存在。
+ */
+export const WIKI_PLAN_PAGES_DEFINITION = {
+  type: "function" as const,
+  function: {
+    name: "wiki_plan_pages",
+    description:
+      "登记本次要生成的 Wiki 页面清单。\n\n" +
+      "⚠️ 仅在「规划 Wiki 页面」阶段可用。\n\n" +
+      "先勘察仓库（读 README / 配置 / 核心模块），弄清这是什么项目、主干在哪，再决定页面划分。" +
+      "粒度取「一个模块 / 一个关注点」：太粗则任何局部改动都让整页失效，太细则页数膨胀、索引冗长。\n\n" +
+      "每页给出 title、summary（一句话，会进注入模型的索引，务必短）、" +
+      "以及你打算依据的源文件路径（relative to 工作区根）。\n\n" +
+      "一次性提交完整清单，不要分批调用。一般 5~15 页，项目小就少几页，不要为凑数而写。",
+    parameters: {
+      type: "object",
+      properties: {
+        pages: {
+          type: "array",
+          description: "页面清单，一次给全",
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string", description: "页面标题，如「订单系统」" },
+              summary: { type: "string", description: "一句话说明这页讲什么（建议 40 字内）" },
+              category: { type: "string", description: "本页分类，必须是以下五个词之一：概览、架构、领域、功能、约定" },
+              sources: {
+                type: "array",
+                items: { type: "string" },
+                description: "计划依据的源文件，相对工作区根的路径",
+              },
+            },
+            required: ["title", "summary", "category"],
+          },
+        },
+      },
+      required: ["pages"],
+    },
+  },
+} as const;
+
+/** 撰写阶段注入给子 Agent 的工具定义。默认不参与任何工具列表。 */
+export function getWikiToolDefinitions() {
+  return [WIKI_SAVE_PAGE_DEFINITION];
+}
+
+/** 规划阶段注入给子 Agent 的工具定义。默认不参与任何工具列表。 */
+export function getWikiPlanToolDefinitions() {
+  return [WIKI_PLAN_PAGES_DEFINITION];
+}
+
 /** check_diagnostics 的结构化结果：每个文件一条，供前端折叠展示 */
 export interface DiagnosticFileResult {
   path: string;
@@ -676,6 +781,42 @@ export function toolContentLimit(toolName: string): number {
 /** Skill 加载器：按名称返回 skill 正文（用于 use_skill 工具）。由上层注入。 */
 export type SkillLoaderFn = (name: string) => Promise<{ name: string; dir: string; body: string } | null>;
 
+/**
+ * Wiki 页面保存器：把一页写入目标工作区的 .axon/wiki/。由上层注入。
+ * 仅在生成流程中提供 —— 缺省时 wiki_save_page 直接报错，工具形同不存在。
+ * 目标工作区不由此函数决定，而由上层在生成开始时锁定并随每次调用显式传入
+ * （见 WikiController 构造的 save 闭包与 AgentSession.generateWiki）。
+ */
+export type WikiSaverFn = (page: { title: string; summary: string; sources: string[]; body: string; category?: string }) => Promise<{ slug: string }>;
+
+/** 规划阶段的单页条目 */
+export interface WikiPlannedPage {
+  title: string;
+  summary: string;
+  sources: string[];
+  category?: string;
+}
+
+/**
+ * Wiki 规划器：登记页面清单。由生成流程注入。
+ * 返回回执文案（告诉子 Agent 登记了多少页、可以进入下一阶段），而非 void ——
+ * 工具结果是要喂回给模型的，明确的回执能让它知道这一步成了、不必重试。
+ */
+export type WikiPlannerFn = (pages: WikiPlannedPage[]) => Promise<string>;
+
+/**
+ * 生成流程注入给子 Agent 的 Wiki 能力。
+ *
+ * 收成一个对象而不是两个独立参数：executeToolCall 的位置参数已经很长，
+ * 继续追加会让每个调用点都要数一遍参数位置 —— 那是 bug 的温床。
+ * 两个能力分阶段注入：规划阶段只给 plan，撰写阶段只给 save，
+ * 避免子 Agent 在规划时误写页面、在撰写时重复规划。
+ */
+export interface WikiTools {
+  plan?: WikiPlannerFn;
+  save?: WikiSaverFn;
+}
+
 /** Power 加载器：按名称返回 Power 完整信息（用于 activate_power 工具）。由上层注入。 */
 export type PowerLoaderFn = (name: string) => Promise<{
   name: string;
@@ -684,7 +825,8 @@ export type PowerLoaderFn = (name: string) => Promise<{
   keywords: string[];
   mcpServerCount: number;
   skillCount: number;
-  skills: { name: string; description: string }[];
+  /** 捆绑的 skills；dir 为 skill 目录绝对路径（供 AI 直接读其 SKILL.md） */
+  skills: { name: string; description: string; dir?: string }[];
   mcpServers: Record<string, { command: string; args?: string[] }>;
   steeringFiles: string[];
 } | null>;

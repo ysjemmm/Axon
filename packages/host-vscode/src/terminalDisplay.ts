@@ -87,6 +87,8 @@ export interface TerminalRunResult {
   cancelReason?: "terminal_stuck_waiting_input" | "aborted" | "terminal_closed" | "command_hijacked";
   /** 终端执行结束原因 */
   reason?: "completed" | "timeout" | "aborted" | "terminal_stuck_waiting_input" | "unknown_exit";
+  /** 本次命令占用的实际终端 ID；并发超时任务用它作为独立查询句柄。 */
+  terminalId?: string;
 }
 
 /** @internal 向后兼容的旧类型名 */
@@ -126,8 +128,14 @@ let poolCounter = 0;
 export function interruptTimedOutTask(terminalKey: string): boolean {
   const task = timedOutRegistry.get(terminalKey);
   if (!task || task.status !== "running") return false;
-  const pool = terminalPools.get(terminalKey);
-  const busyTerminal = pool?.find((entry) => entry.busy && !entry.terminal.exitStatus)?.terminal;
+  let busyTerminal: vscode.Terminal | undefined;
+  for (const pool of terminalPools.values()) {
+    const entry = pool.find((item) => item.id === task.terminalId && item.busy && !item.terminal.exitStatus);
+    if (entry) {
+      busyTerminal = entry.terminal;
+      break;
+    }
+  }
   if (!busyTerminal) return false;
   busyTerminal.sendText("\u0003", false);
   return true;
@@ -861,6 +869,9 @@ export async function runCommand(opts: TerminalRunOptions): Promise<TerminalRunR
   const requestedKey = opts.terminalKey ?? "default";
   const { terminal: t, id: terminalId, cwdChanged } = acquireTerminal(requestedKey, opts.cwd);
   const effectiveCommand = cwdChanged ? `${cdCommand(opts.cwd!)}${opts.command}` : opts.command;
+  // 超时任务的查询句柄必须绑定实际终端，而不是 session 级池 key；同一批并发命令
+  // 会共享 requestedKey，但各自占用不同终端，不能互相覆盖 timedOutRegistry。
+  const commandOpts = { ...opts, terminalKey: terminalId };
 
   let result: TerminalRunResult | null = null;
   try {
@@ -881,18 +892,18 @@ export async function runCommand(opts: TerminalRunOptions): Promise<TerminalRunR
     // ── Layer 1: Shell Integration ──
     const siReady = await waitForShellIntegration(t);
     if (siReady) {
-      result = await runWithShellIntegration(t, effectiveCommand, opts);
+      result = await runWithShellIntegration(t, effectiveCommand, commandOpts);
       if (result) {
         vscode.commands.executeCommand("axon.internal.markAiCommandEnd", aiCmdStartTime);
-        return result;
+        return { ...result, terminalId };
       }
     }
 
     // ── Layer 2: Terminal Content Reading ──
     console.warn("[terminal] SI unavailable, falling back to content layer");
-    result = await runWithTerminalContent(t, effectiveCommand, opts);
+    result = await runWithTerminalContent(t, effectiveCommand, commandOpts);
     vscode.commands.executeCommand("axon.internal.markAiCommandEnd", aiCmdStartTime);
-    return result;
+    return { ...result, terminalId };
   } finally {
     // ⚠️ 超时不释放终端：命令仍在终端里运行（clone/install/构建等长任务）。
     // 保持 busy=true 防止后续 execute_command 复用这个终端把还在跑的命令强杀。

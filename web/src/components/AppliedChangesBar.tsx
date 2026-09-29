@@ -10,6 +10,7 @@ import { ChevronDown, FileText, GitCompare, Undo2, Check, X, History, RotateCcw,
 import { ClickableFileName } from "@/components/ToolCallItem";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import type { ChatMessage } from "./chat/types";
+import { openDiff as openDiffView, openMergedDiff, usePanelClientId, type DiffRef } from "@/lib/openDiff";
 
 interface Snapshot {
   id: string;
@@ -39,6 +40,9 @@ interface ChangeFile {
   undoable?: boolean;
   oldContent?: string;
   newContent?: string;
+  /** 最早 / 最近一次改动的引用：正文被省略（bodyOmitted）时靠它们的 editId 按需取回 */
+  firstRef?: DiffRef;
+  lastRef?: DiffRef;
 }
 
 type TabKey = "changes" | "rollback";
@@ -63,6 +67,7 @@ export function AppliedChangesBar({
   const [expanded, setExpanded] = useState(headless);
   const [tab, setTab] = useState<TabKey>("changes");
   const [search, setSearch] = useState("");
+  const clientId = usePanelClientId();
 
   // 切 Tab 时清空搜索词（避免跨 Tab 搜索词残留导致看起来不相关）
   const switchTab = useCallback((t: TabKey) => {
@@ -122,22 +127,24 @@ export function AppliedChangesBar({
     for (const msg of assistantMsgs) {
       for (const seg of msg.segments!) {
         if (seg.type !== "tool" || seg.status !== "success") continue;
-        const collect = (path: string, editId?: string, reverted?: boolean, undoable?: boolean, oldContent?: string, newContent?: string) => {
+        const collect = (path: string, editId?: string, reverted?: boolean, undoable?: boolean, oldContent?: string, newContent?: string, ref?: DiffRef) => {
           if (pendingSet.has(path)) return;
           const existing = map.get(path);
           if (existing) {
             // 同一文件多次编辑：取最早 oldContent + 最新 newContent，撤销状态取最新
             if (oldContent !== undefined) existing.oldContent = existing.oldContent ?? oldContent;
             if (newContent !== undefined) existing.newContent = newContent;
+            // 正文被省略时靠这两个引用按需取回（最早一次取 old、最近一次取 new）
+            if (ref) existing.lastRef = ref;
             existing.reverted = reverted ?? existing.reverted;
             existing.undoable = undoable ?? existing.undoable;
             if (editId) existing.editId = editId;
           } else {
-            map.set(path, { path, editId, status: "applied", reverted, undoable, oldContent, newContent });
+            map.set(path, { path, editId, status: "applied", reverted, undoable, oldContent, newContent, firstRef: ref, lastRef: ref });
           }
         };
-        if (seg.diff?.path) collect(seg.diff.path, seg.diff.editId, seg.reverted, seg.undoable, seg.diff.oldContent, seg.diff.newContent);
-        if (seg.diffs) for (const d of seg.diffs) collect(d.path, d.editId, seg.reverted, seg.undoable, d.oldContent, d.newContent);
+        if (seg.diff?.path) collect(seg.diff.path, seg.diff.editId, seg.reverted, seg.undoable, seg.diff.oldContent, seg.diff.newContent, seg.diff as DiffRef);
+        if (seg.diffs) for (const d of seg.diffs) collect(d.path, d.editId, seg.reverted, seg.undoable, d.oldContent, d.newContent, d as DiffRef);
       }
     }
     // 保持出现顺序
@@ -169,14 +176,13 @@ export function AppliedChangesBar({
   // 有快照功能但没改动也没快照时也不显示
   if (totalChanges === 0 && snapshots.length === 0) return null;
 
-  const openDiff = (path: string, oldContent?: string, newContent?: string) => {
-    const vs = (window as any).__axonVSCode;
-    if (vs) {
-      const msg: Record<string, unknown> = { type: "open_diff", path };
-      if (oldContent !== undefined) msg.oldContent = oldContent;
-      if (newContent !== undefined) msg.newContent = newContent;
-      vs.postMessage(msg);
+  const openDiff = (path: string, oldContent?: string, newContent?: string, file?: ChangeFile) => {
+    // 从会话快照恢复的历史改动没有正文：按最早 / 最近两次改动的 editId 取回再打开
+    if (file?.firstRef?.bodyOmitted && file.lastRef) {
+      void openMergedDiff(clientId, path, file.firstRef, file.lastRef);
+      return;
     }
+    void openDiffView(clientId, { path, oldContent, newContent });
   };
   const openFile = (path: string) => {
     const vs = (window as any).__axonVSCode;
@@ -256,7 +262,7 @@ export function AppliedChangesBar({
                   ))}
                   {filteredApplied.map((f) => (
                     <FileRow key={`a-${f.path}`} file={f} onOpenDiff={() => {
-                      if (f.oldContent !== undefined || f.newContent !== undefined) { openDiff(f.path, f.oldContent, f.newContent); } else { openFile(f.path); }
+                      if (f.oldContent !== undefined || f.newContent !== undefined || f.firstRef?.bodyOmitted) { openDiff(f.path, f.oldContent, f.newContent, f); } else { openFile(f.path); }
                     }} onOpenFile={() => openFile(f.path)}>
                       {f.undoable && !f.reverted && (
                         <button onClick={() => onUndo(f.path)} className="flex items-center gap-0.5 px-1.5 py-px rounded text-amber-500 hover:text-amber-600 hover:bg-amber-500/10 transition-colors shrink-0 text-[11px]" title="撤销此文件改动"><Undo2 className="w-3 h-3" />撤销</button>

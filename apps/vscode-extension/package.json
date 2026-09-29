@@ -119,20 +119,6 @@
           "scope": "resource",
           "markdownDescription": "压缩时保留最近多少条消息的原文不压缩。\n\n- **值越大**：AI 能看到更多近期原文上下文，理解更连贯；但上下文体积更大\n- **值越小**：压缩更激进，体积更小，但可能丢失近期上下文细节\n\n默认 8（约 3-4 轮完整对话）。"
         },
-        "axon.compaction.toolResultPruneChars": {
-          "type": "number",
-          "default": 800,
-          "minimum": 50,
-          "scope": "resource",
-          "markdownDescription": "旧工具结果裁剪后保留的字符数。超过 N 轮（见下方设置）的工具结果会被截断到这个长度，超出部分用标记替代。\n\n- **值越大**：旧工具输出保留越多细节（如完整搜索结果、完整命令输出）\n- **值越小**：上下文更精简，但旧工具输出可能丢失有用信息\n\n`read_file` / `list_dir` 保留开头，`execute_command` / `search` 保留末尾。"
-        },
-        "axon.compaction.toolResultKeepTurns": {
-          "type": "number",
-          "default": 2,
-          "minimum": 0,
-          "scope": "resource",
-          "markdownDescription": "保留最近几轮对话中的工具结果不被裁剪。设为 0 表示裁剪所有非当前轮的工具结果。\n\n- **值越大**：AI 能回看更多轮的完整工具输出（如之前读过的文件内容、跑过的命令结果）\n- **值越小**：上下文更精简\n\n注意：此裁剪独立于滚动压缩开关——即使关闭滚动压缩，旧工具结果仍会按此设置裁剪。"
-        },
         "axon.creditBudget.enabled": {
           "type": "boolean",
           "default": true,
@@ -152,6 +138,53 @@
           "minimum": 1,
           "scope": "resource",
           "markdownDescription": "硬暂停阈值（credits）。单轮任务花费达到此值时暂停，弹窗展示真实花费，由你选择「继续」或「停止」。选择继续后该阈值本轮翻倍，避免同一个长任务反复打断。"
+        },
+        "axon.trace.level": {
+          "type": "string",
+          "enum": ["off", "summary", "normal", "full"],
+          "enumDescriptions": [
+            "不记录（不创建任何文件）",
+            "只记骨架：轮次边界、工具调用与结果、错误。不含思考与正文",
+            "骨架 + 思考与正文（按块聚合）。默认",
+            "骨架 + 逐条原始增量。体积可达数百 MB，仅在复现流式细节时临时开启"
+          ],
+          "default": "normal",
+          "scope": "resource",
+          "markdownDescription": "**运行轨迹（trace）记录等级**。\n\ntrace 是排障用的原始时序日志（谁先谁后、工具返回了什么），**记录在用户目录** `<用户目录>/.axon/projects/<项目>/traces/`，不会写进工作区。\n\n- **off**：不记录。\n- **summary**：只留骨架，KB 级。\n- **normal（默认）**：骨架 + 思考与正文，按块聚合，数 MB 级。\n- **full**：逐条原始增量，数百 MB 级 —— 只有要复现打字机节奏这类流式细节时才需要。\n\n实测：逐条记录时 90% 的体积是每行重复的 JSON 外壳而非内容，按块聚合后同样的会话可从 867 MB 降到十几 MB，时序信息不损失。所以除非确有必要，不建议用 full。"
+        },
+        "axon.trace.maxFileMB": {
+          "type": "number",
+          "default": 64,
+          "minimum": 1,
+          "scope": "resource",
+          "markdownDescription": "单个 trace 文件的上限（MB）。达到后停止写入，并在文件尾留一条说明。\n\n设置它是为了防止单个会话把磁盘写满（曾出现单文件 963 MB 的情况）。写入按流式追加，到达上限即停，不会留下半截 JSON 行。"
+        },
+        "axon.trace.keepRecentFiles": {
+          "type": "number",
+          "default": 30,
+          "minimum": 1,
+          "scope": "resource",
+          "markdownDescription": "每个项目保留最近多少份 trace，更旧的自动清理。\n\n文件名内嵌创建时间，因此按名字排序即按时间排序，无需依赖文件系统时间戳。"
+        },
+        "axon.wiki.provider": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "**生成 Wiki 使用的 Provider**。留空表示沿用当前会话所用的 Provider。\n\nWiki 生成是本项目里最贵的单个操作（多页 × 每页多轮工具调用），所以给它可以独立于对话选择模型——聊天的便宜模型与读懂架构所需的模型往往不是同一个。\n\n只填 `model` 不填本项时，会自动在已配置的 Provider 中查找哪个提供该模型。"
+        },
+        "axon.wiki.model": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "**生成 Wiki 使用的模型**。留空表示沿用当前会话模型。\n\n默认跟随会话是有意的：Wiki 跑得少、但要读懂代码，沿用用户已经选定并认可的模型最稳妥。只有想为它单独指定（例如大仓库用更强的、或想省钱用便宜的）时才需要填。\n\n⚠️ 与内联补全刻意相反——那个跑得太频繁，默认要挑最便宜的。"
+        },
+        "axon.wiki.maxPages": {
+          "type": "number",
+          "default": 15,
+          "minimum": 1,
+          "maximum": 100,
+          "scope": "resource",
+          "markdownDescription": "**单次生成的页面数上限**。\n\n页数直接决定 LLM 调用次数，也就直接决定花费；同时它也是注入模型索引的长度来源（页越多，索引越长）。\n\n- **值越小**：越省钱、索引越短，但一个页面要覆盖更多内容，粒度过粗时任何局部改动都会让整页失效\n- **值越大**：覆盖更细，但花费与索引长度同步上升\n\n默认 15，适合中等规模仓库。规划时若发现值得写的主题超过这个数，只会生成前 N 页。"
         }
       }
     },
@@ -168,9 +201,9 @@
           "icon": "media/powers.svg"
         },
         {
-          "id": "axon-agents",
-          "title": "Agent",
-          "icon": "media/agent.svg"
+          "id": "axon-wiki",
+          "title": "Wiki",
+          "icon": "media/wiki.svg"
         }
       ],
       "secondarySidebar": [
@@ -206,10 +239,14 @@
           "name": "Powers"
         }
       ],
-      "axon-agents": [
+      "axon-wiki": [
         {
-          "id": "axon.agents",
-          "name": "Agent"
+          "id": "axon.wiki",
+          "name": "Wiki"
+        },
+        {
+          "id": "axon.wiki.pages",
+          "name": "生成结果"
         }
       ],
       "axon-chat": [
@@ -248,6 +285,49 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "axon.wiki.generate",
+        "title": "Axon: 生成项目 Wiki",
+        "icon": "$(book)"
+      },
+      {
+        "command": "axon.wiki.refresh",
+        "title": "刷新 Wiki 列表",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "axon.wiki.openPage",
+        "title": "Axon: 打开 Wiki 页面"
+      },
+      {
+        "command": "axon.wiki.pickModel",
+        "title": "Axon: 选择生成 Wiki 的模型",
+        "icon": "$(chip)"
+      },
+      {
+        "command": "axon.wiki.cancel",
+        "title": "取消 Wiki 生成",
+        "icon": "$(stop-circle)"
+      },
+      {
+        "command": "axon.wiki.showResults",
+        "title": "Axon: 查看 Wiki 生成结果"
+      },
+      {
+        "command": "axon.wiki.deletePage",
+        "title": "删除页面",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "axon.wiki.deleteJob",
+        "title": "删除这条记录",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "axon.wiki.deleteWorkspace",
+        "title": "删除该应用的全部 Wiki",
+        "icon": "$(trash)"
+      },
+      {
         "command": "axon.openRelay",
         "title": "Axon: 打开 Relay"
       },
@@ -258,24 +338,6 @@
       {
         "command": "axon.openSkill",
         "title": "Axon: 打开 Skill"
-      },
-      {
-        "command": "axon.openAgent",
-        "title": "Axon: 打开 Agent"
-      },
-      {
-        "command": "axon.agent.create",
-        "title": "新建 Agent",
-        "icon": "$(add)"
-      },
-      {
-        "command": "axon.agent.refresh",
-        "title": "刷新 Agent 列表",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "axon.agent.delete",
-        "title": "删除 Agent"
       },
       {
         "command": "axon.skill.create",
@@ -443,6 +505,21 @@
           "group": "inline"
         },
         {
+          "command": "axon.wiki.deletePage",
+          "when": "viewItem =~ /^wikiPage/",
+          "group": "7_modification"
+        },
+        {
+          "command": "axon.wiki.deleteJob",
+          "when": "viewItem == wikiJob",
+          "group": "7_modification"
+        },
+        {
+          "command": "axon.wiki.deleteWorkspace",
+          "when": "viewItem == wikiWorkspace",
+          "group": "7_modification"
+        },
+        {
           "command": "axon.skill.create",
           "when": "viewItem == skillGroup",
           "group": "navigation"
@@ -468,6 +545,11 @@
           "group": "navigation"
         },
         {
+          "command": "axon.skill.toggle",
+          "when": "viewItem == skillBuiltinToggleable",
+          "group": "navigation"
+        },
+        {
           "command": "axon.skill.delete",
           "when": "viewItem == skillToggleable",
           "group": "7_modification"
@@ -475,6 +557,11 @@
         {
           "command": "axon.power.toggle",
           "when": "viewItem == powerItem",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.power.toggle",
+          "when": "viewItem == powerItemBuiltin",
           "group": "navigation"
         },
         {
@@ -527,6 +614,26 @@
         {
           "command": "axon.relay.refresh",
           "when": "view == axon.relay",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.wiki.generate",
+          "when": "view == axon.wiki",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.wiki.cancel",
+          "when": "view == axon.wiki && axon.wikiGenerating",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.wiki.refresh",
+          "when": "view == axon.wiki",
+          "group": "navigation"
+        },
+        {
+          "command": "axon.wiki.pickModel",
+          "when": "view == axon.wiki",
           "group": "navigation"
         },
         {
@@ -587,16 +694,6 @@
         {
           "command": "axon.openMarketplaceManager",
           "when": "view == axon.powers",
-          "group": "navigation"
-        },
-        {
-          "command": "axon.agent.create",
-          "when": "view == axon.agents",
-          "group": "navigation"
-        },
-        {
-          "command": "axon.agent.refresh",
-          "when": "view == axon.agents",
           "group": "navigation"
         },
         {

@@ -1,7 +1,7 @@
 /**
  * ChatPanel 相关类型与常量
  *
- * 从原 ChatPanel.tsx 拆出：聊天消息 / segment / 附件 / 回复风格等纯类型定义，
+ * 从原 ChatPanel.tsx 拆出：聊天消息 / segment / 附件等纯类型定义，
  * 供 ChatPanel 壳层、useChatSession hook 与各展示组件共享。
  */
 
@@ -26,8 +26,10 @@ export interface ToolSegment {
   output?: string;  // execute_command 专用：执行结果
   query?: string;   // search 专用：搜索关键词
   args?: Record<string, unknown>; // 原始工具参数，用于失败态仍能展示路径等关键信息
-  diff?: { path: string; oldContent: string; newContent: string; editId?: string }; // str_replace/create_file 专用：本次修改的完整文件前后快照
-  diffs?: { path: string; absPath?: string; oldContent: string; newContent: string; editId?: string }[]; // apply_patch 专用：一次改多个文件
+  // oldContent / newContent 可能缺省：从会话快照恢复时正文不下发（bodyOmitted=true），
+  // 打开 diff 时按 editId 向后端按需取（见 lib/openDiff）。读正文的地方都要能处理缺省。
+  diff?: { path: string; absPath?: string; oldContent?: string; newContent?: string; editId?: string; bodyOmitted?: boolean; hadOldContent?: boolean }; // str_replace/create_file 专用：本次修改的完整文件前后快照
+  diffs?: { path: string; absPath?: string; oldContent?: string; newContent?: string; editId?: string; bodyOmitted?: boolean }[]; // apply_patch 专用：一次改多个文件
   noopEdit?: boolean; // 编辑工具执行成功但无实际内容变化（无 diff）
   diagnostics?: { path: string; ok: boolean; errorCount: number }[]; // check_diagnostics 专用：按文件诊断结果
   searchResults?: { query: string; source: string; results: { title: string; url: string; snippet: string; domain: string; date?: string }[] }; // web_search 专用
@@ -51,9 +53,25 @@ export interface ToolSegment {
   /** MCP 工具专用：真实 server 名 / 工具名（后端透传，卡片展示用） */
   mcpServer?: string;
   mcpTool?: string;
+  /** 开始执行前必须完成的工具调用（后端按真实调度批次下发）。 */
+  waitingFor?: { id: string; name: string }[];
 }
 
-export type Segment = TextSegment | ToolSegment | SubAgentSegment | ReasoningSegment | RetrySegment;
+export type Segment = TextSegment | ToolSegment | SubAgentSegment | ReasoningSegment | RetrySegment | WikiRecallSegment;
+
+/**
+ * 记忆召回段：本轮把哪些项目 Wiki 页面注入了上下文。
+ *
+ * 只在召回集合【发生变化】时出现（首次 / 页面增删 / 某页转陈旧），稳定期静默 ——
+ * 所以「这张卡片出现」本身就是信号：记忆变了。见 AgentSession.announceWikiRecall。
+ */
+export interface WikiRecallSegment {
+  type: "wikirecall";
+  /** 磁盘上共有多少页（超出注入上限时大于 pages.length） */
+  total: number;
+  /** 实际注入的页面（顺序与提示词里的清单一致） */
+  pages: { title: string; stale: boolean }[];
+}
 
 /** 思考过程段：每个思考块（轮次 + 协议块号）独立为一个 segment，时序上紧跟在对应工具调用前 */
 export interface ReasoningSegment {
@@ -116,10 +134,12 @@ export interface ChatMessage {
   segments?: Segment[];
   /** user 用：内联片段（文本 + tag），用于富文本渲染用户气泡 */
   userSegments?: UserSegment[];
+  /** 本轮实际发给模型的思考强度值（如 high / xhigh）；未选则缺省 */
+  effort?: string;
   streaming?: boolean;
   /** 本轮状态：pending=等待响应 / running=执行中 / success=正常完成 / cancelled=用户取消 / error=异常中断 */
   turnStatus?: "pending" | "running" | "success" | "cancelled" | "error";
-  turnStats?: { elapsed: number; tokens: number; model?: string; modelName?: string; credits?: number; creditDetail?: CreditDetail };
+  turnStats?: { elapsed: number; tokens: number; model?: string; modelName?: string; providerName?: string; effort?: string; credits?: number; creditDetail?: CreditDetail };
   /** turn 代数：取消后启动新轮时递增，防止陈旧事件穿透到新轮 */
   turnGen?: number;
 }
@@ -152,15 +172,6 @@ export interface AttachedFile {
    */
   kind?: "file" | "terminal" | "editor" | "folder" | "diagnostics";
 }
-
-/** 回复风格预设 */
-export type ReplyStyle = "concise" | "default" | "detailed";
-
-export const REPLY_STYLES: { id: ReplyStyle; label: string; hint: string }[] = [
-  { id: "concise", label: "简洁", hint: "直奔结论，尽量短" },
-  { id: "default", label: "默认", hint: "平衡详略" },
-  { id: "detailed", label: "详细", hint: "展开讲解，多给背景" },
-];
 
 /**
  * ChatPanel props（多会话版）。

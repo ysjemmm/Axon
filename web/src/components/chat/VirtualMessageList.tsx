@@ -48,6 +48,16 @@ interface VirtualMessageListProps {
   footer?: ReactNode;
   /** 列表顶部插槽（断开连接提示等） */
   header?: ReactNode;
+  /**
+   * 这段消息之前被折叠掉的条数（= ChatPanel 的切片起点）。
+   *
+   * ⚠️ 必须传。messages 是 chatHistory 的后缀切片，切片起点一移动（每轮结束 / 取消 /
+   * 压缩 / 展开更早消息），同一条消息就换了索引。而 Virtuoso 的**高度缓存按索引存**——
+   * 不告诉它起点移动了，它会拿第 i 条旧消息的高度去排第 i 条新消息，整列偏移全错，
+   * 重测量期间内容区塌掉（实测 775px → 41px，约 200ms 后恢复）= 用户看到的"刷白一下"。
+   * firstItemIndex 变化时 Virtuoso 会把高度缓存整体平移（源码 shiftWith），这正是它的用途。
+   */
+  firstItemIndex?: number;
   /** 滚动事件回调 */
   onScroll?: (scrollTop: number) => void;
   /** 可见范围变化回调（顶部可见消息的 index） */
@@ -56,6 +66,17 @@ interface VirtualMessageListProps {
   followOutput?: boolean;
   /** 初始显示底部（加载历史后定位到最后一条消息） */
   initialBottom?: boolean;
+  /**
+   * 所在面板是否可见。
+   *
+   * ⚠️ 隐藏面板必须停掉贴底跟随。多会话时 SessionContainer 会同时挂着好几个面板
+   * （实测 7 个），它们都叠在同一处、只靠 opacity 隐藏——**布局照算**。
+   * 贴底跟随每帧都要读 scrollHeight（强制同步布局）再写 scrollTop；切 tab 时
+   * 每个面板都因重渲染触发一次 onContentChanged，于是 7 个面板各自连续钉底 400ms，
+   * 每帧 7 次强制重排，正好对上切换时的 9 次 [Violation] Forced reflow
+   * 与"提交→首帧绘制"137~228ms 的空档。隐藏面板的滚动位置用户看不见，没有必要跟。
+   */
+  active?: boolean;
   /**
    * 贴底状态变化回调（仅在翻转时触发）。
    * 供外部决定"要不要做会影响布局的动作"——不在底部时不做，否则从头部折叠消息
@@ -94,6 +115,34 @@ const FooterSlot = ({ context }: { context?: SlotContext }) => <>{context?.foote
 /** components 映射也保持恒定引用：两个插槽都是模块级常量，没有任何需要重建的理由。 */
 const SLOT_COMPONENTS = { Header: HeaderSlot, Footer: FooterSlot };
 
+/**
+ * 列表项按**消息 id** 做 key，而不是 Virtuoso 默认的**索引**。
+ *
+ * ── 为什么必须这样 ──
+ * 这里的消息数组是 `chatHistory` 的一段**后缀切片**（ChatPanel 的 hiddenMessageCount 决定起点）。
+ * 一旦切片起点移动（折叠计数变化：每轮结束、取消、压缩都会触发），同样的消息会落到新索引上。
+ * 索引做 key 时 Virtuoso 会把它当成"这些项的内容全变了"，于是把视口内的项整片卸载重建
+ * ——重建期间容器高度归零、内容是空的，表现为对话区**白屏闪一下**，随后内容再铺回来。
+ *
+ * 实测（取消时，探针记录）：一次取消后 51ms 内 11 个渲染项里有 5 个换成新 DOM 节点、
+ * 首项 id 换成了更早的一条 user 消息，200ms 后又整体换回去。
+ *
+ * ⚠️⚠️ 光有 key 不够，这是上一版踩空的地方：
+ *   · computeItemKey 的第二个参数只有传了 `data` 才会是消息本体。早先只传 totalCount，
+ *     msg 恒为 undefined，永远落到下面的兜底分支——key 实际仍是索引，等于没修。
+ *   · 就算 key 对了，Virtuoso 的**高度缓存仍按索引存**。切片起点移动时必须同步
+ *     firstItemIndex，它才会把高度缓存整体平移；否则整列用错位的高度排版，照样塌一下。
+ * 所以现在 data + firstItemIndex + computeItemKey 三者一起传（见下方 <Virtuoso>）。
+ */
+/**
+ * ⚠️ msg 在这里可能是 undefined：Virtuoso 在 totalCount 变化的过渡帧里，可能用尚未
+ * 收敛的旧 index 范围调用 computeItemKey，此时对应的 messages[index] 已经越界。
+ * itemContent 那边已经对此做了 `if (!msg) return null` 的防御，这里必须做同样的防御，
+ * 否则会在 msg.id 上抛 TypeError，被 Error Boundary 兜底成整页渲染错误（白屏/报错卡片）。
+ */
+type ListMsg = { id: string; role?: string };
+const itemKeyOf = (index: number, msg: ListMsg | undefined) => msg?.id ?? `__missing-${index}`;
+
 // #endregion
 
 // #region Component
@@ -107,10 +156,12 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
       overscan = 600,
       footer,
       header,
+      firstItemIndex = 0,
       onScroll,
       onTopItemChange,
       followOutput = false,
       initialBottom = false,
+      active = true,
       onAtBottomChange,
     },
     ref,
@@ -207,7 +258,15 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
      */
     useEffect(() => {
       const el = scrollerEl;
-      if (!el) return;
+      // 隐藏面板不挂任何观察器（理由见 active 属性注释）。
+      // 变回可见时本 effect 重跑、重新挂上；ChatPanel 在 active 翻 true 时会主动钉一次底。
+      if (!el || !active) return;
+      // ⚠️ 挂上的那一刻不要主动读布局。下面的 onScroll() 首次调用会读 scrollHeight，
+      // 而这个 effect 恰好在切 tab 的同一个任务里跑（active 翻 true → 提交 → effect）：
+      // 此时面板刚从 content-visibility:hidden 放出来，读 scrollHeight 会逼浏览器
+      // **同步**把整个面板布局算完 —— 就是 click handler 里那 229~330ms 的 Forced reflow。
+      // 首次判定推迟到下一帧，那时浏览器已经按正常流程算过布局，读数不再强制重排。
+      let initialCheck: number | null = null;
 
       let frame: number | null = null;
       /** 持续钉到该时刻：每次内容变化都把窗口往后推，变化停止后再多钉一段以覆盖测量收敛 */
@@ -282,7 +341,10 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
       // pointerup 可能落在容器之外，挂到 window 才能可靠清除按下状态
       window.addEventListener("pointerup", onPointerUp);
       window.addEventListener("pointercancel", onPointerUp);
-      onScroll();
+      initialCheck = requestAnimationFrame(() => {
+        initialCheck = null;
+        onScroll();
+      });
 
       // DOM 增删改（流式增量、工具卡片展开）+ 内容高度变化（图片/图表测量完成）
       const observer = new MutationObserver(onContentChanged);
@@ -304,9 +366,10 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
         window.removeEventListener("pointercancel", onPointerUp);
         observer.disconnect();
         resizeObserver?.disconnect();
+        if (initialCheck !== null) cancelAnimationFrame(initialCheck);
         if (frame !== null) cancelAnimationFrame(frame);
       };
-    }, [scrollerEl, readAtBottom, scrollToBottomNow]);
+    }, [scrollerEl, readAtBottom, scrollToBottomNow, active]);
 
     // 滚动事件：通知外部
     const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
@@ -317,9 +380,11 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
     }, [onScroll]);
 
     // 可见范围变化：通知外部顶部可见消息的 index（供 sticky 检测）
+    // 设了 firstItemIndex 后 Virtuoso 回报的是**绝对**索引；换回切片内的局部索引，
+    // 调用方（ChatPanel.handleTopItemChange 自己再加 hiddenMessageCount）的约定保持不变。
     const handleRangeChanged = useCallback((range: { startIndex: number; endIndex: number }) => {
-      onTopItemChange?.(range.startIndex);
-    }, [onTopItemChange]);
+      onTopItemChange?.(range.startIndex - firstItemIndex);
+    }, [onTopItemChange, firstItemIndex]);
 
     // followOutput 回调：决定是否追底
     const handleFollowOutput = useCallback((_isAtBottom: boolean) => {
@@ -327,16 +392,23 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
       return followOutput ? "smooth" : false;
     }, [followOutput]);
 
-    // 渲染单条消息（带 fade-in 入场动画，避免虚拟列表卸载/重挂载时闪烁）
-    const itemContent = useCallback((index: number) => {
-      const msg = messages[index];
+    // 渲染单条消息。
+    //
+    // ⚠️ 这里【不能】加 `animate-fade-in`（或任何入场动画）。
+    // 虚拟列表里"挂载"是滚动过程中的常态（向上滚会把历史项挂进视口），入场动画因此会被
+    // 反复重放：实测向上滚动一次，54~94 个帧里消息项 computed opacity < 1（0.2s 从 0 淡入）。
+    // 而一旦该消息含 mermaid 图，项高可达 2000px+ —— 整个视口透明 200ms，就是用户看到的
+    // "白屏刷一下"。入场动画只适合"出现一次"的元素，不适合会被滚动反复挂载的虚拟列表项。
+    // index 是绝对索引（含 firstItemIndex）；消息本体直接用 Virtuoso 按 data 递进来的 item，
+    // 不再用索引回查数组。传给 renderMessage 的仍是切片内的局部索引。
+    const itemContent = useCallback((index: number, msg: ListMsg | undefined) => {
       if (!msg) return null;
       return (
-        <div className="py-1 animate-fade-in" data-msg-id={msg.id} data-msg-role={msg.role}>
-          {renderMessage(msg, index)}
+        <div className="py-1" data-msg-id={msg.id} data-msg-role={msg.role}>
+          {renderMessage(msg, index - firstItemIndex)}
         </div>
       );
-    }, [messages, renderMessage]);
+    }, [renderMessage, firstItemIndex]);
 
     // 插槽内容走 context 下发。这个对象每次重建无妨：它只是 prop，变化只让插槽 patch，
     // 而组件类型（HeaderSlot / FooterSlot）恒定，所以不会重挂载。
@@ -345,11 +417,30 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
     return (
       <Virtuoso
         ref={virtuosoRef}
-        totalCount={messages.length}
+        data={messages as ListMsg[]}
+        firstItemIndex={firstItemIndex}
         itemContent={itemContent}
+        computeItemKey={itemKeyOf}
         defaultItemHeight={estimateHeight}
-        increaseViewportBy={overscan}
+        // ── 为什么向上滚动会"白一下" ──
+        // 向上滚进来的历史项在进入视口前才挂载；挂载那一刻它没有测量值，只能按
+        // defaultItemHeight（200px）估位。真实高度（长回复 / 大图常 1000px+）测出来后，
+        // Virtuoso 得把上方偏移整体校正一次，校正期间可见区间里会短暂出现空白带。
+        //
+        // 两个参数分开给：
+        //   · increaseViewportBy：视口**外**预先挂载的像素范围。向上方向给得大，
+        //     让历史项在进入视口前一屏多就挂上、完成测量，校正发生在用户看不到的地方。
+        //   · overscan：滚动时"成块"扩展渲染范围的步长，只用来减少重渲染次数。
+        //     早先两者都传了同一个 300，向上的预挂载余量不够盖住一条长消息。
+        increaseViewportBy={{ top: Math.max(overscan, 1200), bottom: overscan }}
+        // 按像素的预挂载对"单条就上千像素"的聊天项不够：一条长回复就能吃掉整个 1200px 余量，
+        // 快速向上滚时下一条还没挂上就进了视口。再按条数兜底，视口上方至少常驻 2 条已测量的项。
+        minOverscanItemCount={{ top: 2, bottom: 1 }}
         overscan={overscan}
+        // 尺寸变化直接同步上报，而不是推迟一帧（requestAnimationFrame）。
+        // 推迟的那一帧里，项已按新内容画出、但偏移还是旧的，正好是一帧错位的空白 / 跳动。
+        // 代价是库会在测量期间尺寸变化时打一条无害的 ResizeObserver 告警（见库文档 #1049）。
+        skipAnimationFrameInResizeObserver
         followOutput={handleFollowOutput}
         initialTopMostItemIndex={initialBottom && messages.length > 0 ? messages.length - 1 : undefined}
         components={SLOT_COMPONENTS}
@@ -357,7 +448,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListHandle, VirtualMe
         scrollerRef={handleScrollerRef}
         onScroll={handleScroll as any}
         rangeChanged={handleRangeChanged}
-        className="flex-1 min-h-0"
+        className="flex-1 min-h-0 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
         style={{ height: "100%", overflowX: "hidden" }}
       />
     );

@@ -69,6 +69,10 @@ export interface SessionHubDeps {
    */
   getCompactionConfig?: () => CompactionUserConfig;
   /**
+   * trace 记录配置（等级 / 上限 / 保留份数）。缺省时用 core 的 DEFAULT_TRACE_CONFIG。
+   */
+  getTraceConfig?: () => Partial<import("./sessionTraceWriter.js").TraceConfig>;
+  /**
    * 可选：Credits 预算门配置提供器。返回当前生效的预算门配置（含开关、软提醒/硬暂停阈值）。
    * 在会话创建时和配置变更时调用，使配置热更新到所有活跃会话。
    * 不注入则使用 DEFAULT_CREDIT_BUDGET_CONFIG（默认启用）。

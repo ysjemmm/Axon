@@ -123,10 +123,13 @@ export function registerSkillRoutes(app: Express): void {
   /** 删除整个 skill */
   app.delete("/api/skills/:name", async (req, res) => {
     try {
-      await service.deleteSkill(req.params.name);
+      // 带上 workspace：meta.dir 才是真正该删的目录（工作区级 skill 也在其中）
+      await service.deleteSkill(req.params.name, queryStr(req, "workspace"));
       res.json({ ok: true });
     } catch (err) {
-      fail(res, err, 500);
+      // 用默认 400：不可删除属于用户侧的可预期拒绝，不是服务端故障；
+      // 「skill 不存在」仍会被 fail 映射成 404。
+      fail(res, err);
     }
   });
 }

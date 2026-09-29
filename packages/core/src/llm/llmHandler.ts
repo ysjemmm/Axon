@@ -81,6 +81,7 @@ export class DefaultLLMHandler implements LLMHandler, LLMHandlerContract {
       finishReason: raw.finishReason,
       // 透传真实 token 用量，供上层（canary 驱动 UI 时）精确计费/驱动压缩。
       usage: raw.usage,
+      reasoningContent: raw.reasoningContent,
       stage,
     };
   }

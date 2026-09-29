@@ -29,10 +29,24 @@ export interface DirChild extends DirEntry {
   isDir: boolean;
 }
 
-/** 文件/目录元信息 */
+/**
+ * 文件/目录元信息。
+ *
+ * 为什么 mtimeMs / size 是【可选】而非必填：
+ * 不同宿主提供元信息的能力不同 —— node:fs 的 Stats 两者都有；vscode.workspace.fs 则依赖
+ * 具体 FileSystemProvider，虚拟文件系统（Remote-SSH / Dev Container / github.dev / 扩展注册
+ * 的内存 FS）可能返回伪造的 0 或干脆不提供。把「拿不到」表达成 undefined，而不是给一个
+ * 看着像真的假值 —— 消费方才能区分「文件确实没变」与「根本不知道变没变」。
+ * 对以元信息判断「是否需要重新生成」的场景（如文档陈旧检测），这个区分是正确性的前提：
+ * 拿假值当依据会得出「没变」，于是该更新的内容永远不更新。
+ */
 export interface StatInfo {
   isFile: boolean;
   isDir: boolean;
+  /** 最后修改时间（epoch 毫秒）；宿主无法提供时为 undefined */
+  mtimeMs?: number;
+  /** 文件字节数；目录、或宿主无法提供时为 undefined */
+  size?: number;
 }
 
 /** Agent 可用的文件系统能力 */

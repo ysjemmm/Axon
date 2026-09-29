@@ -41,7 +41,7 @@ export class ResponsesStrategy implements LLMStrategy {
   constructor(private client: OpenAI) {}
 
   async runTurn(params: RunTurnParams): Promise<LLMTurnResult> {
-    const { model, messages, tools, signal, callbacks, temperature, maxOutputTokens, think, modelSupportsThinking } = params;
+    const { model, messages, tools, signal, callbacks, temperature, maxOutputTokens, think, effort, modelSupportsThinking } = params;
 
     const isGpt = /^gpt/i.test(model);
     // 推理模型（gpt-5.x / o1 / o3 / o4 系列）支持 reasoning summary。
@@ -74,7 +74,7 @@ export class ResponsesStrategy implements LLMStrategy {
         ...(maxOutputTokens !== undefined ? { max_output_tokens: maxOutputTokens } : {}),
         // 推理模型显式请求思考摘要：summary="auto" 让模型自行决定是否产出，
         // 避免简单任务也强制生成摘要浪费 token。
-        ...(isReasoningModel ? { reasoning: { summary: "auto" } } : {}),
+        ...(isReasoningModel ? { reasoning: { summary: "auto", ...(effort ? { effort } : {}) } } : {}),
         store: false,
         stream: true,
       },

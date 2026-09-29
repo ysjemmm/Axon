@@ -14,6 +14,7 @@ import { CheckCircle2, Loader2, Terminal, Eye, EyeOff, FileX, Search, GitCompare
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCommandApproval, CommandApprovalContext, type CommandTrustOption, type CommandDecision } from "@/components/chat/commandApprovalContext";
+import { openDiff, openMergedDiff, usePanelClientId, type DiffRef } from "@/lib/openDiff";
 
 /**
  * 单行文本：超长截断为省略号，hover 显示完整内容（shadcn tooltip）。
@@ -108,7 +109,7 @@ export function queuedActionText(name: string): string {
  * 刻意做得比正在执行的卡片弱：无动画、弱对比、小字号——它的作用是"预告"，不是"吸引注意"。
  *
  * 两种文案对应两种**成因完全不同**的等待，不能混：
- * · waiting=true  前面确实有工具在跑，这个在等 → "排队中"
+ * · waiting=true  参数已生成，尚未收到宿主执行事件 → "待执行"
  * · waiting=false 流式阶段，模型还在生成这次调用的参数 → "生成中"
  *
  * 文案用"生成中"而不是"生成参数中"："参数"是实现词，用户不需要知道工具调用有参数这回事。
@@ -117,13 +118,13 @@ export function queuedActionText(name: string): string {
  *
  * 为什么必须分：工具卡在工具名一到就发出（onToolCallDetected），而参数还要继续流。
  * create_file 的 content、str_replace 的 new_str 往往就是模型本轮输出的主体，
- * 这一段可能几十秒。全都写"排队中"会让用户以为卡在调度上，
+ * 这一段可能几十秒。全都写"待执行"会让用户以为卡在调度上，
  * 而真实情况是模型正在逐字写文件内容——等待时间的归因整个错了。
  */
 export function QueuedBadge({ waiting }: { waiting?: boolean }) {
   return (
     <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground/70 border border-border/60">
-      {waiting ? "排队中" : "生成中"}
+      {waiting ? "待执行" : "生成中"}
     </span>
   );
 }
@@ -147,8 +148,9 @@ export interface ToolCallData {
   output?: string;  // execute_command 专用：执行结果
   query?: string;   // search 专用：搜索关键词
   args?: Record<string, unknown>; // 原始工具参数，用于失败态仍能展示路径等关键信息
-  diff?: { path: string; absPath?: string; oldContent: string; newContent: string }; // str_replace/create_file 专用：本次修改的完整文件前后快照
-  diffs?: { path: string; absPath?: string; oldContent: string; newContent: string }[]; // apply_patch 专用：一次改多个文件，逐文件的前后快照
+  // 正文可能缺省（bodyOmitted）：从会话快照恢复的历史改动不带全文，打开 diff 时按 editId 取（lib/openDiff）
+  diff?: { path: string; absPath?: string; oldContent?: string; newContent?: string; editId?: string; bodyOmitted?: boolean; hadOldContent?: boolean }; // str_replace/create_file 专用：本次修改的完整文件前后快照
+  diffs?: { path: string; absPath?: string; oldContent?: string; newContent?: string; editId?: string; bodyOmitted?: boolean }[]; // apply_patch 专用：一次改多个文件，逐文件的前后快照
   diagnostics?: DiagnosticFileResult[]; // check_diagnostics 专用：按文件的诊断结果
   searchResults?: { query: string; source: string; results: { title: string; url: string; snippet: string; domain: string; date?: string }[] }; // web_search 专用
   fetchResult?: { url: string; title: string; byteSize: number; success: boolean; error?: string }; // web_fetch 专用
@@ -164,13 +166,12 @@ export interface ToolCallData {
   hidden?: boolean;
   /**
    * status="queued" 时，区分它为什么还没跑（由 renderSegments 按同轮工具的执行进度推导）：
-   * · true  前面已有工具开始执行 → 它在真排队
+   * · true  参数已经生成，等待调度/授权/前置依赖
    * · false/缺省 执行还没开始 → 流式阶段，模型还在生成这次调用的参数
-   *
-   * 后端严格串行，所以"它之前有工具进入过 pending/终态"就等价于"执行已开始"，
-   * 不需要为此加协议字段。
    */
   queuedWaiting?: boolean;
+  /** 当前仍未完成的前置工具。 */
+  waitingFor?: { id: string; name: string }[];
   /** MCP 工具专用：真实 server 名 / 工具名（后端透传，免去从编码工具名反推） */
   mcpServer?: string;
   mcpTool?: string;
@@ -495,7 +496,7 @@ function CommandCardItem({ tool, approval }: { tool: ToolCallData; approval: Ret
     <div className={`my-2 rounded-lg border bg-popover overflow-hidden tool-card-enter ${approval?.danger ? "border-red-500/80 animate-danger-pulse" : approval ? "border-amber-400/70" : (isWaitingInput && tool.status === "pending") ? "border-primary/50 animate-pulse" : tool.status === "queued" ? "border-border/50 opacity-60" : "border-border"}`}>
       {/* 标题栏 */}
       <div className="flex items-center gap-2 py-1.5 px-2.5 text-xs border-b border-border/60 bg-foreground/[0.04]">
-        {/* 排队中用静态时钟：转圈只属于真正在执行的那一个（后端串行，同一时刻只有一个在跑） */}
+        {/* 待执行用静态时钟；只有宿主实际开始执行后才显示转圈。 */}
         {tool.status === "queued" && <Clock className="w-3.5 h-3.5 shrink-0 text-muted-foreground/50" />}
         {tool.status === "pending" && isWaitingInput && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-primary" />}
         {tool.status === "pending" && !isWaitingInput && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-muted-foreground" />}
@@ -528,6 +529,17 @@ function CommandCardItem({ tool, approval }: { tool: ToolCallData; approval: Ret
           </button>
         )}
       </div>
+      {tool.status === "queued" && tool.waitingFor && tool.waitingFor.length > 0 && (
+        <div className="flex items-center gap-1.5 border-b border-border/50 bg-muted/20 px-2.5 py-1.5 text-[10px] text-muted-foreground">
+          <Clock className="size-3 shrink-0" />
+          <span className="shrink-0">等待 {tool.waitingFor.length} 个工具完成</span>
+          <span className="text-muted-foreground/40">·</span>
+          <TruncatedText
+            text={tool.waitingFor.map((item) => queuedActionText(item.name)).join("、")}
+            className="text-muted-foreground/75"
+          />
+        </div>
+      )}
       {/* 命令内容：有审批且正在编辑时用 textarea，否则用只读 code */}
       {isEditing ? (
         <div className="px-2.5 py-1.5">
@@ -907,7 +919,7 @@ export function ToolCallItem({ tool, onAcceptEdit, onRejectEdit, onUndoEdit }: T
   // 根据工具类型和状态选择图标
   const renderIcon = () => {
     // 排队中：静态时钟图标，不转圈。转圈是"正在执行"的专属信号，
-    // 排队卡也转就等于骗人——后端严格串行，同一时刻只有一个工具真在跑。
+    // 待执行卡不转圈；只有收到 executing 事件才表示宿主真正开始执行。
     if (tool.status === "queued") {
       return <Clock className="w-3.5 h-3.5 shrink-0 text-muted-foreground/50" />;
     }
@@ -944,7 +956,7 @@ export function ToolCallItem({ tool, onAcceptEdit, onRejectEdit, onUndoEdit }: T
   // 根据状态决定边框样式（queued/pending/rejected/error）
   let borderClass = "border-border bg-muted/20";
   if (tool.status === "queued") {
-    // 排队中：不用琥珀色高亮，整卡压暗后退，让正在执行的那张自然凸显
+    // 待执行：不用琥珀色高亮，整卡压暗后退，让正在执行的卡片自然凸显
     borderClass = "border-border/50 bg-muted/10 opacity-60";
   } else if (tool.status === "pending") {
     borderClass = "border-amber-300/60 bg-amber-50 dark:bg-amber-950/20";
@@ -999,15 +1011,12 @@ function FileEditItem({
   const isRejected = !!tool.rejected;
   const isReverted = !!tool.reverted;
   const isUndoable = !!tool.undoable && !isPending && !isRejected && !isReverted;
+  const clientId = usePanelClientId();
 
   /** 打开 VS Code 原生 diff（通过 postMessage 通知扩展） */
   const openNativeDiff = () => {
-    const vscode = (window as any).__axonVSCode;
-    if (vscode) {
-      vscode.postMessage({ type: "open_diff", path: diff.absPath || diff.path, oldContent: diff.oldContent, newContent: diff.newContent });
-    } else {
-      console.log("[axon] open diff:", diff.path);
-    }
+    // 正文可能没随会话快照下发（bodyOmitted），openDiff 会先按 editId 取回再打开
+    void openDiff(clientId, { ...(diff as DiffRef), path: diff.absPath || diff.path });
   };
 
   // 样式：pending=琥珀色; rejected=红色浅底+删除线; reverted=灰色浅底+删除线; 正常=灰色
@@ -1159,6 +1168,7 @@ export function EditGroupItem({
   // 总 diff（仅单文件分组有意义）：第一次编辑前 → 最后一次编辑后
   const firstDiff = group.edits[0]?.diff;
   const lastDiff = group.edits[group.edits.length - 1]?.diff;
+  const panelClientId = usePanelClientId();
   const canShowTotalDiff = !group.multiFile && !!firstDiff && !!lastDiff && !hasExecuting;
 
   // 批量操作：作用于「对应状态」的子单元，按各自 editId 精确下发。
@@ -1203,10 +1213,7 @@ export function EditGroupItem({
             <button
               onClick={() => {
                 if (!canShowTotalDiff || !firstDiff || !lastDiff) return;
-                const vscode = (window as any).__axonVSCode;
-                if (vscode) {
-                  vscode.postMessage({ type: "open_diff", path: firstDiff.path, oldContent: firstDiff.oldContent, newContent: lastDiff.newContent });
-                }
+                void openMergedDiff(panelClientId, firstDiff.path, firstDiff as DiffRef, lastDiff as DiffRef);
               }}
               disabled={!canShowTotalDiff}
               title={hasExecuting ? "编辑进行中，完成后可查看总 diff" : "查看所有改动的合并 diff"}
@@ -1251,7 +1258,7 @@ export function EditGroupItem({
             <FileEditItem
               key={edit.id}
               tool={edit}
-              action={edit.name === "create_file" ? (edit.diff && edit.diff.oldContent ? "已覆盖" : "已创建") : "已编辑"}
+              action={edit.name === "create_file" ? (edit.diff && (edit.diff.oldContent || edit.diff.hadOldContent) ? "已覆盖" : "已创建") : "已编辑"}
               fileName={edit.displayName || group.fileName}
               icon={<CheckCircle2 className="w-3.5 h-3.5 text-green-600 shrink-0" />}
               onAcceptEdit={onAcceptEdit}

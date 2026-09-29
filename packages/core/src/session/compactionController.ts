@@ -22,10 +22,18 @@ export class CompactionController {
   /** 手动触发上下文压缩（供前端"压缩上下文"按钮调用）。需超过当前模型窗口 35% 才允许。 */
   async compactSession(): Promise<void> {
     if (this.s.isCompacting) return;
-    // 取消/异常结束的回合可能还没走正常循环末尾的 updateAndSendTokenUsage，
-    // 此时 lastTotalTokens 是上一轮的旧快照，而前端圆环已经按当前历史显示新估算值。
-    // 手动压缩前强制以当前 messages 重算一次，确保前后端用同一口径判断 35% 阈值。
-    this.s.updateAndSendTokenUsage();
+    // ⚠️ 这里【不重算】——判定用的就是界面正在显示的那个值。
+    // lastTotalTokens 是上一次推送出去的占用，也正是用户此刻在圆环/tooltip 上看到的数字。
+    // 两者共用同一个数，才不会出现"显示 59% 却提示未超过 35%"这种自相矛盾
+    // （59% 与 35% 不可能同时为真，出现即说明判定与显示各算了一份）。
+    //
+    // 这条路径的两种写法都试过，都不对：
+    //   · 重算并推送（updateAndSendTokenUsage）→ 点击本身会改动界面数字，实测 39% → 26%；
+    //   · 只重算不推送（recomputeTokenUsage）→ 判定用新值、界面停旧值，于是判定与显示打架。
+    // 根因是 used = 本地估算 × 校准系数，而系数每轮会被端点实报数改写（区间 0.5~2.5），
+    // 同一份上下文在不同时刻能差一倍以上。在把它做成真正稳定的量之前，
+    // 宁可让判定与显示共用同一个（可能略滞后的）快照，也不要各算各的。
+    // 代价：若某轮异常结束、没走正常循环末尾的推送，这里读到的是上一轮的旧快照。
     const ctxWindow = this.s.getContextWindow();
     if (!needsCompaction(this.s.lastTotalTokens, ctxWindow)) {
       this.s.send("compacting_end", { success: false, message: "当前上下文未超过模型窗口的 35%，无需压缩" });

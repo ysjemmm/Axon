@@ -38,17 +38,14 @@ export * from "./storage/types.js";
 export * from "./skills/builtinSkills.js";
 export * from "./skills/skillLoader.js";
 export * from "./skills/subAgentRunner.js";
-// 自定义 Agent 加载器：呈现端（VS Code 的 Agent 树）需要 listCustomAgents 来列目录。
-// 早先扩展是深链到 "@axon/core/src/skills/customAgentLoader.js" 拿它的，而本包 exports
-// 只声明了 "." / "./host" / "./channel" 三个入口，没有 "./src/*" 子路径映射，于是 tsc 报
-// TS2307（esbuild 走自己的解析所以能打包成功，运行时没事——类型检查却一直是红的）。
-// 从主入口正常导出，比给 exports 开一个 ./src/* 后门更符合这个包既有的边界设计。
-export * from "./skills/customAgentLoader.js";
 
 // relay 运行时（迁自 server/src/relay）
 export * from "./relay/relayStore.js";
 export * from "./relay/reviewAgent.js";
-export * from "./relay/parallelResearch.js";
+
+// Wiki（项目级知识文档：落盘 / 读取 / 陈旧检测）
+export * from "./wiki/wikiStore.js";
+export * from "./wiki/wikiController.js";
 
 // 系统提示、provider、Agent 会话、会话编排
 export * from "./systemPrompt.js";
@@ -57,6 +54,7 @@ export type * from "./providerTypes.js"; // 仅类型，避免 ESIGN_PROVIDER �
 export * from "./providerCatalog.js";    // BUILTIN_PROVIDERS / builtinModels / getBuiltinProvider
 export * from "./providerRegistry.js";   // ProviderRegistry + 路径助手
 export * from "./providerModels.js";     // model id 唯一性校验（findDuplicateModelIds / assertUniqueModelIds / dedupeModelsById）
+export * from "./providerEnv.js";        // .env 摘行工具（providerEnvKeys / stripProviderEnvLines）
 export * from "./agentSession.js";
 export * from "./session/index.js";
 

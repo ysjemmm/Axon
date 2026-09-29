@@ -120,6 +120,13 @@ function formatEntryResults(
   return `找到 ${results.length} 个${label}:\n${results.join("\n")}${capped}`;
 }
 
+/**
+ * 单条命中每行保留的字符数。
+ * 180 太宽：一个匹配块最多 3 行（前/中/后）就是 540 字符，几十条下来单次结果必被总长上限砍掉，
+ * 等于白读了前半截。压到 120 能看清「这行是不是我要的」，又让相同额度装下更多条命中。
+ */
+const MATCH_LINE_CHARS = 120;
+
 /** 把内容命中列表格式化为 search（content 模式）的模型可见文本 */
 function formatContentMatches(
   found: ContentMatch[],
@@ -131,9 +138,9 @@ function formatContentMatches(
   const blocks = found.slice(0, maxMatches).map((m) => {
     const rel = relative(rootCwd, m.file).split(sep).join("/");
     const lines = [`${rel}:${m.line}`];
-    if (m.before !== undefined) lines.push(`    ${m.line - 1}: ${m.before.trimEnd().slice(0, 180)}`);
-    lines.push(`  > ${m.line}: ${m.text.trimEnd().slice(0, 180)}`);
-    if (m.after !== undefined) lines.push(`    ${m.line + 1}: ${m.after.trimEnd().slice(0, 180)}`);
+    if (m.before !== undefined) lines.push(`    ${m.line - 1}: ${m.before.trimEnd().slice(0, MATCH_LINE_CHARS)}`);
+    lines.push(`  > ${m.line}: ${m.text.trimEnd().slice(0, MATCH_LINE_CHARS)}`);
+    if (m.after !== undefined) lines.push(`    ${m.line + 1}: ${m.after.trimEnd().slice(0, MATCH_LINE_CHARS)}`);
     return lines.join("\n");
   });
   const capped = found.length >= maxMatches
@@ -344,7 +351,9 @@ export async function searchContent(
   host: AgentHost,
   includePattern?: string,
 ): Promise<string> {
-  const MAX_MATCHES = 50;
+  // 50 条命中远超单次结果上限（2500 字符），真正生效的一直是那道总长闸 ——
+  // 把条数收到 20，等于把「截断」提前成「本来就没那么多」，模型看到的结束语也更准确
+  const MAX_MATCHES = 20;
   const MAX_FILE_SIZE = 1024 * 1024; // 1MB，跳过过大文件
 
   let regex: RegExp;

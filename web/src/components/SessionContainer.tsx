@@ -20,7 +20,7 @@ export interface SessionTab {
   /** 稳定的面板标识（同时作为 clientId），由 App 创建 tab 时生成 */
   key: string;
   /** 会话模式：agent=智能体，quest=纯问答 */
-  mode: "agent" | "quest" | "parallel";
+  mode: "agent" | "quest";
 }
 
 interface SessionContainerProps {
@@ -36,8 +36,16 @@ interface SessionContainerProps {
   onCompactionMigrated?: (newSessionId: string) => void;
 }
 
-/** IDLE 面板卸载延迟（ms） */
-const IDLE_UNMOUNT_DELAY = 30_000;
+/**
+ * IDLE 面板卸载延迟（ms）。
+ *
+ * 从 30s 拉长到 5 分钟：被卸载的面板切回时要重新加载整个会话（后端读盘 → 跨进程投递 →
+ * webview 解析 → 重建），实测一个 536 条消息的会话切回要 +827ms 才出内容；
+ * 而保活的面板切回只要约 200ms。"来回切几个 tab"是最常见的操作，
+ * 30s 太短，稍微停留一下再切回就落到慢路径。
+ * 代价是多占一些内存（每个面板一份消息状态 + DOM），5 分钟内没再用的仍会被卸载。
+ */
+const IDLE_UNMOUNT_DELAY = 5 * 60_000;
 
 export function SessionContainer({ tabs, activeKey, connected, send, onSessionCreated, onCompactionMigrated }: SessionContainerProps) {
   // 当前应挂载的面板 key 集合
@@ -115,12 +123,18 @@ export function SessionContainer({ tabs, activeKey, connected, send, onSessionCr
 
   return (
     <>
-      {tabs.filter((t) => keysToRender.has(t.key) && t.mode !== "parallel").map((t) => {
+      {tabs.filter((t) => keysToRender.has(t.key)).map((t) => {
         const isActive = t.key === activeKey;
         return (
           <div
             key={t.key}
-            // 过场：进入的面板从右侧快速滑入（easeOutQuint，无淡入淡出）；离开的瞬时隐藏，不留鬼影
+            // 过场：进入的面板从右侧快速滑入（easeOutQuint，无淡入淡出）；离开的瞬时隐藏，不留鬼影。
+            //
+            // ⚠️ 不要给隐藏面板加 content-visibility:hidden（试过，实测更慢）。
+            // 它让浏览器完全跳过隐藏子树，切回来时整个面板要从零排版；而且这次排版会被
+            // 切换同一任务里的布局读取逼成同步完成——click handler 里多出 229~330ms 的
+            // Forced reflow，首帧从 +147~235ms 退化到 +311~503ms。opacity:0 下隐藏面板的
+            // 布局一直是"热"的，切回只需增量更新，反而更快。
             className="absolute inset-0"
             style={{
               opacity: isActive ? 1 : 0,
@@ -128,7 +142,9 @@ export function SessionContainer({ tabs, activeKey, connected, send, onSessionCr
               transition: isActive ? "transform 240ms cubic-bezier(0.22, 1, 0.36, 1)" : "none",
               pointerEvents: isActive ? "auto" : "none",
               zIndex: isActive ? 1 : 0,
-              willChange: "transform",
+              // 只给激活面板提升合成层。给全部 7 个都挂 will-change，会常驻 7 张全屏大小的
+              // 合成层纹理——内存与合成开销都白付，隐藏面板根本不参与动画。
+              willChange: isActive ? "transform" : "auto",
             }}
             aria-hidden={!isActive}
           >

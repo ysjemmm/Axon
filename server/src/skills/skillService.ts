@@ -12,7 +12,7 @@ import { writeFile, rm, mkdir } from "node:fs/promises";
 import { join as pathJoin } from "node:path";
 import { homedir } from "node:os";
 import OpenAI from "openai";
-import { globalSkillsDir, parseFrontmatter, SkillRegistry, type SkillMeta } from "@axon/core";
+import { globalSkillsDir, parseFrontmatter, PowerRegistry, SkillRegistry, isBuiltinPowerBundledSkill, skillDeleteRejection, type SkillMeta } from "@axon/core";
 import { createNodeAgentHost } from "@axon/host-node";
 import {
   resolveSkillDir,
@@ -48,9 +48,11 @@ SKILL.md 格式要求：
 直接输出 SKILL.md 的完整内容，不要加任何解释或代码围栏。`;
 
 export class SkillService {
-  /** 列出所有已发现的 skill（全局 + 工作区两级） */
+  /** 列出所有已发现的 skill（内置方法论 + 全局 + Power 捆绑 + 工作区） */
   async list(workspace?: string): Promise<SkillListItem[]> {
-    const registry = new SkillRegistry(workspace ? [workspace] : [], createNodeAgentHost(), homedir());
+    const host = createNodeAgentHost();
+    const powers = new PowerRegistry(workspace ? [workspace] : [], host, homedir());
+    const registry = new SkillRegistry(workspace ? [workspace] : [], host, homedir(), () => powers.getActiveSkillDirs());
     const metas = await registry.discover();
     return metas.map((m) => ({
       name: m.name,
@@ -61,21 +63,21 @@ export class SkillService {
     }));
   }
 
-  /** 启用/禁用 skill（创建/删除 .disabled 标记文件）。skill 不存在时抛错。 */
+  /** 启用/禁用 skill（内置写用户级禁用名单，其余写自身目录的 .disabled 标记）。 */
   async toggle(name: string, disabled: boolean): Promise<void> {
-    const registry = new SkillRegistry([], createNodeAgentHost(), homedir());
+    const host = createNodeAgentHost();
+    const powers = new PowerRegistry([], host, homedir());
+    const registry = new SkillRegistry([], host, homedir(), () => powers.getActiveSkillDirs());
     const metas = await registry.discover();
     const meta = metas.find((m) => m.name === name);
     if (!meta) throw new Error(`skill 不存在: ${name}`);
-    if (meta.source === "builtin") {
-      throw new Error(`"${name}" 是 Axon 内置方法论，不能禁用。如需替换，可在工作区或全局放一个同名 skill 覆盖它。`);
+    // 内置 Power 捆绑的 skill 位于只读产物目录：写不进 .disabled，升级还会覆盖。
+    // 要关闭它只能禁用整个能力包（Powers 面板），要定制只能放同名 skill 覆盖。
+    if (isBuiltinPowerBundledSkill(meta.source, meta.dir)) {
+      throw new Error(`"${name}" 来自内置 Power 捆绑（只读目录），不能单独禁用。如需关闭，请在 Powers 面板禁用整个能力包；如需覆盖，可在工作区或全局放一个同名 skill。`);
     }
-    const markerPath = pathJoin(meta.dir, ".disabled");
-    if (disabled) {
-      await writeFile(markerPath, "", "utf-8");
-    } else {
-      await rm(markerPath, { force: true });
-    }
+    // 交给 registry.setEnabled 分流：内置方法论写用户级禁用名单，其余写自身目录的 .disabled
+    await registry.setEnabled(meta, disabled);
   }
 
   /**
@@ -154,10 +156,23 @@ export class SkillService {
     await deleteSkillEntry(skillDir, relPath);
   }
 
-  /** 删除整个全局 skill 目录 */
-  async deleteSkill(name: string): Promise<void> {
-    const skillDir = pathJoin(globalSkillsDir(homedir()), name);
-    await rm(skillDir, { recursive: true, force: true });
+  /**
+   * 删除整个 skill 目录。
+   *
+   * 删的是元信息里的 dir，而不是"拿 name 去拼一个路径"：后者对内置方法论（无磁盘目录）
+   * 和能力包捆绑的 skill 会 rm 到不存在的路径——force 让它静默成功，
+   * 用户看到"删除成功"但列表里还在，只能反复点。所以先判可删性，把不可删的原因说清楚。
+   */
+  async deleteSkill(name: string, workspace?: string): Promise<void> {
+    const host = createNodeAgentHost();
+    const ws = workspace ? [workspace] : [];
+    const powers = new PowerRegistry(ws, host, homedir());
+    const registry = new SkillRegistry(ws, host, homedir(), () => powers.getActiveSkillDirs());
+    const meta = (await registry.discover()).find((m) => m.name === name);
+    if (!meta) throw new Error(`skill 不存在: ${name}`);
+    const rejection = skillDeleteRejection(meta);
+    if (rejection) throw new Error(rejection);
+    await rm(meta.dir, { recursive: true, force: true });
   }
 
   /** 定位 skill 目录，找不到统一抛错（供需要目录的方法复用） */

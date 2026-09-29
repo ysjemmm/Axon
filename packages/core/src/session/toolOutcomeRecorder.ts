@@ -1,4 +1,4 @@
-import { capToolContent, type ToolMeta } from "../tools/index.js";
+import { capByTurnBudget, capToolContent, type ToolMeta } from "../tools/index.js";
 import { EDIT_PERSIST_TOOLS, FULL_RESULT_TOOLS } from "../tools/index.js";
 import type { LoopGuard } from "../agentGuards.js";
 
@@ -51,7 +51,21 @@ export interface ToolOutcomeRecordResult {
  * 本类当前只承接“发什么 + 存什么”。
  */
 export class ToolOutcomeRecorder {
+  /**
+   * 本轮探索类结果已占用的字符数（单轮预算，见 TURN_EXPLORATION_BUDGET）。
+   *
+   * 必须跨调用保持、并由 resetTurnBudget 在每轮开头清零 —— 两个方向都会出错：
+   * 不清零 → 预算跨轮累积，把后续轮次全部限死；
+   * 不保持 → 每次都当第一次，等于没限。
+   */
+  private turnExplorationChars = 0;
+
   constructor(private readonly deps: ToolOutcomeRecorderDeps) {}
+
+  /** 新一轮用户输入开始时调用：把单轮探索预算清零。 */
+  resetTurnBudget(): void {
+    this.turnExplorationChars = 0;
+  }
 
   record(input: ToolOutcomeRecordInput): ToolOutcomeRecordResult {
     const {
@@ -123,8 +137,12 @@ export class ToolOutcomeRecorder {
         ? "[系统提示：本次编辑工具调用已执行成功，但生成的新内容与当前文件内容完全一致，因此没有产生任何实际修改。请据此继续判断：如果你本来预期文件应被修改，说明这次编辑是 no-op，需要换参数、换工具或重新评估目标；不要把它当成已改成功。]\n"
         : "";
     const contentForAI = aiHint + result;
-    // 入库统一走 capToolContent：结论型上限为 Infinity（原样），终端类超限时保留头尾
-    const storedResult = capToolContent(toolName, contentForAI);
+    // 两级裁剪：先过该工具自己的单次上限（capToolContent），再过本轮的累计预算。
+    // 单次那道管不住总量 —— 实测一轮连读十几份文件，单次都合规、累计却到 10 万字符。
+    const singleCapped = capToolContent(toolName, contentForAI);
+    const budgeted = capByTurnBudget(toolName, singleCapped, this.turnExplorationChars);
+    this.turnExplorationChars += budgeted.counted;
+    const storedResult = budgeted.content;
 
     this.deps.pushToolMessage({
       role: "tool",

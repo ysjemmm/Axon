@@ -1,5 +1,4 @@
 import { calculateCredits, buildCreditDetail } from "../credits.js";
-import { pruneOldToolResults } from "../compactor.js";
 import { estimateTokensFromText } from "../llm/tokenEstimator.js";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 
@@ -9,13 +8,13 @@ export interface TurnFinalizerInput {
   streamedContentThisRound: string;
   turnStartTime: number;
   model: string;
+  providerName?: string;
+  effort?: string;
   messages: ChatCompletionMessageParam[];
   lastTurnTokens: number;
   lastTurnOutputTokens: number;
   lastCompletionTokens: number;
   buildTokenBreakdown: () => { memoryTokens: number; systemTokens: number; questionTokens: number; cachedTokens?: number };
-  compactionEnabled: boolean;
-  toolResultKeepTurns: number;
   rollingSummaryAccumulated: number;
   triggerTokens: number;
 }
@@ -56,28 +55,25 @@ export class TurnFinalizer {
     const nextMessages = [...input.messages, {
       role: "assistant",
       content: input.contentBuffer,
-      turnStats: { elapsed, tokens: turnTokens, model: input.model, credits, creditDetail },
+      turnStats: { elapsed, tokens: turnTokens, model: input.model, providerName: input.providerName, effort: input.effort, credits, creditDetail },
     } as any];
 
-    // ⚠️ 这里的持久化裁剪仍受 compressionEnabled 约束，是有意的——不要再把它去掉。
+    // ⚠️ 这里【不再】在回合结束时裁剪旧工具结果（曾经调用 pruneOldToolResults）。
     //
-    // 它写回 this.messages 并落盘，是【破坏性】的：裁掉的历史工具结果不可恢复。
-    // 而关闭滚动压缩的用户，其诉求正是"完整保留每一条原始消息"（见 CompactionUserConfig
-    // 与设置项说明），所以这条路径保持跟随开关。
+    // 那一步会把刚退出"最近 N 轮"窗口的工具结果砍短，改写的是历史**中间**的消息：
+    // 前缀缓存从被改的那条起全部失效，而每轮都有一批结果刚好变老，于是几乎每轮的首个请求
+    // 都按全价计费（实测 cached=0，单次 ≈20 credit，同轮后续请求 ≈1 credit）。
     //
-    // 那"工具结果裁剪仍生效"的承诺由谁兑现？由请求组装侧兑现：
-    // promptBuilder 会按 toolResultKeepTurns 裁剪【发给模型的副本】，不改动存储的历史。
-    // 两处配合的结果是：关闭压缩时——存储完整、上行精简；开启压缩时——两者都裁。
-    // 若在此处去掉门控，等于把"关闭压缩"也变成破坏性的，与该设置的存在意义相矛盾。
-    const prunedMessages = input.compactionEnabled
-      ? pruneOldToolResults(nextMessages, input.toolResultKeepTurns)
-      : nextMessages;
+    // 现在工具结果在【写入历史时】就按各工具的单次上限一次裁到位（toolOutcomeRecorder →
+    // capToolContent），此后发给模型、持久化、进缓存的都是这同一份，不再二次改写。
+    // 旧结果的总体积交给滚动压缩——它本就是低频的整体重写。
+    // 回归测试见 turnFinalizer.test.ts「回合收尾不改写已有历史」。
 
     const nextRollingSummaryAccumulated = input.rollingSummaryAccumulated + turnTokens;
     const shouldTriggerRollingSummary = nextRollingSummaryAccumulated >= input.triggerTokens;
 
     return {
-      messages: prunedMessages,
+      messages: nextMessages,
       elapsed,
       turnTokens,
       credits,

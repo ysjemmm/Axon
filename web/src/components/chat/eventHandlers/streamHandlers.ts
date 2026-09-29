@@ -3,6 +3,9 @@
  */
 
 import type { TurnStats } from "../useTypewriter";
+import { stripPendingRetry } from "../retryLifecycle";
+import { clearPendingRetry } from "./stateHandlers";
+import { isStaleCancelledTurnEnd } from "./turnHandlers";
 import type { EventHandlerCtx, WsMessage } from "./types";
 
 export function handleStreamStart(_msg: WsMessage, ctx: EventHandlerCtx): void {
@@ -29,8 +32,9 @@ export function handleStreamStart(_msg: WsMessage, ctx: EventHandlerCtx): void {
       const segs = (last.segments || []).map((s) =>
         s.type === "reasoning" && s.streaming ? { ...s, streaming: false } : s,
       );
-      // 重试成功：移除 retry segment（重连已成功，不再需要展示）
-      const cleaned = segs.filter((s) => s.type !== "retry");
+      // 重试成功：移除「正在重试」段（重连已成功，不再需要展示）。
+      // 只清 retrying、保留 failed：「重试次数已用尽」是终态记录，要留给人看。
+      const cleaned = stripPendingRetry(segs) ?? segs;
       const lastSeg = cleaned[cleaned.length - 1];
       // 自动续写（finish_reason=length）时，现有 text segment 已有内容，
       // 新建一个 text segment 以区分两段内容，避免前后拼接导致时序混乱。
@@ -50,6 +54,11 @@ export function handleStreamStart(_msg: WsMessage, ctx: EventHandlerCtx): void {
 
 export function handleStreamDelta(msg: WsMessage, ctx: EventHandlerCtx): void {
   if (ctx.cancelled.current) return;
+  // 正文增量 = 重试已恢复，收掉「正在重试」提示。
+  // 这里必须清，不能只靠 handleStreamStart —— 重试可能发生在【本轮已输出正文之后】，
+  // 那时轮级的 turnStreamStarted 已是 true，恢复后不会再发 stream_start，
+  // 只挂在 stream_start 上的清除就永远不触发，重试提示永久残留。
+  clearPendingRetry(ctx);
   ctx.typewriter.push((msg.content as string) || "");
 }
 
@@ -67,12 +76,29 @@ export function handleStreamPause(_msg: WsMessage, ctx: EventHandlerCtx): void {
 }
 
 export function handleStreamEnd(msg: WsMessage, ctx: EventHandlerCtx): void {
+  // ── 治本：事件自带轮次标识时，直接按标识归属（与 handleTurnCancelled 同一道判据）──
+  // 下面那行 `if (ctx.cancelled.current) return` 挡不住这个场景：新一轮的 sendNow 会把
+  // cancelled.current 复位成 false，于是属于**上一轮**的 stream_end 会被当成当前轮的收尾，
+  // 把新一轮的 loading / 状态文字抹掉（"排队消息已发出、对话区却没开始"），
+  // 并重新打开出队闸门（"两条排队消息并发跑"）。
+  // 高可用：老后端不带该字段时仍走原有逻辑，行为不变。
+  const evTurnId = (msg as any).clientMessageId as string | undefined;
+  const curTurnId = ctx.currentTurnClientMessageId.current;
+  if (evTurnId && curTurnId && evTurnId !== curTurnId) return;
   if (ctx.cancelled.current) return;
+  // 用户取消那一轮迟到的 stream_end（取消路径的收尾）不能收掉新一轮的 loading：
+  // 它一旦被应用，不但会提前收掉新一轮的 loading/状态文字，还会把出队闸门打开，
+  // 让下一条排队消息并发出去。判据见 isStaleCancelledTurnEnd。
+  if (isStaleCancelledTurnEnd(ctx, msg)) return;
+  // 整轮结束兜底：retrying 段无论如何都该收掉（覆盖"重试成功后本轮没再产出正文"的情况）
+  clearPendingRetry(ctx);
   const stats: TurnStats = {
     elapsed: (msg as any).elapsed || 0,
     tokens: (msg as any).tokens || 0,
     model: (msg as any).model as string | undefined,
     modelName: (msg as any).modelName as string | undefined,
+    providerName: (msg as any).providerName as string | undefined,
+    effort: (msg as any).effort as string | undefined,
     credits: (msg as any).credits as number | undefined,
     creditDetail: (msg as any).creditDetail as any | undefined,
   };

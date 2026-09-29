@@ -12,6 +12,7 @@
 import { useCallback, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileText, FileCode, Folder, Bug, Terminal as TerminalIcon } from "lucide-react";
+import { attachmentTypeLabel } from "./attachmentType";
 
 export interface FileTagData {
   /** 展示名称（可以是文件名、相对路径、标签） */
@@ -86,9 +87,12 @@ export function FileTag({ data }: { data: FileTagData }) {
       onClick={clickable ? handleClick : undefined}
       onMouseEnter={show}
       onMouseLeave={scheduleHide}
-      className={`inline-flex h-5 items-center gap-1 mx-0.5 rounded-md border border-border bg-background/60 px-1.5 align-[-0.2em] text-xs leading-none ${clickable ? "cursor-pointer hover:bg-muted/60 transition-colors" : ""}`}
+      className={`inline-flex h-7 items-center gap-1.5 mx-0.5 rounded-lg border border-border bg-background/60 px-1.5 align-[-0.35em] text-xs leading-none shadow-sm ${clickable ? "cursor-pointer hover:bg-muted/60 transition-colors" : ""}`}
     >
       {tagIcon(data.kind)}
+      <span className="rounded bg-muted px-1 py-px text-[9px] font-semibold text-muted-foreground">
+        {attachmentTypeLabel({ name: data.name, kind: data.kind })}
+      </span>
       <span className="whitespace-nowrap font-medium">{displayName(data)}</span>
 
       {pos && data.content &&

@@ -49,18 +49,13 @@ export class PowerService {
     return registry.load(name);
   }
 
-  /** 启用/禁用 power（创建/删除 .disabled 标记文件） */
+  /** 启用/禁用 power（内置写用户级启用名单，其余写自身目录的 .disabled 标记） */
   async toggle(name: string, enabled: boolean, workspace?: string): Promise<void> {
     const registry = new PowerRegistry(workspace ? [workspace] : [], createNodeAgentHost(), homedir());
     const metas = await registry.discover();
     const meta = metas.find((m) => m.name === name);
     if (!meta) throw new Error(`power 不存在: ${name}`);
-    const markerPath = pathJoin(meta.dir, ".disabled");
-    if (!enabled) {
-      await writeFile(markerPath, "", "utf-8");
-    } else {
-      await rm(markerPath, { force: true });
-    }
+    await registry.setEnabled(meta, enabled);
   }
 
   /** 读取 power 的 steering 文件内容 */
@@ -101,6 +96,8 @@ export class PowerService {
     const metas = await registry.discover();
     const meta = metas.find((m) => m.name === name);
     if (!meta) throw new Error(`power 不存在: ${name}`);
+    // 内置 power 随产物分发，删了也会随升级回来；要隐藏请禁用它
+    if (meta.source === "builtin") throw new Error("内置 Power 不可删除，如需隐藏请先禁用它");
     await rm(meta.dir, { recursive: true, force: true });
   }
 

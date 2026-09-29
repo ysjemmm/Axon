@@ -4,6 +4,7 @@ import { findModel, getModels, useModels, normalizeStoredModelId } from "@/compo
 import { isToolInFlight, type ToolStatus } from "@/components/ToolCallItem";
 import { listRelays, type RelayData } from "@/lib/apiClient";
 import { useSessionEvents } from "@/hooks/useSessionEvents";
+import { registerPathBadgeRoots } from "../MarkdownRenderer";
 import type { AttachedFile, ChatMessage, CreditDetail, TextSegment, UserSegment } from "./types";
 import type { CommandDecision } from "./commandApprovalContext";
 import { STORAGE, TIMEOUT, CONTROL_CMD } from "@/lib/constants";
@@ -13,6 +14,7 @@ import { createEventHandler } from "./eventHandlers";
 import type { EventHandlerCtx } from "./eventHandlers/types";
 import { useTypewriter } from "./useTypewriter";
 import { useToolCallQueue } from "./useToolCallQueue";
+import { markTurnEnd } from "@/lib/turnEndProbe";
 
 /** 读取持久化的模型选择；无记录或旧的 "auto" 都视为未选择。 */
 function readStoredModelId(): string {
@@ -25,7 +27,7 @@ function readStoredModelId(): string {
 
 export interface SubmitPayload {
   /** 加入聊天时间线的用户气泡 */
-  userBubble: { content: string; images?: string[]; attachedFiles?: AttachedFile[]; segments?: UserSegment[] };
+  userBubble: { content: string; images?: string[]; attachedFiles?: AttachedFile[]; segments?: UserSegment[]; effort?: string };
   send: {
     content: string;
     displayText: string;
@@ -36,7 +38,6 @@ export interface SubmitPayload {
     images?: string[];
     workspace?: string;
     workspaces?: string[];
-    replyStyle: string;
     /** 会话模式 */
     mode?: "agent" | "quest";
     /**
@@ -44,6 +45,8 @@ export interface SubmitPayload {
      * 关掉即不下发 thinking 参数、也不转发 reasoning——省钱省延迟，不只是不展示。
      */
     think?: boolean;
+    /** Provider 配置并由用户选中的实际强度值（如 high / xhigh）；关闭时不传 */
+    effort?: string;
     /** Quest 模式专属选项（联网搜索；思考开关已上移到 think） */
     quest?: { webSearch?: boolean };
   };
@@ -106,34 +109,29 @@ export function useChatSession(opts: UseChatSessionOptions) {
     setWorkspacesState(ws);
     setWorkspacesLoaded(true);
   }, []);
+
+  // 把工作区根登记给路径徽章判定：徽章只对落在已知工作区根之下的路径渲染。
+  // 走模块级集合而非 props/context —— 不产生 React 依赖，不会换掉 computeHtml 的身份，
+  // 因此不会引发额外的全量 markdown 重解析（详见 MarkdownRenderer 里该集合的注释）。
+  useEffect(() => {
+    registerPathBadgeRoots(workspaces);
+  }, [workspaces]);
   const [currentGroupId, setCurrentGroupId] = useState<string | null>(null);
   const [, setLiveRelay] = useState<RelayData | null>(null);
   const [, setFocusRelayId] = useState<string | null>(null);
   const [, setDeletedRelayId] = useState<string | null>(null);
   const [hasRelay, setHasRelay] = useState(false);
   const [editMode, setEditMode] = useState<"auto" | "manual">(() => {
-    try { return (localStorage.getItem(STORAGE.EDIT_MODE) as "auto" | "manual") || "manual"; } catch { return "manual"; }
+    try { return (localStorage.getItem(STORAGE.EDIT_MODE) as "auto" | "manual") || "auto"; } catch { return "auto"; }
   });
-  /**
-   * 思考开关（agent / quest 通用），**默认开启**。
-   *
-   * 关掉时后端既不向模型请求思考、也不转发 reasoning——所以关掉是真的省钱省延迟。
-   * 早先这是 Quest 专属开关且只管"要不要展示"，模型照样在想、照样计费。
-   */
-  const [think, setThinkState] = useState<boolean>(() => {
-    try {
-      const v = localStorage.getItem(STORAGE.THINK);
-      return v === null ? true : v === "1";
-    } catch { return true; }
-  });
+  /** 思考强度默认关闭；切换模型时由 ChatPanel 主动重置。 */
+  const [effort, setEffort] = useState<string | null>(null);
+  /** 向后端的 think 开关由是否选中强度派生，避免两套状态互相打架。 */
+  const think = effort !== null;
   // Quest 模式：联网搜索开关（持久化）
   const [questWebSearch, setQuestWebSearchState] = useState<boolean>(() => {
     try { return localStorage.getItem(STORAGE.QUEST_WEBSEARCH) === "1"; } catch { return false; }
   });
-  const setThink = useCallback((v: boolean) => {
-    setThinkState(v);
-    try { localStorage.setItem(STORAGE.THINK, v ? "1" : "0"); } catch { /* ignore */ }
-  }, []);
   const setQuestWebSearch = useCallback((v: boolean) => {
     setQuestWebSearchState(v);
     try { localStorage.setItem(STORAGE.QUEST_WEBSEARCH, v ? "1" : "0"); } catch { /* ignore */ }
@@ -156,6 +154,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const [undoNotice, setUndoNotice] = useState<{ id: number; text: string } | null>(null);
   const [toolConfirm, setToolConfirm] = useState<{ toolName: string; title: string; kind?: string } | null>(null);
   const [waitingInputIds, setWaitingInputIds] = useState<Set<string>>(new Set());
+  // ask_user 问答请求（Agent 抛问题 + 选项，等用户作答）。结构对齐 eventHandlers 的 AskUserRequest。
+  const [askUser, setAskUser] = useState<{ toolCallId: string; questions: { question: string; options: { id: string; label: string; description?: string }[]; multi: boolean; allowOther: boolean }[] } | null>(null);
   const [commandApprovals, setCommandApprovals] = useState<Record<string, CommandApproval>>({});
   const [commandRiskNotice, setCommandRiskNotice] = useState<{ id?: string; command: string; reason: string } | null>(null);
   const [contextOverflow, setContextOverflow] = useState(false);
@@ -185,11 +185,33 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const hasEverConnected = useRef(false);
 
   const MIN_LOADING_MS = 400;
+  /**
+   * 本轮用户消息 id（sendNow 时写入）。与 user_message 一并发给后端，
+   * 后端在收尾事件里原样带回同一个值，供前端精确归属"这条终态属于哪一轮"。
+   */
+  const currentTurnClientMessageId = useRef<string | null>(null);
   const finishLoading = useCallback(() => {
     const elapsed = Date.now() - (turnStartTime.current || Date.now());
     const remaining = Math.max(0, MIN_LOADING_MS - elapsed);
     if (remaining > 0) {
-      setTimeout(() => setIsLoading(false), remaining);
+      // ⚠️ 这个延迟置 false 必须绑定「它属于哪一轮」，否则会让排队的两轮并发。
+      //
+      // isLoading 是排队出队的唯一闸门：consumingQueue 在本轮开跑时就被释放了，
+      // 此后只剩 isLoading 挡着下一条排队消息。所以只要有一个"上一轮遗留的收尾定时器"
+      // 在新一轮已经开跑之后落地，isLoading 就会被误置成 false，
+      // 出队 effect 立刻放行 —— 下一条排队消息被发出去，两轮并发。
+      //
+      // 而它会成对出现：一轮的结束事件不止一个（stream_end 之后的 turn_cancelled / error
+      // 等都会调 finishLoading），每次各排一个定时器，而它们算出的 remaining 都基于同一个
+      // turnStartTime，于是在同一时刻一起到期：第一个收掉 loading、队列放行、新一轮开跑，
+      // 第二个紧接着又把新开那一轮的 loading 收掉。
+      //
+      // 守卫：只有"发起它的那一轮仍是当前轮"时才真正收 loading（turnStartTime 变了即作废）。
+      const ownerTurnStart = turnStartTime.current;
+      setTimeout(() => {
+        if (turnStartTime.current !== ownerTurnStart) return;
+        setIsLoading(false);
+      }, remaining);
     } else {
       setIsLoading(false);
     }
@@ -225,13 +247,16 @@ export function useChatSession(opts: UseChatSessionOptions) {
     setCreditBudgetPaused,
     setPendingPaths, setPendingDiffs, setPendingExpanded, setUndoNotice,
     setToolConfirm, setWaitingInputIds, setCommandApprovals, setCommandRiskNotice,
+    setAskUser,
     setContextOverflow, setToolHistoryMismatch,
     cancelled, cancelledTurnMsgId, cancelledTurnGeneration, turnGeneration,
+    turnStartTime,
     modelRef, statusPhaseRef, toolResultResetTimer,
     compactionMigratedRef, onSessionCreatedRef, onCompactionMigratedRef,
     ownedSessionId,
     typewriter,
     clientId, send, finishLoading,
+    currentTurnClientMessageId,
   };
 
   const handleEvent = useMemo(
@@ -323,25 +348,85 @@ export function useChatSession(opts: UseChatSessionOptions) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
 
+  /**
+   * 排队消息的"在途锁"。
+   *
+   * 旧写法是发完 `sendNow()` 就立刻把锁复位，而放行条件看的 `isLoading` 要等后端首条流事件
+   * 回来才变 true —— 于是"已发出、还没开跑"这段窗口里没有任何互斥保护。窗口内只要 effect
+   * 重跑一次（messageQueue 变更 / connected 抖动 / isLoading 抖动），条件重新成立，
+   * **下一条排队消息也会被发出去**，同一会话并发两轮；两轮的 stream_delta 又会被追加进
+   * 同一个文本段，表现为输出"串段"。
+   *
+   * 现在锁只在两种情况下释放：
+   *   ① 观察到 isLoading 变 true（这一轮真的开跑了）→ 交给"它结束后再发下一条"的正常流程；
+   *   ② 兜底超时（后端异常没回任何事件，避免队列永久卡死）。
+   */
   const consumingQueue = useRef(false);
+  const queueUnlockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * "放行延迟"定时器的句柄。
+   *
+   * ⚠️ 它**绝不能**挂在下面消费 effect 的 cleanup 上，原因见那里。这里只做卸载时清理。
+   */
+  const queueSendTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 唯一该取消在途定时器的时机：面板真的卸载了
   useEffect(() => {
-    if (!isLoading && messageQueue.length > 0 && !consumingQueue.current) {
-      consumingQueue.current = true;
-      const [next, ...rest] = messageQueue;
-      setMessageQueue(rest);
-      setTimeout(() => {
-        sendNow(next.payload);
-        consumingQueue.current = false;
-      }, 50);
+    return () => {
+      if (queueSendTimer.current) {
+        clearTimeout(queueSendTimer.current);
+        queueSendTimer.current = null;
+      }
+      if (queueUnlockTimer.current) {
+        clearTimeout(queueUnlockTimer.current);
+        queueUnlockTimer.current = null;
+      }
+    };
+  }, []);
+
+  // 锁定解除：一旦观察到本轮真的开跑，就允许"结束后"再发下一条
+  useEffect(() => {
+    if (isLoading) {
+      consumingQueue.current = false;
+      if (queueUnlockTimer.current) {
+        clearTimeout(queueUnlockTimer.current);
+        queueUnlockTimer.current = null;
+      }
     }
+  }, [isLoading]);
+
+  useEffect(() => {
+    // 连接不可用时绝不放行：此时 isLoading 可能是被断线逻辑清掉的，不代表本轮已结束
+    if (isLoading || !connected) return;
+    if (messageQueue.length === 0 || consumingQueue.current) return;
+
+    consumingQueue.current = true;
+    const [next, ...rest] = messageQueue;
+    setMessageQueue(rest);
+    // ⚠️ 这里**不能**返回 cleanup 去 clearTimeout。
+    // 本 effect 的依赖里有 messageQueue，而上一行 setMessageQueue 会立刻换掉它的引用，
+    // 于是 effect 马上重跑一遍：React 会先执行上一次的 cleanup——那个 clearTimeout 恰好把
+    // 还没到期的定时器掐掉，紧接着新一轮又因 consumingQueue 已置位而直接 return。
+    // 结果就是消息从队列 UI 里消失了、却从来没被发出去（"排队信息丢失、发不出去"）。
+    // 生命周期清理改由上面那个「仅卸载时执行」的 effect 负责。
+    queueSendTimer.current = setTimeout(() => {
+      queueSendTimer.current = null;
+      sendNow(next.payload);
+      // 兜底解锁：正常情况下上面那个 isLoading effect 会解锁；这里只防"后端一个事件都没回"
+      queueUnlockTimer.current = setTimeout(() => {
+        consumingQueue.current = false;
+        queueUnlockTimer.current = null;
+      }, 15_000);
+    }, 50);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoading, messageQueue]);
+  }, [isLoading, connected, messageQueue]);
 
   // ── 发送动作 ────────────────────────────────────────────────────────
 
   const sendNow = useCallback((payload: SubmitPayload) => {
     const gen = ++turnGeneration.current;
     const userMessageId = `user-${Date.now()}`;
+    currentTurnClientMessageId.current = userMessageId;
     cancelled.current = false;
     setChatHistory((prev) => [
       ...prev,
@@ -353,6 +438,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
         images: payload.userBubble.images && payload.userBubble.images.length > 0 ? [...payload.userBubble.images] : undefined,
         attachedFiles: payload.userBubble.attachedFiles && payload.userBubble.attachedFiles.length > 0 ? payload.userBubble.attachedFiles : undefined,
         userSegments: payload.userBubble.segments && payload.userBubble.segments.length > 0 ? payload.userBubble.segments : undefined,
+        effort: payload.userBubble.effort,
         turnGen: gen,
       },
     ]);
@@ -417,6 +503,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
 
   const cancelTurn = useCallback((currentModel: string) => {
     if (isCompacting) return;
+    // ⚠️ 临时诊断：记录取消后收尾窗口内的布局变化（定位偶发闪烁后删除）
+    markTurnEnd("取消");
     send({ type: "cancel" });
     if (toolConfirm) {
       send({ type: "confirm_tool", confirmed: false });
@@ -431,6 +519,19 @@ export function useChatSession(opts: UseChatSessionOptions) {
       setCommandApprovals({});
     }
     cancelled.current = true;
+    // 守卫在这里**同步**装配，不能只放在下面的 setChatHistory updater 里：
+    // updater 要等渲染阶段才执行，而 turn_cancelled 是 WebSocket 上来的，可能在这次渲染之前就到
+    // —— 那个窗口里 cancelledTurnGeneration 还是 null，handleTurnCancelled 的判据不成立。
+    // 而且原来它只在"最后一条是 streaming 的 assistant"时才装配；取消发生在还没建出
+    // assistant 消息的时刻（如工具轮中、首字之前）就会漏装。标记的语义是"用户取消了当前这一轮"，
+    // 与最后一条消息是什么无关。
+    cancelledTurnGeneration.current = turnGeneration.current;
+    // 先把已到达、还没出字的残余写进当前消息，再停循环。
+    // 早先只 cancel()，缓冲里的字被直接丢弃；而后端取消时会把本轮已流式发出的正文完整落盘
+    // （streamedContentThisRound），于是刷新后这条消息比取消时看到的多出一截。
+    // 错误收尾（finalizeStreamingTurnAsError）一直是 flush 再 cancel，这里对齐。
+    // flush 的 updater 排在下面收尾 updater 之前执行，所以统计的字数也包含这段残余。
+    typewriter.flush({ setChatHistory, finishLoading });
     typewriter.cancel();
     setWaitingInputIds(new Set()); // 取消时清除所有呼吸灯
     setChatHistory((prev) => {
@@ -438,7 +539,6 @@ export function useChatSession(opts: UseChatSessionOptions) {
       const last = updated[updated.length - 1];
       if (last?.role === "assistant" && last.streaming) {
         cancelledTurnMsgId.current = last.id;
-        cancelledTurnGeneration.current = turnGeneration.current;
         const elapsed = turnStartTime.current ? Date.now() - turnStartTime.current : 0;
         const tokens = (last.segments || [])
           .filter((s): s is TextSegment => s.type === "text")
@@ -485,11 +585,13 @@ export function useChatSession(opts: UseChatSessionOptions) {
     });
     finishLoading();
     setReasoning("");
+  // typewriter 不进依赖：useTypewriter 每次渲染返回新的字面量对象（方法本身是稳定的 useCallback），
+  // 写进来会让 cancelTurn 每次渲染都重建。本文件其余回调对 typewriter 也是同样处理。
   }, [send, toolConfirm, tokenUsage.used, finishLoading]);
 
-  /** 切换编辑模式 */
-  const toggleEditMode = useCallback(() => {
-    const next = editMode === "manual" ? "auto" : "manual";
+  /** 设置编辑模式；无本地记录的首次使用默认自动应用。 */
+  const setEditModePreference = useCallback((next: "auto" | "manual") => {
+    if (next === editMode) return;
     setEditMode(next);
     send({ type: CONTROL_CMD.SET_EDIT_MODE, mode: next });
     try { localStorage.setItem(STORAGE.EDIT_MODE, next); } catch { /* ignore */ }
@@ -510,6 +612,14 @@ export function useChatSession(opts: UseChatSessionOptions) {
     )));
     send({ type: "edit_user_message", messageId, content, userIndex, images, attachedFiles: attachedFiles?.map((f) => ({ name: f.name, size: f.size })) });
   }, [send, chatHistory]);
+
+  const answerUserQuestion = useCallback((answers: { selected: string[]; other?: string; skipped?: boolean }[]) => {
+    const req = askUser;
+    setAskUser(null);
+    if (req) {
+      send({ type: "answer_user_question", toolCallId: req.toolCallId, answers });
+    }
+  }, [send, askUser]);
 
   const confirmTool = useCallback((confirmed: boolean, options?: { mode?: "strict" | "auto" }) => {
     setToolConfirm(null);
@@ -584,6 +694,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     creditBudgetPaused, chooseCreditBudget,
     pendingPaths, pendingDiffs, pendingExpanded, setPendingExpanded,
     messageQueue, toolConfirm,
+    askUser,
     waitingInputIds,
     commandApprovals, commandRiskNotice, setCommandRiskNotice,
     contextOverflow, dismissContextOverflow, forceCompact,
@@ -594,10 +705,11 @@ export function useChatSession(opts: UseChatSessionOptions) {
     // 撤销轻提示
     undoNotice, setUndoNotice,
     // 思考开关（agent / quest 通用）+ Quest 专属联网开关
-    mode, think, setThink, questWebSearch, setQuestWebSearch,
+    mode, think, effort, setEffort, questWebSearch, setQuestWebSearch,
     // 动作
     submit, removeFromQueue, cancelTurn,
-    toggleEditMode, acceptEdits, rejectEdits, undoEdits, editUserMessage, confirmTool,
+    setEditModePreference, acceptEdits, rejectEdits, undoEdits, editUserMessage, confirmTool,
+    answerUserQuestion,
     approveCommand, dismissCommandRiskNotice,
     setModel, selectWorkspace, selectGroup, groupUpdated,
     listSnapshots: () => send({ type: "list_snapshots" }),

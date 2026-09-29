@@ -12,7 +12,7 @@
  */
 
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { executeToolCall, getToolDefinitions, getReadOnlyToolDefinitions, capToolContent, FULL_RESULT_TOOLS, ToolCallStatus, type ToolMeta, type SkillLoaderFn, type WebCapability, type GateOutcome } from "../tools/index.js";
+import { executeToolCall, getToolDefinitions, getReadOnlyToolDefinitions, getWikiToolDefinitions, getWikiPlanToolDefinitions, capToolContent, FULL_RESULT_TOOLS, ToolCallStatus, type ToolMeta, type SkillLoaderFn, type WikiTools, type WebCapability, type GateOutcome } from "../tools/index.js";
 import type { LLMStrategy, ToolDef, LLMStreamCallbacks } from "../llm/types.js";
 import type { LoadedSkill } from "./skillLoader.js";
 import type { AgentHost } from "../host/index.js";
@@ -74,6 +74,39 @@ execute_command 规则
 /** 子 agent 事件回调：父级据此包装成 sub_agent_event 推前端 */
 export type SubAgentEmit = (type: string, data: Record<string, unknown>) => void;
 
+/**
+ * 子 Agent 全局并发闸门。
+ *
+ * 为什么要有：上层一次可以请求很多个子 Agent —— parallel_research / parallel_execute 天生是批量
+ * 派发，模型也可能在同一轮里连续多次 delegate_task。实测模型很容易一次铺开五六个，
+ * 结果是并发请求把网关打限流、token 陡增、前端的折叠卡片糊成一片，而用户根本来不及看。
+ * 与其靠提示词劝模型克制（它不一定听），不如在这里做硬约束：同一时刻最多跑两个，
+ * 其余的排队等待，拿到名额再开跑。
+ *
+ * 放在 SubAgentRunner 内部而不是各调用点：所有子 Agent（delegate / parallel / wiki）
+ * 都必须经过 run()，闸门设在唯一的必经之处才不会漏。
+ */
+const MAX_CONCURRENT_SUB_AGENTS = 2;
+let activeSubAgents = 0;
+const subAgentWaiters: Array<() => void> = [];
+
+/** 取一个并发名额；返回释放函数（幂等，重复调用只生效一次）。 */
+async function acquireSubAgentSlot(): Promise<() => void> {
+  // while 而非 if：被唤醒后需要重新确认名额（可能被别的等待者先抢走）
+  while (activeSubAgents >= MAX_CONCURRENT_SUB_AGENTS) {
+    await new Promise<void>((resolve) => subAgentWaiters.push(resolve));
+  }
+  activeSubAgents++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    activeSubAgents--;
+    const next = subAgentWaiters.shift();
+    if (next) next();
+  };
+}
+
 /** 子 agent 执行所需的依赖（由父 AgentSession 注入） */
 export interface SubAgentDeps {
   strategy: LLMStrategy;
@@ -100,6 +133,14 @@ export interface SubAgentDeps {
   skillLoader?: SkillLoaderFn;
   /** web 能力（透传给 executeToolCall，支持 web_search/web_fetch） */
   web?: WebCapability;
+
+  /**
+   * Wiki 生成能力（规划 / 撰写，分阶段注入）。提供哪一项，工具集里就多出对应的那一个工具：
+   *   · plan → wiki_plan_pages（登记页面清单）
+   *   · save → wiki_save_page（落盘一页）
+   * 只在生成 Wiki 的流程中注入 —— 普通 delegate_task 不传，那些子 Agent 便拿不到这些工具。
+   */
+  wiki?: WikiTools;
 
   /**
    * 只读模式：true 时子 Agent 只能用只读工具（read_file/search/list_dir/web_*），
@@ -187,8 +228,17 @@ export class SubAgentRunner {
   /** 子 agent 的工具集：复用通用工具，天然不含 delegate_task（限 1 层递归）。
    * 只读模式下进一步收窄到只读工具白名单，保证并行调研并发安全。 */
   private getToolDefs(): ToolDef[] {
-    const defs = this.deps.readOnly ? getReadOnlyToolDefinitions() : getToolDefinitions();
-    return defs as unknown as ToolDef[];
+    const base = this.deps.readOnly ? getReadOnlyToolDefinitions() : getToolDefinitions();
+    // Wiki 工具按阶段注入。刻意不并入 getToolDefinitions()：那是所有会话与子 Agent
+    // 共用的公共列表，而这些工具只在生成流程里有意义（没有目标工作区时调用会被拒），
+    // 常驻只会白占每轮 schema 篇幅，还可能被误用在无关场景。
+    const extra: unknown[] = [];
+    // 规划：只登记清单、不写文件，因此只读模式下也允许 ——
+    // 只读契约约束的是「不得改动仓库」，而登记计划只发生在内存里。
+    if (this.deps.wiki?.plan) extra.push(...getWikiPlanToolDefinitions());
+    // 撰写：真正写 .axon/wiki/，只读模式下不给（那是写操作）
+    if (this.deps.wiki?.save && !this.deps.readOnly) extra.push(...getWikiToolDefinitions());
+    return [...base, ...extra] as unknown as ToolDef[];
   }
 
   /** 构造子 agent 的初始消息：系统提示（含 skill 正文）+ 工作区目录预览 + 任务 prompt */
@@ -237,6 +287,17 @@ export class SubAgentRunner {
    * @param skill 已加载的 skill（含正文）；无 skill 时为通用任务执行
    */
   async run(prompt: string, skill: LoadedSkill | null): Promise<SubAgentResult> {
+    // 并发闸门：超出上限的请求在这里排队，而不是一起打出去。
+    const release = await acquireSubAgentSlot();
+    try {
+      return await this.runInner(prompt, skill);
+    } finally {
+      release();
+    }
+  }
+
+  /** run() 的实际实现。已被并发闸门包裹，不要直接调用。 */
+  private async runInner(prompt: string, skill: LoadedSkill | null): Promise<SubAgentResult> {
     let messages = await this.buildInitialMessages(prompt, skill);
     const policy = policyForSubAgent(this.deps.model);
     // 子 agent 轮次上限对齐 policy（与主 agent 同源），不再写死
@@ -483,7 +544,7 @@ export class SubAgentRunner {
         status = "error";
       } else {
         try {
-          result = await executeToolCall(toolName, toolArgs, this.deps.cwd, this.deps.host, meta, this.deps.workspaces, this.deps.skillLoader, this.deps.web, undefined, this.deps.signal);
+          result = await executeToolCall(toolName, toolArgs, this.deps.cwd, this.deps.host, meta, this.deps.workspaces, this.deps.skillLoader, this.deps.web, undefined, this.deps.signal, this.deps.wiki);
           // 同文件重复读检测
           if (toolName === "read_file" && typeof toolArgs.path === "string") {
             result += guard.noteFileRead(toolArgs.path);

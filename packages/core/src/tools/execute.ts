@@ -26,7 +26,7 @@ import {
   listDir,
   mergeMultiRootResults,
 } from "./search.js";
-import type { ToolMeta, SkillLoaderFn, PowerLoaderFn } from "./definitions.js";
+import type { ToolMeta, SkillLoaderFn, PowerLoaderFn, WikiTools } from "./definitions.js";
 import { ToolError, getToolDefinitions } from "./definitions.js";
 import type { AgentHost, DiagnosticFileResult } from "../host/index.js";
 import type { FileEdit } from "../host/index.js";
@@ -153,6 +153,9 @@ export async function executeToolCall(
   web?: WebCapability,
   powerLoader?: PowerLoaderFn,
   signal?: AbortSignal,
+  // 生成 Wiki 时注入的能力（规划 / 撰写，分阶段）。缺省时两个 wiki 工具都不可用。
+  // 收成对象而非再加一个位置参数：这个参数列表已经很长，继续追加会让每个调用点都要数位置。
+  wiki?: WikiTools,
 ): Promise<string> {
   switch (name) {
     case "read_file": {
@@ -898,6 +901,78 @@ export async function executeToolCall(
         `（这是给你的内部执行说明，不要向用户复述、不要宣布"已加载技能"或"现在开始执行"之类的话，直接按说明开始做事即可）\n\n${skill.body}`
       );
     }
+    case "wiki_save_page": {
+      const saver = wiki?.save;
+      if (!saver) {
+        // 不在生成流程中，本工具压根不该出现在这一轮的工具列表里。真被调用说明模型
+        // 收到了不属于本轮的 schema，或凭记忆臆造了工具名 —— 明确拒绝并指路，不要静默失败。
+        throw new Error("wiki_save_page 失败：当前不在 Wiki 生成流程中，该工具不可用。请直接用文字回应用户。");
+      }
+      const title = typeof args.title === "string" ? args.title.trim() : "";
+      const summary = typeof args.summary === "string" ? args.summary.trim() : "";
+      const body = typeof args.content === "string" ? args.content.trim() : "";
+      const category = typeof args.category === "string" ? args.category.trim() : "";
+      const sources = Array.isArray(args.sources)
+        ? (args.sources as unknown[])
+            .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+            .map((s) => s.trim())
+        : [];
+      if (!title) throw new Error("wiki_save_page 失败：title 不能为空。");
+      if (!body) throw new Error("wiki_save_page 失败：content 不能为空。");
+
+      const saved = await saver({ title, summary, sources, body, category: category || undefined });
+      // sources 为空不阻断（某些总览页确实跨多个文件、难以逐一列举），但必须把后果说清楚：
+      // 没有 sources 就没有过时检测的依据，这页会静默腐烂 —— 而那正是「比没有文档更糟」的情形。
+      const warn = sources.length === 0
+        ? "\n⚠️ 本页未声明 sources，因此不参与「过时检测」：其依据的代码变化后也不会被标记待复核。若本页确有依据文件，请重新调用并补上。"
+        : "";
+      return `已保存 Wiki 页面《${title}》（文件 ${saved.slug}.md，依据 ${sources.length} 个文件）。${warn}`;
+    }
+    case "wiki_plan_pages": {
+      const planner = wiki?.plan;
+      if (!planner) {
+        throw new Error("wiki_plan_pages 失败：当前不在 Wiki 规划阶段，该工具不可用。");
+      }
+      if (!Array.isArray(args.pages) || args.pages.length === 0) {
+        throw new Error("wiki_plan_pages 失败：pages 必须是非空数组。");
+      }
+      // 逐项校验并清理：模型可能给出缺字段 / 类型不对的条目。与其把脏数据交给上层
+      // 再在某处崩掉，不如在入口挡住并说清哪一条不合格 —— 模型据此能自行修正重试。
+      const pages: { title: string; summary: string; sources: string[]; category?: string }[] = [];
+      for (let i = 0; i < args.pages.length; i++) {
+        const raw = args.pages[i] as Record<string, unknown> | null;
+        const title = typeof raw?.title === "string" ? raw.title.trim() : "";
+        if (!title) {
+          throw new Error(`wiki_plan_pages 失败：第 ${i + 1} 项缺少 title。每一项都必须有 title 与 summary。`);
+        }
+        const summary = typeof raw?.summary === "string" ? raw.summary.trim() : "";
+        if (!summary) {
+          throw new Error(`wiki_plan_pages 失败：第 ${i + 1} 项（${title}）缺少 summary。`);
+        }
+        // 分类必须在这里接住并原样带走：它不落盘，只随计划传给撰写阶段
+        // （buildPagePrompt 用它告诉子 Agent 该页归哪一组）。漏掉它，页面就会全部
+        // 落成「未分类」，侧边栏的分组降级成一层平铺 —— 这正是本工具曾经的行为。
+        const category = typeof raw?.category === "string" ? raw.category.trim() : "";
+        const sources = Array.isArray(raw?.sources)
+          ? (raw.sources as unknown[])
+              .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+              .map((s) => s.trim())
+          : [];
+        pages.push({ title, summary, sources, category: category || undefined });
+      }
+      // 标题去重：同名页面在存储层会落到同一个文件（后写覆盖先写），
+      // 计划里出现两次等于白干一页，且进度分母虚高。这里直接收敛掉。
+      const seen = new Set<string>();
+      const deduped = pages.filter((p) => {
+        const key = p.title;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      const dropped = pages.length - deduped.length;
+      const receipt = await planner(deduped);
+      return dropped > 0 ? `${receipt}\n（已忽略 ${dropped} 个重复标题的条目）` : receipt;
+    }
     case "activate_power": {
       const powerName = (args.name as string || "").trim();
       if (!powerName) throw new Error("activate_power 失败：name 不能为空");
@@ -923,8 +998,13 @@ export async function executeToolCall(
         sections.push(`\n## 文档\n${power.body}`);
       }
       if (power.skills.length > 0) {
-        const skillList = power.skills.map((s) => `- ${s.name}：${s.description}`).join("\n");
-        sections.push(`\n## 捆绑的 Skills（可用 use_skill 加载）\n${skillList}`);
+        // 附上 SKILL.md 的绝对路径：Power 捆绑的 skills 目前【不】进入 SkillRegistry 的发现链路
+        // （powerLoader.getActiveSkillDirs 暂无调用方），所以不能只写"可用 use_skill 加载"——
+        // 那样 AI 会去调用一个加载不到的名字。直接给路径，用 read_file 就能取到细节。
+        const skillList = power.skills
+          .map((s) => `- ${s.name}：${s.description}${s.dir ? `（SKILL.md：${s.dir}/SKILL.md）` : ""}`)
+          .join("\n");
+        sections.push(`\n## 捆绑的 Skills（细节见各自的 SKILL.md）\n${skillList}`);
       }
       if (Object.keys(power.mcpServers).length > 0) {
         const mcpList = Object.entries(power.mcpServers).map(([k, v]) => `- ${k}：${v.command} ${(v.args || []).join(" ")}`).join("\n");

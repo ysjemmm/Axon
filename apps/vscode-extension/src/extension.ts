@@ -13,9 +13,9 @@
 
 import * as vscode from "vscode";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { SessionHub, type ControlCommand, type WorkspaceGroup, type CompactionUserConfig, type CreditBudgetUserConfig, webSearch, webFetch } from "@axon/core";
-import { DEFAULT_COMPACTION_CONFIG, DEFAULT_CREDIT_BUDGET_CONFIG } from "@axon/core";
+import { join, basename } from "node:path";
+import { SessionHub, type ControlCommand, type WorkspaceGroup, type CompactionUserConfig, type CreditBudgetUserConfig, webSearch, webFetch, setBuiltinPowersDir } from "@axon/core";
+import { DEFAULT_COMPACTION_CONFIG, DEFAULT_CREDIT_BUDGET_CONFIG, DEFAULT_TRACE_CONFIG, type TraceConfig } from "@axon/core";
 import { createVSCodeAgentHost, VSCodeCommandTrustStore } from "@axon/host-vscode";
 import { JsonFileStorage, createNodeMcpCapability } from "@axon/host-node";
 import { loadProviderEnv } from "./loadEnv.js";
@@ -23,7 +23,6 @@ import { VSCodeChannel } from "./vscodeChannel.js";
 import { AxonViewProvider } from "./viewProvider.js";
 import { RequestRouter, vscodeBrowse } from "./requestRouter.js";
 import { registerTreeViews } from "./treeViews.js";
-import { AgentEditor } from "./agentEditor.js";
 import { registerAxonStatusBar, registerAxonUsageStatusBar } from "./statusBar.js";
 import { openOrFocusPanel, postToPanel } from "./panelManager.js";
 import { registerGitBlameAnnotation } from "./gitBlameAnnotation.js";
@@ -69,6 +68,58 @@ function readCreditBudgetConfig(): CreditBudgetUserConfig {
     warnAt: cfg.get<number>("warnAt", DEFAULT_CREDIT_BUDGET_CONFIG.warnAt),
     pauseAt: cfg.get<number>("pauseAt", DEFAULT_CREDIT_BUDGET_CONFIG.pauseAt),
   };
+}
+
+/**
+ * 读取 VS Code 设置中的 trace 记录配置（axon.trace.*）。
+ * 读取时机：会话创建时（注入初始值）+ 设置变更时（热更新）。
+ *
+ * 关于「开关 + 等级」：这里合并成一个四档枚举（off / summary / normal / full），off 即关闭。
+ * 不拆成 enabled + level 两个设置 —— 那样会出现 "enabled=true 且 level=off" 这种
+ * 说不清以谁为准的组合，而一个下拉本身就同时充当了开关。
+ */
+function readTraceConfig(): Partial<TraceConfig> {
+  const cfg = vscode.workspace.getConfiguration("axon.trace");
+  return {
+    level: cfg.get<TraceConfig["level"]>("level", DEFAULT_TRACE_CONFIG.level),
+    maxFileMB: cfg.get<number>("maxFileMB", DEFAULT_TRACE_CONFIG.maxFileMB),
+    keepRecentFiles: cfg.get<number>("keepRecentFiles", DEFAULT_TRACE_CONFIG.keepRecentFiles),
+  };
+}
+
+/**
+ * 读取 VS Code 设置中的 Wiki 生成配置（axon.wiki.*）。
+ *
+ * ── 为什么放设置里、而不是 .axon/ 下 ──
+ * `.axon/wiki/` 是要【随 git 提交、团队共享】的 —— 那是 wiki 的核心价值。
+ * 而「用哪个 provider / 模型」是机器本地偏好：同事未必配了同一个 provider、未必有同名模型，
+ * 写进共享物只会让 clone 下来的人看到一堆用不了的模型名。
+ * 这与「mtime 快照不进 md、放被 gitignore 的 .state.json」是同一条判据：
+ * **机器本地事实不进共享物**。
+ *
+ * ── 为什么它需要独立于会话的模型选择 ──
+ * 侧栏按钮不属于任何对话面板，没有天然的「当前会话模型」；而它是本项目里最贵的单个操作
+ * （多页 × 每页多轮工具调用）。最贵的操作，配置不该靠猜。
+ */
+function readWikiConfig(): { provider: string; model: string; maxPages: number } {
+  const cfg = vscode.workspace.getConfiguration("axon.wiki");
+  return {
+    provider: cfg.get<string>("provider", "") || "",
+    model: cfg.get<string>("model", "") || "",
+    maxPages: cfg.get<number>("maxPages", 15),
+  };
+}
+
+/**
+ * 一句话描述本次生成将使用哪个模型（供选择框展示）。
+ *
+ * 必须让用户在选择目标工作区时就看到它：这是本功能最贵的一次操作，
+ * 「花了大钱」这件事不该只在事后才发现。留空时如实写明是跟随会话，而不是假装已配置。
+ */
+function describeWikiModel(): string {
+  const { provider, model } = readWikiConfig();
+  if (!model) return "模型：跟随当前会话";
+  return provider ? `模型：${provider} / ${model}` : `模型：${model}`;
 }
 
 /**
@@ -273,6 +324,11 @@ export function activate(context: vscode.ExtensionContext): void {
   const { providerCount, sources } = loadProviderEnv();
   console.log(`[axon] provider 配置加载：识别到 ${providerCount} 个 provider，来源 [${sources.join(", ") || "无"}]`);
 
+  // 内置 Power 根目录：随扩展分发的只读目录（media/powers，构建时从源码拷入）。
+  // 只在这里注入一次，core 用模块级存储接住（与 Provider 的启动期注入同一套路）。
+  // 内置 Power 的启用状态不写这个目录——它只读、且升级覆盖后会丢；启用状态写用户级配置。
+  setBuiltinPowersDir(vscode.Uri.joinPath(context.extensionUri, "media", "powers").fsPath);
+
   const storage = new JsonFileStorage();
   const channel = new VSCodeChannel();
 
@@ -281,13 +337,151 @@ export function activate(context: vscode.ExtensionContext): void {
   // 所有工作区文件夹（多根工作区场景）
   const allWorkspaces = vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath) || [defaultWorkspace];
 
-  /** 列出全局 relay（relay 统一落盘到 <homeDir>/.axon/relays/，不跟工作区绑定） */
+  /**
+   * 列出所有 relay。
+   *
+   * Agent 创建 relay 时写入的是【会话工作区】的 .axon/relays/（见 AgentSession.relayStore），
+   * 主目录 .axon/relays/ 下则可能有历史遗留产物。两个位置都作为根交给 RelayStore 合并读取，
+   * 避免只认一个根导致左侧面板看不到 AI 刚创建的 relay。
+   */
   async function listAllRelays(): Promise<Array<{ id: string; title: string; phase: string }>> {
     const { RelayStore } = await import("@axon/core");
     const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
-    const store = new RelayStore(homedir(), createHost());
+    const store = new RelayStore([...allWorkspaces, homedir()], createHost());
     const relays = await store.list();
     return relays.map((r) => ({ id: r.id, title: r.title, phase: r.phase }));
+  }
+
+  /**
+   * 刷新 Wiki 侧边栏：读页面列表 + 陈旧状态，并把「待复核页数」挂到视图徽标上。
+   *
+   * 徽标是这套设计的关键一环——页面一多，人不会主动翻列表去找 ⚠️；
+   * 「有 N 页可能过时」必须有个常驻可见的位置提示，才有动力去刷新。
+   *
+   * 整个流程不调用 LLM（只读文件 + 比对 mtime），所以可以随便触发：启动时、文件变动时、
+   * 手动刷新时都走它。真正花钱的是「重新生成页面」，那一步必须用户显式触发。
+   *
+   * 根取全部工作区：wiki 是 per-repo 的，多根场景下各自都可能有。
+   */
+  /** 选择框项：携带工作区绝对路径，选中后直接可用 */
+  interface WikiTargetPick extends vscode.QuickPickItem {
+    ws: string;
+  }
+
+  /**
+   * 让用户显式选择「生成 Wiki 的目标工作区」。
+   *
+   * ── 为什么必须让用户选，而不是自动推定 ──
+   * 早先按「活动编辑器所属工作区 → 主工作区」自动推定，实测立刻出问题：用户点了生成，
+   * 提示「将生成到 d:\me\work-prds」—— 而他从未选择过这个工作区，只因恰好有个文件
+   * 开在编辑器里。推定把「碰巧在看什么」当成了「想做什么」。
+   *
+   * 写操作的代价不可逆：往不相干的仓库写进一堆文件，而且它们会被提交。必须让用户拍板。
+   * 这与 promptBuilder 里的【工作区聚焦】是两回事 —— 那个是软提示，用于搜索/读取这类
+   * 可逆操作，猜错只是多翻几个文件；读可以猜，写不能猜。
+   *
+   * 单工作区时跳过选择：没有第二种可能，弹一个只有一个选项的框只是徒增点击。
+   */
+  async function pickWikiTargetWorkspace(): Promise<string | undefined> {
+    if (allWorkspaces.length === 1) return allWorkspaces[0];
+
+    const { WikiStore } = await import("@axon/core");
+    const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+    const store = new WikiStore(allWorkspaces, createHost());
+
+    // 带上「已有多少页 / 是否有未完成作业」：选工作区时这正是判断依据，用户不必先去列表里翻。
+    // 探测失败不阻塞选择本身 —— 选择框的价值在于让用户拍板，不在于这些附加信息。
+    const pages = await store.summary().catch(() => []);
+    const countByWs = new Map<string, number>();
+    for (const p of pages) countByWs.set(p.workspace, (countByWs.get(p.workspace) ?? 0) + 1);
+
+    const items: WikiTargetPick[] = [];
+    for (const ws of allWorkspaces) {
+      const count = countByWs.get(ws) ?? 0;
+      let resume = false;
+      try {
+        resume = (await store.getResumableJob(ws)) !== null;
+      } catch { /* 单根探测失败不该阻塞整体选择 */ }
+      const bits = [count > 0 ? `已有 ${count} 页` : "尚未生成"];
+      if (resume) bits.push("有未完成的生成，选中即续跑");
+      items.push({ label: basename(ws), description: ws, detail: bits.join(" ｜ "), ws });
+    }
+
+    const picked = await vscode.window.showQuickPick(items, {
+      // 模型信息放标题而非每一行的 detail：17 个工作区重复同一句毫无意义，
+      // 但它又必须显眼 —— 这是本功能最贵的一次操作，用户点确定前要知道用哪个模型。
+      title: `选择生成 Wiki 的工作区  ｜  ${describeWikiModel()}`,
+      placeHolder: "Wiki 是仓库级资产，一次只针对一个工作区生成",
+      ignoreFocusOut: true,
+    });
+    return picked?.ws;
+  }
+
+  // ── Wiki 生成期的共享状态 ──────────────────────────────────────────────
+  // 声明在两处使用点（生成命令、wiki_generation 事件处理）之前，
+  // 避免出现「用了后面才声明的变量」这种要往前翻才读得懂的顺序。
+
+  /**
+   * Wiki 生成的进度落点 —— 自建的状态栏项：生成期间显示当前阶段，点击即取消。
+   *
+   * ── 为什么不用 withProgress 的进度通知 ──
+   * VS Code 的进度通知不渲染关闭按钮（notificationsViewer 里只有非进度通知才加 close 动作），
+   * 于是它一旦出现就一直在屏幕上，长任务期间用户唯一能让它消失的办法是点「取消」——
+   * 而那会把整个生成停掉。等于逼人在「忍受遮挡」和「中止任务」之间二选一。
+   *
+   * ── 为什么也不走 ProgressLocation.Window ──
+   * 公开 API 的 ProgressOptions 不含 command 字段（只有 workbench 内部的
+   * IProgressWindowOptions 才有），扩展侧传不进去，于是它只会退化成一条静默通知，
+   * 进度依旧藏着。自建状态栏项则 text 与 command 都能控制。
+   */
+  const wikiStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
+  wikiStatusItem.command = "axon.wiki.cancel";
+  wikiStatusItem.tooltip = "点击取消本次 Wiki 生成";
+  context.subscriptions.push(wikiStatusItem);
+
+  /** 本次生成的目标工作区目录名（状态栏与面板提示都靠它标注归属） */
+  let wikiTargetName = "";
+
+  /**
+   * 给结果通知补上「是哪个应用」。
+   *
+   * 长任务结束时用户多半已经切走、没盯着看，「生成完成，共 14 页」缺了主语就无从判断
+   * 是哪个仓库的 —— 而这个面板管着所有工作区。过程期间不再需要它：那些进度已经直接
+   * 挂在对应的应用节点上了（见 WikiTreeProvider.setGenerating）。
+   */
+  const wikiMsg = (text: string): string => (wikiTargetName ? `${wikiTargetName}：${text}` : text);
+
+  /** 更新状态栏上的生成进度（固定带 spinner，一眼看出还在跑） */
+  const setWikiProgress = (message: string): void => {
+    const who = wikiTargetName ? `${wikiTargetName}：` : "";
+    wikiStatusItem.text = `$(loading~spin) 生成 Wiki：${who}${message}`;
+  };
+
+  /**
+   * 生成中标志，挡住重复点击。
+   *
+   * 根因层的守卫在 core（AgentSession.generateWiki）—— 那里才真正防住「两个并发生成互相破坏」。
+   * 这里再挡一层是为了立刻给出可见提示：否则用户只会看到一个通知闪一下又消失，不知道发生了什么。
+   */
+  let wikiGenerating = false;
+
+  async function refreshWikiTree(): Promise<number> {
+    const { WikiStore } = await import("@axon/core");
+    const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+    const store = new WikiStore(allWorkspaces, createHost());
+    const pages = await store.summary();
+    const staleCount = wikiTree.refresh(pages);
+    wikiView.badge = staleCount > 0
+      ? { value: staleCount, tooltip: `${staleCount} 个 Wiki 页面可能已过时` }
+      : undefined;
+    // 这里不再显示项目名：应用已经是树的最上层分组（见 treeViews 的 buildWikiTree），
+    // 标题旁再写一遍只是重复。
+    // 顺带刷新控制台的入口描述与任务列表：页数会变、作业状态会变（生成完 / 中断 / 失败）。
+    // 两处数据同源（同一份 .state.json），分开取会读到不同快照，出现「入口说 13 页、
+    // 列表里 14 个文件」这种对不上的情况。
+    const jobs = await store.listJobs().catch(() => []);
+    wikiTasksTree.refresh(jobs);
+    return staleCount;
   }
 
   const isValidDir = async (p: string): Promise<boolean> => {
@@ -316,6 +510,8 @@ export function activate(context: vscode.ExtensionContext): void {
     getCompactionConfig: () => readCompactionConfig(),
     // Credits 预算门配置：读取 VS Code 设置（axon.creditBudget.*），默认启用
     getCreditBudgetConfig: () => readCreditBudgetConfig(),
+    // trace 记录配置：读取 VS Code 设置（axon.trace.*），默认 normal
+    getTraceConfig: () => readTraceConfig(),
   });
 
   // REST 请求路由（webview 形态下替代 Express）
@@ -381,6 +577,9 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       if (e.affectsConfiguration("axon.creditBudget")) {
         hub.reloadCreditBudgetConfig();
+      }
+      if (e.affectsConfiguration("axon.trace")) {
+        hub.reloadTraceConfig();
       }
     })
   );
@@ -539,6 +738,218 @@ export function activate(context: vscode.ExtensionContext): void {
         relayTree.refresh(relays);
       } catch { /* ignore */ }
     }),
+    vscode.commands.registerCommand("axon.wiki.generate", async () => {
+      // 目标工作区由用户显式选择，不做任何推定（推定会把「碰巧在看什么」当成「想做什么」）。
+      const target = await pickWikiTargetWorkspace();
+      if (!target) return; // 用户取消
+      // 挡重复点击：并发生成会互相破坏。根因层的守卫在 core（AgentSession.generateWiki），
+      // 这里再挡一层是为了立刻给出可见提示 —— 否则用户只会看到一个通知闪一下又消失。
+      if (wikiGenerating) {
+        void vscode.window.showInformationMessage("已有 Wiki 生成在进行中，请等它结束或先取消。");
+        return;
+      }
+      wikiGenerating = true;
+      const { provider, model, maxPages } = readWikiConfig();
+      // 生成是长任务（十几页 × 每页多次工具调用，可能跑几分钟）。
+      //
+      // 进度放在【状态栏】而不是弹窗通知里：进度通知没有关闭按钮（见 wikiStatusItem 的说明），
+      // 长任务期间它一直占着屏幕，用户只能靠点「取消」让它消失 —— 而取消会中止整个生成。
+      // 状态栏项既不挡视线，也不需要用户去关。
+      //
+      // 取消有两个入口，都与进度同处可见：
+      //   ① 点状态栏那条进度（它带了 command）
+      //   ② Wiki 面板标题栏的「取消」（仅生成期间出现，见 package.json 的 view/title）
+      wikiTargetName = basename(target);
+      setWikiProgress("正在勘察仓库、规划页面…");
+      wikiStatusItem.show();
+      // 让标题栏的「取消」按钮出现
+      void vscode.commands.executeCommand("setContext", "axon.wikiGenerating", true);
+      try {
+        await hub.dispatch({ type: "wiki_generate", workspace: target, provider, model, maxPages } as any);
+      } catch (err) {
+        vscode.window.showErrorMessage(`生成 Wiki 失败：${(err as Error).message}`);
+      } finally {
+        // 无论成功/失败/取消都要收干净：残留的状态栏项会一直挂在状态栏上，
+        // 应用节点上的 spinner 也会一直转下去 —— 那比不显示更糟，看上去像卡死了
+        wikiTree.setGenerating(null);
+        wikiStatusItem.hide();
+        wikiTargetName = "";
+        wikiGenerating = false;
+        void vscode.commands.executeCommand("setContext", "axon.wikiGenerating", false);
+      }
+    }),
+    vscode.commands.registerCommand("axon.wiki.cancel", async () => {
+      // 取消 = 走会话取消：驱动层在每页之间检查中断信号，把作业记为 interrupted（可续跑）。
+      // 已生成的页面全部保留，下次点击接着写剩下的，不必从头再来。
+      if (!wikiGenerating) {
+        void vscode.window.showInformationMessage("当前没有正在进行的 Wiki 生成。");
+        return;
+      }
+      await hub.dispatch({ type: "cancel" } as any);
+    }),
+    vscode.commands.registerCommand("axon.wiki.pickModel", async () => {
+      // 选 provider + 模型，写入设置（用户级）。
+      // 单独做成命令、而不是每次生成前都问一遍：模型是低频且稳定的偏好，
+      // 不该在每次生成时都打断用户一次。
+      const { getResolvedProviders } = await import("@axon/core");
+      const cur = readWikiConfig();
+
+      /** 选择项携带 provider/model，选中后直接写设置 */
+      type ModelPick = vscode.QuickPickItem & { provider?: string; model?: string };
+      const items: ModelPick[] = [
+        {
+          label: "$(sync) 跟随当前会话模型",
+          description: cur.model ? "" : "（当前）",
+          detail: "Wiki 跑得少但要读懂代码，沿用你在对话里已选定的模型最稳妥。",
+          provider: "",
+          model: "",
+        },
+      ];
+      for (const p of getResolvedProviders()) {
+        if (!p.configured) continue; // 没配 key 的 provider 列出来只会让人白点一次
+        for (const m of p.models) {
+          if (m.disabled) continue;
+          const isCur = cur.provider === p.name && cur.model === m.id;
+          items.push({
+            label: m.id,
+            description: `${p.label || p.name}${isCur ? "  ← 当前" : ""}`,
+            provider: p.name,
+            model: m.id,
+          });
+        }
+      }
+
+      const picked = await vscode.window.showQuickPick(items, {
+        title: "选择生成 Wiki 使用的模型",
+        placeHolder: "只影响 Wiki 生成，不影响对话",
+        ignoreFocusOut: true,
+      });
+      if (!picked) return;
+
+      // 写用户级：这是机器本地偏好，不该跟着某个项目走
+      const cfg = vscode.workspace.getConfiguration("axon.wiki");
+      await cfg.update("provider", picked.provider ?? "", vscode.ConfigurationTarget.Global);
+      await cfg.update("model", picked.model ?? "", vscode.ConfigurationTarget.Global);
+      void vscode.window.showInformationMessage(
+        picked.model ? `Wiki 生成将使用 ${picked.provider} / ${picked.model}` : "Wiki 生成将跟随当前会话模型",
+      );
+    }),
+    vscode.commands.registerCommand("axon.wiki.showResults", async () => {
+      // 跳转到「生成结果」视图。优先聚焦该视图本体；个别版本不认 <viewId>.focus 时
+      // 退回聚焦整个 Wiki 容器 —— 两条路都能让用户看到结果，比只留一条然后静默失败好。
+      try {
+        await vscode.commands.executeCommand("axon.wiki.pages.focus");
+      } catch {
+        await vscode.commands.executeCommand("workbench.view.extension.axon-wiki");
+      }
+      // 顺便刷新：用户点进来通常是想看最新的，而不是上次渲染时的快照
+      await refreshWikiTree().catch(() => { /* 刷新失败不影响跳转本身 */ });
+    }),
+    vscode.commands.registerCommand("axon.wiki.deletePage", async (item?: vscode.TreeItem) => {
+      const target = item as unknown as { wikiSlug?: string; wikiWorkspace?: string } | undefined;
+      const slug = target?.wikiSlug;
+      if (!slug) return;
+      const label = typeof item?.label === "string" ? item.label : slug;
+      // 明确写出「会删文件」以及「可从 git 恢复」：前者防止误以为只从列表移除，
+      // 后者给出退路，免得用户以为一删就没救了而不敢动手。
+      const confirm = await vscode.window.showWarningMessage(
+        `确定删除 Wiki 页面「${label}」？\n\n` +
+        `会从 ${basename(target?.wikiWorkspace || "")}/.axon/wiki/ 中移除该文件。\n` +
+        `若该文件已提交到 git，可以从中恢复。`,
+        { modal: true },
+        "删除",
+      );
+      if (confirm !== "删除") return;
+      try {
+        const { WikiStore } = await import("@axon/core");
+        const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+        const store = new WikiStore(allWorkspaces, createHost());
+        if (await store.remove(slug)) {
+          vscode.window.showInformationMessage(`已删除页面「${label}」`);
+        } else {
+          vscode.window.showWarningMessage(`未找到页面「${label}」，可能已被删除。`);
+        }
+        await refreshWikiTree().catch(() => { /* 树刷新失败不影响删除结果 */ });
+      } catch (err) {
+        vscode.window.showErrorMessage(`删除页面失败：${(err as Error).message}`);
+      }
+    }),
+    vscode.commands.registerCommand("axon.wiki.deleteJob", async (item?: vscode.TreeItem) => {
+      const jobId = (item as unknown as { wikiJobId?: string } | undefined)?.wikiJobId;
+      if (!jobId) return;
+      // 两个后果都必须先说清：① 不动页面（免得用户以为会连页面一起删）；
+      // ② 中断的作业删掉就不能续跑了（那正是它存在的意义），这是真正不可逆的部分。
+      const confirm = await vscode.window.showWarningMessage(
+        `确定删除这条生成记录？（${jobId}）\n\n` +
+        `只删记录，不会删除已生成的页面。\n` +
+        `若这条是「已中断」的作业，删除后就不能再续跑了。`,
+        { modal: true },
+        "删除",
+      );
+      if (confirm !== "删除") return;
+      try {
+        const { WikiStore } = await import("@axon/core");
+        const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+        const store = new WikiStore(allWorkspaces, createHost());
+        if (await store.removeJob(jobId)) {
+          vscode.window.showInformationMessage("已删除该记录");
+        } else {
+          vscode.window.showWarningMessage("未找到该记录，可能已被清理。");
+        }
+        await refreshWikiTree().catch(() => { /* 树刷新失败不影响删除结果 */ });
+      } catch (err) {
+        vscode.window.showErrorMessage(`删除记录失败：${(err as Error).message}`);
+      }
+    }),
+    vscode.commands.registerCommand("axon.wiki.deleteWorkspace", async (item?: vscode.TreeItem) => {
+      const ws = (item as unknown as { wikiWorkspace?: string } | undefined)?.wikiWorkspace;
+      if (!ws) return;
+      const name = basename(ws);
+      try {
+        const { WikiStore } = await import("@axon/core");
+        const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+        const store = new WikiStore(allWorkspaces, createHost());
+        // 先数清页数再确认：用户得知道这一下删掉的是多大一块，
+        // 只说「确定删除吗」等于让人蒙着眼睛按按钮
+        const pages = (await store.summary()).filter((p) => p.workspace === ws);
+        if (pages.length === 0) {
+          void vscode.window.showInformationMessage(`「${name}」下没有 Wiki 页面。`);
+          return;
+        }
+        // 这是破坏面最大的一个删除（一次清掉整个应用的 Wiki），所以确认框给全三件事：
+        // 删几个、删在哪里、还能不能救回来。第三条尤其不能省 ——
+        // 没有退路时人会不敢动手，有退路（git）时才敢正常使用这个功能。
+        const confirm = await vscode.window.showWarningMessage(
+          `确定删除应用「${name}」的全部 ${pages.length} 个 Wiki 页面？\n\n` +
+          `会移除 ${name}/.axon/wiki/ 下的 ${pages.length} 个文件，并清除该应用的生成记录（含可续跑状态）。\n` +
+          `此操作在 Axon 内无法撤销；若这些文件已提交到 git，可以从 git 恢复。`,
+          { modal: true },
+          "删除",
+        );
+        if (confirm !== "删除") return;
+        const removed = await store.removeWorkspace(ws);
+        vscode.window.showInformationMessage(`已删除「${name}」的 ${removed} 个 Wiki 页面`);
+        await refreshWikiTree().catch(() => { /* 树刷新失败不影响删除结果 */ });
+      } catch (err) {
+        vscode.window.showErrorMessage(`删除失败：${(err as Error).message}`);
+      }
+    }),
+    vscode.commands.registerCommand("axon.wiki.refresh", async () => {
+      try {
+        await refreshWikiTree();
+      } catch (err) {
+        vscode.window.showErrorMessage(`刷新 Wiki 列表失败：${(err as Error).message}`);
+      }
+    }),
+    vscode.commands.registerCommand("axon.wiki.openPage", async (pagePath?: string) => {
+      if (!pagePath) return;
+      try {
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(pagePath));
+        await vscode.window.showTextDocument(doc, { preview: false });
+      } catch (err) {
+        vscode.window.showErrorMessage(`打开 Wiki 页面失败：${(err as Error).message}`);
+      }
+    }),
     vscode.commands.registerCommand("axon.openSkill", async (arg?: { name?: string; source?: string; skillFile?: string; create?: boolean }) => {
       // builtin skill：无实体文件，正文在内存常量里。提示用户这是内置 skill
       if (arg && arg.source === "builtin") {
@@ -584,15 +995,18 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // 左侧管理面板 TreeView（Relay / Skills / Powers / Provider）
-  const { relayTree, skillsTree, providerTree, agentsTree, powersTree, customSkillsTree, mcpTree } = registerTreeViews(context);
+  // 左侧管理面板 TreeView（Relay / Wiki / Skills / Powers / Provider）
+  const { relayTree, wikiTasksTree, wikiTree, wikiView, skillsTree, providerTree, powersTree, customSkillsTree, mcpTree } = registerTreeViews(context);
 
   // Skill 树刷新辅助
   const refreshSkillTree = async () => {
     try {
-      const { SkillRegistry, globalSkillsDir, workspaceSkillsDir } = await import("@axon/core");
+      const { SkillRegistry, PowerRegistry, globalSkillsDir, workspaceSkillsDir } = await import("@axon/core");
       const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
-      const registry = new SkillRegistry([defaultWorkspace], createHost(), homedir());
+      const host = createHost();
+      const powers = new PowerRegistry([defaultWorkspace], host, homedir());
+      // 注入 Power 捆绑的 skills：否则会出现「AI 能 use_skill 加载、用户在面板里却看不到」
+      const registry = new SkillRegistry([defaultWorkspace], host, homedir(), () => powers.getActiveSkillDirs());
       const skills = await registry.discover();
       skillsTree.refresh(skills.map((s) => ({ name: s.name, source: s.source, disabled: s.disabled, skillFile: s.skillFile })));
       customSkillsTree.refresh(
@@ -608,26 +1022,28 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("axon.skill.toggle", async (item?: vscode.TreeItem) => {
       if (!item || !item.command?.arguments?.[0]) return;
       const arg = item.command.arguments[0] as { name: string; source: string; disabled?: boolean };
-      if (arg.source === "builtin") {
-        vscode.window.showInformationMessage("内置 Skill 不能禁用。如需替换，可在工作区或全局创建一个同名 skill 覆盖它。");
-        return;
-      }
-      const { SkillRegistry } = await import("@axon/core");
+      const { SkillRegistry, PowerRegistry, isBuiltinPowerBundledSkill } = await import("@axon/core");
       const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
-      const registry = new SkillRegistry([defaultWorkspace], createHost(), homedir());
+      const host = createHost();
+      const powers = new PowerRegistry([defaultWorkspace], host, homedir());
+      const registry = new SkillRegistry([defaultWorkspace], host, homedir(), () => powers.getActiveSkillDirs());
       const metas = await registry.discover();
       const meta = metas.find((m) => m.name === arg.name);
       if (!meta) return;
-      const path = require("path");
-      const { writeFile, rm } = require("fs/promises");
-      const markerPath = path.join(meta.dir, ".disabled");
-      const willDisable = !arg.disabled; // 当前状态取反
+      // 内置 Power 捆绑的 skill 在只读产物目录里：禁不掉（写不进 .disabled），升级还会覆盖。
+      // 要关闭只能整包禁用，要定制只能放同名 skill 覆盖——给出可操作的指引，而不是让它撞写文件错误。
+      if (isBuiltinPowerBundledSkill(meta.source, meta.dir)) {
+        vscode.window.showInformationMessage(
+          "该 Skill 来自内置 Power 捆绑（只读目录），不能单独禁用。如需关闭，请在 Powers 面板禁用整个能力包；如需覆盖，可在工作区或全局创建一个同名 skill。",
+        );
+        return;
+      }
+      // 按后端当前状态取反，而不是用树条目的陈旧快照——否则连点两次会来回抵消
+      const willDisable = !meta.disabled;
       try {
-        if (willDisable) {
-          await writeFile(markerPath, "", "utf-8");
-        } else {
-          await rm(markerPath, { force: true });
-        }
+        // 交给 registry.setEnabled 分流：内置方法论写用户级禁用名单（它没有磁盘目录可放标记），
+        // 其余仍写自身目录的 .disabled。
+        await registry.setEnabled(meta, willDisable);
         await refreshSkillTree();
         vscode.window.showInformationMessage(`Skill「${arg.name}」已${willDisable ? "禁用" : "启用"}`);
       } catch (err) {
@@ -812,65 +1228,6 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // ── Agent 树刷新辅助 ──────────────────────────────────────────────────────
-  const refreshAgentTree = async () => {
-    try {
-      const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
-      const { listCustomAgents } = await import("@axon/core");
-      // 全局目录：~/.axon/agents/
-      const homeDir = require("os").homedir();
-      const agents = await listCustomAgents(homeDir, createHost());
-      agentsTree.refresh(agents.map((a: any) => ({
-        name: a.name,
-        description: a.description || "",
-        path: a.skillFile,
-      })));
-    } catch { /* ignore */ }
-  };
-
-  // Agent 命令：打开 Agent 编辑器（表单模式）
-  context.subscriptions.push(
-    vscode.commands.registerCommand("axon.openAgent", async (arg?: any) => {
-      const info = arg?.info || arg;
-      const filePath = info?.path || arg?.path;
-      if (!filePath) return;
-      try {
-        await vscode.workspace.fs.stat(vscode.Uri.file(filePath));
-        await AgentEditor.open(filePath, false);
-      } catch {
-        vscode.window.showWarningMessage("Agent 文件不存在");
-      }
-    }),
-    // Agent 命令：刷新列表
-    vscode.commands.registerCommand("axon.agent.refresh", async () => {
-      await refreshAgentTree();
-    }),
-  );
-
-  // Agent 命令：创建（草稿存内存，保存时才落盘，不污染 Agent 列表）
-  context.subscriptions.push(
-    vscode.commands.registerCommand("axon.agent.create", async () => {
-      await AgentEditor.createDraft();
-    }),
-  );
-
-  // Agent 命令：删除
-  context.subscriptions.push(
-    vscode.commands.registerCommand("axon.agent.delete", async (arg?: any) => {
-      const info = arg?.info || arg;
-      if (!info?.path || !info?.name) return;
-      const confirmed = await vscode.window.showWarningMessage(`删除 Agent "${info.name}"？`, { modal: true }, "删除");
-      if (confirmed !== "删除") return;
-      try {
-        await vscode.workspace.fs.delete(vscode.Uri.file(info.path));
-        await refreshAgentTree();
-      } catch (err) { vscode.window.showErrorMessage("删除失败：" + String(err)); }
-    }),
-  );
-
-  // 启动时初始化 Agent 列表
-  refreshAgentTree();
-
   // Power 树刷新辅助
   const refreshPowerTree = async () => {
     try {
@@ -1047,17 +1404,20 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand("axon.power.toggle", async (item?: vscode.TreeItem) => {
       if (!item || !item.command?.arguments?.[0]) return;
-      const arg = item.command.arguments[0] as { name: string; dir: string; enabled: boolean };
-      const path = require("path");
-      const markerPath = path.join(arg.dir, ".disabled");
+      const arg = item.command.arguments[0] as { name: string };
       try {
-        if (arg.enabled) {
-          // 当前启用 → 禁用
-          await vscode.workspace.fs.writeFile(vscode.Uri.file(markerPath), new Uint8Array());
-        } else {
-          // 当前禁用 → 启用
-          await vscode.workspace.fs.delete(vscode.Uri.file(markerPath));
+        const { PowerRegistry } = await import("@axon/core");
+        const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+        const registry = new PowerRegistry([defaultWorkspace], createHost(), homedir());
+        // 重新 discover 而不是直接用树条目的 enabled：树可能已过期，按下时要按当前真实状态取反。
+        const meta = (await registry.discover()).find((m) => m.name === arg.name);
+        if (!meta) {
+          vscode.window.showErrorMessage(`未找到 Power「${arg.name}」`);
+          return;
         }
+        // 交给 registry.setEnabled 分流：内置 power 写用户级启用名单，其余写自身目录的 .disabled。
+        // 内置 power 位于扩展包内（media/powers），运行期只读、升级会覆盖，不能往里写标记文件。
+        await registry.setEnabled(meta, !meta.enabled);
         await refreshPowerTree();
       } catch (err) {
         vscode.window.showErrorMessage(`操作失败：${(err as Error).message}`);
@@ -1151,8 +1511,58 @@ export function activate(context: vscode.ExtensionContext): void {
   // Quick Fix → "Ask Axon"：让 AI 一键修复诊断问题
   registerAskAxonCodeAction(context, provider);
 
+  // ── Wiki 生成进度 ────────────────────────────────────────────────────────
+  //
+  // 两条通道，都不弹窗、都不挡视线：
+  //   ① 状态栏项 —— 带 spinner、显示当前阶段与页数，点击即取消（wikiStatusItem）
+  //   ② Wiki 面板内的 message —— 打开该面板就能看到当前阶段
+  //
+  // 为什么不用「带取消按钮的进度通知」：那种通知没有关闭按钮
+  // （notificationsViewer 里只有非进度通知才渲染 close），长任务期间它只能靠
+  // 点「取消」消失 —— 而取消会中止整个生成。用户被逼着在「忍受遮挡」和「中止任务」
+  // 之间二选一，这正是这条设计要避开的。
+  // 不进聊天则是另一个理由：生成过程有几十步工具调用，灌进对话会把界面淹掉。
+  // 共享状态（wikiStatusItem / wikiGenerating）声明在上方 refreshWikiTree 之前。
   // 监听 Agent 事件：relay_updated / relay_deleted 时刷新左侧 Relay 树
   channel.onEmit(async (event: any) => {
+    if (event.type === "wiki_generation") {
+      const e = event.event as { type: string; [k: string]: any };
+      // 归属取自事件本身（每条 wiki_generation 都带 workspace），而不是生成命令里设的变量：
+      // 这样无论由哪个入口发起生成，显示出的都是权威值。
+      if (e.workspace) wikiTargetName = basename(e.workspace as string);
+      // 进度直接挂在目标应用节点上（见 WikiTreeProvider.setGenerating），不再用视图顶部的
+      // message：两者本来说的就是同一件事，而节点还能回答 message 答不了的
+      // 「在生成【哪个】应用」—— 这个面板列着所有工作区，那才是用户最先要知道的。
+      if (e.type === "planning") {
+        // 规划阶段要通读仓库、可能几十秒，所以这里就必须亮出 spinner；
+        // 否则从点按钮到第一页落盘之间毫无动静，用户会以为没生效。
+        wikiTree.setGenerating({ workspace: e.workspace, done: 0, total: 0 });
+        setWikiProgress("正在勘察仓库、规划页面…");
+      } else if (e.type === "planned") {
+        const n = (e.pages as unknown[]).length;
+        wikiTree.setGenerating({ workspace: e.workspace, done: 0, total: n });
+        setWikiProgress(`共 ${n} 页，开始生成…`);
+      } else if (e.type === "page_saved") {
+        wikiTree.setGenerating({ workspace: e.workspace, done: e.done, total: e.total, current: e.title });
+        setWikiProgress(`${e.done}/${e.total}：${e.title}`);
+      } else if (e.type === "page_failed") {
+        // 单页失败不终止整体，但要让用户知道有一页没成。
+        // 节点上的进度刻意不动：失败的页没有落盘，进度本就该停在那儿（明细见结束通知）。
+        setWikiProgress(`${e.title} 未成功，继续…`);
+      } else if (e.type === "finished") {
+        // 收掉节点上的 spinner：残留会让它一直转下去，看着像卡住了
+        wikiTree.setGenerating(null);
+        // 结果提示同样带归属：长任务结束时用户多半没盯着看，
+        // 不写清是哪个应用，「完成 14 页」就成了没有主语的一句话。
+        const doneMsg = wikiMsg(e.message as string);
+        // 用户主动取消既不是成功也不是失败 —— 弹黄色警告属于误报
+        if (e.cancelled) vscode.window.showInformationMessage(doneMsg);
+        else if (e.ok) vscode.window.showInformationMessage(doneMsg);
+        else vscode.window.showWarningMessage(doneMsg);
+        void refreshWikiTree().catch(() => { /* 刷新失败不影响结果提示 */ });
+      }
+      return;
+    }
     if (event.type === "relay_updated" || event.type === "relay_deleted") {
       try {
         const relays = await listAllRelays();
@@ -1179,13 +1589,17 @@ export function activate(context: vscode.ExtensionContext): void {
       const relays = await listAllRelays();
       relayTree.refresh(relays);
 
-      // Skills 列表
-      const { SkillRegistry } = await import("@axon/core");
+      // Wiki 列表（读 .axon/wiki/ + 判定陈旧，零 LLM 成本）
+      await refreshWikiTree();
+
+      // Skills 列表（注入 Power 捆绑的 skills，与 refreshSkillTree 保持一致）
+      const { SkillRegistry, PowerRegistry, globalSkillsDir, workspaceSkillsDir } = await import("@axon/core");
       const { createVSCodeAgentHost: createHost2 } = await import("@axon/host-vscode");
-      const registry = new SkillRegistry([defaultWorkspace], createHost2(), homedir());
+      const host2 = createHost2();
+      const powerRegistry = new PowerRegistry([defaultWorkspace], host2, homedir());
+      const registry = new SkillRegistry([defaultWorkspace], host2, homedir(), () => powerRegistry.getActiveSkillDirs());
       const skills = await registry.discover();
       skillsTree.refresh(skills.map((s) => ({ name: s.name, source: s.source, disabled: s.disabled, skillFile: s.skillFile })));
-      const { globalSkillsDir, workspaceSkillsDir } = await import("@axon/core");
       customSkillsTree.refresh(
         skills.map((s) => ({ name: s.name, source: s.source, disabled: s.disabled, skillFile: s.skillFile, dir: s.dir })),
         workspaceSkillsDir(defaultWorkspace),
@@ -1193,9 +1607,6 @@ export function activate(context: vscode.ExtensionContext): void {
       );
 
       // Powers 列表
-      const { PowerRegistry } = await import("@axon/core");
-      const { createVSCodeAgentHost: createHost3 } = await import("@axon/host-vscode");
-      const powerRegistry = new PowerRegistry([defaultWorkspace], createHost3(), homedir());
       const powers = await powerRegistry.discover();
       powersTree.refresh(powers.map((p) => ({
         name: p.name,
@@ -1209,7 +1620,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
       // MCP 列表（三来源合并：用户级 + 工作区级 + Power 内嵌）
       const { McpRegistry } = await import("@axon/core");
-      const mcpRegistry = new McpRegistry([defaultWorkspace], createHost3(), homedir(), powerRegistry);
+      const mcpRegistry = new McpRegistry([defaultWorkspace], host2, homedir(), powerRegistry);
       const mcpSpecs = await mcpRegistry.resolve(true);
       mcpTree.refresh(mcpSpecs.map((s) => ({ name: s.name, source: s.source, disabled: !!s.disabled })));
     } catch (err) {
@@ -1236,6 +1647,24 @@ export function activate(context: vscode.ExtensionContext): void {
   mcpWatcher.onDidCreate(refreshMcpTree);
   mcpWatcher.onDidDelete(refreshMcpTree);
   context.subscriptions.push(mcpWatcher);
+
+  // Wiki 页面变动时刷新侧边栏（手改 / 新增 / 删除 .md 都会被看到）。
+  // 加 200ms 去抖：生成一页会先后写 .md 与 .state.json，不去抖会连触发两次刷新。
+  // 检测本身不调 LLM，频繁触发无成本顾虑。
+  let wikiRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  const scheduleWikiRefresh = () => {
+    if (wikiRefreshTimer) clearTimeout(wikiRefreshTimer);
+    wikiRefreshTimer = setTimeout(() => {
+      wikiRefreshTimer = undefined;
+      void refreshWikiTree().catch(() => { /* 列表刷新失败不该影响主流程 */ });
+    }, 200);
+  };
+  const wikiWatcher = vscode.workspace.createFileSystemWatcher("**/.axon/wiki/*");
+  wikiWatcher.onDidChange(scheduleWikiRefresh);
+  wikiWatcher.onDidCreate(scheduleWikiRefresh);
+  wikiWatcher.onDidDelete(scheduleWikiRefresh);
+  context.subscriptions.push(wikiWatcher, { dispose: () => { if (wikiRefreshTimer) clearTimeout(wikiRefreshTimer); } });
+
 
   // 手动刷新命令（树标题栏刷新按钮用）
   context.subscriptions.push(
@@ -1373,6 +1802,10 @@ export function activate(context: vscode.ExtensionContext): void {
         query: `view=providers&workspace=${encodeURIComponent(workspace)}`,
         extensionUri: context.extensionUri,
         router,
+        onProvidersChanged: () => {
+          provider.postToWebview({ type: "providers_changed" });
+          void refreshProviderTree();
+        },
         icon: "media/powers.svg",
       });
     }),

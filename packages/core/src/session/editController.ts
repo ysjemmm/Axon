@@ -1,10 +1,10 @@
 /**
- * EditController —— 待确认改动的接受/拒绝/撤销与并行回滚（从 AgentSession 解耦）
+ * EditController —— 待确认改动的接受/拒绝/撤销（从 AgentSession 解耦）
  *
- * 职责单一：把 manual 模式下暂存改动的接受落盘、拒绝丢弃、撤销恢复，以及 parallel_execute
- * auto 落盘文件的快照回滚集中到一处；每次变动后向 AI 注入系统消息（让它感知用户决策）并通知前端。
+ * 职责单一：把 manual 模式下暂存改动的接受落盘、拒绝丢弃、撤销恢复集中到一处；
+ * 每次变动后向 AI 注入系统消息（让它感知用户决策）并通知前端。
  *
- * 通过构造注入的 session 引用访问 host.edits / 消息历史 / 持久化回调 / 并行快照（@internal）。
+ * 通过构造注入的 session 引用访问 host.edits / 消息历史 / 持久化回调。
  * 轻量待确认状态查询（pending 路径/diff 等）仍是 host.edits 的薄封装，保留在 session。
  */
 
@@ -84,32 +84,5 @@ export class EditController {
     }
     // 无论成功失败都通知前端撤销结果：成功→更新卡片为已撤销；失败→轻提示
     this.s.send("edit_undo_result", { path, ok: result.ok, reason: result.reason });
-  }
-
-  /**
-   * 回滚一个并行执行（parallel_execute）写入的文件。
-   * 并行子 Agent auto 落盘，无原生 undo 记录，靠 parallelSnapshots 里捕获的"改动前快照"恢复：
-   * - 新建文件 → 删除
-   * - 已存在文件 → 写回原始内容
-   * @param path AI 使用的路径（前端从文件变更清单回传）
-   */
-  async undoParallelFile(path: string): Promise<void> {
-    const snap = this.s.parallelSnapshots.get(path);
-    if (!snap) {
-      this.s.send("parallel_file_reverted", { path, ok: false, reason: "未找到该文件的回滚快照" });
-      return;
-    }
-    try {
-      if (snap.isNew) {
-        await this.s.host.fs.remove(snap.absPath);
-      } else {
-        await this.s.host.fs.write(snap.absPath, snap.original ?? "");
-      }
-      // 回滚成功后移除快照（不可重复回滚）
-      this.s.parallelSnapshots.delete(path);
-      this.s.send("parallel_file_reverted", { path, ok: true });
-    } catch (err) {
-      this.s.send("parallel_file_reverted", { path, ok: false, reason: (err as Error).message });
-    }
   }
 }

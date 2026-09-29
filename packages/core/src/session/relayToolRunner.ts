@@ -149,20 +149,9 @@ export class RelayToolRunner {
     if (!relay) throw new Error(`未找到 relay：${id}`);
     this.s.send("relay_updated", { relay });
     if (to === "executing") {
-      // 找出无依赖（或 deps 全部已完成）的 pending 任务
-      const completedIds = new Set(relay.tasks.filter((t) => t.status === "completed").map((t) => t.id));
-      const readyTasks = relay.tasks.filter((t) =>
-        t.status === "pending" && (!t.deps || t.deps.length === 0 || t.deps.every((d) => completedIds.has(d)))
-      );
-      const parallelHint = readyTasks.length >= 2
-        ? `\n\n【并行加速】当前有 ${readyTasks.length} 个无依赖的就绪任务（${readyTasks.map((t) => t.id).join(", ")}），` +
-          `它们互不依赖，优先使用 parallel_execute 并行派发执行以提升效率。` +
-          `每个子任务的 prompt 需自包含（背景+目标+验收标准+涉及文件），fileScope 从任务详情中提取。`
-        : "";
       return (
         `阶段已推进到执行（executing）。计划共 ${relay.tasks.length} 个任务。\n` +
-        `请开始执行：每个任务开始前用 relay_update_task 设为 in_progress，完成并验证后设为 completed。` +
-        parallelHint
+        `请开始执行：每个任务开始前用 relay_update_task 设为 in_progress，完成并验证后设为 completed。`
       );
     }
     if (to === "done") {

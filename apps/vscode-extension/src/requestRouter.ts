@@ -11,7 +11,7 @@ import * as vscode from "vscode";
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { RelayStore, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, assertUniqueModelIds, supportsThinking, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry, type ProviderQuotaConfig } from "@axon/core";
+import { RelayStore, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, assertUniqueModelIds, supportsThinking, providerEnvKeys, stripProviderEnvLines, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry, type ProviderQuotaConfig } from "@axon/core";
 import { createVSCodeAgentHost } from "@axon/host-vscode";
 import { queryProviderQuota, quotaTokenStore, validateQuotaQuery } from "./quotaService.js";
 
@@ -30,6 +30,15 @@ function parsePath(rawPath: string): { path: string; query: URLSearchParams } {
   const qIndex = rawPath.indexOf("?");
   if (qIndex === -1) return { path: rawPath, query: new URLSearchParams() };
   return { path: rawPath.slice(0, qIndex), query: new URLSearchParams(rawPath.slice(qIndex + 1)) };
+}
+
+/**
+ * relay 的候选落盘根：请求指定的工作区（缺省用默认工作区）+ 主目录。
+ * Agent 把 relay 写进会话工作区的 .axon/relays/，主目录下可能有历史遗留，故合并读取。
+ */
+function relayRoots(query: URLSearchParams, defaultWorkspace: string): string[] {
+  const ws = query.get("workspace") || defaultWorkspace;
+  return [ws, homedir()];
 }
 
 /** 清理指定工作区中 axios 创建的 git 快照 ref */
@@ -90,7 +99,7 @@ export class RequestRouter {
           for (const ws of wsList) {
             await cleanupSnapshotRefs(ws);
           }
-          // 注：relay 已改为全局落盘且独立于 session，删除会话不再连带删除 relay
+          // 注：relay 独立于 session，删除会话不再连带删除 relay
         }
         await d.storage.deleteSession(id);
         return { ok: true };
@@ -137,16 +146,37 @@ export class RequestRouter {
       }
     }
 
+    // 删除整个 skill。
+    // 这条路由此前缺失：SkillStudio 的删除按钮会打到 DELETE /api/skills/<name>，
+    // 而 webview 形态只实现了 /api/skills 的 GET 与 /file 系列，于是删除必定失败
+    // ——「删不掉」的另一半原因。补上它，并复用 core 的可删性判定。
+    const skillDeleteMatch = path.match(/^\/api\/skills\/([^/]+)$/);
+    if (skillDeleteMatch && method === "DELETE") {
+      const skillName = decodeURIComponent(skillDeleteMatch[1]);
+      const ws = query.get("workspace") || d.defaultWorkspace;
+      const { SkillRegistry, PowerRegistry, skillDeleteRejection } = await import("@axon/core");
+      const host = createVSCodeAgentHost();
+      const powers = new PowerRegistry([ws], host, homedir());
+      const registry = new SkillRegistry([ws], host, homedir(), () => powers.getActiveSkillDirs());
+      const meta = (await registry.discover()).find((m) => m.name === skillName);
+      if (!meta) throw new Error(`skill 不存在: ${skillName}`);
+      const rejection = skillDeleteRejection(meta);
+      if (rejection) throw new Error(rejection);
+      const { rm } = await import("node:fs/promises");
+      await rm(meta.dir, { recursive: true, force: true });
+      return { ok: true };
+    }
+
     // ── Relay ──
     if (path === "/api/relays" && method === "GET") {
-      // relay 全局落盘到 <homeDir>/.axon/relays，不再跟工作区绑定
-      const store = new RelayStore(homedir(), createVSCodeAgentHost());
+      // 工作区 + 主目录合并读取（Agent 写在工作区，主目录可能有历史遗留）
+      const store = new RelayStore(relayRoots(query, d.defaultWorkspace), createVSCodeAgentHost());
       return { relays: await store.list() };
     }
     const relayIdMatch = path.match(/^\/api\/relays\/([^/]+)$/);
     if (relayIdMatch) {
       const id = decodeURIComponent(relayIdMatch[1]);
-      const store = new RelayStore(homedir(), createVSCodeAgentHost());
+      const store = new RelayStore(relayRoots(query, d.defaultWorkspace), createVSCodeAgentHost());
       if (method === "GET") {
         const relay = await store.get(id);
         if (!relay) throw new Error("relay 不存在");
@@ -175,7 +205,7 @@ export class RequestRouter {
       if (!status || !["pending", "in_progress", "completed"].includes(status)) {
         throw new Error("status 非法");
       }
-      const store = new RelayStore(homedir(), createVSCodeAgentHost());
+      const store = new RelayStore(relayRoots(query, d.defaultWorkspace), createVSCodeAgentHost());
       const relay = await store.setTaskStatus(id, taskId, status as "pending" | "in_progress" | "completed");
       if (!relay) throw new Error("relay 不存在");
       return relay;
@@ -204,6 +234,8 @@ export class RequestRouter {
         const metas = await registry.discover();
         const meta = metas.find((m) => m.name === name);
         if (!meta) throw new Error("power 不存在");
+        // 内置 power 在扩展包内，删了也会随升级回来；要隐藏请禁用它
+        if (meta.source === "builtin") throw new Error("内置 Power 不可删除，如需隐藏请先禁用它");
         await rm(meta.dir, { recursive: true, force: true });
         return { ok: true };
       }
@@ -214,18 +246,12 @@ export class RequestRouter {
       const ws = query.get("workspace") || d.defaultWorkspace;
       const enabled = !!(body as { enabled?: boolean } | undefined)?.enabled;
       const { PowerRegistry } = await import("@axon/core");
-      const { writeFile, rm } = await import("node:fs/promises");
-      const { join } = await import("node:path");
       const registry = new PowerRegistry([ws], createVSCodeAgentHost(), homedir());
       const metas = await registry.discover();
       const meta = metas.find((m) => m.name === name);
       if (!meta) throw new Error("power 不存在");
-      const markerPath = join(meta.dir, ".disabled");
-      if (!enabled) {
-        await writeFile(markerPath, "", "utf-8");
-      } else {
-        await rm(markerPath, { force: true });
-      }
+      // 交给 registry.setEnabled 分流：内置 power 写用户级启用名单，其余写自身目录的 .disabled
+      await registry.setEnabled(meta, enabled);
       return { ok: true, name, enabled };
     }
     const powerMcpMatch = path.match(/^\/api\/powers\/([^/]+)\/mcp$/);
@@ -464,88 +490,6 @@ export class RequestRouter {
       return { ok: true };
     }
 
-    // ── Agent CRUD（全局 ~/.axon/agents/）──
-    if (path === "/api/agents" && method === "GET") {
-      const { join } = require("path");
-      const { readdir, readFile } = await import("node:fs/promises");
-      const agentsDir = join(homedir(), ".axon", "agents");
-      const entries: { name: string; description: string }[] = [];
-      try {
-        const files = await readdir(agentsDir);
-        for (const f of files) {
-          if (!f.endsWith(".json")) continue;
-          try {
-            const raw = await readFile(join(agentsDir, f), "utf-8");
-            const a = JSON.parse(raw);
-            entries.push({ name: a.name || f.replace(".json", ""), description: a.description || "" });
-          } catch { /* skip broken */ }
-        }
-      } catch { /* no dir */ }
-      return { agents: entries };
-    }
-    const agentNameMatch = path.match(/^\/api\/agents\/([^/]+)$/);
-    if (agentNameMatch) {
-      const { join } = require("path");
-      const name = decodeURIComponent(agentNameMatch[1]);
-      const filePath = join(homedir(), ".axon", "agents", `${name}.json`);
-      if (method === "GET") {
-        const { readFile } = await import("node:fs/promises");
-        try { return JSON.parse(await readFile(filePath, "utf-8")); }
-        catch { throw new Error("Agent 不存在"); }
-      }
-      if (method === "DELETE") {
-        const { unlink } = await import("node:fs/promises");
-        try { await unlink(filePath); vscode.commands.executeCommand("axon.agent.refresh"); return { ok: true }; }
-        catch { throw new Error("Agent 不存在"); }
-      }
-      if (method === "PUT") {
-        // 编辑已有 Agent：支持改名（sanitized 不同时删除旧文件）
-        const { readFile, writeFile, unlink } = await import("node:fs/promises");
-        const { existsSync } = await import("node:fs");
-        if (!existsSync(filePath)) throw new Error("Agent 不存在");
-        const { name: newName, description, systemPrompt, skills, mcpServers, powers, tools } = (body || {}) as {
-          name?: string; description?: string; systemPrompt?: string;
-          skills?: string[]; mcpServers?: string[]; powers?: string[]; tools?: string[];
-        };
-        if (!newName || !newName.trim()) throw new Error("name 为必填");
-        const sanitized = newName.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 50);
-        const newPath = join(homedir(), ".axon", "agents", `${sanitized}.json`);
-        await writeFile(newPath, JSON.stringify({
-          name: sanitized,
-          description: description ?? "",
-          systemPrompt: systemPrompt ?? "",
-          skills: skills ?? [],
-          mcpServers: mcpServers ?? [],
-          powers: powers ?? [],
-          tools: tools ?? [],
-        }, null, 2), "utf-8");
-        // 改名时删除旧文件
-        if (newPath !== filePath && existsSync(filePath)) {
-          await unlink(filePath);
-        }
-        vscode.commands.executeCommand("axon.agent.refresh");
-        return { ok: true, name: sanitized };
-      }
-    }
-    if (path === "/api/agents" && method === "POST") {
-      const { mkdir, writeFile } = await import("node:fs/promises");
-      const { join } = require("path");
-      const { name, description, systemPrompt } = (body || {}) as { name?: string; description?: string; systemPrompt?: string };
-      if (!name) throw new Error("name 为必填");
-      const sanitized = name.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 50);
-      const agentsDir = join(homedir(), ".axon", "agents");
-      await mkdir(agentsDir, { recursive: true });
-      const filePath = join(agentsDir, `${sanitized}.json`);
-      const { existsSync } = await import("node:fs");
-      if (existsSync(filePath)) throw new Error("同名 Agent 已存在");
-      await writeFile(filePath, JSON.stringify({
-        name: sanitized, description: description || "", systemPrompt: systemPrompt || "",
-        skills: [], mcpServers: [], powers: [], tools: [],
-      }, null, 2), "utf-8");
-      vscode.commands.executeCommand("axon.agent.refresh");
-      return { ok: true, name: sanitized };
-    }
-
     // ── Provider 配置（.axon/settings/providers.json）──
     if (path === "/api/providers" && method === "GET") {
       const ws = query.get("workspace") || d.defaultWorkspace;
@@ -600,6 +544,30 @@ export class RequestRouter {
       await removeCustomProvider(level, decodeURIComponent(providerDeleteMatch[2]), ws);
       await resolveProviders(ws);
       return { ok: true };
+    }
+    // 移除「纯环境变量来源」的 provider：摘它的真实来源 ~/.axon/.env，
+    // 而不是 providers.json（那里根本没有它，走上面的 custom 删除必然报"不存在"）。
+    const providerEnvDeleteMatch = path.match(/^\/api\/providers\/env\/([^/]+)$/);
+    if (providerEnvDeleteMatch && method === "DELETE") {
+      const name = decodeURIComponent(providerEnvDeleteMatch[1]).trim();
+      if (!name) throw new Error("provider 名称不能为空");
+      const { removed, file } = await removeProviderFromEnvFile(name);
+      // 同步清掉进程内 env：core 每次 resolve 都读 process.env，
+      // 这样当前窗口不必重启就能从列表消失（否则要等下次读 .env 才生效）。
+      for (const k of providerEnvKeys(name)) delete process.env[k];
+      // 若它同时由 VS Code 设置提供，改 .env 是删不掉的——如实上报，让前端能给出正确指引
+      const upper = name.toUpperCase();
+      const cfg = vscode.workspace.getConfiguration("axon");
+      const envSetting = cfg.get<Record<string, string>>("env") || {};
+      const providersSetting = cfg.get<Record<string, { apiKey?: string; baseUrl?: string }>>("providers") || {};
+      const settingKeys = new Set(Object.keys(envSetting).map((k) => k.toUpperCase()));
+      const fromSettings =
+        settingKeys.has(`PROVIDER_${upper}_API_KEY`) ||
+        settingKeys.has(`PROVIDER_${upper}_BASE_URL`) ||
+        Object.keys(providersSetting).some((k) => k.toLowerCase() === name.toLowerCase());
+      const ws = query.get("workspace") || d.defaultWorkspace;
+      await resolveProviders(ws);
+      return { ok: true, removed, file, fromSettings };
     }
     const providerModelsMatch = path.match(/^\/api\/providers\/(user|workspace)\/custom\/([^/]+)\/models$/);
     if (providerModelsMatch && method === "PUT") {
@@ -855,6 +823,33 @@ async function removeCustomProvider(level: "user" | "workspace", name: string, w
   await writeProviderConfig(level, config, workspace);
 }
 
+/**
+ * 从 ~/.axon/.env 摘掉某 provider 的配置行。
+ *
+ * 为什么必须单独一条路径：provider 有三个来源（内置 / providers.json 自定义 / 纯环境变量），
+ * 面板把三类混在一起展示；而 env 来源的根本不在 providers.json 里，
+ * 走 removeCustomProvider 只会报"provider 不存在"——用户看到的就是"删不掉、重启又回来"。
+ * 要真正移除它，只能改它的真实来源。
+ *
+ * 逐行摘除而非重新序列化：保留用户的注释、空行与原有顺序，只删匹配的两行。
+ */
+async function removeProviderFromEnvFile(name: string): Promise<{ removed: string[]; file: string }> {
+  const { readFile, writeFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const file = join(homedir(), ".axon", ".env");
+  let text: string;
+  try {
+    text = await readFile(file, "utf-8");
+  } catch {
+    return { removed: [], file }; // 文件不存在：无可摘除
+  }
+  // 摘行逻辑收敛在 core（纯函数、有单测、两种形态共用），这里只管读写文件
+  const { text: next, removed } = stripProviderEnvLines(text, name);
+  if (removed.length === 0) return { removed, file };
+  await writeFile(file, next, "utf-8");
+  return { removed, file };
+}
+
 /** 在用户级 / 工作区级之间迁移自定义 provider（迁移后源层级删除） */
 async function moveCustomProvider(
   fromLevel: "user" | "workspace",
@@ -951,6 +946,8 @@ function flattenProviderModels(providers: ResolvedProvider[]) {
           // web 是独立工程引用不到 @axon/core，判定逻辑只能留在后端一处，
           // 否则前端得照抄一份启发式，两边迟早不一致。
           thinking: supportsThinking(m.id, m.thinking),
+          effortLevels: m.effortLevels,
+          defaultEffort: m.defaultEffort,
         })),
     );
 }

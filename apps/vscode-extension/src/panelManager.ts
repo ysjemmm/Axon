@@ -24,10 +24,10 @@ export interface PanelOptions {
   extensionUri: vscode.Uri;
   /** 可选：REST 请求路由器（让 Panel 内的 webview 也能代理 REST 请求） */
   router?: { handle(method: string, path: string, body?: unknown): Promise<unknown> };
+  /** Provider 配置保存后通知侧栏刷新 */
+  onProvidersChanged?: () => void;
   /** 可选：Tab 图标路径（相对 extensionUri） */
   icon?: string;
-  /** 可选：向侧栏 webview 发消息（跨 webview 通信） */
-  postToSidebar?: (message: unknown) => void;
 }
 
 /**
@@ -69,6 +69,11 @@ export function openOrFocusPanel(options: PanelOptions): vscode.WebviewPanel {
       if (!msg || typeof msg !== "object") return;
       const m = msg as Record<string, unknown>;
 
+      if (m.type === "providers_changed") {
+        options.onProvidersChanged?.();
+        return;
+      }
+
       // 打开 Power Tab（点击聊天卡片中的 Power 名称）
       if (m.type === "open_power_tab" && typeof m.powerName === "string") {
         const powerName = m.powerName as string;
@@ -101,16 +106,6 @@ export function openOrFocusPanel(options: PanelOptions): vscode.WebviewPanel {
           await vscode.window.showTextDocument(vscode.Uri.file(m.filePath as string), { preview: true });
         } catch {
           vscode.window.showWarningMessage(`无法打开文件：${m.filePath}`);
-        }
-        return;
-      }
-
-      // 从 Relay Tab 跳转到并行面板：转发给侧栏 webview
-      if (m.type === "navigate_parallel") {
-        if (options.postToSidebar) {
-          options.postToSidebar({ type: "navigate_parallel", batchId: m.batchId || null, relayId: m.relayId || null });
-        } else {
-          vscode.window.showInformationMessage("未找到关联的并行执行记录。请在侧栏「并行」面板中查看。");
         }
         return;
       }

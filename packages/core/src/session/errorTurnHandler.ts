@@ -12,7 +12,7 @@
 import type { AgentSession } from "../agentSession.js";
 import { calculateCredits, buildCreditDetail } from "../credits.js";
 import { estimateTokensFromText } from "../llm/tokenEstimator.js";
-import { getModelDisplayName } from "../providers.js";
+import { getModelDisplayName, getProviderDisplayName } from "../providers.js";
 
 export class ErrorTurnHandler {
   constructor(private readonly s: AgentSession) {}
@@ -30,6 +30,8 @@ export class ErrorTurnHandler {
       tokens: turnTokens,
       model: this.s.model,
       modelName: getModelDisplayName(this.s.model, this.s.provider),
+      providerName: getProviderDisplayName(this.s.provider),
+      effort: this.s.effort,
       credits,
       creditDetail,
       // 这条路径是 cancel() 的兜底，语义上确实是"用户取消"
@@ -113,7 +115,7 @@ export class ErrorTurnHandler {
     }
     this.s.send("stream_delta", { content: errMsg });
     const model = (this.s as any)._lastSentModel || this.s.model;
-    this.s.send("stream_end", { elapsed: Date.now() - turnStartTime, tokens: this.s.lastTotalTokens, model, modelName: getModelDisplayName(model, this.s.provider) } as any);
+    this.s.send("stream_end", { elapsed: Date.now() - turnStartTime, tokens: this.s.lastTotalTokens, model, modelName: getModelDisplayName(model, this.s.provider), providerName: getProviderDisplayName(this.s.provider), effort: this.s.effort } as any);
   }
 
   /**
@@ -137,7 +139,7 @@ export class ErrorTurnHandler {
     const creditDetail = buildCreditDetail(this.s.model, breakdown);
     for (let i = this.s.messages.length - 1; i >= 0; i--) {
       if (this.s.messages[i].role === "assistant") {
-        (this.s.messages[i] as any).turnStats = { elapsed, tokens: turnTokens, model: this.s.model, modelName: getModelDisplayName(this.s.model, this.s.provider), credits, creditDetail };
+        (this.s.messages[i] as any).turnStats = { elapsed, tokens: turnTokens, model: this.s.model, modelName: getModelDisplayName(this.s.model, this.s.provider), providerName: getProviderDisplayName(this.s.provider), effort: this.s.effort, credits, creditDetail };
         (this.s.messages[i] as any).turnStatus = status;
         break;
       }
@@ -145,7 +147,7 @@ export class ErrorTurnHandler {
     this.s.persistMessages();
     // reason 必须跟着 status 一起发：落盘的消息记了 error，事件却不带原因的话，
     // 前端只能一律按 "cancelled" 渲染——于是"网关挂了"和"用户点了停止"在界面上无从区分。
-    this.s.send("turn_cancelled", { elapsed, tokens: turnTokens, model: this.s.model, modelName: getModelDisplayName(this.s.model, this.s.provider), credits, creditDetail, reason: status });
+    this.s.send("turn_cancelled", { elapsed, tokens: turnTokens, model: this.s.model, modelName: getModelDisplayName(this.s.model, this.s.provider), providerName: getProviderDisplayName(this.s.provider), effort: this.s.effort, credits, creditDetail, reason: status });
   }
 
   /**
@@ -166,12 +168,12 @@ export class ErrorTurnHandler {
     const creditDetail = buildCreditDetail(this.s.model, breakdown);
     for (let i = this.s.messages.length - 1; i >= 0; i--) {
       if (this.s.messages[i].role === "assistant") {
-        (this.s.messages[i] as any).turnStats = { elapsed, tokens: turnTokens, model: this.s.model, modelName: getModelDisplayName(this.s.model, this.s.provider), credits, creditDetail };
+        (this.s.messages[i] as any).turnStats = { elapsed, tokens: turnTokens, model: this.s.model, modelName: getModelDisplayName(this.s.model, this.s.provider), providerName: getProviderDisplayName(this.s.provider), effort: this.s.effort, credits, creditDetail };
         (this.s.messages[i] as any).turnStatus = "cancelled";
         break;
       }
     }
     this.s.persistMessages();
-    this.s.send("turn_cancelled", { elapsed, tokens: turnTokens, model: this.s.model, modelName: getModelDisplayName(this.s.model, this.s.provider), credits, creditDetail, reason: "cancelled" });
+    this.s.send("turn_cancelled", { elapsed, tokens: turnTokens, model: this.s.model, modelName: getModelDisplayName(this.s.model, this.s.provider), providerName: getProviderDisplayName(this.s.provider), effort: this.s.effort, credits, creditDetail, reason: "cancelled" });
   }
 }

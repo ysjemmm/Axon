@@ -81,7 +81,7 @@ export function applyEventToSubAgent(sub: SubAgentSegment, event: WsMessage): Su
       id: eventId || `subtool-${Date.now()}-${event.name}-${inner.length}`,
       boundId: !!eventId,
       name: event.name || "",
-      // 与主 agent 一致：流式阶段的提前卡是"排队中"，不是"执行中"
+      // 与主 agent 一致：流式阶段的提前卡是"待执行"，不是"执行中"
       status: status === "queued" ? "queued" : "pending",
       description: formatToolDescription(event.name || "", undefined, args),
       args,
@@ -140,6 +140,13 @@ export function applyEventToSubAgent(sub: SubAgentSegment, event: WsMessage): Su
         finalDesc = verbMap[event.name || ""] || `已完成 ${fileName}`;
       } else if (toolStatus === "error") {
         finalDesc = event.result?.slice(0, 100) || "执行失败";
+      }
+      // 兜底：上面是一张手写的"部分工具"文案表，漏掉的工具会原样留着执行中的文案。
+      // 典型是 apply_patch —— 它的执行中文案「应用补丁中…」既不含文件名、也不匹配其它分支，
+      // 于是卡片到了终态（绿勾）却仍写着"应用补丁中…"。凡未被任何分支改写的，统一按
+      //「名称 + 结果 + 参数」重算一次，与主 Agent 的 tool_result 处理保持一致。
+      if (finalDesc === seg.description) {
+        finalDesc = formatToolDescription(seg.name, event.result, ((event as any).args || seg.args) as Record<string, unknown>);
       }
       inner[matchIdx] = {
         ...seg,

@@ -39,15 +39,18 @@ const DEFAULT_CONFIG: CompactConfig = {
  * 由呈现端（VS Code 设置 / CLI flag）注入，AgentSession 在触发压缩时读取。
  */
 export interface CompactionUserConfig {
-  /** 滚动压缩总开关。关闭后不再自动压缩历史（工具结果裁剪仍生效，见 toolResultKeepTurns） */
+  /** 滚动压缩总开关。关闭后不再自动压缩历史（工具结果仍在写入历史时按单次上限裁剪） */
   enabled: boolean;
   /** 触发阈值：自上次压缩后累计 token 超过此值，异步触发滚动压缩 */
   triggerTokens: number;
   /** 保留最近多少条消息不压缩（原文保留） */
   keepRecentMessages: number;
-  /** 旧工具结果 content 裁剪后保留的最大字符数 */
+  /** 旧工具结果 content 裁剪后保留的最大字符数（仅 pruneOldToolResults 使用，回合收尾已不再调用） */
   toolResultPruneChars: number;
-  /** 保留最近几轮的工具结果不裁剪（0 = 全裁） */
+  /**
+   * @deprecated 回合收尾不再裁剪旧工具结果（会改写历史中间、断前缀缓存），该配置已无效，
+   * 仅为兼容旧的宿主注入保留。工具结果改为写入历史时按单次上限一次裁到位（capToolContent）。
+   */
   toolResultKeepTurns: number;
 }
 

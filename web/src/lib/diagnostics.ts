@@ -379,6 +379,15 @@ function startHeartbeat(): void {
 /** 捕获未处理的异常（React 渲染错误之外的那些，往往才是把界面搞死的原因） */
 function startErrorCapture(): void {
   window.addEventListener("error", (event) => {
+    // 浏览器在"一帧内 ResizeObserver 回调又改了被观察元素的尺寸"时抛这条，
+    // 意思是剩下的通知挪到下一帧再送，不是异常，也不会丢数据（规范行为）。
+    // 虚拟列表开了 skipAnimationFrameInResizeObserver（同步上报尺寸以消除滚动时的一帧错位）后
+    // 必然偶发，库文档明确说明它无害（react-virtuoso #1049）。它没有 error 对象、也没有栈，
+    // 记成 error 只会刷屏并掩盖真正的错误，所以这里单独放过。
+    if (!event.error && /^ResizeObserver loop/.test(event.message || "")) {
+      event.stopImmediatePropagation();
+      return;
+    }
     const err = event.error as Error | undefined;
     recordIncident("error", 0, `${event.message}${err?.stack ? ` @ ${err.stack.split("\n")[1]?.trim() ?? ""}` : ""}`);
   });

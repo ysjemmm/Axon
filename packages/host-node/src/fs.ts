@@ -31,7 +31,15 @@ export class NodeFileSystem implements HostFileSystem {
   async stat(absPath: string): Promise<StatInfo | null> {
     try {
       const st = await stat(absPath);
-      return { isFile: st.isFile(), isDir: st.isDirectory() };
+      const isFile = st.isFile();
+      return {
+        isFile,
+        isDir: st.isDirectory(),
+        mtimeMs: st.mtimeMs,
+        // 只给文件大小：目录的 size 是平台相关的无意义值（Linux 常为 4096、Windows 常为 0），
+        // 透出去会诱导消费方拿它做「内容变化」判断，而目录内容变化根本不由 size 反映。
+        size: isFile ? st.size : undefined,
+      };
     } catch {
       return null;
     }

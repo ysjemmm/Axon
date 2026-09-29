@@ -58,6 +58,11 @@ export interface TokenUsage {
 export interface LLMTurnResult {
   /** 模型本回合输出的正文 */
   content: string;
+  /**
+   * 本回合完整思考内容（DeepSeek reasoning_content / 兼容网关 reasoning）。
+   * 带 tool_calls 的 assistant 消息必须在下一轮原样回传；未产生思考时省略。
+   */
+  reasoningContent?: string;
   /** 本回合的工具调用列表（为空表示模型给出了最终回复） */
   toolCalls: NormalizedToolCall[];
   /** 结束原因：stop / tool_calls / length / content_filter 等（原始协议值，历史消费方依赖，勿改语义） */
@@ -110,6 +115,8 @@ export interface RunTurnParams {
    * 缺省（undefined）按 true 处理：内部工具调用（压缩摘要、Relay 评审）不传即维持原行为。
    */
   think?: boolean;
+  /** 原样下发给 provider 的思考强度值；必须来自 ProviderModel.effortLevels */
+  effort?: string;
   /**
    * 该模型在 provider 目录 / providers.json 里**声明**的思考能力（`ProviderModel.thinking`）。
    *

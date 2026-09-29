@@ -127,7 +127,7 @@ function AssistantTurnImpl({
   const uncertain = message.turnStatus === "cancelled" || message.turnStatus === "error";
 
   return (
-    <div className="flex flex-col">
+    <div className="group/assistant flex flex-col">
       <AssistantTurnHeader streaming={message.streaming} liveStatus={liveStatus} startedAt={startedAt}>
         {!message.streaming && rawContent && (
           <button
@@ -150,7 +150,7 @@ function AssistantTurnImpl({
         )}
 
         {!message.streaming && message.turnStats && (
-          <div className="mt-3 text-[11px] text-muted-foreground">
+          <div className="mt-3 text-[11px] text-muted-foreground animate-rise-in">
             {message.turnStats.creditDetail ? (
               <span className="relative inline-flex cursor-default border-b border-dotted border-muted-foreground/40 group/credits">
                 Credits: {(message.turnStats.credits ?? 0).toFixed(2)}
@@ -187,11 +187,26 @@ function AssistantTurnImpl({
                 {uncertain ? "(?)" : ""}
               </span>
             )}
-            {" · "}Elapsed: {formatElapsed(message.turnStats.elapsed)}
-            {uncertain ? "(?)" : ""}
-            {message.turnStats.modelName || message.turnStats.model
-              ? ` · ${message.turnStats.modelName || message.turnStats.model}`
-              : ""}
+            {message.turnStats.modelName || message.turnStats.model ? (
+              <>
+                {" · "}
+                <span className="relative inline-flex cursor-default border-b border-dotted border-muted-foreground/40 group/model-meta">
+                  {message.turnStats.modelName || message.turnStats.model}
+                  <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 hidden -translate-x-1/2 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs leading-relaxed text-white shadow-xl group-hover/model-meta:block">
+                    <span className="grid grid-cols-[auto_auto] gap-x-3 gap-y-1 whitespace-nowrap">
+                      <span className="text-white/60">Provider</span>
+                      <span className="text-right">{message.turnStats.providerName || "未知"}</span>
+                      <span className="text-white/60">强度</span>
+                      <span className="text-right font-mono">{message.turnStats.effort || "关闭"}</span>
+                    </span>
+                  </span>
+                </span>
+              </>
+            ) : null}
+            <span className="hidden group-hover/assistant:inline">
+              {" · "}Elapsed: {formatElapsed(message.turnStats.elapsed)}
+              {uncertain ? "(?)" : ""}
+            </span>
           </div>
         )}
       </div>

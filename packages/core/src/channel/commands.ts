@@ -8,7 +8,7 @@
  * 使会话生命周期管理与具体传输（WS / webview.postMessage / stdio）解耦。
  */
 
-/** 用户发送一条消息（可带图片、附件、模型/provider 选择、回复风格等） */
+/** 用户发送一条消息（可带图片、附件、模型/provider 选择等） */
 export interface UserMessageCommand {
   type: "user_message";
   content?: string;
@@ -23,9 +23,8 @@ export interface UserMessageCommand {
   clientMessageId?: string;
   /** 用户消息的内联片段（文本 + tag），用于富文本气泡的持久化与恢复 */
   userSegments?: unknown[];
-  replyStyle?: string;
-  /** 会话模式：agent（默认）、quest（纯问答）或 parallel（多 Agent 并行） */
-  mode?: "agent" | "quest" | "parallel";
+  /** 会话模式：agent（默认）或 quest（纯问答） */
+  mode?: "agent" | "quest";
   /**
    * 是否启用思考（缺省视为开启）。
    *
@@ -34,6 +33,8 @@ export interface UserMessageCommand {
    * 模型照样思考、照样计费，关掉省不下任何东西。现在它同时决定"是否向模型请求思考"。
    */
   think?: boolean;
+  /** 当前模型 Provider 配置中选中的实际思考强度值（如 high / xhigh）；关闭时不传 */
+  effort?: string;
   /** Quest 模式专属选项（联网搜索；思考开关见顶层 think） */
   quest?: { webSearch?: boolean };
 }
@@ -58,7 +59,7 @@ export type ControlCommandPayload =
   | UserMessageCommand
   // 会话切换/管理
   | { type: "load_session"; sessionId: string }
-  | { type: "new_session"; workspace?: string; model?: string; provider?: string; mode?: "agent" | "quest" | "parallel" }
+  | { type: "new_session"; workspace?: string; model?: string; provider?: string; mode?: "agent" | "quest" }
   | { type: "reset_session" }
   // 工作区
   | { type: "set_workspace"; workspace: string; workspaces?: string[] }
@@ -73,6 +74,11 @@ export type ControlCommandPayload =
   | { type: "compact_session"; model?: string; provider?: string }
   | { type: "force_compact_session"; model?: string; provider?: string }
   | { type: "compaction_choice"; choice: "continue" | "new_session" }
+  // 生成 / 续跑项目 Wiki。workspace 由 UI 显式指定 —— 生成是写操作，
+  // 多工作区下不能由后端推定（写错仓库会污染不相干项目，且那些文件还会被提交）。
+  // model / provider / maxPages 来自 VS Code 设置（axon.wiki.*），由呈现端读出后透传：
+  // 读设置是形态相关的事，而「哪个 provider 提供这个模型」的解析留在 core。
+  | { type: "wiki_generate"; workspace: string; provider?: string; model?: string; maxPages?: number }
   // Credits 预算门：硬暂停触发时用户的继续/停止决策
   | { type: "credit_budget_choice"; choice: "continue" | "stop" }
   // 浏览器：把 open_browser 打开的页面带到前台（前端点击卡片输出触发）
@@ -82,14 +88,30 @@ export type ControlCommandPayload =
   | { type: "accept_edits"; path?: string }
   | { type: "reject_edits"; path?: string }
   | { type: "undo_edits"; path: string }
-  | { type: "undo_parallel_file"; path: string }
   // 闪电回滚
   | { type: "list_snapshots" }
   | { type: "restore_snapshot"; snapshotId: string }
+  // 按需取某次改动的前后全文（会话快照里只下发路径与 editId，打开 diff 时再取正文）。
+  // requestId 原样回带在 diff_content 事件上，前端据此配对请求。
+  | { type: "get_diff_content"; requestId: string; editId?: string; path?: string }
   // Relay
   | { type: "delete_relay"; relayId: string; workspace?: string }
   // 工具确认（用户确认/拒绝创建 Relay 等需要确认的操作）
   | { type: "confirm_tool"; confirmed: boolean; mode?: "strict" | "auto" }
+  // 选项问答（ask_user 工具）的用户作答：answers 与请求里的 questions 一一对应
+  | {
+      type: "answer_user_question";
+      /** 对应 ask_user 的工具调用 id */
+      toolCallId: string;
+      answers: {
+        /** 选中的选项 id 列表（单选时最多一个；skipped 时为空） */
+        selected: string[];
+        /** 用户自己填写的「其他」答案（allowOther 且有填写时） */
+        other?: string;
+        /** 用户选择「跳过，让你自己决定」 */
+        skipped?: boolean;
+      }[];
+    }
   // 压平历史里的结构化工具调用（用户点击"压缩不兼容记忆"后触发）
   | { type: "flatten_tool_history" }
   // 命令信任授权（用户对未信任命令的三档决策）

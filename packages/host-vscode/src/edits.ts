@@ -20,7 +20,7 @@ const td = new TextDecoder("utf-8");
 const te = new TextEncoder();
 
 export class VSCodeEditPresenter implements EditPresenter {
-  private mode: EditMode = "manual";
+  private mode: EditMode = "auto";
   /** key 为 editId（缺省回退 absPath）。Map 保留插入顺序 = 改动先后 */
   private pending = new Map<string, FileEdit>();
   /** 已接受、可撤销的改动（key 为 editId） */

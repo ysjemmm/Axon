@@ -24,6 +24,7 @@ import type { AgentChannel, AgentEvent } from "../channel/index.js";
 import type { AgentHost } from "../host/index.js";
 import type { SessionStorage } from "../storage/types.js";
 import type { SessionHubDeps } from "./types.js";
+import { filterPersistableMessages, filterTransientMessages, slimDiffBodies, findDiffBody } from "./persistable.js";
 
 /**
  * 每个 session 的代理 channel：拦截该 session emit 的所有事件，
@@ -33,7 +34,8 @@ import type { SessionHubDeps } from "./types.js";
  * 事件被打标后直达真实 channel，由前端总线按 clientId 分发到对应面板。
  */
 class SessionChannel implements AgentChannel {
-  /** 当前拥有（展示）该会话的面板标识；load_session / 新建会话时更新 */
+  /** 当前拥有（展示）该会话的面板标识。**只由 load_session / 新建会话显式设置**，
+      绝不能在"顺手发一条事件"时被改写（见 emitTo）。 */
   clientId: string | null = null;
 
   constructor(
@@ -41,10 +43,27 @@ class SessionChannel implements AgentChannel {
     private readonly realChannel: AgentChannel,
   ) {}
 
-  emit(event: AgentEvent): void {
+  private tag(event: AgentEvent, clientId: string | null): AgentEvent {
     const tagged: AgentEvent = { ...event, sessionId: this.sessionId };
-    if (this.clientId) tagged.clientId = this.clientId;
-    this.realChannel.emit(tagged);
+    if (clientId) tagged.clientId = clientId;
+    return tagged;
+  }
+
+  emit(event: AgentEvent): void {
+    this.realChannel.emit(this.tag(event, this.clientId));
+  }
+
+  /**
+   * 定向投递一条事件到指定面板，**不改变会话归属**。
+   *
+   * 必须与 emit 分开：sendTo 只是"把这条事件发出去"，它携带的 clientId 表示
+   * "这一次送给谁"，而不是"从此这条会话归谁"。早先两者共用 getOrCreateSessionChannel
+   * 的赋值副作用，于是一条发给会话 X 的事件就能把 X 的归属改写成另一个面板；
+   * 若那个面板是【新开的空面板】（clientId 尚未注册，其指令会被 resolveSessionId
+   * 兜底解析到 X），X 正在进行的流式输出就会整体改投到空面板，原面板再也收不到。
+   */
+  emitTo(clientId: string | undefined, event: AgentEvent): void {
+    this.realChannel.emit(this.tag(event, clientId ?? this.clientId));
   }
 }
 
@@ -69,6 +88,15 @@ export class SessionHub {
 
   /** 面板 → 会话映射（clientId → sessionId）。取代全局单一 currentSessionId。 */
   private readonly clientSessions = new Map<string, string>();
+
+  /**
+   * 最近一次被用户使用的会话 id。
+   *
+   * 侧栏树按钮、命令面板等【不属于任何聊天面板】的入口发起的指令不带 clientId
+   * （clientId 是 webview tab 的标识），但这类全局操作仍需知道「作用于哪个会话」——
+   * 取用户最近活跃的那个，它决定了用哪个 Provider / 模型来执行。
+   */
+  private lastActiveSessionId: string | null = null;
 
   /**
    * 面板 → 期望的编辑模式（clientId → auto/manual）。
@@ -113,7 +141,7 @@ export class SessionHub {
    * workspace_set / session_title_updated。
    */
   private sendTo(sessionId: string, clientId: string | undefined, event: AgentEvent): void {
-    this.getOrCreateSessionChannel(sessionId, clientId).emit(event);
+    this.getOrCreateSessionChannel(sessionId).emitTo(clientId, event);
   }
 
   /** 向指定面板推送事件（仅打 clientId 标签，用于会话尚未创建时的定向响应） */
@@ -131,12 +159,24 @@ export class SessionHub {
     else this.channel.emit(event);
   }
 
-  /** 解析指令的目标会话：优先按 clientId 映射，回退到指令显式 sessionId */
+  /**
+   * 解析指令的目标会话：clientId 映射 → 指令显式 sessionId → 最近活跃会话。
+   *
+   * 最后那层回退是给【不属于任何聊天面板】的入口准备的：侧栏树按钮、命令面板等发起的指令
+   * 天然不带 clientId（那是 webview 面板的标识）。早先这里直接返回 null，调用方
+   * `if (!session) return` 就把指令静默吞掉了 —— 用户点了按钮什么都没发生，
+   * 既看不到失败原因，也无从判断是「没触发」还是「触发了没反应」。
+   */
   private resolveSessionId(cmd: ControlCommand): string | null {
     const cid = cmd.clientId;
-    if (cid && this.clientSessions.has(cid)) return this.clientSessions.get(cid)!;
+    if (cid) {
+      // 面板指令以它自己的映射为准。映射缺失说明这个面板还没有会话（例如刚新开的空 tab），
+      // 此时只认指令显式携带的 sessionId（cancel 等场景），**绝不外溢到 lastActiveSessionId**——
+      // 那是别的面板的会话，抢过来会把它的展示归属一并改写，使其流式输出改投到这个新面板。
+      return this.clientSessions.get(cid) ?? cmd.sessionId ?? null;
+    }
     if (cmd.sessionId) return cmd.sessionId;
-    return null;
+    return this.lastActiveSessionId;
   }
 
   /** 取活跃会话实例（不存在返回 null） */
@@ -195,15 +235,40 @@ export class SessionHub {
     }
   }
 
-  /** 获取或创建一个 session 的代理 channel；传入 clientId 时更新其归属面板 */
-  private getOrCreateSessionChannel(sessionId: string, clientId?: string): SessionChannel {
+  /**
+   * 热更新 trace 记录配置到所有活跃会话。
+   * 调高等级（如排障时切到 full）无需重开窗口，下一次写入即生效。
+   */
+  reloadTraceConfig(): void {
+    if (!this.deps.getTraceConfig) return;
+    try {
+      const cfg = this.deps.getTraceConfig();
+      for (const session of this.activeSessions.values()) {
+        session.setTraceConfig(cfg);
+      }
+    } catch (err) {
+      console.warn("[trace] 同步 trace 配置失败:", (err as Error).message);
+    }
+  }
+
+  /** 获取或创建一个 session 的代理 channel。【纯查找/创建，不改归属】 */
+  private getOrCreateSessionChannel(sessionId: string): SessionChannel {
     let ch = this.sessionChannels.get(sessionId);
     if (!ch) {
       ch = new SessionChannel(sessionId, this.channel);
       this.sessionChannels.set(sessionId, ch);
     }
-    if (clientId) ch.clientId = clientId;
     return ch;
+  }
+
+  /**
+   * 显式设置会话的展示归属面板。
+   * 只有"用户确实切到了这条会话"的路径（load_session / 新建会话）才允许调用，
+   * 不能让普通事件投递顺带改写它。
+   */
+  private setSessionOwner(sessionId: string, clientId?: string): void {
+    if (!clientId) return;
+    this.getOrCreateSessionChannel(sessionId).clientId = clientId;
   }
 
   /** 创建一个 AgentSession，使用代理 channel 而非真实 channel */
@@ -216,7 +281,9 @@ export class SessionHub {
     mode: "agent" | "quest" = "agent",
   ): AgentSession {
     const host: AgentHost = this.deps.createHost();
-    const proxyChannel = this.getOrCreateSessionChannel(sessionId, clientId);
+    const proxyChannel = this.getOrCreateSessionChannel(sessionId);
+    // 创建会话即认领归属：创建它的面板从此接收这条会话的全部事件
+    if (clientId) proxyChannel.clientId = clientId;
     const session = new AgentSession(
       cwd,
       proxyChannel,
@@ -242,6 +309,10 @@ export class SessionHub {
     // 注入 Credits 预算门配置
     if (this.deps.getCreditBudgetConfig) {
       session.setCreditBudgetConfig(this.deps.getCreditBudgetConfig());
+    }
+    // 注入 trace 记录配置（等级 / 上限 / 保留份数）
+    if (this.deps.getTraceConfig) {
+      session.setTraceConfig(this.deps.getTraceConfig());
     }
     return session;
   }
@@ -286,9 +357,7 @@ export class SessionHub {
    * 即使用户切到别的会话，增量落盘始终写到正确的 session。
    */
   private registerPersistence(s: AgentSession, sid: string): void {
-    s.setOnPendingChanged(async () => {
-      await this.storage.updateSession(sid, { pendingEdits: s.serializePendingEdits() }).catch(() => {});
-    });
+    // 改动记录（pendingEdits 等）只维护在内存，不落盘——重启后改动面板不堆历史文件
     s.setOnMessagesChanged(async () => {
       const total = s.getLastTotalTokens();
       const allMessages = s.getMessages();
@@ -297,7 +366,6 @@ export class SessionHub {
         messages: persistable,
         // 仅在有有效值时写入 totalTokens：避免尚未拿到真实 usage 时用 0 覆盖磁盘已有统计。
         ...(total > 0 ? { totalTokens: total } : {}),
-        pendingEdits: s.serializePendingEdits(),
       }).catch(() => {});
     });
   }
@@ -313,7 +381,7 @@ export class SessionHub {
     const cached = this.activeSessions.get(sid);
     if (cached) {
       // 更新该会话的归属面板，确保后续事件路由到当前面板
-      this.getOrCreateSessionChannel(sid, clientId);
+      this.setSessionOwner(sid, clientId);
       const savedSession = await this.storage.getSession(sid);
       return { session: cached, savedSession };
     }
@@ -324,14 +392,11 @@ export class SessionHub {
       ? this.deps.workspaces
       : (savedSession?.workspaces && savedSession.workspaces.length > 0 ? savedSession.workspaces : [ws_dir]);
 
-    const session = this.createSession(sid, ws_dir, savedSession?.messages, ws_dirs, clientId, savedSession?.mode ?? "agent");
+    const session = this.createSession(sid, ws_dir, savedSession?.messages ? this.filterPersistable(savedSession.messages) : undefined, ws_dirs, clientId, savedSession?.mode ?? "agent");
     session.setSessionId(sid);
     // 回填上次落盘的 token 统计，避免新实例 getLastTotalTokens()=0 在首次真实 usage 前
     // 被持久化回写、覆盖磁盘上的有效值（刷新后上下文显示为 0 的根因）。
     session.hydrateTokenUsage(savedSession?.totalTokens);
-    if (savedSession?.pendingEdits && savedSession.pendingEdits.length > 0) {
-      session.restorePendingEdits(savedSession.pendingEdits);
-    }
     this.registerPersistence(session, sid);
     this.activeSessions.set(sid, session);
 
@@ -356,6 +421,8 @@ export class SessionHub {
     switch (cmd.type) {
       case "load_session":
         return this.handleLoadSession(cmd.sessionId, clientId, primaryWorkspace);
+      case "get_diff_content":
+        return this.handleGetDiffContent(cmd, clientId);
       case "set_workspace":
         return this.handleSetWorkspace(cmd, clientId);
       case "set_workspace_group":
@@ -385,6 +452,29 @@ export class SessionHub {
       case "force_compact_session":
         this.getActiveSession(this.resolveSessionId(cmd))?.forceCompactSession((cmd as any).model, (cmd as any).provider);
         return;
+      case "wiki_generate": {
+        const session = this.getActiveSession(this.resolveSessionId(cmd));
+        // 找不到会话就明确报错，绝不静默返回：这条路是用户主动点按钮触发的，
+        // 无声失败会让人完全无法判断发生了什么（点到了吗？跑了吗？坏了？）。
+        // 抛出后由呈现端接住并提示 —— 扩展侧对 dispatch 有 .catch 弹错误框，
+        // server 侧的 ws 处理器也会把异常转成 error 事件发给前端。
+        if (!session) {
+          throw new Error(
+            "找不到可用的会话，无法生成 Wiki。请先在 Axon 对话面板中新建或打开一个会话，再重试。",
+          );
+        }
+        // 生成是长任务（十几页 × 每页多次工具调用），这里 await 到底。
+        // 进度不靠返回值传递，而是由会话发出的 wiki_generation 事件承载 ——
+        // 这样呈现端不必持有这个 Promise 也能显示进度。
+        // 模型 / 页数上限来自呈现端读出的设置，原样透传；解析（哪个 provider 提供该模型）
+        // 留在 core，因为它与形态无关、且能被单测覆盖。
+        await session.generateWiki(cmd.workspace, {
+          provider: cmd.provider,
+          model: cmd.model,
+          maxPages: cmd.maxPages,
+        });
+        return;
+      }
       case "compaction_choice": {
         const sid = this.resolveSessionId(cmd);
         const session = this.getActiveSession(sid);
@@ -416,6 +506,12 @@ export class SessionHub {
         return this.handleDeleteRelay(cmd, clientId, primaryWorkspace);
       case "confirm_tool":
         this.getActiveSession(this.resolveSessionId(cmd))?.resolveToolConfirmation(cmd.confirmed, (cmd as any).mode);
+        return;
+      case "answer_user_question":
+        this.getActiveSession(this.resolveSessionId(cmd))?.resolveUserAnswer(
+          cmd.toolCallId,
+          Array.isArray(cmd.answers) ? cmd.answers : [],
+        );
         return;
       case "flatten_tool_history": {
         const s = this.getActiveSession(this.resolveSessionId(cmd));
@@ -450,12 +546,6 @@ export class SessionHub {
         const s = this.getActiveSession(sid);
         if (typeof cmd.path === "string" && cmd.path) await s?.undoEdits(cmd.path);
         if (sid && s) await this.storage.updateSession(sid, { messages: this.filterPersistable(s.getMessages()) });
-        return;
-      }
-      case "undo_parallel_file": {
-        const sid = this.resolveSessionId(cmd);
-        const s = this.getActiveSession(sid);
-        if (typeof cmd.path === "string" && cmd.path) await s?.undoParallelFile(cmd.path);
         return;
       }
       case "list_snapshots": {
@@ -495,6 +585,7 @@ export class SessionHub {
   /** 加载/切换会话：发送 session_loaded 快照（实时事件由代理 channel 直达，无需缓冲重放） */
   private async handleLoadSession(sid: string, clientId: string | undefined, primaryWorkspace: string): Promise<void> {
     if (clientId) this.clientSessions.set(clientId, sid);
+    this.lastActiveSessionId = sid;
 
     const { session, savedSession } = await this.getOrLoadSession(sid, primaryWorkspace, clientId);
 
@@ -509,7 +600,11 @@ export class SessionHub {
       workspace: ws_dir,
       workspaces: ws_dirs,
       workspaceGroupId: savedSession?.workspaceGroupId || null,
-      messages: session.getMessages().length > 0 ? this.filterPersistable(session.getMessages()) : (savedSession?.messages || []),
+      // 只过滤瞬态、不剥离改动字段：运行中重连/切回时本会话的改动照常展示（重启后内存来自盘，天然干净）。
+      // 改动前后全文不随快照下发（slimDiffBodies），前端打开 diff 时经 get_diff_content 按需取。
+      messages: slimDiffBodies(
+        session.getMessages().length > 0 ? filterTransientMessages(session.getMessages()) : filterTransientMessages(savedSession?.messages || []),
+      ),
       totalTokens: session.getLastTotalTokens() || savedSession?.totalTokens || 0,
       pendingPaths: session.getPendingPaths(),
       pendingDiffs: session.getPendingDiffs(),
@@ -526,6 +621,34 @@ export class SessionHub {
   }
 
   /** 设置/切换会话工作区（带 clientId 定向；无 clientId 时为工作区文件夹变化广播，应用到全部活跃会话） */
+  /**
+   * 按需回填某次改动的前后全文。
+   *
+   * 会话快照里只带路径与 editId（见 slimDiffBodies），用户点开 diff 时才走这里。
+   * 先查活跃会话的内存消息；会话不在内存（从未加载过）再读磁盘。
+   * 待确认（manual 模式暂存区）的改动不在消息里，由 pendingDiffs 单独下发，不走这条路。
+   */
+  private async handleGetDiffContent(
+    cmd: Extract<ControlCommand, { type: "get_diff_content" }>,
+    clientId: string | undefined,
+  ): Promise<void> {
+    const sid = this.resolveSessionId(cmd);
+    const query = { editId: cmd.editId, path: cmd.path };
+    let body: { oldContent: string; newContent: string } | null = null;
+    const live = this.getActiveSession(sid);
+    if (live) body = findDiffBody(live.getMessages(), query);
+    if (!body && sid) {
+      const saved = await this.storage.getSession(sid);
+      if (saved?.messages) body = findDiffBody(saved.messages, query);
+    }
+    this.emitResult(sid, clientId, {
+      type: "diff_content",
+      requestId: cmd.requestId,
+      found: !!body,
+      ...(body ?? {}),
+    } as AgentEvent);
+  }
+
   private async handleSetWorkspace(
     cmd: Extract<ControlCommand, { type: "set_workspace" }>,
     clientId: string | undefined,
@@ -638,6 +761,7 @@ export class SessionHub {
     if (clientId) this.clientSessions.set(clientId, created.id);
     const session = this.createSession(created.id, ws_dir, undefined, allWorkspaces, clientId, mode);
     session.setSessionId(created.id);
+    this.lastActiveSessionId = created.id;
     this.registerPersistence(session, created.id);
     this.activeSessions.set(created.id, session);
     this.sendTo(created.id, clientId, {
@@ -726,7 +850,7 @@ export class SessionHub {
         migrateData.userInput.model,
         migrateData.userInput.images,
         migrateData.userInput.provider,
-        migrateData.userInput.userMeta as { displayText?: string; attachedFiles?: { name: string; size: number }[]; replyStyle?: string } | undefined,
+        migrateData.userInput.userMeta as { displayText?: string; attachedFiles?: { name: string; size: number }[] } | undefined,
       );
     } catch (err) {
       const error = err as Error;
@@ -764,7 +888,9 @@ export class SessionHub {
       await s.deleteRelay(relayId);
     } else {
       const ws_dir = (typeof cmd.workspace === "string" && cmd.workspace) ? cmd.workspace : primaryWorkspace;
-      await new RelayStore(ws_dir, this.deps.createHost()).remove(relayId);
+      // relay 可能落在工作区或主目录，跨根定位后再删
+      const relayRoots = [ws_dir, ...(this.deps.workspaces ?? []), this.deps.homeDir].filter((r): r is string => !!r);
+      await new RelayStore(relayRoots, this.deps.createHost()).remove(relayId);
       this.emitResult(sid, clientId, { type: "relay_deleted", relayId } as AgentEvent);
     }
     if (sid && s) {
@@ -772,9 +898,10 @@ export class SessionHub {
     }
   }
 
-  /** 过滤掉不落盘的消息：_transient（编辑工具失败等）与 _ephemeralInjected（单轮临时注入：反思/复盘/强制收尾/预算提醒等） */
+  /** 过滤掉不落盘的消息：_transient（编辑工具失败等）与 _ephemeralInjected（单轮临时注入：反思/复盘/强制收尾/预算提醒等）
+   * 并剥离改动记录字段——改动/回滚记录只维护在内存，不随会话恢复堆积（实现见 persistable.ts） */
   private filterPersistable(messages: any[]): any[] {
-    return messages.filter((m: any) => !m._transient && !m._ephemeralInjected);
+    return filterPersistableMessages(messages);
   }
 
   /** 设置编辑模式 */
@@ -805,8 +932,6 @@ export class SessionHub {
     let sid = this.resolveSessionId(cmd);
     let session = this.getActiveSession(sid);
     const mode = cmd.mode === "quest" ? "quest" : "agent";
-    // 并行模式标记：仍走 agent 会话，但 content 前注入编排指令引导 AI 自动拆分并使用 parallel_execute
-    const isParallel = cmd.mode === "parallel";
 
     if (!cmd.model?.trim() || !cmd.provider?.trim()) {
       throw new Error("请先在模型菜单中选择已配置的 Provider 和模型");
@@ -857,27 +982,18 @@ export class SessionHub {
 
     const execSessionId = sid!;
     const execSession = session!;
+    // 记录最近活跃会话：供侧栏树按钮等「无 clientId」入口的指令定位目标（见 resolveSessionId）
+    this.lastActiveSessionId = execSessionId;
     this.runningSessions.add(execSessionId);
 
-    // 并行模式：在用户原始需求前注入编排指令，引导 AI 将需求拆分为 parallel_execute 调用
-    const finalContent = isParallel
-      ? `【并行执行模式】请按以下步骤处理用户需求：\n\n` +
-        `1. **先确认目标文件存在**：用 search 或 list_dir 快速确认用户提到的路径/文件是否真实存在于工作区。不要凭猜测假设路径。\n` +
-        `2. **只对确实存在的文件拆分任务**：确认后，将需求拆分为多个互不依赖、文件作用域不重叠的子任务。\n` +
-        `3. **使用 parallel_execute 派发**：每个子任务需要明确 fileScope（必须是真实存在的路径）。\n` +
-        `4. **每个子任务的 prompt 必须自包含**：包含完整的背景、目标、操作步骤，子 Agent 看不到主对话历史。\n\n` +
-        `【重要约束】\n` +
-        `- 如果需求不适合并行（有依赖/文件重叠/目标文件不存在），直接说明原因并自己处理，不要强行拆分。\n` +
-        `- 不要猜测路径。找不到的文件/目录就跳过，不要为不存在的路径创建子任务。\n\n` +
-        `用户需求：${cmd.content || ""}`
-      : (cmd.content || "");
+    const finalContent = cmd.content || "";
 
     try {
       await execSession.handleUserInput(finalContent, cmd.model, cmd.images as string[] | undefined, cmd.provider, {
         clientMessageId: (cmd as any).clientMessageId as string | undefined,
         displayText: cmd.displayText,
         attachedFiles: cmd.attachedFiles as { name: string; size: number }[] | undefined,
-        replyStyle: cmd.replyStyle,
+        effort: typeof cmd.effort === "string" ? cmd.effort : undefined,
         userSegments: cmd.userSegments as unknown[] | undefined,
       });
     } catch (err) {

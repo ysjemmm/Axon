@@ -3,10 +3,8 @@ import { ToolName } from "../tools/index.js";
 import { resolveToolDispatchRoute } from "./toolDispatchRouter.js";
 
 describe("resolveToolDispatchRoute", () => {
-  it("识别子 Agent / 并行工具", () => {
+  it("识别子 Agent 工具", () => {
     expect(resolveToolDispatchRoute(ToolName.DelegateTask)).toBe("delegate_task");
-    expect(resolveToolDispatchRoute(ToolName.ParallelResearch)).toBe("parallel_research");
-    expect(resolveToolDispatchRoute(ToolName.ParallelExecute)).toBe("parallel_execute");
   });
 
   it("识别 Relay 工具族", () => {

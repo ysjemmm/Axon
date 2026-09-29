@@ -6,6 +6,7 @@
 import { GitCompare } from "lucide-react";
 import { ClickableFileName } from "@/components/ToolCallItem";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
+import { openDiff, usePanelClientId } from "@/lib/openDiff";
 
 export function PendingFileRow({ path, displayName, diff, onAccept, onReject }: {
   /** 原始路径（getPendingPaths 原值，用于 diff/接受/拒绝匹配，不可改） */
@@ -17,6 +18,7 @@ export function PendingFileRow({ path, displayName, diff, onAccept, onReject }: 
   onReject: (p: string) => void;
 }) {
   const shownName = displayName || path.replace(/\\/g, "/").split("/").pop() || path;
+  const clientId = usePanelClientId();
   return (
     <div className="flex items-center gap-2 text-xs">
       <span className="flex-1 min-w-0 inline-flex items-center gap-1 font-mono">
@@ -25,7 +27,7 @@ export function PendingFileRow({ path, displayName, diff, onAccept, onReject }: 
       </span>
       {diff && (
         <button
-          onClick={() => { const vs = (window as any).__axonVSCode; if (vs) vs.postMessage({ type: "open_diff", path, oldContent: diff.oldContent, newContent: diff.newContent }); }}
+          onClick={() => { void openDiff(clientId, { path, oldContent: diff.oldContent, newContent: diff.newContent }); }}
           className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors shrink-0"
           title="查看改动"
         >

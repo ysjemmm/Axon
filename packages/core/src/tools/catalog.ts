@@ -56,6 +56,10 @@ export enum ToolName {
   // 技能 / 能力包
   UseSkill = "use_skill",
   ActivatePower = "activate_power",
+  // Wiki 页面保存：生成流程专用，不在默认工具列表里（见 definitions.getWikiToolDefinitions）
+  WikiSavePage = "wiki_save_page",
+  // Wiki 页面规划：生成流程专用，仅在规划阶段注入
+  WikiPlanPages = "wiki_plan_pages",
   // 主 Agent 编排类（不在通用 tools.ts，子 Agent 拿不到）
   DelegateTask = "delegate_task",
   RelayCreate = "relay_create",
@@ -63,8 +67,9 @@ export enum ToolName {
   RelayAdvance = "relay_advance",
   RelayUpdateTask = "relay_update_task",
   RelayReviewTask = "relay_review_task",
-  ParallelResearch = "parallel_research",
-  ParallelExecute = "parallel_execute",
+  // 选项问答：主 Agent 向用户抛问题 + 选项，用户单选/多选作答。
+  // 子 Agent 拿不到用户（会死等），故只在 ToolDefBuilder 里注入给主 Agent。
+  AskUser = "ask_user",
 }
 
 /**
@@ -122,7 +127,7 @@ export const NO_CONTENT_LIMIT = Number.POSITIVE_INFINITY;
 
 /**
  * 不截断工具：结果必须原样保留，任何环节都不得裁剪。只含结论型——
- *   · 结论型（delegate_task / parallel_research / parallel_execute）：子 Agent 的最终交付物，
+ *   · 结论型（delegate_task）：子 Agent 的最终交付物，
  *     不像 read_file 那样能“换个范围再读一次”，砍掉即永久丢失。
  *
  * ⚠️ 终端类（execute_command / get_process_output）曾经也在本集合里，现已移出，见 TERMINAL_OUTPUT_TOOLS。
@@ -141,8 +146,6 @@ export const NO_CONTENT_LIMIT = Number.POSITIVE_INFINITY;
  */
 export const NO_TRUNCATE_TOOLS: Set<string> = new Set([
   ToolName.DelegateTask,
-  ToolName.ParallelResearch,
-  ToolName.ParallelExecute,
 ]);
 
 /**
@@ -162,13 +165,17 @@ export const TERMINAL_OUTPUT_TOOLS: Set<string> = new Set([
 ]);
 
 /**
- * 单次终端输出保留的最大字符数（≈2.8 万 token，约 1M 窗口的 2.8%）。
+ * 单次终端输出写入历史的最大字符数（超出保留头 40% + 尾 60%）。
  *
- * 取这个量级的理由：正常构建日志/搜索结果远达不到，不会误伤；
- * 而病态输出（递归全盘搜索、无过滤的巨型 JSON）被挡在这里，
- * 不至于一条命令就把上下文顶爆。
+ * ⚠️ 这是终端输出唯一的一道裁剪：写入历史时一次裁到位，之后不再改写
+ * （回合收尾的旧结果裁剪已移除——它改写历史中间的消息，每轮都断一次前缀缓存）。
+ * 所以上限要按「长期留在历史里」来定，而不是按「只在当轮有用」来定。
+ *
+ * 取 20_000 的依据（实测 33 个会话、1084 次 execute_command）：p90 = 3053、p99 = 5945、
+ * 最大 18561 —— 正常输出全部原样保留；病态输出（递归全盘搜索、无过滤的巨型 JSON）
+ * 被挡在约 5 千 token 以内。原值 100_000 是事故修复时的"防顶爆"口径，不适合长期驻留。
  */
-export const TERMINAL_OUTPUT_CAP = 100_000;
+export const TERMINAL_OUTPUT_CAP = 20_000;
 
 /**
  * 发往前端实时事件时保留完整结果（不降为 500 字符预览）的工具。
@@ -181,6 +188,54 @@ export const FULL_RESULT_TOOLS: Set<string> = new Set([
   ...NO_TRUNCATE_TOOLS,
   ...TERMINAL_OUTPUT_TOOLS,
 ]);
+
+/**
+ * 探索类工具：read_file / search / list_dir —— 三者结果都属于「换个更精确的调用就能重新拿到」。
+ *
+ * 这是它们与结论型工具（delegate_task：砍掉即永久丢失、不可复得）的根本区别，
+ * 也正是能对它们做「单轮累计限流」的前提：超了可以让模型换个方式再取，结论型超了只能认。
+ */
+export const EXPLORATION_TOOLS: Set<string> = new Set([
+  ToolName.ReadFile,
+  ToolName.Search,
+  ToolName.ListDir,
+]);
+
+/**
+ * 单轮探索结果的累计上限（字符）。
+ *
+ * ── 为什么单次上限不够 ──
+ * 它管不住总量。实测：一次「了解某项目结构」的任务里，模型连读十几份文件，单次都在各自
+ * 上限内，一轮累计却到 10 万字符量级；后端 + 前端两次叠起来接近 20 万。
+ * 逐个工具收紧单次上限只是把每次切得更碎（总量不变），所以必须有一道【按轮累计】的闸。
+ *
+ * ── 为什么只覆盖探索类 ──
+ * 只有探索类能「换方式重取」：读被截了可以读更小的行范围，搜被截了可以缩窄 query。
+ * 结论型（子 Agent 交付物）砍掉就补不回来，终端类另有自己的硬上限，都不该进这套预算。
+ *
+ * ── 取值依据 ──
+ * 实测正常轮次多在 2~5 万字符，失控轮次 9~15 万。6 万足以放行正常探索，
+ * 又能把失控轮次压到一半以下。
+ */
+/**
+ * ⚠️ 已停用（按用户要求移除该约束）。
+ *
+ * 原值 60_000：把「一轮内累计读入的探索类结果」限制在 6 万字符，用尽后后续每次
+ * read_file / search / list_dir 都只返回 TURN_BUDGET_EXHAUSTED_PREVIEW 个字符的预览。
+ * 它带来的实际摩擦是：同一个文件想分几次读完会被中途掐断，只能靠"换一轮"重置额度，
+ * 而换轮本身要重发、重推理、重烧额度——反而更贵。
+ *
+ * 置为 Infinity 后，capByTurnBudget 里的 `content.length <= remaining` 恒成立，直接原样返回，
+ * 该上限从此不再生效：读文件只受「单次上限」（capToolContent / 各工具 contentLimit）约束。
+ * 需要恢复时把本常量改回 60_000 即可——函数与整条调用链都原样保留。
+ */
+export const TURN_EXPLORATION_BUDGET = Number.POSITIVE_INFINITY;
+
+/**
+ * 预算用尽后，单条探索结果还能保留的字符数。
+ * 取 1500 是为了够模型判断「这份内容里有没有我要的东西」——只留几十字符等于什么都没给。
+ */
+export const TURN_BUDGET_EXHAUSTED_PREVIEW = 1_500;
 
 const S = (content: string, phase: string) => ({ content, phase });
 
@@ -216,21 +271,26 @@ export const TOOL_CATALOG: Record<ToolName, ToolSpec> = {
   [ToolName.BrowserSetViewport]: { status: S("正在设置视口...", "running"), requiresArgs: true },
   [ToolName.BrowserBack]: { status: S("正在后退...", "running") },
   [ToolName.BrowserForward]: { status: S("正在前进...", "running") },
-  [ToolName.Search]: { status: S("正在搜索...", "searching"), requiresArgs: true, readOnly: true, transient: true, contentLimit: 4_000 },
-  [ToolName.ListDir]: { status: S("正在浏览目录...", "searching"), readOnly: true, transient: true, contentLimit: 4_000 },
+  [ToolName.Search]: { status: S("正在搜索...", "searching"), requiresArgs: true, readOnly: true, transient: true, contentLimit: 2_500 },
+  [ToolName.ListDir]: { status: S("正在浏览目录...", "searching"), readOnly: true, transient: true, contentLimit: 3_000 },
   [ToolName.CheckDiagnostics]: { status: S("正在检查语法...", "checking"), requiresArgs: true, transientAggressive: true, contentLimit: 8_000 },
   [ToolName.WebSearch]: { status: S("正在搜索网络...", "searching"), requiresArgs: true, readOnly: true, transient: true },
   [ToolName.WebFetch]: { status: S("正在获取网页...", "searching"), requiresArgs: true, readOnly: true, transient: true, contentLimit: 10_000 },
   [ToolName.UseSkill]: { status: S("正在加载 Skill...", "thinking"), requiresArgs: true, readOnly: true },
   [ToolName.ActivatePower]: { requiresArgs: true, readOnly: true },
+  // 写操作（不标 readOnly：只读子 Agent 不可用）。也不进快照体系 ——
+  // 快照回滚是给用户代码准备的，Wiki 页面有 git 托管，不需要另一套撤销。
+  [ToolName.WikiSavePage]: { status: S("正在保存 Wiki 页面...", "editing"), requiresArgs: true },
+  // 规划不写文件、只登记清单，故标 readOnly（只读子 Agent 也能用）
+  [ToolName.WikiPlanPages]: { status: S("正在规划 Wiki 页面...", "planning"), requiresArgs: true, readOnly: true },
   [ToolName.DelegateTask]: { status: S("正在委托子 Agent...", "delegating"), requiresArgs: true, contentLimit: NO_CONTENT_LIMIT },
   [ToolName.RelayCreate]: { status: S("正在创建工作流...", "planning"), requiresArgs: true },
   [ToolName.RelaySaveDoc]: { requiresArgs: true },
   [ToolName.RelayAdvance]: { requiresArgs: true },
   [ToolName.RelayUpdateTask]: { requiresArgs: true },
   [ToolName.RelayReviewTask]: { requiresArgs: true },
-  [ToolName.ParallelResearch]: { status: S("正在并行调研...", "delegating"), requiresArgs: true, contentLimit: NO_CONTENT_LIMIT },
-  [ToolName.ParallelExecute]: { status: S("正在并行执行...", "delegating"), requiresArgs: true, contentLimit: NO_CONTENT_LIMIT },
+  // 选项问答：结果（用户的选择）要留在历史里供后续轮次参考，故不标 transient。
+  [ToolName.AskUser]: { status: S("正在等待你的选择...", "thinking"), requiresArgs: true, contentLimit: NO_CONTENT_LIMIT },
 };
 
 const DEFAULT_CONTENT_LIMIT = 3_000;
@@ -250,7 +310,14 @@ export const SNAPSHOT_TOOLS: Set<string> = namesWith("snapshot");
 export const SOFT_FAIL_TOOLS: Set<string> = namesWith("softFailProne");
 /** 编辑类：硬失败前几次不落盘 */
 export const EDIT_PERSIST_TOOLS: Set<string> = namesWith("editPersist");
-/** 瞬态工具（跨轮裁掉结果） */
+/**
+ * 瞬态工具（标记"结果只在当轮有用"）。
+ *
+ * ⚠️ 请求组装已不再据此在新一轮开头移除旧结果：那会让上一轮已发出的历史在新一轮变样，
+ * 前缀缓存从中间断开、每次发问的首个请求按全价计费（见 promptBuilder.buildRequestMessages）。
+ * 旧结果的体积现由写入时的单次上限（capToolContent）与滚动压缩控制。
+ * 这两个集合目前没有消费方，保留是为了不丢失工具目录里的这层语义。
+ */
 export const TRANSIENT_TOOLS: Set<string> = namesWith("transient");
 /** 慢模型下额外纳入瞬态的工具（含基础瞬态集 + transientAggressive 集） */
 export const TRANSIENT_TOOLS_AGGRESSIVE: Set<string> = new Set([
@@ -293,4 +360,53 @@ export function capToolContent(toolName: string, content: string, limit = conten
     );
   }
   return content.slice(0, limit) + `\n\n[内容已截断，原始长度 ${content.length} 字符。如需更多内容，请用更大的行范围一次性读取，不要分多次零碎读取]`;
+}
+
+/**
+ * 按【单轮累计预算】裁剪探索类结果。
+ *
+ * 与 capToolContent 的分工：后者管「单次」上限（各工具自己的口径），本函数管「一轮内累计」——
+ * 同一轮里第 N 次调用，可用额度是预算减去前 N-1 次的用量。两级都会生效：
+ * 调用方先过 capToolContent，再把结果交给这里。
+ *
+ * ── 为什么用尽的文案要说「不是这一次被截」 ──
+ * 若只说「已截断」，模型会以为换个范围重读就能拿到，于是反复重试、白烧轮次。
+ * 必须讲明是【本轮累计到顶】，并把出路指明（缩小参数范围 / 先基于已有内容推进）。
+ *
+ * @param used 本轮此前已写入上下文的探索结果字符数（由调用方跨调用维护）
+ * @returns content 为实际保留的文本；counted 为本次应计入预算的字符数
+ *          （非探索类恒为 0 —— 它们不占用这套预算）
+ */
+export function capByTurnBudget(
+  toolName: string,
+  content: string,
+  used: number,
+): { content: string; counted: number } {
+  // 非探索类不参与：结论型砍了不可复得，终端类另有自己的硬上限
+  if (!EXPLORATION_TOOLS.has(toolName)) return { content, counted: 0 };
+
+  const remaining = TURN_EXPLORATION_BUDGET - used;
+
+  // 额度已用尽：只留开头一小段。counted 记 0 —— 再计下去会把额度推成负数，
+  // 后续每一次都会走这一支，文案里出现的「剩余」也就跟着失真
+  if (remaining <= 0) {
+    return {
+      content:
+        content.slice(0, TURN_BUDGET_EXHAUSTED_PREVIEW) +
+        `\n\n[本轮探索额度已用尽（上限 ${TURN_EXPLORATION_BUDGET} 字符），本结果仅保留开头 ${TURN_BUDGET_EXHAUSTED_PREVIEW} 字符。` +
+        `\n注意：这不是单独某次调用被截，而是本轮累计读入已达上限。请先基于已获得的内容推进；` +
+        `确实还需要别的信息时，用更精确的参数（更小的行范围 / 更窄的 query / includePattern）重新调用，只取真正需要的那部分。]`,
+      counted: 0,
+    };
+  }
+
+  if (content.length <= remaining) return { content, counted: content.length };
+
+  return {
+    content:
+      content.slice(0, remaining) +
+      `\n\n[本轮探索额度仅剩 ${remaining} 字符，本结果已截断（原始 ${content.length} 字符）。` +
+      `请勿重试同一次调用；需要更多内容时请缩小参数范围，只取必要部分。]`,
+    counted: remaining,
+  };
 }

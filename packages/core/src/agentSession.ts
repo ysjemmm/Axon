@@ -6,11 +6,11 @@
 
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { resolve } from "node:path";
-import { executeToolCall, toolContentLimit, ToolError, ToolName, ToolCallStatus, statusForTool, SOFT_FAIL_TOOLS, EDIT_PERSIST_TOOLS, type ToolMeta, type WebCapability, type ApprovalDecision, type TrustRule, type GateOutcome } from "./tools/index.js";
+import { ToolCallStatus, type ToolMeta, type WebCapability, type ApprovalDecision, type TrustRule, type GateOutcome } from "./tools/index.js";
 import { calculateCredits, buildCreditDetail } from "./credits.js";
 import type { AgentHost } from "./host/index.js";
 import type { AgentChannel, AgentEvent } from "./channel/index.js";
-import { needsCompaction, compactMessages, pruneOldToolResults, DEFAULT_COMPACTION_CONFIG, setPruneKeepChars } from "./compactor.js";
+import { DEFAULT_COMPACTION_CONFIG, setPruneKeepChars } from "./compactor.js";
 import type { CompactionUserConfig } from "./compactor.js";
 import type { CreditBudgetUserConfig } from "./credits.js";
 import type { SerializedPendingEdit } from "./storage/types.js";
@@ -21,15 +21,14 @@ import { DefaultLLMHandler } from "./llm/llmHandler.js";
 import { DefaultOutputHandler } from "./llm/outputHandler.js";
 import { SkillRegistry } from "./skills/skillLoader.js";
 import { PowerRegistry } from "./powers/powerLoader.js";
-import { looksLikeIncompleteReply, LoopGuard, policyForModel, isSoftToolFailure, buildReflectionPrompt, buildSummaryRestartPrompt, type StuckTarget, type LoopGuardSnapshot } from "./agentGuards.js";
+import { LoopGuard, policyForModel, type StuckTarget, type LoopGuardSnapshot } from "./agentGuards.js";
 import { McpRegistry } from "./mcp/mcpRegistry.js";
 import { modelContextWindow } from "./llm/modelContext.js";
 import { SYSTEM_PROMPT, QUEST_SYSTEM_PROMPT } from "./systemPrompt.js";
-import { getStrategy, findProviderForModel, declaredThinkingFor, declaredCacheControlFor, declaredVisionFor, getVisionFallbackModel, getModelDisplayName } from "./providers.js";
-import { PromptBuilder, messageText } from "./session/promptBuilder.js";
+import { getStrategy, findProviderForModel, declaredThinkingFor, declaredEffortValuesFor, declaredCacheControlFor, declaredVisionFor, getVisionFallbackModel, getModelDisplayName, getProviderDisplayName } from "./providers.js";
+import { PromptBuilder } from "./session/promptBuilder.js";
 import { flattenToolHistory } from "./messageSanitizer.js";
 import {
-  resolveToolDispatchRoute,
   CommandToolExecutor,
   RelayToolExecutor,
   DelegatedToolExecutor,
@@ -38,6 +37,8 @@ import {
   ToolOutcomeRecorder,
   SessionTraceWriter,
   truncateForTrace,
+  projectTraceDir,
+  type TraceConfig,
   TurnFinalizer,
   ToolOutcomeStateResolver,
   ToolOutcomePostSync,
@@ -51,8 +52,8 @@ import { TokenAccountant } from "./session/tokenAccountant.js";
 import { ToolDefBuilder } from "./session/toolDefBuilder.js";
 import { McpController } from "./session/mcpController.js";
 import { DelegateRunner } from "./session/delegateRunner.js";
-import { ParallelRunner } from "./session/parallelRunner.js";
 import { RelayToolRunner } from "./session/relayToolRunner.js";
+import { AskUserToolExecutor, type AskUserQuestion, type AskUserAnswer } from "./session/askUserToolExecutor.js";
 import { CommandGateController } from "./session/commandGateController.js";
 import { resolveInWorkspaces } from "./tools/search.js";
 import { CommandGate } from "./tools/index.js";
@@ -60,8 +61,11 @@ import { EditController } from "./session/editController.js";
 import { CompactionController } from "./session/compactionController.js";
 import { CreditBudgetGate } from "./session/creditBudgetGate.js";
 import { RelayStore } from "./relay/relayStore.js";
-import { SnapshotManager, SNAPSHOT_TOOLS } from "./snapshot/index.js";
-import type { EditSnapshot } from "./host/scopedHost.js";
+import { WikiStore, wikiRecallSignature, type WikiRecall } from "./wiki/wikiStore.js";
+import { WikiController, resolveWikiModel, type WikiGenerationResult, type WikiGenerationOptions } from "./wiki/wikiController.js";
+import { SubAgentRunner } from "./skills/subAgentRunner.js";
+import { deriveSubAgentHost } from "./host/derive.js";
+import { SnapshotManager } from "./snapshot/index.js";
 import type { McpCapability } from "./mcp/types.js";
 
 
@@ -95,8 +99,6 @@ export class AgentSession {
   private readonly mcpController: McpController;
   /** delegate_task 子 Agent 委托执行协作者（解耦自本类） */
   private readonly delegateRunner: DelegateRunner;
-  /** parallel_research / parallel_execute 并行编排协作者（解耦自本类） */
-  private readonly parallelRunner: ParallelRunner;
   /** Relay 工具执行协作者（create/saveDoc/advance/updateTask/reviewTask，解耦自本类） */
   private readonly relayToolRunner: RelayToolRunner;
   /** 对话轮次计数（用于快照 id） */
@@ -135,8 +137,8 @@ export class AgentSession {
   // 独立于 abortController（后者 abort 后会被置 null，无法再判断状态）
   private cancelled = false;
   /** @internal */ get isCancelled(): boolean { return this.cancelled; }
-  // 回复风格（concise/default/detailed），影响每次请求时注入的风格指令
-  /** @internal */ replyStyle = "default";
+  // 本轮思考强度实际值（来自当前模型 Provider 配置）；undefined = 关闭
+  /** @internal */ effort: string | undefined;
   // 编辑模式与暂存区：manual 模式下文件改动暂存不落盘，等用户确认
   // 持久化回调：pendingEdits 变动时通知外部存储
   /** @internal */ onPendingChanged?: () => void;
@@ -158,14 +160,22 @@ export class AgentSession {
   /** @internal */ delegateSeq = 0;
   // Relay 长任务工作流存储（落盘在主工作区 .axon/relays/）
   /** @internal */ relayStore: RelayStore;
-  // 并行调研委托计数器：为每次 parallel_research 生成唯一 batchId
-  /** @internal */ researchSeq = 0;
-  // 并行执行委托计数器：为每次 parallel_execute 生成唯一 batchId
-  /** @internal */ executionSeq = 0;
-  // 并行执行的文件回滚快照（key = AI 路径 path）。auto 落盘无原生 undo，靠此实现一键回滚。
-  /** @internal */ parallelSnapshots = new Map<string, EditSnapshot>();
+  // Wiki 项目知识文档存储：读全部工作区（wiki 是 per-repo 资产），写入落主工作区
+  /** @internal */ wikiStore: WikiStore;
+  // 本轮请求的 Wiki 索引提示。无 wiki 时恒为 null —— 此时完全不注入，未用 Wiki 的项目零成本。
+  /** @internal */ wikiPromptCache: string | null = null;
+  // 上一次推给前端的召回集合签名（见 wikiRecallSignature）。用于「只在变化时提示」，
+  // 稳定期保持静默；null 表示尚无基准（首次必然不同，故会提示）。
+  private lastWikiRecallSignature: string | null = null;
+  // 生成中标志：挡住重复触发。并发生成会互相破坏，理由见 generateWiki 的注释。
+  /** @internal */ wikiGenerating = false;
   // 工具确认门：relay_create 等需要用户确认的操作，await 此 Promise 阻塞直到用户响应
   private toolConfirmResolve: ((confirmed: boolean) => void) | null = null;
+  // 选项问答门（ask_user）：await 此 Promise 阻塞直到用户作答。
+  // **刻意不设超时**——提问本就是要等用户，超时替用户做决定比不答更糟。仅会话取消时解除（返回 null）。
+  private askUserResolve: ((answers: AskUserAnswer[] | null) => void) | null = null;
+  /** 当前正在等待作答的工具调用 id：用于校验回传答案是否对应本次提问（旧卡片/失效会话直接忽略）。 */
+  private askUserPendingToolCallId: string | null = null;
   // 压缩选择门：自动压缩触发时（>=75%），await 此 Promise 阻塞直到用户在"继续/新会话"中选择
   /** @internal */ compactionChoiceResolve: ((choice: "continue" | "new_session") => void) | null = null;
   // 迁移数据：compactionChoice = new_session 时，存储压缩后的消息供 sessionHub 在新会话中注入
@@ -184,6 +194,7 @@ export class AgentSession {
   /** @internal */ readonly commandToolExecutor: CommandToolExecutor;
   /** @internal */ readonly delegatedToolExecutor: DelegatedToolExecutor;
   /** @internal */ readonly relayToolExecutor: RelayToolExecutor;
+  /** @internal */ readonly askUserToolExecutor: AskUserToolExecutor;
   /** @internal */ readonly mcpToolExecutor: McpToolExecutor;
   /** @internal */ readonly genericToolExecutor: GenericToolExecutor;
   /** 纯逻辑协作者：收尾 / 无工具决策 / 工具结果三段式拆分。 */
@@ -202,6 +213,13 @@ export class AgentSession {
   /** @internal */ currentRelaySessionId?: string;
   /** 正在执行上下文压缩时为 true。此期间不允许取消，避免压缩中断导致消息状态不完整。 */
   isCompacting = false;
+  /**
+   * 本轮用户消息的 id（前端在 user_message 里给的 clientMessageId）。
+   *
+   * 每轮在 handleUserInput 里**无条件**刷新（本轮没有该字段则置 null）。
+   * 用途：让收尾类事件带上"这是哪一轮"的标识，前端据此精确归属，不必再靠时间线推断 —— 详见 send()。
+   */
+  /** @internal */ currentTurnClientMessageId: string | null = null;
   /** 滚动摘要：自上次摘要以来的累计 token 增量。每轮 stream_end 后累加，超过阈值触发异步摘要。 */
   /** @internal */ rollingSummaryAccumulated = 0;
   /** 滚动摘要是否正在进行中（防止并发）。 */
@@ -251,28 +269,48 @@ export class AgentSession {
     this.host = host;
     this.homeDir = homeDir ?? "";
     this.web = web;
-    this.skillRegistry = new SkillRegistry(this.workspaces, this.host, this.homeDir);
-    this.powerRegistry = new PowerRegistry(this.workspaces, this.host, this.homeDir);
+    const powerRegistry = new PowerRegistry(this.workspaces, this.host, this.homeDir);
+    this.powerRegistry = powerRegistry;
+    // 让 skill 发现链路也扫「Power 捆绑的 skills」。此前这条链路缺失（getActiveSkillDirs 无调用方），
+    // 结果是 activate_power 把捆绑 skill 的名字报给模型、模型再去 use_skill 却加载不到。
+    // 传回调而非数组：Power 的启用状态在运行期可变，每次 discover 都要取当时的值。
+    // 闭包捕获局部变量而非 this.powerRegistry —— 后者声明为可选，直接访问会被判 possibly null；
+    // 而这里刚构造完，这个引用本身是确定的。
+    this.skillRegistry = new SkillRegistry(
+      this.workspaces,
+      this.host,
+      this.homeDir,
+      () => powerRegistry.getActiveSkillDirs(),
+    );
     this.mcp = mcp;
     this.mcpRegistry = new McpRegistry(this.workspaces, this.host, this.homeDir, this.powerRegistry);
-    this.relayStore = new RelayStore(this.cwd, this.host);
+    // 写入落会话工作区；同时把主目录作为回退根，兼容历史遗留产物
+    this.relayStore = new RelayStore([this.cwd, this.homeDir], this.host);
+    // Wiki 与 Relay 不同：它是仓库自身的长期资产（应随 git 提交共享），不是本机痕迹，
+    // 因此【不】把 homeDir 作为回退根 —— 那会让不相干的用户级目录混进项目列表。
+    // 读全部工作区（多根下各自可能都有 wiki），写入落主工作区。
+    this.wikiStore = new WikiStore([this.cwd, ...this.workspaces], this.host);
     this.snapshotMgr = new SnapshotManager(this.host, this.cwd);
     this.promptBuilder = new PromptBuilder(this);
     this.tokenAccountant = new TokenAccountant(this);
     this.toolDefBuilder = new ToolDefBuilder(this);
     this.mcpController = new McpController(this);
     this.delegateRunner = new DelegateRunner(this);
-    this.parallelRunner = new ParallelRunner(this);
     this.relayToolRunner = new RelayToolRunner(this);
     this.commandGateController = new CommandGateController(this, commandGate ?? new CommandGate());
     this.editController = new EditController(this);
     this.compactionController = new CompactionController(this);
     this.creditBudgetGate = new CreditBudgetGate(this);
-    this.traceWriter = new SessionTraceWriter({ host: this.host, cwd: this.cwd });
+    // trace 落到用户目录下的项目分区（~/.axon/projects/<项目>/traces），**不写进工作区**。
+    // 它是"本机跑过什么"的痕迹，对仓库、对下一个 clone 的人都没有价值；早先写在
+    // <cwd>/.axon/traces，导致每个执行过/读过的项目都留下一个 .axon 目录（还会进 git status）。
+    // homeDir 缺失时（极少数形态）干脆不记 —— 宁可不记，也不退回去污染工作区。
+    this.traceWriter = new SessionTraceWriter({
+      host: this.host,
+      rootDir: this.homeDir ? projectTraceDir(this.homeDir, this.cwd) : "",
+    });
     this.delegatedToolExecutor = new DelegatedToolExecutor({
       runDelegateTask: (args, id) => this.runDelegateTask(args, id),
-      runParallelResearch: (args, id) => this.runParallelResearch(args, id),
-      runParallelExecution: (args, id) => this.runParallelExecution(args, id),
     });
     this.relayToolExecutor = new RelayToolExecutor({
       waitForToolConfirmation: (name, args, kind, label) => this.waitForToolConfirmation(name, args, kind, label),
@@ -281,6 +319,9 @@ export class AgentSession {
       runRelayAdvance: (args) => this.runRelayAdvance(args),
       runRelayUpdateTask: (args) => this.runRelayUpdateTask(args),
       runRelayReviewTask: (args) => this.runRelayReviewTask(args),
+    });
+    this.askUserToolExecutor = new AskUserToolExecutor({
+      waitForUserAnswer: (toolCallId, questions) => this.waitForUserAnswer(toolCallId, questions),
     });
     this.mcpToolExecutor = new McpToolExecutor({
       runMcpTool: (name, args) => this.runMcpTool(name, args),
@@ -339,6 +380,14 @@ export class AgentSession {
   /** 获取当前压缩配置（诊断 / UI 展示用） */
   getCompactionConfig(): CompactionUserConfig {
     return this.compactionConfig;
+  }
+
+  /**
+   * 设置 trace 记录配置（等级 / 体积上限 / 保留份数）。
+   * 由呈现端在启动时与配置变更时调用；改等级后无需重开会话，下一次写入即生效。
+   */
+  setTraceConfig(cfg: Partial<TraceConfig>): void {
+    this.traceWriter.setConfig(cfg);
   }
 
   /** 设置 Credits 预算门配置（由呈现端在启动时 / 配置变更时调用） */
@@ -509,8 +558,10 @@ export class AgentSession {
     this.cwd = dir;
     this.workspaces = [dir];
     this.skillRegistry?.setWorkspaces(this.workspaces);
+    this.powerRegistry?.setWorkspaces(this.workspaces);
     this.mcpRegistry?.setWorkspaces(this.workspaces);
-    this.relayStore?.setWorkspace(this.cwd);
+    this.relayStore?.setRoots([this.cwd, this.homeDir]);
+    this.wikiStore?.setRoots([this.cwd, ...this.workspaces]);
   }
 
   /** 设置多工作区路径（工作区组绑定时调用） */
@@ -519,8 +570,10 @@ export class AgentSession {
     this.cwd = this.workspaces[0]; // 主工作区为第一个
     this.terminalCwd = this.cwd;
     this.skillRegistry?.setWorkspaces(this.workspaces);
+    this.powerRegistry?.setWorkspaces(this.workspaces);
     this.mcpRegistry?.setWorkspaces(this.workspaces);
-    this.relayStore?.setWorkspace(this.cwd);
+    this.relayStore?.setRoots([this.cwd, this.homeDir]);
+    this.wikiStore?.setRoots([this.cwd, ...this.workspaces]);
   }
 
   /** 跟踪终端实际工作目录（execute_command / start_process 执行后同步） */
@@ -607,18 +660,6 @@ export class AgentSession {
     return ok;
   }
 
-  /**
-   * 回滚一个并行执行（parallel_execute）写入的文件。
-   * 并行子 Agent auto 落盘，无原生 undo 记录，靠 parallelSnapshots 里捕获的"改动前快照"恢复：
-   * - 新建文件 → 删除
-   * - 已存在文件 → 写回原始内容
-   * @param path AI 使用的路径（前端从文件变更清单回传）
-   */
-  /** 回滚一个并行执行（parallel_execute）写入的文件（委托 EditController）。 */
-  async undoParallelFile(path: string): Promise<void> {
-    await this.editController.undoParallelFile(path);
-  }
-
   /** 获取最近一次的累计 token 数（委托 TokenAccountant） */
   getLastTotalTokens(): number {
     return this.tokenAccountant.getLastTotalTokens();
@@ -629,10 +670,25 @@ export class AgentSession {
     this.tokenAccountant.hydrateTokenUsage(totalTokens);
   }
 
+  /**
+   * 只重算当前上下文占用、**不推送 UI**（委托 TokenAccountant）。
+   * 给"内部需要最新占用、但不该改动界面数字"的场景用（判定手动压缩阈值前的那次重算）。
+   */
+  recomputeTokenUsage(): number {
+    return this.tokenAccountant.recomputeTokenUsage();
+  }
+
   /** 取消当前进行中的请求。压缩进行中时忽略——中断会破坏消息完整性。 */
   cancel(): void {
     if (this.isCompacting) return;
     this.cancelled = true;
+    // 解除问答门：ask_user 刻意不设超时，若不在此解除，等用户作答的 agent loop 会一直挂着。
+    if (this.askUserResolve) {
+      const resolveAsk = this.askUserResolve;
+      this.askUserResolve = null;
+      this.askUserPendingToolCallId = null;
+      resolveAsk(null);
+    }
     if (this.abortController) {
       this.abortController.abort();
       this.abortController = null;
@@ -746,6 +802,31 @@ export class AgentSession {
     }
   }
 
+  /** 外部 resolve 问答门（由 SessionHub.dispatch answer_user_question 调用）。 */
+  resolveUserAnswer(toolCallId: string, answers: AskUserAnswer[] | null): void {
+    // 只接受"当前这次提问"的答案：旧卡片、失效会话（reload 后）回传的答案一律忽略。
+    if (this.askUserPendingToolCallId !== toolCallId || !this.askUserResolve) return;
+    const resolve = this.askUserResolve;
+    this.askUserResolve = null;
+    this.askUserPendingToolCallId = null;
+    resolve(answers);
+  }
+
+  /**
+   * 等待用户对一次提问的作答（ask_user 工具，可含多个问题）：发 ask_user_request 后【无限阻塞】。
+   * 不设超时（提问就是要等用户）；仅当会话被取消时由 cancel() 解除，返回 null 让 agent loop 收敛。
+   */
+  /** @internal */ waitForUserAnswer(
+    toolCallId: string,
+    questions: AskUserQuestion[],
+  ): Promise<AskUserAnswer[] | null> {
+    this.send("ask_user_request", { toolCallId, questions });
+    this.askUserPendingToolCallId = toolCallId;
+    return new Promise<AskUserAnswer[] | null>((resolve) => {
+      this.askUserResolve = resolve;
+    });
+  }
+
   /** 用户在确认门选择的 Relay 模式（创建后清空） */
   /** @internal */ pendingRelayMode?: "strict" | "auto";
 
@@ -830,7 +911,7 @@ export class AgentSession {
   }
 
   /**
-   * 解析子 Agent 执行阶段（delegate_task / parallel_execute）应使用的 provider + model。
+   * 解析子 Agent 执行阶段（delegate_task）应使用的 provider + model。
    * 若当前处于某个 Relay 任务的执行上下文（this.activeRelayTask 有值）且该 Relay 配置了
    * modelOverrides.executing，且该模型能在已配置的 provider 目录中找到 → 用覆盖值；
    * 否则回退到当前会话的 provider + model（未配置模型覆盖时的默认行为）。
@@ -882,6 +963,19 @@ export class AgentSession {
 
   /** 统一发事件给前端，并对关键事件补一份 session trace。 */
   /** @internal */ send(type: string, data: Record<string, unknown> = {}): void {
+    // ── 收尾类事件统一带上「本轮的轮次标识」──
+    // 一次取消在后端会发出**不止一条**收尾事件：cancel() 的兜底（elapsed 恒为 0）+ agent loop 解栈时补的
+    // 那条（elapsed 真实），取消与"正常完成"赛跑时还会有正常的 stream_end。这些事件的 payload 里没有任何
+    // 轮次信息，前端只能靠 elapsed 去猜它属于哪一轮 —— 猜不准就会把**新一轮**的状态抹掉：
+    // 表现为「排队消息已经发出去了、对话区却没开始」，或「两条排队消息并发跑」。
+    //
+    // 这里把前端发起本轮时给的 clientMessageId 原样带回（它在 channel/commands.ts 里已有定义，
+    // sessionHub 也已透传给 handleUserInput），前端就能确定性归属，不必再推断。
+    // 只在终态事件上注入：它们才是"某一轮结束了"的宣告。
+    // 向后兼容：老前端忽略这个多出来的字段，行为不变。
+    if (this.currentTurnClientMessageId && (type === "stream_end" || type === "turn_cancelled")) {
+      data = { ...data, clientMessageId: this.currentTurnClientMessageId };
+    }
     // 先对会话级关键事件做 trace，再发给前端。这里只记高价值事件，避免把所有 stream_delta 都重复落两份。
     switch (type) {
       case "tool_call":
@@ -947,6 +1041,30 @@ export class AgentSession {
     this.channel.emit({ type, ...data } as AgentEvent);
   }
 
+  /**
+   * 记忆召回提示 —— 把「本轮注入了哪些 Wiki 页面」推给前端。
+   *
+   * ── 为什么按签名去重，而不是每轮都发 ──
+   * 召回每轮都在发生，但内容绝大多数时候不变。逐轮推送的结果是一串完全相同的卡片，
+   * 真正的变化（新增一页、某页转陈旧）反而淹没其中。签名相同就完全静默 ——
+   * 于是「卡片出现」本身就意味着「记忆变了」，这才有信息量。
+   * 这与视图徽标只在有待复核页时才亮，是同一条原则。
+   *
+   * 失败不上报：这是提示性信息，不该因为它出错而打断本轮对话。
+   */
+  private announceWikiRecall(recall: WikiRecall | null): void {
+    // 没有召回内容：清空基准，使页面重新出现时能再次提示
+    // （而不是与一个早已失效的旧签名比较，从而被误判成「没变化」）
+    if (!recall) {
+      this.lastWikiRecallSignature = null;
+      return;
+    }
+    const sig = wikiRecallSignature(recall);
+    if (sig === this.lastWikiRecallSignature) return;
+    this.lastWikiRecallSignature = sig;
+    this.send("wiki_recall", { total: recall.total, pages: recall.pages });
+  }
+
   /** 工具定义装配（委托 ToolDefBuilder） */
   /** @internal */ getToolDefs(): ToolDef[] {
     return this.toolDefBuilder.getToolDefs();
@@ -960,6 +1078,96 @@ export class AgentSession {
   /** 设置 Quest 模式选项（每轮用户输入前由 SessionHub 注入） */
   setQuestOptions(opts: { webSearch?: boolean }): void {
     if (typeof opts.webSearch === "boolean") this.questWebSearch = opts.webSearch;
+  }
+
+  /**
+   * 为指定工作区生成 / 续跑 Wiki。
+   *
+   * workspace 必须由调用方（UI）显式给出：生成是写操作，而多工作区下会话 cwd 未必是
+   * 用户想生成的那个仓库。写错会把一批文件塞进不相干的仓库，而且它们还会被提交上去 ——
+   * 读可以猜，写不能猜。
+   *
+   * 编排逻辑在 WikiController 里，本方法只负责把会话侧的能力（模型、宿主、skill 加载器、
+   * 中断信号）接上去。这样编排可以脱离真实模型单测，而生成质量交给 skill 与子 Agent。
+   */
+  /** @internal */ async generateWiki(workspace: string, opts: WikiGenerationOptions = {}): Promise<WikiGenerationResult> {
+    // 防重入：两次并发生成会互相破坏 ——
+    // 第二次 startJob 会把第一次那个【仍在活跃】的作业标成 interrupted
+    // （startJob 的语义是「新作业开始时旧进程必然已死」，同进程并发下该假定不成立），
+    // 而两边又同时往同一个 .axon/wiki/ 写。结果是进度错乱、状态互相覆盖。
+    // 触发路径很平常：手快连点两次，或点完忘了、过一会儿又点一次。
+    if (this.wikiGenerating) {
+      return {
+        ok: false,
+        done: 0,
+        total: 0,
+        failed: [],
+        resumed: false,
+        message: "已有 Wiki 生成在进行中。请等它结束，或先取消再重试。",
+      };
+    }
+    this.wikiGenerating = true;
+    try {
+      return await this.doGenerateWiki(workspace, opts);
+    } finally {
+      // 无论成功 / 失败 / 取消都要复位，否则一次失败会把功能永久锁死
+      this.wikiGenerating = false;
+    }
+  }
+
+  /** generateWiki 的实际实现。已被防重入守卫包裹，不要直接调用。 */
+  private async doGenerateWiki(workspace: string, opts: WikiGenerationOptions = {}): Promise<WikiGenerationResult> {
+    // 模型解析：显式配置优先 → 回退到会话所用（含 Relay 执行阶段的模型覆盖）。
+    //
+    // 为什么给 Wiki 留一个独立的模型开关：它是本项目里最贵的单个操作，
+    // 而「聊天的便宜模型」与「读懂架构所需的模型」往往不是同一个。
+    // 默认仍跟随会话 —— 跑得少、要读懂代码，沿用用户已认可的选择最稳妥。
+    // 解析逻辑抽到 resolveWikiModel（纯函数，可单测）：
+    // 显式配置优先 → 回退到会话所用（base 已含 Relay 执行阶段的模型覆盖）。
+    const base = await this.resolveExecutingModel();
+    const { provider, model } = resolveWikiModel(base, opts);
+    const strategy = getStrategy(provider, model);
+
+    const controller = new WikiController({
+      host: this.host,
+      workspaces: this.workspaces,
+      store: this.wikiStore,
+      model,
+      maxPages: opts.maxPages,
+      sessionId: this.getSessionId(),
+      signal: this.abortSignal,
+      emit: (event) => this.send("wiki_generation", { event }),
+      runSubAgent: async (req) => {
+        const runner = new SubAgentRunner({
+          strategy,
+          model,
+          // cwd 用目标工作区：子 Agent 的相对路径解析、目录预览都应以它为根
+          cwd: workspace,
+          workspaces: this.workspaces,
+          // 派生独立 host：子 Agent 的 edits 暂存区独立，不与父会话互相干扰
+          host: deriveSubAgentHost(this.host),
+          signal: this.abortSignal,
+          // 子 Agent 的内部过程**刻意不转发**到前端。
+          //
+          // 一是会让聊天界面被十几张卡片灌满（用户明确担心过"污染会话"），
+          // 二是没有对应的 sub_agent_start，前端会把事件路由到不存在的卡片上。
+          // 进度改由 wiki_generation 事件承载（带「共几页、已完成几页」），
+          // 由呈现端渲染成状态栏提示与列表刷新 —— 那才是这种长任务合适的展示位。
+          emit: () => { /* 见上：不转发子 Agent 内部过程 */ },
+          skillLoader: this.loadSkillForTool,
+          web: this.web,
+          // 思考开关跟随父会话；wiki 工具按阶段注入（plan / save）
+          think: this.think,
+          modelSupportsThinking: declaredThinkingFor(model, provider),
+          readOnly: req.readOnly,
+          wiki: req.wiki,
+        });
+        const res = await runner.run(req.prompt, req.skill);
+        return { ok: res.ok, text: res.text };
+      },
+    });
+
+    return controller.generate(workspace);
   }
 
   /** use_skill 工具的 skill 加载器（绑定 this，传给 executeToolCall） */
@@ -1029,24 +1237,6 @@ export class AgentSession {
   /** 执行 relay_review_task（委托 RelayToolRunner） */
   private async runRelayReviewTask(args: Record<string, unknown>): Promise<string> {
     return this.relayToolRunner.reviewTask(args);
-  }
-
-  /**
-   * 执行 parallel_research：派发多个只读子 Agent 并发调研，聚合结论回填。
-   * 每路子 Agent 的事件用 sub_agent_event 包装（带独立 delegateId），前端各自渲染卡片。
-   */
-  /** 执行 parallel_research（委托 ParallelRunner） */
-  private async runParallelResearch(args: Record<string, unknown>, toolCallId: string): Promise<string> {
-    return this.parallelRunner.research(args, toolCallId);
-  }
-
-  /**
-   * 执行 parallel_execute：派发多个子 Agent 并行执行写任务，各自有文件作用域隔离。
-   * 每路子 Agent 的事件用 sub_agent_event 包装（带独立 delegateId），前端各自渲染卡片。
-   */
-  /** 执行 parallel_execute（委托 ParallelRunner） */
-  private async runParallelExecution(args: Record<string, unknown>, toolCallId: string): Promise<string> {
-    return this.parallelRunner.execute(args, toolCallId);
   }
 
   /** 根据当前模型返回上下文窗口大小（统一来源 modelContextWindow） */
@@ -1205,19 +1395,19 @@ export class AgentSession {
       streamedContentThisRound,
       turnStartTime,
       model: this.model,
+      providerName: getProviderDisplayName(this.provider),
+      effort: this.effort,
       messages: this.messages,
       lastTurnTokens: this.lastTurnTokens,
       lastTurnOutputTokens: this.lastTurnOutputTokens,
       lastCompletionTokens: this.lastCompletionTokens,
       buildTokenBreakdown: () => this.buildTokenBreakdown(),
-      compactionEnabled: this.compactionConfig.enabled,
-      toolResultKeepTurns: this.compactionConfig.toolResultKeepTurns,
       rollingSummaryAccumulated: this.rollingSummaryAccumulated,
       triggerTokens: this.compactionConfig.triggerTokens,
     });
     this.messages = out.messages;
     this.persistMessages(); // 最终回复落盘，切走也保留
-    this.send("stream_end", { elapsed: out.elapsed, tokens: out.turnTokens, model: this.model, modelName: getModelDisplayName(this.model, this.provider), credits: out.credits, creditDetail: out.creditDetail });
+    this.send("stream_end", { elapsed: out.elapsed, tokens: out.turnTokens, model: this.model, modelName: getModelDisplayName(this.model, this.provider), providerName: getProviderDisplayName(this.provider), effort: this.effort, credits: out.credits, creditDetail: out.creditDetail });
     this.rollingSummaryAccumulated = out.nextRollingSummaryAccumulated;
     if (out.shouldTriggerRollingSummary) {
       this.maybeRollingSummary();
@@ -1282,6 +1472,7 @@ export class AgentSession {
           temperature: 0.2,
           signal: this.abortController?.signal,
           think: this.think,
+          effort: this.effort,
           modelSupportsThinking: declaredThinkingFor(this.model, this.provider),
           modelSupportsCacheControl: declaredCacheControlFor(this.model, this.provider),
           modelSupportsVision: declaredVisionFor(this.model, this.provider),
@@ -1314,6 +1505,7 @@ export class AgentSession {
           finishReason: normalized,
           normalizedFinishReason: normalized,
           usage: draft.usage,
+          reasoningContent: draft.reasoningContent,
         };
       } catch (err) {
         const error = err as Error;
@@ -1630,7 +1822,7 @@ export class AgentSession {
     model?: string,
     images?: string[],
     provider?: string,
-    userMeta?: { displayText?: string; attachedFiles?: { name: string; size: number }[]; replyStyle?: string; userSegments?: unknown[]; clientMessageId?: string },
+    userMeta?: { displayText?: string; attachedFiles?: { name: string; size: number }[]; effort?: string; userSegments?: unknown[]; clientMessageId?: string },
   ): Promise<void> {
     this.turnCount++;
     this.trace("turn.start", { input: truncateForTrace(input, 2000), model: model || this.model, provider: provider || this.provider }, this.turnCount);
@@ -1647,10 +1839,11 @@ export class AgentSession {
     if (provider && provider !== this.provider) {
       this.provider = provider;
     }
-    // 更新回复风格（会话级，影响后续所有请求）
-    if (userMeta?.replyStyle) {
-      this.replyStyle = userMeta.replyStyle;
-    }
+    // 只接受当前模型 Provider 明确配置的值。伪造值 / 旧模型残留直接按关闭处理，
+    // 避免把端点不认识的 effort 原样发出去导致 400 或断流。
+    const requestedEffort = userMeta?.effort?.trim();
+    const allowedEfforts = declaredEffortValuesFor(this.model, this.provider);
+    this.effort = requestedEffort && allowedEfforts.includes(requestedEffort) ? requestedEffort : undefined;
 
     // 新一轮用户输入开始前，清理上一轮遗留的临时诊断/纠偏注入。
     // _tailInjected 只表示“为 prompt cache 友好而放到尾部”，不代表必须跨轮删除；
@@ -1670,6 +1863,10 @@ export class AgentSession {
     this.cancelled = false; // 新一轮用户输入，重置取消标志
     this.lastSubAgentTokens = 0; // 新一轮用户输入，重置本轮 subagent 用量统计
     this.lastTurnOutputTokens = 0; // 新一轮用户输入，重置本轮输出 token 累计
+    // 新一轮用户输入，重置「单轮探索预算」（read_file / search / list_dir 的本轮累计上限）。
+    // 放在这里而不是别处：用户再次发消息就是新的对话边界，预算必须跟着重置，
+    // 否则它会跨轮累积、把后续每一轮都限死。
+    this.toolOutcomeRecorder.resetTurnBudget();
     this.turnStartCumulative = this.cumulativeTokens; // 取消时用差值复原本轮消耗
     // 记录本轮开始前的消息条数（此刻 messages 仅含 system + 之前会话，尚未 push 本轮用户消息）。
     // 用它在收尾时切出"本轮新增的消息"（用户消息 + 工具结果），据此估算"本次输入"。
@@ -1680,8 +1877,12 @@ export class AgentSession {
     const userExtra: Record<string, unknown> = {};
     if (userMeta?.displayText !== undefined) userExtra.displayText = userMeta.displayText;
     if (userMeta?.clientMessageId) userExtra.clientMessageId = userMeta.clientMessageId;
+    // 无条件刷新（不是"有才设"）：本轮没有标识时必须清掉上一轮的残留值，
+    // 否则收尾事件会带着上一轮的 id 发出去 —— 那比不携带更糟：前端会"精确地归属错"。
+    this.currentTurnClientMessageId = userMeta?.clientMessageId ?? null;
     if (userMeta?.attachedFiles && userMeta.attachedFiles.length > 0) userExtra.attachedFiles = userMeta.attachedFiles;
     if (userMeta?.userSegments && userMeta.userSegments.length > 0) userExtra.userSegments = userMeta.userSegments;
+    if (this.effort) userExtra.effort = this.effort;
 
     // 构建用户消息（支持多模态：文字 + 图片）
     if (images && images.length > 0) {
@@ -1725,16 +1926,34 @@ export class AgentSession {
 
     this.send("status", { content: "思考中...", phase: "thinking" });
 
-    // 预取 IDE 上下文 / skill / power / MCP —— 它们之间无依赖，并行拉取以缩短首字延迟
-    const [ideCtx, skillsPrompt, powersPrompt] = await Promise.all([
+    // 预取 IDE 上下文 / skill / power / MCP / Wiki 索引 —— 它们之间无依赖，并行拉取以缩短首字延迟
+    const [ideCtx, skillsPrompt, powersPrompt, wikiRecall] = await Promise.all([
       this.promptBuilder.buildIdeContextPrompt(false).catch((e: unknown) => { console.warn("[ide-ctx] 预取失败（忽略）:", (e as Error).message); return null; }),
       this.skillRegistry.buildSkillsPrompt().catch((e: unknown) => { console.warn("[skill] 发现 skill 失败（忽略）:", (e as Error).message); return null; }),
       this.powerRegistry ? this.powerRegistry.buildPowersPrompt().catch((e: unknown) => { console.warn("[power] 发现 power 失败（忽略）:", (e as Error).message); return null; }) : Promise.resolve(null),
+      // Wiki 召回：一次取回注入文本 + 页面清单（同一次 summary，保证两者同一份快照）。
+      // 无页面时返回 null，注入侧据此完全跳过 —— 未使用 Wiki 的项目零成本
+      //
+      // ⚠️ Quest（纯问答）模式不召回记忆：
+      // 该模式的定位就是"不绑定工作区语义"（见上面 mode 字段的说明），
+      // 把工作区的 wiki 记忆注入进去与这个定位相悖。
+      // 在这里返 null 即可同时关掉两个消费端 —— wikiPromptCache（进系统提示）与
+      // announceWikiRecall（发前端渲染「记忆召回」卡片）；只关一处会留下半吊子状态。
+      this.mode === "quest"
+        ? Promise.resolve(null)
+        : this.wikiStore.buildRecall().catch((e: unknown) => { console.warn("[wiki] 索引构建失败（忽略）:", (e as Error).message); return null; }),
       this.prefetchMcpTools(),  // ← 之前串行 await，现在并入并行
     ]);
     this.ideContextCache = ideCtx;
     this.skillsPromptCache = skillsPrompt;
     this.powersPromptCache = powersPrompt;
+    this.wikiPromptCache = wikiRecall?.prompt ?? null;
+    // 定格本轮的易变注入（终端 cwd / 工作区聚焦）：一轮之内 system 前缀逐字节不变，
+    // 否则 Anthropic / Responses 链路每次命令换目录都会整段断缓存（见 PromptBuilder.beginTurn）
+    this.promptBuilder.beginTurn();
+    // 再显式挡一次：不依赖 announceWikiRecall 自己对 null 的处理（那是它的实现细节，
+    // 万一它把 null 当成"本轮没有召回"而渲染一张空卡片，Quest 模式就会冒出一块莫名其妙的东西）
+    if (this.mode !== "quest") this.announceWikiRecall(wikiRecall);
 
     // Agent 循环：总轮数上限只作极端兜底（正常任务很难碰到），真正防死循环靠"相同调用重复检测"
     let rounds = 0;
@@ -1823,8 +2042,8 @@ export class AgentSession {
           },
         onToolCallDetected: (name, id) => {
           this.trace("tool.detected", { name, id }, this.turnCount);
-          // delegate_task / parallel_execute / parallel_research 有专门的 sub_agent 卡片，跳过。
-          if (name === "delegate_task" || name === "parallel_execute" || name === "parallel_research") return;
+          // delegate_task 有专门的 sub_agent 卡片，跳过。
+          if (name === "delegate_task") return;
           // 这个回调在流式阶段就会触发（工具名已定、参数还在逐 chunk 累加），是卡片能出现的
           // 最早时机。而工具参数体往往就是模型输出的主体（create_file 的 content、str_replace
           // 的 new_str，几百到几千 token），等整条流消费完再发卡，用户要盯着空白等好几秒。
@@ -1833,8 +2052,8 @@ export class AgentSession {
           // 此刻拿不到参数，卡片先以占位文案出现（前端在 shortName 为空时会显示
           // "修改文件中..."/"创建文件中..."）；执行循环发出带 args 的 executing 事件后按 id 回填。
           if (!id) return; // 没拿到调用 id 就没法与后续 executing 事件配对，宁可不发
-          // status=queued 而非 pending：此刻一个工具都还没开始跑（本轮工具由 ToolDispatchHandler
-          // 串行执行）。发 pending 会让前端把"排队等待"画成"正在执行"——多工具轮里几张卡一起
+          // status=queued 而非 pending：此刻宿主还没开始跑这个工具。发 pending 会让前端把
+          // "尚未执行"画成"正在执行"——多工具轮里几张卡一起
           // 转圈、都写着"执行命令中..."。真正开始执行时 toolCallExecutor 会按同一个 id 发 executing。
           //
           // 注意此刻工具名刚定、**参数还在流式累加**（create_file 的 content 就是整个文件正文），
@@ -1911,6 +2130,9 @@ export class AgentSession {
       const assistantMsg = {
         role: "assistant" as const,
         content: contentBuffer || null,
+        // DeepSeek 等 reasoning 模型要求带 tool_calls 的 assistant 消息原样回传思考状态。
+        // 使用 provider 协议字段名，PromptBuilder 会保留该字段进入下一轮请求。
+        ...(turn.reasoningContent ? { reasoning_content: turn.reasoningContent } : {}),
         displayContent: null,
         runtimeContent: contentBuffer || null,
         tool_calls: toolCalls.map((tc) => ({
@@ -2034,6 +2256,7 @@ export class AgentSession {
         // 跟随用户的思考开关。这里虽然不展示思考过程，但思考本身会影响收尾结论的质量，
         // 所以不强制关掉——只在用户明确关闭时才不请求。
         think: this.think,
+        effort: this.effort,
         modelSupportsThinking: declaredThinkingFor(this.model, this.provider),
         modelSupportsCacheControl: declaredCacheControlFor(this.model, this.provider),
         callbacks: {
@@ -2081,7 +2304,7 @@ export class AgentSession {
     };
     const summaryCredits = calculateCredits(this.model, summaryBreakdown);
     const summaryCreditDetail = buildCreditDetail(this.model, summaryBreakdown);
-    this.send("stream_end", { elapsed: Date.now() - turnStartTime, tokens: summaryTokens, model: this.model, modelName: getModelDisplayName(this.model, this.provider), credits: summaryCredits, creditDetail: summaryCreditDetail });
+    this.send("stream_end", { elapsed: Date.now() - turnStartTime, tokens: summaryTokens, model: this.model, modelName: getModelDisplayName(this.model, this.provider), providerName: getProviderDisplayName(this.provider), effort: this.effort, credits: summaryCredits, creditDetail: summaryCreditDetail });
   }
 }
 

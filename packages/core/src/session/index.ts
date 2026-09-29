@@ -19,6 +19,16 @@ export { NoToolTurnDecider } from "./noToolTurnDecider.js";
 export { ErrorTurnHandler } from "./errorTurnHandler.js";
 export { ReflectionHandler } from "./reflectionHandler.js";
 export { ToolCallExecutor, type TurnState } from "./toolCallExecutor.js";
-export { SessionTraceWriter, truncateForTrace } from "./sessionTraceWriter.js";
+export {
+  SessionTraceWriter,
+  truncateForTrace,
+  projectDataDir,
+  projectTraceDir,
+  pruneOldTraces,
+  normalizeTraceConfig,
+  DEFAULT_TRACE_CONFIG,
+  type TraceConfig,
+  type TraceLevel,
+} from "./sessionTraceWriter.js";
 export { resolveToolDispatchRoute } from "./toolDispatchRouter.js";
 export { SessionHub } from "./sessionHub.js";

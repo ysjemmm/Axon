@@ -125,7 +125,7 @@ export function validateDirectory(path: string): Promise<{ valid: boolean }> {
 export interface SkillInfo {
   name: string;
   description: string;
-  source: "global" | "workspace" | "builtin";
+  source: "global" | "workspace" | "builtin" | "power";
   dir: string;
   disabled: boolean;
 }
@@ -147,8 +147,9 @@ export function generateSkill(prompt: string, model?: string, provider?: string)
   return post("/api/skills/generate", { prompt, model, provider });
 }
 
-export function deleteSkill(name: string): Promise<{ ok: boolean }> {
-  return del(`/api/skills/${name}`);
+/** 删除整个 skill（需带 workspace，工作区级 skill 才定位得到） */
+export function deleteSkill(name: string, workspace?: string): Promise<{ ok: boolean }> {
+  return del(`/api/skills/${encodeURIComponent(name)}${skillQuery({ workspace })}`);
 }
 
 // ── Skill 文件管理 ──
@@ -478,6 +479,10 @@ export interface ProviderModelInfo {
    * （模型声明优先，未声明时由后端启发式兜底），前端直接采信、不要自己再判一遍。
    */
   thinking?: boolean;
+  /** Provider 为该模型配置的思考强度档位：展示名 → 实际协议值 */
+  effortLevels?: { label: string; value: string }[];
+  /** 默认强度实际值；缺省表示默认关闭 */
+  defaultEffort?: string;
   /** 是否支持 OpenAI 兼容的 prompt caching（cache_control）。 */
   cacheControl?: boolean;
 }
@@ -613,6 +618,19 @@ export function addCustomProvider(level: ProviderLevel, name: string, entry: Raw
 /** 删除一个自定义 provider */
 export function removeCustomProvider(level: ProviderLevel, name: string, workspace?: string): Promise<{ ok: boolean }> {
   return del(`/api/providers/${level}/custom/${encodeURIComponent(name)}${providerQuery(workspace)}`);
+}
+
+/**
+ * 移除「环境变量来源」的 provider：从 ~/.axon/.env 摘掉它的配置行。
+ *
+ * 必须与 removeCustomProvider 分开：env 来源的 provider 根本不在 providers.json 里，
+ * 走 custom 删除只会报"provider 不存在"——那正是"删不掉、重启又回来"的原因。
+ */
+export function removeEnvProvider(
+  name: string,
+  workspace?: string,
+): Promise<{ ok: boolean; removed: string[]; file: string; fromSettings: boolean }> {
+  return del(`/api/providers/env/${encodeURIComponent(name)}${providerQuery(workspace)}`);
 }
 
 /** 在用户级 / 工作区级之间迁移一个自定义 provider（迁移后源层级删除） */

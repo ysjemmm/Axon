@@ -58,6 +58,11 @@ const TOOL_KIND_MAP: Record<ToolName, ToolKind> = {
   // 技能 / 能力包
   [ToolName.UseSkill]: "other",
   [ToolName.ActivatePower]: "other",
+  // Wiki 页面保存：本质是写文件（写 .axon/wiki/*.md），归到 edit。
+  // 它不产生 fileDiff，因此不会进「代码改动」那套呈现（改动面板/待确认卡片）。
+  [ToolName.WikiSavePage]: "edit",
+  // 规划只登记清单、不落盘，归到 other（不是编辑、也不是读取仓库内容）
+  [ToolName.WikiPlanPages]: "other",
   // 编排类
   [ToolName.DelegateTask]: "orchestration",
   [ToolName.RelayCreate]: "orchestration",
@@ -65,8 +70,9 @@ const TOOL_KIND_MAP: Record<ToolName, ToolKind> = {
   [ToolName.RelayAdvance]: "orchestration",
   [ToolName.RelayUpdateTask]: "orchestration",
   [ToolName.RelayReviewTask]: "orchestration",
-  [ToolName.ParallelResearch]: "orchestration",
-  [ToolName.ParallelExecute]: "orchestration",
+  // 选项问答：向用户抛选择。归到 other——它不是读写/命令/联网任何一类，
+  // 也不想被 orchestration 那套（子 Agent 分组）呈现逻辑带走。
+  [ToolName.AskUser]: "other",
 };
 
 /**

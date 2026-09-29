@@ -18,6 +18,13 @@ type Handler = (msg: WsMessage) => void;
 /** 全局事件总线：按 clientId 分发 Agent 事件 */
 class SessionEventBus {
   private handlers = new Map<string, Set<Handler>>();
+  /** 在按 clientId 分发之前截获事件；返回 true 表示已消费、不再分发（请求/应答类事件用） */
+  private interceptors = new Set<(msg: WsMessage) => boolean>();
+
+  intercept(fn: (msg: WsMessage) => boolean): () => void {
+    this.interceptors.add(fn);
+    return () => { this.interceptors.delete(fn); };
+  }
 
   /** 订阅指定面板（clientId）的事件流，返回取消订阅函数 */
   subscribe(clientId: string, handler: Handler): () => void {
@@ -37,6 +44,9 @@ class SessionEventBus {
 
   /** 分发一条事件：有 clientId 则定向，否则广播给所有面板 */
   dispatch(msg: WsMessage): void {
+    for (const fn of this.interceptors) {
+      if (fn(msg)) return;
+    }
     const cid = (msg as { clientId?: string }).clientId;
     if (cid) {
       const set = this.handlers.get(cid);

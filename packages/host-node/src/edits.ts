@@ -18,7 +18,7 @@ import type { EditPresenter, EditMode, FileEdit, FileDiff, UndoableEdit, UndoRes
 import { reverseApplyHunks } from "@axon/core";
 
 export class NodeEditPresenter implements EditPresenter {
-  private mode: EditMode = "manual";
+  private mode: EditMode = "auto";
   /** key 为 editId（缺省回退 absPath）。Map 保留插入顺序 = 改动先后顺序 */
   private pending = new Map<string, FileEdit>();
   /** 已接受、可撤销的改动（key 为 editId） */

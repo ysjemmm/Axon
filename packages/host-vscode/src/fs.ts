@@ -57,9 +57,16 @@ export class VSCodeFileSystem implements HostFileSystem {
   async stat(absPath: string): Promise<StatInfo | null> {
     try {
       const st = await vscode.workspace.fs.stat(this.uri(absPath));
+      const isFile = (st.type & vscode.FileType.File) !== 0;
       return {
-        isFile: (st.type & vscode.FileType.File) !== 0,
+        isFile,
         isDir: (st.type & vscode.FileType.Directory) !== 0,
+        // mtime / size 在 vscode.d.ts 里声明为必填 number，但那是「实现应当提供」而非
+        // 「一定拿得到真实值」：虚拟文件系统（Remote-SSH / Dev Container / github.dev /
+        // 扩展注册的内存 FS）完全可能返回 0 或 NaN。这里做一次有限性校验，拿不到就给
+        // undefined —— 消费方靠「undefined = 不知道」才能避免把假值当成「文件没变」。
+        mtimeMs: Number.isFinite(st.mtime) ? st.mtime : undefined,
+        size: isFile && Number.isFinite(st.size) ? st.size : undefined,
       };
     } catch {
       return null;

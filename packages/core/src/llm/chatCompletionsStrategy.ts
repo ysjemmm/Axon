@@ -18,7 +18,7 @@ export class ChatCompletionsStrategy implements LLMStrategy {
   constructor(private client: OpenAI) {}
 
   async runTurn(params: RunTurnParams): Promise<LLMTurnResult> {
-    const { model, messages, tools, signal, callbacks, temperature, maxOutputTokens, think, modelSupportsThinking } = params;
+    const { model, messages, tools, signal, callbacks, temperature, maxOutputTokens, think, effort, modelSupportsThinking } = params;
     const modelSupportsCacheControl = params.modelSupportsCacheControl;
     const modelSupportsVision = params.modelSupportsVision;
 
@@ -90,7 +90,21 @@ export class ChatCompletionsStrategy implements LLMStrategy {
     // （deepseek / glm 等）收到后可能断流或返回格式异常的 chunk，故仅对原生 OpenAI（GPT 系）
     // 及确认兼容的 provider 下发。
     const isNativeOpenAI = /^(gpt|o1|o3|o4)/i.test(model);
-    const enableReasoningEffort = canThink && (isQwen37Plus || isDeepSeek4Plus || isGLM52Plus);
+    // 「会下发 reasoning_effort 的厂商族」单列：开启与关闭两个分支共用，
+    // 免得两处各写一遍正则、日后改一处漏一处。
+    const effortFamilies = isQwen37Plus || isDeepSeek4Plus || isGLM52Plus;
+    // Provider 显式配置并由用户选中的 effort 优先于模型名启发式：
+    // 自定义中转站的模型 id 可以完全不带厂商名，靠正则识别必然漏掉。
+    const enableReasoningEffort = canThink && (!!effort || effortFamilies);
+    // ── 显式关闭思考 ──
+    // 「不发参数」不等于「让它别想」。实测 deepseek-v4-flash @ 企业网关（A/B 对照）：
+    // 不带任何思考参数时端点仍返回 reasoning_content（172 字）且 usage.reasoning_tokens=51
+    // —— 它照旧在想、照旧计费，只是我们既看不到（不转发给前端）又用不上（不入历史、不回传），
+    // 于是每轮推理链从零重建，表现为反复重述同一结论、重搜同一个东西。
+    // 加上 reasoning_effort:"none" 后 reasoning_content 消失（thinking:{type:"disabled"} 亦有效）。
+    // 参数名刻意与「开启」分支对称复用：为同一厂商引入第二个参数名，正是本文件反复
+    // 强调过的风险（网关不认的参数可能直接断流）。
+    const thinkingDisabled = think === false && supportsThinking(model, modelSupportsThinking);
     const stream: any = await this.client.chat.completions.create(
       {
         model,
@@ -114,7 +128,18 @@ export class ChatCompletionsStrategy implements LLMStrategy {
         ...(isGLM5Thinking ? { thinking: { type: "enabled" } } : {}),
         // 部分 thinking 模型支持 reasoning_effort，用于控制隐藏思考强度。
         // 默认给 high，避免推理模型在简单任务上过度思考；未确认支持的模型绝不猜传。
-        ...(enableReasoningEffort ? { reasoning_effort: "high" } : {}),
+        // Provider 配置的实际值原样下发；未选择时保留旧默认 high。
+        // OpenAI SDK 把值限制成官方联合类型；自定义中转站可能接受其它字符串，
+        // Provider 配置就是用户对该端点的明确声明，因此这里只在 SDK 类型层放宽，运行时原样透传。
+        ...(enableReasoningEffort ? { reasoning_effort: (effort || "high") as any } : {}),
+        // 显式关闭思考（见 thinkingDisabled）。只在「开启时确实会下发参数」的分支上对称地关，
+        // 免得给本就不支持思考的模型塞无关参数。
+        ...(thinkingDisabled && isGLM ? { thinking: { type: "disabled" } } : {}),
+        // "none" 需窄化断言：SDK（openai ^4.80）的 ReasoningEffort 只收录了 low/medium/high，
+        // 尚未跟上 API。实测该端点接受 "none" 且能真正停掉思考（不带参数时它照旧在想并计费）。
+        // 刻意继续用 reasoning_effort 而非改成 thinking —— 与上面的「开启」分支保持同一参数名，
+        // 不为同一厂商引入第二种写法。
+        ...(thinkingDisabled && effortFamilies ? { reasoning_effort: "none" as unknown as "high" } : {}),
         stream: true,
         // 让流式响应在末尾附带真实 token 用量（精确值，替代上层字符数估算）。
         // 仅对 OpenAI 原生模型下发；中转网关模型（glm/deepseek）不兼容该参数，会断流。
@@ -124,6 +149,9 @@ export class ChatCompletionsStrategy implements LLMStrategy {
     );
 
     let content = "";
+    // reasoning_content 不用于前端正文展示，但带 tool_calls 时必须原样写回下一轮 assistant 消息。
+    // 只在模型实际返回时占用内存；think=false 且端点遵守关闭参数时保持空串。
+    let reasoningContent = "";
     let finishReason: string | null = null;
     let usage: LLMTurnResult["usage"];
     // 按 index 累积工具调用（chat 协议下工具参数分多个 chunk 流式到达）
@@ -173,7 +201,10 @@ export class ChatCompletionsStrategy implements LLMStrategy {
 
       // 思考过程
       const reasoning = (delta as any).reasoning_content || (delta as any).reasoning;
-      if (reasoning) callbacks.onReasoningDelta(reasoning);
+      if (reasoning) {
+        reasoningContent += reasoning;
+        callbacks.onReasoningDelta(reasoning);
+      }
 
       // 正文
       if (delta.content) {
@@ -255,7 +286,15 @@ export class ChatCompletionsStrategy implements LLMStrategy {
     // 归一化结束原因（并存字段）：有工具调用时优先按 tool_calls 语义，否则按原始 finishReason 归一化。
     const normalizedFinishReason = normalizeFinishReason(toolCalls.length > 0 ? "tool_calls" : finishReason);
 
-    return { content, toolCalls, finishReason, normalizedFinishReason, dsmlDetected, usage };
+    return {
+      content,
+      reasoningContent: reasoningContent || undefined,
+      toolCalls,
+      finishReason,
+      normalizedFinishReason,
+      dsmlDetected,
+      usage,
+    };
   }
 }
 

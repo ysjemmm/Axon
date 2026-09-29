@@ -10,6 +10,13 @@
 import { useRef, useEffect, useLayoutEffect, useState, useCallback, memo } from "react";
 import mermaid from "mermaid";
 import { renderMarkdown } from "@/lib/markdown";
+import { fitSvgToContainer, readSvgIntrinsicSize } from "@/lib/diagramFit";
+import {
+  attachHtmlPreviewAutoHeight,
+  HTML_PREVIEW_MIN_HEIGHT,
+  HTML_PREVIEW_PRELUDE,
+  HTML_PREVIEW_SANDBOX,
+} from "@/lib/htmlPreviewResize";
 import { useThemeVersion } from "@/lib/theme";
 import { beginSpan, endSpan, recordIncident } from "@/lib/diagnostics";
 
@@ -106,6 +113,47 @@ function buildPathLinkHTML(pathText: string): string {
   return `<code class="axon-path-link" data-path="${encoded}" title="${escapedTitle}"><svg class="axon-path-icon" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="5" fill="${color}"/><text x="12" y="12" text-anchor="middle" dominant-baseline="central" font-size="${fontSize}" font-weight="700" fill="#fff" font-family="ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace">${label}</text></svg><span class="axon-path-name">${fileName}</span></code>`;
 }
 
+/**
+ * 本机已知的工作区根集合（多面板取并集）。
+ *
+ * 用途：路径徽章只对"落在某个工作区根之下"的路径渲染——只有这类路径才可能真的被打开；
+ * 容器 / 远端路径（如 `/app/.cache/git_repos/...`）不属于任何根，渲染成可点徽章纯属误导。
+ *
+ * ⚠️ 刻意用模块级集合，而不是 props / context：
+ * computeHtml 是空依赖（useCallback [..., ]）的稳定回调，被 useState 初始化器与 32ms
+ * 节流重解析复用。一旦把根列表接进它的依赖，列表引用一变就会换掉它的身份、触发整条消息的
+ * 全量重解析（实测单次正则扫描 0.316ms 起，流式期间约每 32ms 一次）。模块级集合的读写
+ * 不产生任何 React 依赖，额外重解析为 0 次；新增的前缀比较实测仅 0.0139ms/次（12 候选 × 17 根）。
+ */
+const knownWorkspaceRoots = new Set<string>();
+
+/** 路径归一化：Windows 大小写不敏感，且 `/` 与 `\` 会混用 */
+function normalizeForCompare(p: string): string {
+  return p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+/**
+ * 登记一组工作区根（并集累加）。由会话侧在拿到工作区列表时调用。
+ * 未登记任何根时判定放行（fail-open）——避免登记链路没接上时把正常徽章全挡掉。
+ */
+export function registerPathBadgeRoots(roots: string[]): void {
+  for (const r of roots) {
+    if (!r) continue;
+    const normalized = normalizeForCompare(r);
+    if (normalized) knownWorkspaceRoots.add(normalized);
+  }
+}
+
+/** 该路径是否可能存在于本机（落在任一已知工作区根之下） */
+function isUnderKnownRoot(pathText: string): boolean {
+  if (knownWorkspaceRoots.size === 0) return true;
+  const p = normalizeForCompare(pathText);
+  for (const root of knownWorkspaceRoots) {
+    if (p === root || p.startsWith(root + "/")) return true;
+  }
+  return false;
+}
+
 /** 对 <code>...</code> 内容做路径链接化：仅当整段内容【就是】一个路径时才渲染为图标+名称 */
 function linkifyPaths(html: string): string {
   return html.replace(/<code>([^<]+)<\/code>/g, (match, inner: string) => {
@@ -114,6 +162,14 @@ function linkifyPaths(html: string): string {
     // 必须包含路径分隔符（/ 或 \），否则单纯的文件名（如 `config`）不视为路径，避免误伤普通行内代码
     if (!/[\\/]/.test(pathText)) return match;
     if (!PATH_PATTERN.test(pathText)) return match;
+    // 末段是省略号占位（`/app/.cache/git_repos/...`）→ 这是"后面还有内容"的截断写法，不是真实路径。
+    // PATH_PATTERN 会放行它（`.` 与 `-` 都在字符集里），于是渲染出一个名字叫 "..." 的假文件徽章。
+    // 这类路径通常来自容器/远端日志，本地既不可打开也不存在，正是本函数最该拦掉的"误导性徽章"。
+    const lastName = pathText.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "";
+    if (lastName === "" || /^\.{2,}$/.test(lastName) || lastName === "…") return match;
+    // 必须落在已知工作区根之下：容器/远端路径（如 `/app/.cache/git_repos/x.ts`）形状像绝对路径、
+    // 却不可能在本机打开，渲染成可点徽章只会让用户白点一次。
+    if (!isUnderKnownRoot(pathText)) return match;
     return buildPathLinkHTML(pathText);
   });
 }
@@ -150,6 +206,46 @@ function writeHydrateCache(key: string, liveEl: HTMLElement): void {
     if (oldest === undefined) break;
     enhancedRenderCache.delete(oldest);
   }
+}
+
+// ── 增强块 hydrate 后的【整体高度】缓存（与 DOM 快照分开） ──
+//
+// 为什么需要它：DOM 快照缓存是 LRU（MAX_HYDRATE_CACHE 条），长会话里会被淘汰。
+// 一旦某个含图的块被淘汰，消息再次滚进视口时只能走完整的 mermaid 渲染（异步，几百毫秒）。
+// 而虚拟列表在消息挂载那一刻就按"源码块"的高度（几十 px）把它量好、排好位；
+// 等图渲染完换装，这一项会瞬间长高上千 px —— 虚拟列表据此校正偏移，把视口整体挪走
+// （实测单次最多 +1544px）。用户看到的正是"滚动条跳到别的位置，画面与上一秒不一样"。
+//
+// 有了实测高度，这条路径就不再产生位移：块一挂载就先把这个高度占住（min-height），
+// 后续图换装时高度不变，虚拟列表无需校正。
+//
+// key 刻意【不含 themeTick】：高度由图的固有尺寸决定，与主题几乎无关；
+// 去掉 themeTick 后，主题切换（DOM 快照会因 key 变化而整体未命中）也仍能保留高度。
+const hydrateHeightCache = new Map<string, number>();
+const MAX_HYDRATE_HEIGHT_CACHE = 1000;
+
+function readHydrateHeight(key: string): number | undefined {
+  const h = hydrateHeightCache.get(key);
+  if (h !== undefined) {
+    hydrateHeightCache.delete(key);
+    hydrateHeightCache.set(key, h);
+  }
+  return h;
+}
+
+function writeHydrateHeight(key: string, height: number): void {
+  if (!Number.isFinite(height) || height <= 0) return;
+  hydrateHeightCache.set(key, Math.round(height));
+  while (hydrateHeightCache.size > MAX_HYDRATE_HEIGHT_CACHE) {
+    const oldest = hydrateHeightCache.keys().next().value;
+    if (oldest === undefined) break;
+    hydrateHeightCache.delete(oldest);
+  }
+}
+
+/** 高度缓存的 key：只由语言 + 源码决定（见上方说明，刻意不含 themeTick） */
+function hydrateHeightKey(lang: string, codeContent: string): string {
+  return `${lang}::${codeContent}`;
 }
 
 // ── 增强块悬浮菜单（事件委托版） ──
@@ -314,6 +410,231 @@ function htmlToElement(html: string): HTMLElement {
   return template.content.firstElementChild as HTMLElement;
 }
 
+/**
+ * 淡入动画时长。与 index.css 的 `.axon-chunk` 保持一致（那里是兜底值，这里以内联样式为准）。
+ * 取打字机批节奏 PACE_BEAT_MS(80ms) 的 3 倍：前一批还没淡完、后一批已经开始，连续覆盖。
+ * ⚠️ 与 useTypewriter 的 PACE_BEAT_MS 是一对，调一个要跟着调另一个。
+ */
+const CHUNK_FADE_MS = 240;
+
+/** 解开一个淡入包裹：把文字放回原位、合并相邻文本节点 */
+function unwrapChunk(s: Element): void {
+  const parent = s.parentNode;
+  if (!parent) return;
+  while (s.firstChild) parent.insertBefore(s.firstChild, s);
+  parent.removeChild(s);
+  parent.normalize();
+}
+
+/**
+ * 解开淡入包裹。
+ *
+ * @param onlyFinished 为 true 时只解开**动画已播完**的（流式期间用）；
+ *   为 false 时全部解开（终态用：此后内容不再追加，残留的 span 会让下一次
+ *   patchChildren 的前缀比对在它所在的节点提前失配，把已 hydrate 的图一起刷回源码块）。
+ *
+ * ── 为什么流式期间不能"每次提交都全部解开" ──
+ * 这正是"淡入效果一直没有"的原因。渲染层每 32ms 提交一次，旧实现每次提交开头都把
+ * 所有 span 解开，再给新增文字包一个新的——于是每个 span 只活一个提交周期。
+ * 验证脚本（逐字照搬这三段逻辑，按真实节奏模拟 1.6 秒流式）实测：
+ *   创建 19 个 span，平均存活 32ms，活满 240ms 淡入时长的 0 个。
+ * 动画刚播了八分之一，span 被拆掉、文字直接 opacity:1 —— 肉眼看不出任何淡入。
+ */
+function unwrapChunks(el: HTMLElement, onlyFinished: boolean): void {
+  // 整块淡入（axon-chunk-block）：播完就摘掉 class 与内联动画属性，让块回到"原样"。
+  // 必须摘干净——前缀比对按 outerHTML 判等，残留的 class / style 会让已稳定的块被当成"变了"而整块重建。
+  const now0 = performance.now();
+  el.querySelectorAll<HTMLElement>(".axon-chunk-block").forEach((b) => {
+    const born = Number(b.dataset.chunkBorn);
+    if (onlyFinished && Number.isFinite(born) && now0 - born < CHUNK_FADE_MS) return;
+    b.classList.remove("axon-chunk-block");
+    if (!b.className) b.removeAttribute("class");
+    b.style.removeProperty("animation-duration");
+    if (!b.getAttribute("style")) b.removeAttribute("style");
+    delete b.dataset.chunkBorn;
+  });
+  const spans = el.querySelectorAll<HTMLElement>("span.axon-chunk");
+  if (spans.length === 0) return;
+  const now = performance.now();
+  spans.forEach((s) => {
+    if (onlyFinished) {
+      const born = Number(s.dataset.born);
+      if (Number.isFinite(born) && now - born < CHUNK_FADE_MS) return;
+    }
+    unwrapChunk(s);
+  });
+}
+
+/** 节点的纯文本，把淡入 span 视为透明（span 只是动画外壳，不代表内容变化） */
+function sameIgnoringChunks(a: Node, b: Node): boolean {
+  if (a.nodeType !== b.nodeType) return false;
+  if (!(a instanceof HTMLElement && b instanceof HTMLElement)) return a.nodeValue === b.nodeValue;
+  const isFadingBlock = a.classList.contains("axon-chunk-block");
+  if (!isFadingBlock && !a.querySelector("span.axon-chunk")) return a.outerHTML === b.outerHTML;
+  // 旧节点里有正在播的淡入（行内 span 或整块动画）：克隆后还原再比，原节点不动
+  const clone = a.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll("span.axon-chunk").forEach(unwrapChunk);
+  if (isFadingBlock) {
+    clone.classList.remove("axon-chunk-block");
+    if (!clone.className) clone.removeAttribute("class");
+    clone.style.removeProperty("animation-duration");
+    if (!clone.getAttribute("style")) clone.removeAttribute("style");
+    delete clone.dataset.chunkBorn;
+  }
+  clone.normalize();
+  return clone.outerHTML === b.outerHTML;
+}
+
+/**
+ * 旧节点 a 与新节点 b 是否"只是末尾多了一段纯文本"——是的话返回多出来的文本，否则 null。
+ *
+ * 这是流式最常见的形态（最后一个段落在变长）。命中时只需往 a 里追加一个文本节点，
+ * 不用整体替换 —— 于是 a 里那个正在播淡入的 span 能活下来，动画播得完。
+ *
+ * 判据刻意收得很窄：去掉 span 后 a 的 outerHTML，要等于 b 的 outerHTML 去掉尾部那段文本。
+ * 也就是说 b 只能比 a 多出**末尾的纯文本**，任何标签变化（加粗闭合、新开行内代码、
+ * 链接成形……）都不命中，回退到整体替换，保证正确性优先。
+ */
+function appendedTail(a: Node, b: Node): string | null {
+  if (!(a instanceof HTMLElement && b instanceof HTMLElement) || a.tagName !== b.tagName) return null;
+  const oldText = a.textContent ?? "";
+  const newText = b.textContent ?? "";
+  if (newText.length <= oldText.length || !newText.startsWith(oldText)) return null;
+  // b 的最后一个节点必须是文本，且去掉多出来的尾巴后，结构与 a（解包后）逐字节相同
+  const lastB = b.lastChild;
+  if (!lastB || lastB.nodeType !== Node.TEXT_NODE) return null;
+  const tail = newText.slice(oldText.length);
+  const lastBText = lastB.nodeValue ?? "";
+  if (!lastBText.endsWith(tail)) return null;
+  const bTrimmed = b.cloneNode(true) as HTMLElement;
+  const trimmedLast = bTrimmed.lastChild as Text;
+  trimmedLast.nodeValue = lastBText.slice(0, lastBText.length - tail.length);
+  if (!trimmedLast.nodeValue) bTrimmed.removeChild(trimmedLast);
+  const aClone = a.cloneNode(true) as HTMLElement;
+  aClone.querySelectorAll("span.axon-chunk").forEach(unwrapChunk);
+  if (aClone.classList.contains("axon-chunk-block")) {
+    aClone.classList.remove("axon-chunk-block");
+    if (!aClone.className) aClone.removeAttribute("class");
+    aClone.style.removeProperty("animation-duration");
+    if (!aClone.getAttribute("style")) aClone.removeAttribute("style");
+    delete aClone.dataset.chunkBorn;
+  }
+  aClone.normalize();
+  bTrimmed.normalize();
+  return aClone.outerHTML === bTrimmed.outerHTML ? tail : null;
+}
+
+/**
+ * 把 `html` 增量应用到 `el` 的子节点上，**只改真正变化的部分**。
+ *
+ * ── 为什么不能直接 `el.innerHTML = html` ──
+ * 那一行的语义是「清空容器 → 重新解析整段 → 重建所有子节点」，即使 99% 的内容一个字节都没变。
+ * 流式期间每 PARSE_THROTTLE_MS(32ms) 就跑一次，于是每 32ms 整棵子树被推平重建一次。
+ * MutationObserver 实测（流式输出中，只统计 ≥200 字或 ≥3 子节点的大块）：
+ *   移除 5/新增 5、移除 6/新增 6、移除 6/新增 6 …… 每 30~70ms 一批，增删数量相等。
+ * 三个后果：
+ *   · 重建期间浏览器可能渲染到空容器 → 肉眼「白屏闪一下」（取消时整段一次性灌入，最明显）
+ *   · hydrateMermaid / hydrateSvg 用 pre.replaceWith 做的 DOM 手术产物被丢弃 → 图退回源码
+ *   · 每批重建后紧跟贴底跟随读布局 → [Violation] Forced reflow
+ * 组件里的 appliedHtmlRef 只能挡住「内容完全没变」的提交；流式期间内容每次都多几个字，
+ * 那道去重永远命中不了，所以必须在这一层做增量。
+ *
+ * ── 为什么一个简单的前缀比对就够 ──
+ * 流式追加的形态很固定：**末尾节点在变长，它前面的兄弟节点逐字节不变**。
+ * 因此按顺序逐个比对 outerHTML，跳过完全相同的前缀节点（这部分 DOM 原地保留、连属性都不碰），
+ * 只对第一个不同的节点起做替换/新增，尾部多余的删掉。
+ * 典型情况下只有最后 1~2 个节点被替换，规模与"整段长度"无关。
+ *
+ * 刻意不引入 morphdom：这里的变更形态单一，而它与 hydrate 产物（React 不知情的 DOM 手术）
+ * 的交互需要额外配置钩子去保护，成本高于收益。
+ *
+ * ⚠️ 不做跨节点的移动/key 匹配：markdown 全量重解析的输出是稳定有序的，
+ * 中间插入节点的情形（如新开一个段落）会让该位置之后的节点被重建一次，这是可接受的
+ * ——它只发生在段落边界，而不是每 32ms 都发生。
+ */
+/**
+ * @returns 本次真正"新出现"的节点，调用方给它们挂淡入：
+ *   · appended —— 末尾块走了原地追加时，新追加的那个文本节点
+ *   · inserted —— 从差异点起被替换 / 新增进来的块级节点（段落、标题、列表、表格……）
+ *
+ * ⚠️ 必须把 inserted 全部交出去，而不是只让调用方"找最后一个文本节点包起来"。
+ * 打字机收尾 / 排空时一批能倒出上百字，常常一口气新开好几个块（标题 + 段落 + 表格）：
+ * 只包最后一段的话，同一批里其余新块全部硬出现——肉眼就是"前面还在淡入，后面唰地整段出来"。
+ */
+/**
+ * 一个被替换 / 新增进来的节点。
+ * prevText：它替换掉的旧节点的文字（新增的为 null）。据此区分两种完全不同的情况：
+ *   · 真新块（prevText 为 null，或文字不是在旧文字后面接着长）→ 整块淡入
+ *   · 原地变长的块（新文字以旧文字开头）→ **绝不能整块淡入**，只淡入末尾新增的那段
+ * 后者最典型的是正在流式输出的代码块：它每一批都被整块替换（高亮后的 HTML 不是简单的
+ * 尾部追加，走不了 appendedTail），若当成新块，整个代码块每 30~80ms 就从透明重淡一次——
+ * 就是"中间内容一直闪、颜色发白"。
+ */
+interface InsertedNode {
+  node: Node;
+  prevText: string | null;
+}
+
+function patchChildren(el: HTMLElement, html: string): { appended: Text | null; inserted: InsertedNode[] } {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  const next = Array.from(tpl.content.childNodes);
+  const prev = Array.from(el.childNodes);
+
+  // 找到第一个不同的位置：之前的节点全部原地复用
+  let i = 0;
+  while (i < prev.length && i < next.length) {
+    // 元素比 outerHTML（淡入 span 视为透明），文本/注释比 nodeValue —— 都能逐字节判等
+    if (!sameIgnoringChunks(prev[i], next[i])) break;
+    i++;
+  }
+
+  // 差异点是正在变长的那个块，且只是末尾多了文本 → 原地追加。
+  // ⚠️ 它通常**不是**最后一个节点：markdown-it 每个块后面都跟一个 "\n" 文本节点，
+  // 所以要求的是"差异点之后新旧两边剩下的节点数相同、且逐个相等"，而不是 i 恰好在末尾。
+  const restPrev = prev.length - 1 - i;
+  if (i < prev.length && i < next.length && restPrev === next.length - 1 - i) {
+    let restSame = true;
+    for (let k = 1; k <= restPrev; k++) {
+      if (!sameIgnoringChunks(prev[i + k], next[i + k])) { restSame = false; break; }
+    }
+    const tail = restSame ? appendedTail(prev[i], next[i]) : null;
+    if (tail !== null) {
+      const node = document.createTextNode(tail);
+      prev[i].appendChild(node);
+      return { appended: node, inserted: [] };
+    }
+  }
+
+  const inserted: InsertedNode[] = [];
+  // 从第一个差异点起：替换重叠部分
+  while (i < prev.length && i < next.length) {
+    // 被替换进来的节点里，和旧节点文字完全相同的不算"新出现"（只是标签结构变了，
+    // 例如加粗刚闭合），给它挂淡入会让已经显示过的字重新闪一次
+    const oldText = prev[i].textContent ?? "";
+    if (oldText !== (next[i].textContent ?? "")) {
+      // 同一位置、同一标签 = 同一个块在变长（prevText 非 null），不是新块。
+      // ⚠️ 只看位置与标签，不看文字前缀：代码块的文字是"语言标签 + 代码"，高亮还会插换行，
+      // 新文字常常不以旧文字开头——早先靠 startsWith 判断，流式代码块每批都被误判成新块、
+      // 整块从 0 重淡（实测最低透明度 0.08），就是"中间内容一直闪、颜色发白"。
+      // 标签不同（例如段落变成了标题）才算新块。
+      const sameTag = prev[i] instanceof HTMLElement && next[i] instanceof HTMLElement
+        && (prev[i] as HTMLElement).tagName === (next[i] as HTMLElement).tagName;
+      inserted.push({ node: next[i], prevText: sameTag ? oldText : null });
+    }
+    el.replaceChild(next[i], prev[i]);
+    i++;
+  }
+  // next 更长 → 追加剩余的新节点
+  for (let j = i; j < next.length; j++) {
+    el.appendChild(next[j]);
+    inserted.push({ node: next[j], prevText: null });
+  }
+  // prev 更长 → 删掉多余的旧节点（从后往前，避免索引位移）
+  for (let j = prev.length - 1; j >= i; j--) el.removeChild(prev[j]);
+  return { appended: null, inserted };
+}
+
 if (typeof document !== "undefined") {
   document.addEventListener("click", (e) => {
     if (!(e.target as HTMLElement).closest?.("[data-axon-menu]")) closeAllEnhancedMenus();
@@ -327,11 +648,36 @@ if (typeof document !== "undefined") {
  */
 const SLOW_COMMIT_MS = 80;
 
-interface MarkdownRendererProps { content: string; }
+interface MarkdownRendererProps {
+  content: string;
+  /**
+   * 本条内容是否仍在流式生成中。
+   *
+   * 为 true 时【完全不做增强渲染 hydration】：svg / mermaid / html 的可视化预览只在内容到达
+   * 终态（正常结束 / 取消 / 出错）后才渲染。原因——流式期间本渲染器每 32ms 就把整条消息重解析
+   * 一次，而 hydration 会把 <pre> 就地替换成预览节点；一旦中途 hydrate 出"半截内容"的预览，
+   * 下一次重解析就会把它连同 DOM 子树一起换掉、再重新 hydrate（并重放一次淡入动画），
+   * 表现为边输出边闪烁。终态之后内容不再变化，是唯一稳定的渲染时机。
+   */
+  streaming?: boolean;
+}
 
 
-export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: MarkdownRendererProps) {
+export const MarkdownRenderer = memo(function MarkdownRenderer({ content, streaming = false }: MarkdownRendererProps) {
   const ref = useRef<HTMLDivElement>(null);
+  /**
+   * 上一次真正写进 DOM 的 html 串。
+   *
+   * ⚠️ 这里刻意不用 `dangerouslySetInnerHTML`：React 19 在**每次 commitUpdate** 都会重放它，
+   * _即使 `__html` 逐字节没变_。此前逐帧实测：83 次写入里 **69 次与上一次完全相同**。
+   * 后果是整个内层 DOM 被推平重建 —— 其中包含 hydrateMermaid / hydrateSvg 用 `pre.replaceWith`
+   * 做的 DOM 手术产物 —— 于是回复完成 / 取消那一刻整块重画一下，
+   * 而且**与回复内容无关**（普通文字回复同样发生）。
+   *
+   * 改成自己写 innerHTML 并用这个 ref 去重：内容没变就一个字节都不碰，
+   * 已 hydrate 的图能在后续多次重渲染中存活。
+   */
+  const appliedHtmlRef = useRef<string | null>(null);
   const lastContentRef = useRef<string>("");
   // setTimeout 句柄（早先叫 rafRef，但里面装的从来不是 requestAnimationFrame 的返回值）
   const parseTimerRef = useRef<number | null>(null);
@@ -440,18 +786,109 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: Mark
     if (copyBtn) { e.preventDefault(); const codeBlock = copyBtn.closest(".axon-codeblock")?.querySelector("code"); if (codeBlock) { const text = codeBlock.textContent || ""; const doFeedback = () => { const label = copyBtn.querySelector("span"); if (label) { label.textContent = "已复制"; setTimeout(() => { label.textContent = "复制"; }, 1500); } }; if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(doFeedback).catch(() => { fallbackCopy(text); doFeedback(); }); } else { fallbackCopy(text); doFeedback(); } } return; }
   }, []);
 
+  // ── 写入 html ──
+  // 必须排在下面 hydration 之前：hydration 要对"刚写进去"的 DOM 做手术，
+  // 而 layout effect 是按声明顺序执行的。
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // 只解开播完的：前缀比对已把 span 视为透明，残留的 span 不会再让 patch 失配，
+    // 所以终态也不必"一次性全解开"——那样会把最后一批正在播的淡入掐断。
+    // 播不完也没有后续提交的那几个，由下面的延时 effect 收尾。
+    unwrapChunks(el, true);
+    // 内容没变、且 DOM 里已经有东西 → 一个字节都不碰（这正是本改动的全部意义）
+    if (appliedHtmlRef.current === html && el.firstChild) return;
+    const prevTextLen = el.textContent?.length ?? 0;
+    appliedHtmlRef.current = html;
+    const { appended, inserted } = patchChildren(el, html);
+    // ── 流式吐字：只给"这一批新到的字"挂淡入 ──
+    // 增量取【渲染后纯文本】的长度差，而不是 markdown 源文的长度差：
+    // 源文里的 **、#、- 等语法在渲染后不占文本，用源文长度会错位。
+    //
+    // ⚠️ 判据是"本次有没有新增文本"，而**不是** streaming 标志。
+    // 曾经写成 `if (streaming)`，于是收尾那一帧（stream_end 把 streaming 置为 false、
+    // 同时打字机 ending 模式正把最后一批字倒出来）走不进这里：最后一批字直接硬出现，
+    // 而且上面刚把前一批的 .axon-chunk 包裹解开 —— 正文最后一下永远是"唰"的，没有过渡。
+    // 改用 delta > 0 后，收尾批与流式批走同一条淡入路径；终态重渲染（delta === 0）天然不受影响。
+    {
+      const delta = (el.textContent?.length ?? 0) - prevTextLen;
+      // prevTextLen === 0 说明是整段首次写入（切会话/历史消息挂载/Raw 切换），
+      // 不是"逐批吐字"，包住整段会让历史消息每次挂载都整体闪一下。
+      if (delta > 0 && prevTextLen > 0) {
+        const born = String(performance.now());
+        // ① 原地追加：只包本次新追加的那段文字（前面的已有自己的 span 在播，不能重包让它重播）。
+        //    代码块里的文本不能包 span：会破坏 pre 的空白与换行语义。
+        if (appended && appended.length > 0 && !appended.parentElement?.closest("pre, code")) {
+          const span = document.createElement("span");
+          span.className = "axon-chunk";
+          span.style.animationDuration = `${CHUNK_FADE_MS}ms`;
+          span.dataset.born = born;
+          appended.parentNode?.replaceChild(span, appended);
+          span.appendChild(appended);
+        }
+        // ② 被替换 / 新增进来的块，分两种处理（理由见 InsertedNode）。
+        //    块之间的 "\n" 文本节点看不见，跳过。
+        for (const { node: n, prevText } of inserted) {
+          if (!(n instanceof HTMLElement)) continue;
+          const text = n.textContent ?? "";
+          if (prevText === null) {
+            // 真新块：整块淡入（给元素本身挂动画类，不拆它里面的文字）。
+            // 要覆盖到本批**所有**新块——只挑最后一个包，其余新块就会硬出现。
+            n.classList.add("axon-chunk-block");
+            n.style.animationDuration = `${CHUNK_FADE_MS}ms`;
+            n.dataset.chunkBorn = born;
+            continue;
+          }
+          // 原地变长的块：只淡入末尾新增的那段文字（文字变短 / 改写则什么都不挂）。
+          // 代码块里的文本不能包 span（会破坏 pre 的空白与换行语义），直接跳过——代码逐字出现本就足够清楚。
+          const addLen = text.length - prevText.length;
+          if (addLen <= 0) continue;
+          if (n.matches("pre, code") || n.querySelector("pre, code")) continue;
+          let last: Text | null = null;
+          const walker = document.createTreeWalker(n, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const t = walker.currentNode as Text;
+            if (t.data.trim()) last = t;
+          }
+          if (!last) continue;
+          const cut = Math.min(addLen, last.length);
+          const tail = cut >= last.length ? last : last.splitText(last.length - cut);
+          const span = document.createElement("span");
+          span.className = "axon-chunk";
+          span.style.animationDuration = `${CHUNK_FADE_MS}ms`;
+          span.dataset.born = born;
+          tail.parentNode?.replaceChild(span, tail);
+          span.appendChild(tail);
+        }
+      }
+    }
+  }, [html, streaming]);
+
+  // 流式结束后内容不再追加，但最后几批 span 可能还没播完、也没有下一次提交来解开它们。
+  // 等最后一批播完再统一解开（解开要写 DOM，但此时没有 React 提交在跑，不会与 patch 冲突）。
+  useEffect(() => {
+    if (streaming) return;
+    const el = ref.current;
+    if (!el || !el.querySelector("span.axon-chunk, .axon-chunk-block")) return;
+    const t = window.setTimeout(() => unwrapChunks(el, false), CHUNK_FADE_MS + 20);
+    return () => window.clearTimeout(t);
+  }, [streaming, html]);
+
   // ── 增强渲染 hydration ──
   // useLayoutEffect: 缓存命中恢复 + SVG/HTML 同步首次渲染（paint 前完成，无跳动）
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
+    // 流式期间不 hydrate（含缓存恢复）：只做终态渲染，避免边输出边闪烁。
+    if (streaming) return;
     el.querySelectorAll<HTMLElement>(".axon-codeblock[data-enhanced-lang]").forEach((block) => {
-      if (block.dataset.hydrated === "1") return;
+      if (block.dataset.hydrated === "1" || block.dataset.hydrating === "1") return;
       const lang = block.dataset.enhancedLang || "";
       const codeEl = block.querySelector("code");
       const codeContent = (codeEl?.textContent || "").trim();
       if (!codeContent) return;
       const cacheKey = `${themeTick}::${lang}::${codeContent}`;
+      const heightKey = hydrateHeightKey(lang, codeContent);
       const cached = readHydrateCache(cacheKey);
       if (cached) {
         const clone = cached.cloneNode(true) as HTMLElement;
@@ -460,40 +897,68 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: Mark
         block.dataset.hydrated = "1";
         block.style.background = "transparent";
         block.style.border = "none";
+        // 顺手补记高度：只在该 key 还没有记录时量一次（避免每次提交都强制同步布局）
+        if (readHydrateHeight(heightKey) === undefined) writeHydrateHeight(heightKey, block.offsetHeight);
         return;
+      }
+      // 已知实测高度 → 先把高度占住，等图异步换装时这一项不会再长高，虚拟列表无需校正偏移。
+      const knownHeight = readHydrateHeight(heightKey);
+      if (knownHeight !== undefined && !block.style.minHeight) {
+        block.style.minHeight = `${knownHeight}px`;
       }
       // 首次 hydrate 延迟到防抖 useEffect，避免流式输出时反复 hydrate 闪烁
     });
-  }, [html, themeTick]);
+    // ⚠️ 刻意【不写依赖数组】：本效果必须每次提交都跑一遍。
+    //
+    // hydrate 出来的图是"DOM 手术"的产物（pre.replaceWith(wrapper)），React 对此一无所知。
+    // 而 React 19 在每次 commitUpdate 时都会重新执行 dangerouslySetInnerHTML —— 实测
+    // （真实组件 + 真实 CSS，运行时给 innerHTML setter 打点）83 次写入里有 69 次写的是
+    // 与上一次逐字节相同的字符串，调用栈一律是 updateProperties → setProp → setInnerHTML。
+    // 也就是说：组件只要重渲染一次，整棵内层 DOM 就被推平重建，已 hydrate 的图退回源码代码块。
+    //
+    // 这个"推平"本身难以避免（图必须在 React 之外渲染），窗口只能靠这里补：
+    // 缓存里有成品就当场换回去。如果本效果仍按 [html, themeTick, streaming] 触发，
+    // 那么"内容变了但 html 还没跟上"的那一次重渲染（节流窗口内）会推平 DOM 而本效果不重跑，
+    // 图就一直停在源码代码块上，直到下一次 html 变化才被换回来——肉眼就是整块刷新一下。
+    // 每次提交都跑，推平与还原落在同一次提交里，浏览器只会画最终态，中间态不可见。
+    // 代价可忽略：流式期间第一行的 early return 就挡住了，终态后提交本就稀疏。
+  });
 
   // 防抖首次 hydration：流式输出时 html 每 80ms 变化，频繁 hydrate 导致闪烁。
   // 等 content 稳定 300ms 后再执行首次 SVG/HTML/Mermaid 渲染。
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    // 同上：只在终态渲染。streaming 由 true 翻 false 时本效果重跑，此时才真正 hydrate。
+    if (streaming) return;
     const timer = setTimeout(() => {
       el.querySelectorAll<HTMLElement>(".axon-codeblock[data-enhanced-lang]").forEach((block) => {
-        if (block.dataset.hydrated === "1") return;
+        if (block.dataset.hydrated === "1" || block.dataset.hydrating === "1") return;
         if (block.dataset.previewRenderToken) return;
         const lang = block.dataset.enhancedLang || "";
         const codeEl = block.querySelector("code");
         const codeContent = (codeEl?.textContent || "").trim();
         if (!codeContent) return;
         const cacheKey = `${themeTick}::${lang}::${codeContent}`;
-        if (lang === "svg") { hydrateSvg(block, codeContent, (r) => writeHydrateCache(cacheKey, r)); }
-        else if (lang === "html") { hydrateHtml(block, codeContent, (r) => writeHydrateCache(cacheKey, r)); }
-        else if (lang === "mermaid") { hydrateMermaid(block, codeContent, (r) => writeHydrateCache(cacheKey, r)); }
+        const heightKey = hydrateHeightKey(lang, codeContent);
+        // onRendered 里同时记下"换装后的整体高度"，供下次挂载时预留（见 hydrateHeightCache 说明）。
+        const onRendered = (r: HTMLElement) => {
+          writeHydrateCache(cacheKey, r);
+          writeHydrateHeight(heightKey, block.offsetHeight);
+        };
+        if (lang === "svg") { hydrateSvg(block, codeContent, onRendered); }
+        else if (lang === "html") { hydrateHtml(block, codeContent, onRendered); }
+        else if (lang === "mermaid") { hydrateMermaid(block, codeContent, onRendered); }
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [html, themeTick]);
+  }, [html, themeTick, streaming]);
 
   return (
     <div
       ref={ref}
       onClick={handleContentClick}
-      className="text-[13px] leading-relaxed prose prose-sm dark:prose-invert prose-neutral max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-1 [&_h1]:mt-4 [&_h1]:mb-1.5 [&_h2]:mt-3 [&_h2]:mb-1 [&_h3]:mt-2.5 [&_h3]:mb-1 [&_h4]:mt-2 [&_h4]:mb-0.5 [&_h5]:mt-1.5 [&_h5]:mb-0.5 [&_h6]:mt-1.5 [&_h6]:mb-0.5 [&_ul]:my-0.5 [&_ol]:my-0.5 [&_li]:my-0 [&_li]:py-[1px] [&_li>p]:my-0 [&_ul_ul]:my-0 [&_ol_ol]:my-0 [&_blockquote]:my-2 [&_blockquote]:border-l-[3px] [&_blockquote]:border-blue-400/60 [&_blockquote]:dark:border-blue-500/40 [&_blockquote]:bg-blue-50/50 [&_blockquote]:dark:bg-blue-950/20 [&_blockquote]:rounded-r-md [&_blockquote]:pl-3.5 [&_blockquote]:pr-3 [&_blockquote]:py-2 [&_blockquote]:not-italic [&_blockquote]:text-foreground/85 [&_blockquote]:text-[12.5px] [&_blockquote_p]:my-0.5 [&_pre]:!my-2 [&_hr]:!my-3 [&_:not(pre)>code:not(.axon-path-link)]:bg-[rgba(0,0,0,0.04)] [&_:not(pre)>code:not(.axon-path-link)]:dark:bg-[rgba(255,255,255,0.04)] [&_:not(pre)>code:not(.axon-path-link)]:text-inherit [&_:not(pre)>code:not(.axon-path-link)]:px-1 [&_:not(pre)>code:not(.axon-path-link)]:py-[0.1em] [&_:not(pre)>code:not(.axon-path-link)]:rounded [&_:not(pre)>code:not(.axon-path-link)]:text-[0.95em] [&_code]:before:content-none [&_code]:after:content-none [&_.axon-path-link]:text-[var(--vscode-textLink-foreground,#3794ff)] [&_.axon-path-link]:cursor-pointer [&_.axon-path-link]:hover:underline [&_.axon-path-link]:bg-transparent"
-      dangerouslySetInnerHTML={{ __html: html }}
+      className="axon-chat-prose text-[13px] leading-relaxed prose prose-sm dark:prose-invert prose-neutral max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-1 [&_h1]:mt-4 [&_h1]:mb-1.5 [&_h2]:mt-3 [&_h2]:mb-1 [&_h3]:mt-2.5 [&_h3]:mb-1 [&_h4]:mt-2 [&_h4]:mb-0.5 [&_h5]:mt-1.5 [&_h5]:mb-0.5 [&_h6]:mt-1.5 [&_h6]:mb-0.5 [&_ul]:my-0.5 [&_ol]:my-0.5 [&_li]:my-0 [&_li]:py-[1px] [&_li>p]:my-0 [&_ul_ul]:my-0 [&_ol_ol]:my-0 [&_blockquote]:my-2 [&_blockquote]:border-l-[3px] [&_blockquote]:border-blue-400/60 [&_blockquote]:dark:border-blue-500/40 [&_blockquote]:bg-blue-50/50 [&_blockquote]:dark:bg-blue-950/20 [&_blockquote]:rounded-r-md [&_blockquote]:pl-3.5 [&_blockquote]:pr-3 [&_blockquote]:py-2 [&_blockquote]:not-italic [&_blockquote]:text-foreground/85 [&_blockquote]:text-[12.5px] [&_blockquote_p]:my-0.5 [&_pre]:!my-2 [&_hr]:!my-3 [&_:not(pre)>code:not(.axon-path-link)]:bg-[rgba(0,0,0,0.04)] [&_:not(pre)>code:not(.axon-path-link)]:dark:bg-[rgba(255,255,255,0.04)] [&_:not(pre)>code:not(.axon-path-link)]:text-inherit [&_:not(pre)>code:not(.axon-path-link)]:px-1 [&_:not(pre)>code:not(.axon-path-link)]:py-[0.1em] [&_:not(pre)>code:not(.axon-path-link)]:rounded [&_:not(pre)>code:not(.axon-path-link)]:text-[0.95em] [&_code]:before:content-none [&_code]:after:content-none [&_.axon-path-link]:text-[var(--vscode-textLink-foreground,#3794ff)] [&_.axon-path-link]:cursor-pointer [&_.axon-path-link]:hover:underline [&_.axon-path-link]:bg-transparent"
     />
   );
 });
@@ -510,36 +975,44 @@ function hydrateSvg(block: HTMLElement, content: string, onRendered?: (el: HTMLE
   if (!isSafeSvg(content)) return;
   block.dataset.hydrated = "1";
   const wrapper = document.createElement("div");
-  wrapper.className = "group/enhanced relative my-2 p-1 flex justify-center rounded-md overflow-hidden min-w-0";
+  wrapper.className = "group/enhanced relative my-2 rounded-md overflow-hidden min-w-0";
   wrapper.style.color = "var(--foreground, currentColor)";
   wrapper.dataset.axonKind = "svg";
   wrapper.dataset.axonSource = encodeURIComponent(content);
-  wrapper.innerHTML = content;
+  // 横向滚动槽：图表按固有尺寸显示，只有装不下且已到缩放下限时才滚动
+  const slot = document.createElement("div");
+  slot.className = "axon-diagram-scroll p-1";
+  slot.innerHTML = content;
+  wrapper.appendChild(slot);
   const svg = wrapper.querySelector("svg");
   if (svg) {
-    svg.style.background = "transparent";
-    svg.style.maxWidth = "100%";
-    svg.style.height = "auto";
+    const intrinsic = readSvgIntrinsicSize(svg);
+    fitSvgToContainer(svg);
     // 移除 AI 生成的大背景矩形（浅色硬编码 fill，在深色主题下太亮）
     const firstRect = svg.querySelector("rect");
-    if (firstRect) {
+    if (firstRect && intrinsic) {
       const rw = parseFloat(firstRect.getAttribute("width") || "0");
       const rh = parseFloat(firstRect.getAttribute("height") || "0");
-      const svgW = parseFloat(svg.getAttribute("width") || svg.getAttribute("viewBox")?.split(/\s+/)[2] || "0");
-      const svgH = parseFloat(svg.getAttribute("height") || svg.getAttribute("viewBox")?.split(/\s+/)[3] || "0");
-      if (svgW > 0 && svgH > 0 && rw >= svgW * 0.9 && rh >= svgH * 0.9) {
+      if (rw >= intrinsic.width * 0.9 && rh >= intrinsic.height * 0.9) {
         firstRect.setAttribute("fill", "transparent");
       }
     }
   }
   wrapper.appendChild(createEnhancedMenu("svg", "right-1"));
-  wrapper.style.opacity = "0";
-  wrapper.style.transition = "opacity 0.3s ease-in";
+  // ⚠️ 这里绝不能做「先 opacity:0 插入、再 rAF 置 1」的淡入。
+  //
+  // 换装是 `pre.replaceWith(wrapper)`：原代码块被移除、wrapper 顶上，只提交一次。
+  // wrapper 若以 opacity:0 入场，则**换装后的第一帧整个图区是透明的**——透明的区域透出的是
+  // 消息背景（浅色主题下即白色），随后再花约 0.3s 淡入；肉眼就是"换装瞬间刷白一下"。
+  // 实测（真实组件 + 真实 CSS，逐帧采样 [data-axon-kind] 的 computed opacity）：
+  // 换装帧 opacity=0，此后 18 帧 <0.95、到 ~300ms 才回到 1，而此刻 <pre> 已不在 DOM 中。
+  //
+  // 产物在插入前已由本函数完整渲染（同步），不存在需要用透明遮掩的中间态，
+  // 直接以最终可见状态换入即可——这才是不产生空帧的做法。
   const pre = block.querySelector("pre");
   if (pre) pre.replaceWith(wrapper);
   block.style.background = "transparent";
   block.style.border = "none";
-  requestAnimationFrame(() => { wrapper.style.opacity = "1"; });
   onRendered?.(wrapper);
 }
 
@@ -551,17 +1024,24 @@ function hydrateHtml(block: HTMLElement, content: string, onRendered?: (el: HTML
   wrapper.dataset.axonSource = encodeURIComponent(content);
   const iframe = document.createElement("iframe");
   iframe.className = "w-full border-0 rounded-md";
-  iframe.style.cssText = "height:400px;display:block";
-  iframe.sandbox.add("allow-scripts");
-  const scrollStyle = `<style>html{overflow-y:auto;scrollbar-width:none}html:hover{scrollbar-width:thin;scrollbar-color:#d1d5db transparent}html::-webkit-scrollbar{width:6px}html::-webkit-scrollbar-thumb{background:transparent;border-radius:9999px}html:hover::-webkit-scrollbar-thumb{background:#d1d5db}</style>`;
-  iframe.srcdoc = scrollStyle + content;
+  // 初始取最小高度，真实高度在 load 后由父页量出（见 lib/htmlPreviewResize.ts）。
+  // 早先写死 400px：内容短时那 400px 里绝大部分是空白，看着像"渲染坏了"。
+  iframe.style.cssText = `height:${HTML_PREVIEW_MIN_HEIGHT}px;display:block`;
+  // 开 allow-same-origin 让父页能读 contentDocument 自行测量；**不开 allow-scripts** ——
+  // 沙箱 iframe 里本就执行不了任何脚本（CSP 与 vscode-webview 协议处理器双重封死，
+  // 详见 lib/htmlPreviewResize.ts 头注释）。挂着它只会掩盖真实边界。
+  iframe.setAttribute("sandbox", HTML_PREVIEW_SANDBOX);
+  // 样式前奏放在内容之前：内容里的同名声明才能覆盖它（例如 AI 自己写的 body 外边距）
+  iframe.srcdoc = HTML_PREVIEW_PRELUDE + content;
+  // 先挂测量再插入文档：load 是插入后才触发的，顺序反了会漏掉首次测量。
+  // 测量完成后再回调 onRendered —— 缓存必须存"量好高度之后"的快照，否则命中缓存的会是被裁的旧高度。
+  attachHtmlPreviewAutoHeight(iframe, () => onRendered?.(wrapper));
   wrapper.appendChild(iframe);
   wrapper.appendChild(createEnhancedMenu("html", "right-3"));
   const pre = block.querySelector("pre");
   if (pre) pre.replaceWith(wrapper);
   block.style.background = "transparent";
   block.style.border = "none";
-  onRendered?.(wrapper);
 }
 
 /** Mermaid 渲染序号 */
@@ -588,7 +1068,16 @@ function cleanupMermaidErrorArtifacts(root: ParentNode = document): void {
 }
 
 async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: (el: HTMLElement) => void): Promise<void> {
-  block.dataset.hydrated = "1";
+  // ⚠️ 这里只置「进行中」标记，绝不置 data-hydrated="1"。
+  //
+  // data-hydrated="1" 会立刻命中 index.css 的 `.axon-codeblock[data-hydrated="1"]`，
+  // 把代码块的背景/边框/margin 全部抹掉（background:transparent !important 等）。
+  // 而下面的 `await mermaid.render(...)` 是异步的（复杂图可达数秒）——在这整段时间里，
+  // 卡片已被剥成透明、源码还挂在那儿，那块地方就露出页面底色（浅色主题即白色），
+  // 直到渲染完成把图换上去才恢复。肉眼就是"刷白一下"。
+  // 而且因为流式期间不 hydrate，这个窗口永远落在"回复刚结束"那一刻。
+  // 所以 data-hydrated 必须推迟到换装那一刻再置，只与换装同一次提交（见下方换装处）。
+  block.dataset.hydrating = "1";
   // mermaid 的图布局计算是同步重活（复杂图可达数秒），且流式期间每次内容变化都可能被重新触发。
   // 持久化标记：如果卡死发生在这里，它就是判断根因最直接的证据。
   beginSpan("mermaid-render", { persist: true, detail: `${(content.length / 1024).toFixed(1)}KB` });
@@ -613,21 +1102,22 @@ async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: 
     if (!svgText) throw new Error("mermaid rendered but no SVG produced");
 
     const wrapper = document.createElement("div");
-    wrapper.className = "group/enhanced relative my-2 p-2 w-full rounded-md overflow-hidden";
+    wrapper.className = "group/enhanced relative my-2 w-full rounded-md overflow-hidden";
     wrapper.style.background = "transparent";
     wrapper.style.lineHeight = "0";  // 消除 wrapper 内残余行盒间隙（pre.mermaid 的 line-height 撑高 3-5px）
-    wrapper.innerHTML = svgText;
+    // 横向滚动槽：图表按固有尺寸显示，只有装不下且已到缩放下限时才滚动
+    const slot = document.createElement("div");
+    slot.className = "axon-diagram-scroll p-2";
+    slot.innerHTML = svgText;
+    wrapper.appendChild(slot);
     cleanupMermaidErrorArtifacts(wrapper);
     if (wrapper.querySelector(".error-icon,.error-text") || /Syntax error in text|mermaid version/i.test(wrapper.textContent || "")) {
       throw new Error("mermaid rendered error output");
     }
     const svg = wrapper.querySelector("svg");
     if (!svg) throw new Error("mermaid rendered but no SVG produced");
-    svg.style.maxWidth = "100%";
-    svg.style.width = "100%";
-    svg.style.height = "auto";
-    svg.style.background = "transparent";
-    svg.style.display = "block";
+    // 按固有尺寸显示：不放大、只适应，超出缩放下限则横向滚动（见 diagramFit）
+    fitSvgToContainer(svg);
     // 注入 style 覆盖文字/线条颜色，用 CSS 变量跟随主题
     // 用 SVG id 做作用域前缀，确保只影响该 mermaid 图，不泄漏到页面其他 SVG
     const svgId = svg.id || `axon-mmd-${Date.now()}`;
@@ -656,20 +1146,31 @@ async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: 
     wrapper.dataset.axonKind = "mermaid";
     wrapper.dataset.axonSource = encodeURIComponent(content);
     wrapper.appendChild(createEnhancedMenu("mermaid", "right-1"));
-    wrapper.style.opacity = "0";
-    wrapper.style.transition = "opacity 0.3s ease-in";
+    // 同 hydrateSvg：换装必须一次性、不带透明中间态。
+    // mermaid 的 SVG 是在 `await mermaid.render` 拿到后才换入的（<pre> 一直保留到那一刻），
+    // 所以只要不以 opacity:0 入场，换装帧就是成品可见 —— 不会出现空白帧。
+    // 实测（真实组件 + 真实 CSS）：此前换装帧 opacity=0、19 帧 <0.95、~300ms 才恢复到 1。
     const pre = block.querySelector("pre");
+    // 与换装同一次提交里才让 CSS 剥掉卡片背景/边框/margin：此刻图已就位，
+    // 剥背景与换装在同一任务内完成，浏览器只画最终态 —— 不存在"卡片没了、图还没来"的那一帧。
+    block.dataset.hydrated = "1";
+    delete block.dataset.hydrating;
     if (pre) pre.replaceWith(wrapper);
     block.style.background = "transparent";
     block.style.border = "none";
-    requestAnimationFrame(() => { wrapper.style.opacity = "1"; });
     bindFunctions?.(wrapper);
     onRendered?.(wrapper);
-  } catch {
+  } catch (err) {
     renderHost?.remove();
     if (renderId) cleanupMermaidRenderArtifacts(renderId);
     cleanupMermaidErrorArtifacts();
     block.dataset.hydrated = "0";
+    delete block.dataset.hydrating;   // 解除「进行中」，允许后续重试
+    // ⚠️ 这里绝不能静默：解析失败 / 渲染超时 / SVG 空产出都汇到这条路，
+    // 而重试只由防抖 effect 的依赖（html / themeTick / streaming）变化触发 ——
+    // 依赖不再变，这块就永远停在源码状态，用户看到的就是"图有时候不渲染"。
+    // 没有这条日志，这件事就是零线索的黑盒。
+    console.warn("[hydrate] mermaid 渲染失败，回退为源码块：", err);
   } finally {
     endSpan("mermaid-render");
   }

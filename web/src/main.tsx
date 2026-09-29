@@ -3,9 +3,12 @@ import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App";
 import { installDiagnostics } from "./lib/diagnostics";
+import { installOverlayScrollbars } from "./lib/overlayScrollbar";
 
 // 尽早挂载诊断：它要在应用渲染前就位，才能捕获到启动阶段及后续的偶发卡死
 installDiagnostics();
+// 图表 / HTML 预览的悬浮滚动条（不占布局空间，hover 时不挤动内容）
+installOverlayScrollbars();
 
 /**
  * 移除 index.html 里内置的启动占位页（#axon-boot）。

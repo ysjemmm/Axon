@@ -14,6 +14,7 @@
  *   await mgr.restore("turn-42");  // 用户点回滚
  */
 
+import { relative } from "node:path";
 import { GitSnapshotter } from "./gitSnapshot.js";
 import { FsSnapshotter } from "./fsSnapshot.js";
 import type { Snapshot, Snapshotter } from "./types.js";
@@ -29,6 +30,8 @@ export class SnapshotManager {
   private strategy: Snapshotter | null = null;
   /** 已初始化（策略已选定） */
   private initialized = false;
+  /** 本次运行创建的快照（内存登记）：列表只显示这些，不扫磁盘/refs 历史 */
+  private created = new Map<string, Snapshot>();
   /** 当前会话 id，用于快照存储的 session 隔离。由 AgentSession.setSessionId() 同步设置。 */
   sessionId = "";
 
@@ -48,6 +51,7 @@ export class SnapshotManager {
     if (await git.init()) {
       this.strategy = git;
       this.initialized = true;
+      await this.purgePersisted();
       console.debug(`[snapshot] strategy: git (refs/axon/snapshots/${this.sessionId}/)`);
       return;
     }
@@ -56,6 +60,7 @@ export class SnapshotManager {
     if (await fs.init()) {
       this.strategy = fs;
       this.initialized = true;
+      await this.purgePersisted();
       console.debug(`[snapshot] strategy: filesystem (.axon/snapshots/${this.sessionId}/)`);
       return;
     }
@@ -76,6 +81,7 @@ export class SnapshotManager {
       this.strategy = null;
       this.initialized = false;
       this._snapshotdTurns.clear();
+      this.created.clear();
     }
   }
 
@@ -101,20 +107,42 @@ export class SnapshotManager {
       console.warn(`[snapshot] create failed for turn ${id}`);
       return false;
     }
+    // 内存登记：改动/回滚记录只维护在内存，重启后不恢复历史
+    this.created.set(id, {
+      id,
+      createdAt: Date.now(),
+      label: `文件快照 ${id}`,
+      files: files.map((f) => relative(this.cwd, f)),
+    });
     // FIFO 裁剪：超过上限时删除最旧的快照
     await this.prune();
     return true;
   }
   private _snapshotdTurns = new Set<string>();
 
-  /** FIFO 裁剪：保留最近 MAX_SNAPSHOTS 条，删除多余的旧快照 */
+  /** 清理历史遗留的快照备份（保留本次运行已登记的）：记录只维护在内存，历史不恢复、不累积 */
+  private async purgePersisted(): Promise<void> {
+    try {
+      const keep = new Set(this.created.keys());
+      const old = await this.strategy!.list();
+      for (const snap of old) {
+        if (keep.has(snap.id)) continue;
+        await this.strategy!.remove(snap.id).catch(() => {});
+      }
+    } catch {
+      // 清理失败不影响主流程
+    }
+  }
+
+  /** FIFO 裁剪：保留最近 MAX_SNAPSHOTS 条，删除多余的旧快照（基于内存登记） */
   private async prune(): Promise<void> {
     try {
-      const all = await this.strategy!.list();
+      const all = [...this.created.values()].sort((a, b) => b.createdAt - a.createdAt);
       if (all.length <= MAX_SNAPSHOTS) return;
-      // list 已按 createdAt 倒序（最新在前），尾部是最旧的
+      // 已按 createdAt 倒序（最新在前），尾部是最旧的
       const toRemove = all.slice(MAX_SNAPSHOTS);
       for (const snap of toRemove) {
+        this.created.delete(snap.id);
         await this.strategy!.remove(snap.id).catch(() => {});
         this._snapshotdTurns.delete(snap.id);
       }
@@ -136,18 +164,14 @@ export class SnapshotManager {
     return this.strategy.restore(id);
   }
 
-  /** 列出所有快照 */
+  /** 列出本次运行创建的快照（只看内存登记，不扫磁盘/refs 历史） */
   async list(): Promise<Snapshot[]> {
-    if (!this.initialized) {
-      this.initialized = true;
-      await this.init();
-    }
-    if (!this.strategy) return [];
-    return this.strategy.list();
+    return [...this.created.values()].sort((a, b) => b.createdAt - a.createdAt);
   }
 
   /** 删除指定快照 */
   async remove(id: string): Promise<boolean> {
+    this.created.delete(id);
     if (!this.strategy) return false;
     return this.strategy.remove(id);
   }

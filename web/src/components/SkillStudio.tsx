@@ -67,7 +67,7 @@ interface SkillStudioProps {
 }
 
 type SortKey = "name" | "source";
-type FilterSource = "all" | "global" | "workspace" | "builtin";
+type FilterSource = "all" | "global" | "workspace" | "power" | "builtin";
 
 /** 根据文件扩展名返回匹配的图标组件 */
 function fileIconFor(name: string) {
@@ -126,10 +126,14 @@ export function SkillStudio({ workspace, onBack }: SkillStudioProps) {
     const ok = window.confirm(`确认删除整个 Skill "${skill.name}"？其目录下所有文件都将被删除，且不可撤销。`);
     if (!ok) return;
     try {
-      await deleteSkill(skill.name);
+      await deleteSkill(skill.name, skill.source === "workspace" ? workspace : undefined);
       await loadSkills();
-    } catch { /* ignore */ }
-  }, [loadSkills]);
+    } catch (err) {
+      // 不能静默吞掉：后端会因为「内置方法论不可删除」「属于某个能力包」等原因明确拒绝，
+      // 吞掉之后就退化成"点了没反应"，用户只会反复点（这正是"删不掉"的观感来源）。
+      window.alert(`删除失败：${(err as Error).message}`);
+    }
+  }, [loadSkills, workspace]);
 
   // 过滤 + 排序后的 skill 列表
   const visibleSkills = useMemo(() => {
@@ -235,8 +239,8 @@ export function SkillStudio({ workspace, onBack }: SkillStudioProps) {
 
           {/* 筛选标签 */}
           <div className="flex items-center gap-2 px-6 pb-3 shrink-0">
-            {(["all", "global", "workspace", "builtin"] as const).map((f) => {
-              const labels: Record<FilterSource, string> = { all: "全部", global: "全局", workspace: "项目级", builtin: "内置" };
+            {(["all", "global", "workspace", "power", "builtin"] as const).map((f) => {
+              const labels: Record<FilterSource, string> = { all: "全部", global: "全局", workspace: "项目级", power: "Power", builtin: "内置" };
               const active = filterSource === f;
               return (
                 <button
@@ -303,17 +307,25 @@ function SkillCard({ skill, onOpen, onDelete, onToggle }: {
   onDelete: (e: React.MouseEvent) => void;
   onToggle: (disabled: boolean) => void;
 }) {
+  // 内置方法论编译在产物里、磁盘上没有目录：既没有可打开的文件树，也没有可删的目录。
+  // 能力包捆绑的 skill 由所属 Power 管理，不该在这里单独删。
+  // 两者都只保留「启用/禁用」——这与 VS Code 面板的菜单绑定保持一致（见 package.json）。
+  const canManageFiles = skill.source !== "builtin";
+  const canDelete = canManageFiles && skill.source !== "power";
   return (
     <div
-      onClick={onOpen}
-      className={`group relative rounded-xl border border-border p-4 cursor-pointer hover:border-primary/50 hover:bg-muted/30 transition-colors ${skill.disabled ? "opacity-50" : ""}`}
+      onClick={canManageFiles ? onOpen : undefined}
+      className={`group relative rounded-xl border border-border p-4 transition-colors ${canManageFiles ? "cursor-pointer hover:border-primary/50 hover:bg-muted/30" : ""} ${skill.disabled ? "opacity-50" : ""}`}
     >
       <div className="flex items-start gap-2">
         <Boxes className="w-4 h-4 mt-0.5 shrink-0 text-primary" />
         <div className="min-w-0 flex-1">
           <div className={`font-medium text-sm truncate ${skill.disabled ? "line-through text-muted-foreground" : ""}`}>{skill.name}</div>
           <div className="text-xs text-muted-foreground/70 mt-0.5">
-            {skill.source === "global" ? "全局" : skill.source === "builtin" ? "内置" : "工作区"}
+            {skill.source === "global" ? "全局"
+              : skill.source === "builtin" ? "内置"
+              : skill.source === "power" ? "Power 捆绑"
+              : "工作区"}
             {skill.disabled && <span className="ml-1.5 text-amber-500">已禁用</span>}
           </div>
         </div>
@@ -327,20 +339,24 @@ function SkillCard({ skill, onOpen, onDelete, onToggle }: {
           >
             <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform ${skill.disabled ? "translate-x-0.5" : "translate-x-[18px]"}`} />
           </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); onOpen(); }}
-            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted opacity-0 group-hover:opacity-100 transition-opacity"
-            title="管理文件"
-          >
-            <Settings2 className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={onDelete}
-            className="p-1 rounded text-muted-foreground hover:text-red-500 hover:bg-muted opacity-0 group-hover:opacity-100 transition-opacity"
-            title="删除整个 Skill"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
+          {canManageFiles && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onOpen(); }}
+              className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted opacity-0 group-hover:opacity-100 transition-opacity"
+              title="管理文件"
+            >
+              <Settings2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {canDelete && (
+            <button
+              onClick={onDelete}
+              className="p-1 rounded text-muted-foreground hover:text-red-500 hover:bg-muted opacity-0 group-hover:opacity-100 transition-opacity"
+              title="删除整个 Skill"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </div>
       {skill.description && (

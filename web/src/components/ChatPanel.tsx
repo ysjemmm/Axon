@@ -8,29 +8,33 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Send, Loader2, ImagePlus, X, Paperclip, Plus, Camera, Feather, Check, ChevronDown, ListChecks, Globe, ShieldAlert, Undo2, Minimize2, AlertTriangle } from "lucide-react";
+import { Loader2, ImagePlus, X, Paperclip, Plus, Camera, ChevronDown, ListChecks, Globe, ShieldAlert, Undo2, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ImageViewer } from "./chat/ImageViewer";
-import { ModelSelector, useModels, findModel, getModels } from "@/components/ModelSelector";
+import { EffortSelector, ModelSelector, useModels, findModel, getModels } from "@/components/ModelSelector";
 import { getVisionFallbackModel } from "@/lib/apiClient";
 import { updateDiagState } from "@/lib/diagnostics";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
 import { WorkspaceGroupManager, type WorkspaceGroup } from "@/components/WorkspaceGroupManager";
-import { AxonLogo } from "@/components/AxonLogo";
+import { WelcomeMascot } from "@/components/WelcomeMascot";
 import { AxonMascot } from "@/components/AxonMascot";
 import { useMascotMood } from "./chat/useMascotMood";
+import { MascotStatusText } from "./chat/MascotStatusText";
 import { SkillStudio } from "@/components/SkillStudio";
 
-import type { AttachedFile, ChatPanelProps, ReplyStyle, UserSegment } from "./chat/types";
-import { REPLY_STYLES } from "./chat/types";
+import type { AttachedFile, ChatPanelProps, UserSegment } from "./chat/types";
 import { FILE_MAX_SIZE, isAllowedTextFile, looksBinary } from "./chat/fileUtils";
 import { MessageBubble } from "./chat/MessageBubble";
 import { AssistantTurnHeader } from "./chat/AssistantTurn";
 import { UnifiedStatusBar } from "./UnifiedStatusBar";
+import { AskUserCard } from "./AskUserCard";
 import { MentionEditor, type MentionEditorHandle } from "./chat/MentionEditor";
 import { TokenIndicator } from "./chat/TokenIndicator";
+import { ATTACHMENT_BADGE_CLASS, imageTypeLabel } from "./chat/attachmentType";
+import { SendStopIcon } from "./chat/SendStopIcon";
+import { ProcessingAttachmentCard, type ProcessingAttachment } from "./chat/ProcessingAttachmentCard";
 import { useChatSession, type SubmitPayload } from "./chat/useChatSession";
 import { useSessionEvents } from "@/hooks/useSessionEvents";
 import { useSlashCommands } from "./chat/slash/useSlashCommands";
@@ -41,8 +45,8 @@ import { CommandApprovalContext } from "./chat/commandApprovalContext";
 import { QuestionListPanel } from "./chat/QuestionListPanel";
 import { VirtualMessageList, type VirtualMessageListHandle } from "./chat/VirtualMessageList";
 import { nextHiddenCount, safeHiddenCount } from "./chat/scrollAnchor";
-import { AgentSelector } from "./AgentSelector";
-import { CONTROL_CMD } from "@/lib/constants";
+import { CONTROL_CMD, STORAGE } from "@/lib/constants";
+import { PanelClientIdContext } from "@/lib/openDiff";
 
 /** 时间线默认保留的最近消息数；早期消息可按需从顶部逐批展开。 */
 const VISIBLE_HISTORY_LIMIT = 32;
@@ -51,29 +55,34 @@ const RESTORE_HISTORY_BATCH_SIZE = 24;
 export function ChatPanel({ clientId, sessionId, mode, connected, active, send, onSessionCreated, onCompactionMigrated, onStreamingChange }: ChatPanelProps) {
   const session = useChatSession({ clientId, sessionId, mode, connected, send, onSessionCreated, onCompactionMigrated, onStreamingChange });
   const [hiddenMessageCount, setHiddenMessageCount] = useState(0);
-  /** 列表当前是否贴底（由虚拟列表按真实滚动位置上报，非猜测） */
-  const [listAtBottom, setListAtBottom] = useState(true);
   /** 上一次的会话消息总数：用于区分"追加消息"与"压缩/编辑后变短" */
   const prevHistoryLenRef = useRef(session.chatHistory.length);
 
-  // 虚拟列表只减少 DOM 数量，不会缩短滚动比例。每轮结束后把较早的 UI 消息折叠，
+  // 虚拟列表只减少 DOM 数量，不会缩短滚动比例。把较早的 UI 消息折叠，
   // 但绝不修改 session.chatHistory：后端持久化、上下文压缩和历史恢复仍持有完整记录。
   //
-  // 两条硬约束（都来自"视界不能跳"这条要求）：
-  // · 不在底部时不动可见窗口——从头部折叠消息会让整屏内容位移，用户正看着中间就被抽走一段；
-  // · 计数必须能随消息变少而收缩——上下文压缩会把 chatHistory 从几十条换成几条，
-  //   陈旧的大计数会让 slice() 直接切空，对话区白屏（见 scrollAnchor.nextHiddenCount）。
+  // ⚠️ 折叠只能在【用户看不见】的时刻做：面板在后台、或会话刚加载（列表还没画出来）。
+  // 早先是"每轮结束、且贴底时"折叠——也就是回复完成 / 取消的那一刻。从头部裁掉几条会让
+  // 虚拟列表的 firstItemIndex 前移，它要同时平移高度缓存、回调 scrollTop、重算渲染区间，
+  // 而那一刻最后一条回复还在长高（统计行出现）。实测（收尾探针）：完成后 +26ms scrollTop
+  // 被回调 400px（恰为两条未测量消息的估高 200×2），+44ms 视口里的三条消息同时被卸载，
+  // +161ms 才再跳 2151px 纠正回来——中间 100 多毫秒视口里没有消息，就是"完成时偶发白闪"。
+  // 只在历史超过窗口上限、本轮确实触发折叠时才出现，所以是偶发。
+  //
+  // 硬约束：计数必须能随消息变少而收缩——上下文压缩会把 chatHistory 从几十条换成几条，
+  // 陈旧的大计数会让 slice() 直接切空，对话区白屏（见 scrollAnchor.nextHiddenCount）。
+  // 这种"内容被整体替换"的情况必须立即纠正，不受可见性限制。
   useEffect(() => {
     const len = session.chatHistory.length;
     const prevLen = prevHistoryLenRef.current;
     prevHistoryLenRef.current = len;
     if (len === 0) return;
-    // 内容被整体替换（压缩 / 编辑 / 删除后变少）：必须立即纠正，且不受"只在贴底时才动窗口"
-    // 的限制——它改变的是窗口对应的内容本身，不纠正就会显示错内容（甚至切空）。
     const shrank = len < prevLen;
-    if (!shrank && (session.isLoading || !listAtBottom)) return;
+    // prevLen === 0：会话刚加载，列表尚未绘制，此时定窗口没有可见位移
+    const freshLoad = prevLen === 0;
+    if (!shrank && !freshLoad && (active || session.isLoading)) return;
     setHiddenMessageCount((previous) => nextHiddenCount(previous, prevLen, len, VISIBLE_HISTORY_LIMIT));
-  }, [session.chatHistory.length, session.isLoading, listAtBottom]);
+  }, [session.chatHistory.length, session.isLoading, active]);
 
   // 切换到另一会话时，不能沿用上一会话的折叠数量。
   useEffect(() => {
@@ -114,21 +123,69 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   const lastMessage = session.chatHistory[session.chatHistory.length - 1];
   const assistantTurnStarted = lastMessage?.role === "assistant" && !!lastMessage.streaming;
   const liveAssistantStatus = session.isLoading && assistantTurnStarted ? session.statusText : undefined;
-  const showPendingAssistantHeader = session.isLoading && !assistantTurnStarted;
+  /**
+   * 本轮（末尾往前数、遇到第一条 user 消息为止）是否已建出 assistant 消息、它是否仍在流式。
+   *
+   * ⚠️ 不能只看「最后一条消息」的角色。本轮结束之后还可能追加非 assistant 的消息——
+   * 压缩成功时 handleCompactingEnd 追加的 `[上下文已压缩]`（role: system）就是一条——
+   * 此时"最后一条不是 assistant"并不等于"本轮还没有 assistant 消息"，可只看最后一行的写法
+   * 会把它当成后者，于是"进行中"的占位元素又在已有回复下方冒出来（早先那版
+   * isLoading && !assistantTurnStarted 造成的"两个 Axon 连续出现"，就是同一类误判）。
+   * 判据回到本源：往后找本轮属于本条回复的 assistant 消息，找到就是"消息已存在"。
+   */
+  const { turnAssistantExists, turnStreaming } = useMemo(() => {
+    const history = session.chatHistory;
+    let exists = false;
+    let streaming = false;
+    for (let i = history.length - 1; i >= 0; i--) {
+      const m = history[i];
+      if (m.role === "user") break;          // 到本轮的提问为止，不再往前找
+      if (m.role !== "assistant") continue;  // system 提示等：跳过，继续往前找本轮的 assistant
+      exists = true;
+      if (m.streaming) { streaming = true; break; }
+    }
+    return { turnAssistantExists: exists, turnStreaming: streaming };
+  }, [session.chatHistory]);
+  /**
+   * 本轮是否**仍在进行**。
+   *
+   * isLoading 不能单独当这个判据：收尾它比消息终态慢——finishLoading 有 MIN_LOADING_MS
+   * 最小展示时间（短轮次走 setTimeout 延后收），错误 / 取消 / 断线路径同样是先把消息落终态、
+   * 再延后收 loading。这个窗口里 isLoading 仍为 true，任何"以 isLoading 为条件"的进行中
+   * 呈现（吉祥物状态文字、列表尾部占位头部、滚动按钮脉动…）都会在回复已经结束之后再多冒一下。
+   */
+  const turnRunning = session.isLoading && (!turnAssistantExists || turnStreaming);
+  /**
+   * 占位头部只在「本轮 assistant 消息还没建出来」时显示。
+   *
+   * ⚠️ 不能写成 isLoading && !assistantTurnStarted。后者把「消息还在 streaming」当成了
+   * 「消息存在」的判据，而这两件事并不同步：loading 收得比 streaming 慢是常态
+   * （finishLoading 有 MIN_LOADING_MS 最小展示时间，短轮次走 setTimeout 延后收；
+   * 断线 / 错误 / 取消路径同样会先把消息落终态、再延后收 loading）。
+   * 于是那个条件在「消息已落终态、loading 未收」的窗口里恒真，footer 就在已有消息下方
+   * 再渲染一个头部——而 AssistantTurnHeader 在 streaming 时不渲染品牌名，所以它是一个
+   * 「只有图标、没有 Axon 文案」的光头，与消息自己的头部叠成「两个 Axon 连续出现」。
+   *
+   * 判据回到本源：消息一旦存在（无论是否还在流式），头部就归它自己管；只有当**本轮**
+   * 还没有 assistant 消息（用户刚发出、assistant 尚未建立）时，才需要这个占位。
+   */
+  const showPendingAssistantHeader = session.isLoading && !turnAssistantExists;
 
   // 正在被 AI 回复的用户消息 ID（回复中不可编辑）
   const replyingToMessageId = useMemo(() => {
-    if (!session.isLoading || !session.chatHistory) return undefined;
+    if (!turnRunning || !session.chatHistory) return undefined;
     for (let i = session.chatHistory.length - 1; i >= 0; i--) {
       if ((session.chatHistory[i] as any).role === "user") {
         return (session.chatHistory[i] as any).id as string | undefined;
       }
     }
     return undefined;
-  }, [session.isLoading, session.chatHistory]);
+  }, [turnRunning, session.chatHistory]);
 
   // ── 输入区编排（壳层本地状态） ──────────────────────────────────────────
   const [images, setImages] = useState<string[]>([]);
+  const [processingAttachments, setProcessingAttachments] = useState<ProcessingAttachment[]>([]);
+  const cancelledAttachmentIds = useRef(new Set<string>());
   const [fileError, setFileError] = useState<string>("");
   const fileErrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 设置文件错误提示，3 秒后自动消失。 */
@@ -140,7 +197,6 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     }
   }, []);
   const [composerEmpty, setComposerEmpty] = useState(true); // 编辑器是否为空（控制发送按钮可用态）
-  const [replyStyle, setReplyStyle] = useState<ReplyStyle>("default");
   const [menuOpen, setMenuOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [groupManagerOpen, setGroupManagerOpen] = useState(false);
@@ -178,7 +234,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   const slash = useSlashCommands({ host: slashHost, editor: slashEditorBridge, commands: slashCommands });
 
   // 输入框上沿的吉祥物：按 焦点 / 击键 / AI 忙 / 静默 切换表情
-  const mascotAiState = session.isLoading
+  const mascotAiState = turnRunning
     ? (assistantTurnStarted ? "thinking" : "waiting")
     : lastMessage?.role === "assistant" && lastMessage.turnStatus === "error"
       ? "error"
@@ -188,6 +244,13 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
           ? "done"
           : "idle";
   const mascot = useMascotMood(mascotAiState);
+  // 吉祥物右侧的执行状态文字：AI 干活期间显示当前阶段（思考中/正在读取文件…）。
+  // statusText 在本轮结束时被置空，这里再兜一个"执行中…"，避免恰好切到空串时闪烁。
+  // ⚠️ 判据必须用 turnRunning 而不是 isLoading：本轮刚落终态、loading 还没收的那一小段里，
+  // statusText 已被错误/取消路径清空，于是这里会兜出"执行中…"、或继续显示上一阶段的
+  // "正在回复…"——回复都写完了，输入框上方却又冒出一个"还在干活"的指示。
+  // （实测：逐帧采样下，消息头部已变成终态"Axon + Credits"之后，该文字仍多显示约 80~400ms。）
+  const mascotStatusText = turnRunning ? session.statusText || "执行中…" : null;
 
   // 把"AI 是否正在输出"同步给诊断模块：界面卡死时用它判断"卡灰"是否与流式同时发生
   useEffect(() => {
@@ -244,9 +307,12 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
   /** 点击 sticky 条：平滑滚动到对应提问处，落点刚好在 sticky 条下方一点 */
   const scrollToQuestion = useCallback((id: string) => {
-    const idx = session.chatHistory.findIndex((m) => m.id === id);
+    // 列表里只有切片后的消息，scrollToIndex 要的是切片内的索引（Virtuoso 的 scrollToIndex
+    // 与 firstItemIndex 无关、始终从 0 起）。早先传的是在完整 chatHistory 里的下标，
+    // 有消息被折叠时会跳到错的位置。
+    const idx = visibleHistory.findIndex((m) => m.id === id);
     if (idx >= 0) virtualListRef.current?.scrollToIndex(idx, "smooth");
-  }, [session.chatHistory]);
+  }, [visibleHistory]);
 
   // ── 自动滚动 ──────────────────────────────────────────────────────────────
   const [showScrollBtn, setShowScrollBtn] = useState(false);
@@ -400,6 +466,11 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
     const actualModel = session.model;
     const actualProvider = session.provider || findModel(session.model)?.provider;
+    const effortModel = actualProvider
+      ? models.find((m) => m.id === actualModel && m.provider === actualProvider)
+      : findModel(actualModel);
+    // Provider 配置可能在当前页面打开期间刷新/删除档位；只发送仍在当前模型白名单里的值。
+    const actualEffort = effortModel?.effortLevels?.some((x) => x.value === session.effort) ? session.effort || undefined : undefined;
 
     const payload: SubmitPayload = {
       userBubble: {
@@ -407,6 +478,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         images: sendImages.length > 0 ? [...sendImages] : undefined,
         attachedFiles: sendFiles.length > 0 ? sendFiles : undefined,
         segments: segments.length > 0 ? segments : undefined,
+        effort: actualEffort,
       },
       send: {
         content: contentForModel,
@@ -418,9 +490,9 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         images: sendImages.length > 0 ? sendImages : undefined,
         workspace: mode === "quest" ? undefined : (session.workspace || undefined),
         workspaces: mode === "quest" ? undefined : (session.workspaces.length > 0 ? session.workspaces : undefined),
-        replyStyle,
         mode,
         think: session.think,
+        effort: actualEffort,
         quest: mode === "quest" ? { webSearch: session.questWebSearch } : undefined,
       },
     };
@@ -440,6 +512,10 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
   const handleSend = () => {
     if (session.isCompacting || session.contextOverflow) return;
+    if (processingAttachments.length > 0) {
+      showFileError("附件仍在处理中，请稍候再发送");
+      return;
+    }
     // 无工作区时不允许发送——引导用户先添加工作区
     if (mode !== "quest" && session.workspacesLoaded && !session.workspace && session.workspaces.length === 0) {
       setPickerOpen(true);
@@ -558,13 +634,92 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
       ? getModels().find((m) => m.id === newModel && m.provider === providerName)
       : findModel(newModel);
     if (images.length > 0 && targetModel && !targetModel.vision && !visionFallbackModel) return; // 有图片且未配置识图兜底时，禁止切到不支持 vision 的模型
+    // 强度档位是模型专属配置：优先恢复该 provider:model 的用户偏好；从未设置才用模型默认值。
+    const validDefault = targetModel?.effortLevels?.some((x) => x.value === targetModel.defaultEffort)
+      ? targetModel.defaultEffort || null
+      : null;
+    const preferenceKey = targetModel ? `${targetModel.provider}:${targetModel.id}` : "";
+    let preferred: string | null | undefined;
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORAGE.EFFORT_PREFERENCES) || "{}") as Record<string, string | null>;
+      if (preferenceKey && Object.prototype.hasOwnProperty.call(saved, preferenceKey)) preferred = saved[preferenceKey];
+    } catch { /* ignore invalid local storage */ }
+    const validPreferred = preferred === null || targetModel?.effortLevels?.some((x) => x.value === preferred)
+      ? preferred
+      : undefined;
+    session.setEffort(validPreferred !== undefined ? validPreferred : validDefault);
     session.setModel(newModel, providerName);
   };
 
+  const selectedEffortModel = session.provider
+    ? models.find((m) => m.id === session.model && m.provider === session.provider)
+    : findModel(session.model);
+  const selectedEffortLevels = selectedEffortModel?.effortLevels || [];
+  const selectedDefaultEffort = selectedEffortLevels.some((x) => x.value === selectedEffortModel?.defaultEffort)
+    ? selectedEffortModel?.defaultEffort || null
+    : null;
+  const effortConfigSignature = JSON.stringify({
+    model: selectedEffortModel ? `${selectedEffortModel.provider}:${selectedEffortModel.id}` : "",
+    levels: selectedEffortLevels,
+    defaultEffort: selectedDefaultEffort,
+  });
+  const previousEffortConfig = useRef<string | null>(null);
+  const effortPreferenceKey = selectedEffortModel ? `${selectedEffortModel.provider}:${selectedEffortModel.id}` : "";
+
+  const readEffortPreference = useCallback((key: string): string | null | undefined => {
+    if (!key) return undefined;
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORAGE.EFFORT_PREFERENCES) || "{}") as Record<string, string | null>;
+      return Object.prototype.hasOwnProperty.call(saved, key) ? saved[key] : undefined;
+    } catch {
+      return undefined;
+    }
+  }, []);
+
+  const handleEffortChange = useCallback((next: string | null) => {
+    if (effortPreferenceKey) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(STORAGE.EFFORT_PREFERENCES) || "{}") as Record<string, string | null>;
+        saved[effortPreferenceKey] = next;
+        localStorage.setItem(STORAGE.EFFORT_PREFERENCES, JSON.stringify(saved));
+      } catch { /* ignore storage failures */ }
+    }
+    session.setEffort(next);
+  }, [effortPreferenceKey, session.setEffort]);
+
+  // Provider 配置可以在独立编辑器 Tab 中实时修改。模型仓库刷新后：
+  // · 没有 level list → 清空并隐藏选择器
+  // · 当前值被删 / 默认变化导致当前值失效 → 切到最新默认（无默认则关闭）
+  // · 当前值仍合法 → 保留用户手动选择，不因无关配置刷新被覆盖
+  useEffect(() => {
+    const firstConfig = previousEffortConfig.current === null;
+    const configChanged = !firstConfig && previousEffortConfig.current !== effortConfigSignature;
+    previousEffortConfig.current = effortConfigSignature;
+    if (selectedEffortLevels.length === 0) {
+      if (session.effort !== null) session.setEffort(null);
+      return;
+    }
+    // 首次拿到配置或配置变化：优先恢复用户保存值；没有保存值才应用模型默认值。
+    if (firstConfig || configChanged) {
+      const preferred = readEffortPreference(effortPreferenceKey);
+      const validPreferred = preferred === null || selectedEffortLevels.some((x) => x.value === preferred)
+        ? preferred
+        : undefined;
+      const next = validPreferred !== undefined ? validPreferred : selectedDefaultEffort;
+      if (session.effort !== next) session.setEffort(next);
+      return;
+    }
+    // 非空值若因异常状态变得非法，才回落到默认；用户主动关闭（null）不进这个分支。
+    if (session.effort !== null && selectedEffortLevels.some((x) => x.value === session.effort)) return;
+    if (session.effort !== null) session.setEffort(selectedDefaultEffort);
+  }, [effortConfigSignature, effortPreferenceKey, readEffortPreference, selectedEffortLevels, selectedDefaultEffort, session.effort, session.setEffort]);
+
   // ── 图片/文件处理 ──────────────────────────────────────────────────────────
-  const fileToBase64 = (file: File): Promise<string> => new Promise((resolve) => {
+  const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error || new Error("图片读取失败"));
+    reader.onabort = () => reject(new Error("图片读取已取消"));
     reader.readAsDataURL(file);
   });
 
@@ -620,9 +775,21 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   const addImages = async (files: FileList | File[]) => {
     if (!canSendImages) return;
     const imageFiles = Array.from(files).filter((f) => f.type.startsWith("image/"));
-    const base64List = await Promise.all(imageFiles.map(fileToBase64));
-    const resized = await Promise.all(base64List.map((b) => normalizeImage(b)));
-    setImages((prev) => [...prev, ...resized]);
+    const tasks = imageFiles.map(async (file) => {
+      const id = `image-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      setProcessingAttachments((prev) => [...prev, { id, name: file.name || "图片", kind: "image", size: file.size }]);
+      try {
+        const base64 = await fileToBase64(file);
+        const resized = await normalizeImage(base64);
+        if (!cancelledAttachmentIds.current.has(id)) setImages((prev) => [...prev, resized]);
+      } catch {
+        if (!cancelledAttachmentIds.current.has(id)) showFileError(`${file.name || "图片"}：处理失败`);
+      } finally {
+        setProcessingAttachments((prev) => prev.filter((item) => item.id !== id));
+        cancelledAttachmentIds.current.delete(id);
+      }
+    });
+    await Promise.all(tasks);
   };
 
   const captureScreenshot = async () => {
@@ -752,6 +919,10 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   };
 
   const removeImage = (index: number) => setImages((prev) => prev.filter((_, i) => i !== index));
+  const cancelProcessingAttachment = (id: string) => {
+    cancelledAttachmentIds.current.add(id);
+    setProcessingAttachments((prev) => prev.filter((item) => item.id !== id));
+  };
 
   // 监听 IDE Shell 原生 drop 转发的 explorer_drop 消息（从文件树拖文件到 Axon webview 容器）
   useEffect(() => {
@@ -795,14 +966,20 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     for (const file of list) {
       if (!isAllowedTextFile(file.name)) { errors.push(`${file.name}：不支持的文件类型`); continue; }
       if (file.size > FILE_MAX_SIZE) { errors.push(`${file.name}：超过 ${Math.round(FILE_MAX_SIZE / 1024)}KB 限制`); continue; }
+      const id = `file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      setProcessingAttachments((prev) => [...prev, { id, name: file.name, kind: "file", size: file.size }]);
       try {
         const content = await readFileAsText(file);
+        if (cancelledAttachmentIds.current.has(id)) continue;
         if (looksBinary(content)) { errors.push(`${file.name}：疑似二进制文件，已跳过`); continue; }
         // 上传文件内容已在本地读到，直接作为 tag 插入编辑器（无需走扩展回灌）
         editorRef.current?.insertTag({ name: file.name, content, size: file.size, kind: "file" });
         added++;
       } catch {
-        errors.push(`${file.name}：读取失败`);
+        if (!cancelledAttachmentIds.current.has(id)) errors.push(`${file.name}：读取失败`);
+      } finally {
+        setProcessingAttachments((prev) => prev.filter((item) => item.id !== id));
+        cancelledAttachmentIds.current.delete(id);
       }
     }
     if (added > 0) setComposerEmpty(editorRef.current?.isEmpty() ?? false);
@@ -868,13 +1045,22 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   }
 
   return (
+    <PanelClientIdContext.Provider value={clientId}>
     <div className="flex flex-col h-full overflow-hidden">
       {/* 消息列表 */}
       <div className="relative flex-1 min-h-0 flex flex-col px-3">
-        {/* 顶部导航条：当前视图所属 AI 回答对应的用户提问，固定在消息列表上方（不浮动、不遮盖内容） */}
+        {/* 顶部导航条：当前视图所属 AI 回答对应的用户提问。
+
+            ⚠️ 必须是 absolute 覆盖层，不能是 flex 流里的兄弟节点。
+            它的出现/消失由"当前视口顶部是哪条消息"决定，也就是在**滚动过程中**切换。
+            早先它占 flex 流，一出现就把下面的虚拟列表视口挤矮约 32px、一消失又撑回去：
+            视口高度一变，Virtuoso 重算可见区间并补测新进来的项，scrollTop 被校正，
+            于是"往上翻历史时突然刷白一下、滚动条跳走"。向上滚动正好会反复跨越
+            "顶部是 user 消息 / 是 assistant 消息"的边界，所以滚着滚着就触发。
+            改成覆盖在列表顶部后，视口高度与它是否出现无关。 */}
         {stickyQuestion && (
           <Popover open={questionListOpen} onOpenChange={setQuestionListOpen}>
-            <div className={`flex items-center gap-1 shrink-0 ${questionListOpen ? "" : "shadow-[0_2px_4px_-1px_rgba(0,0,0,0.06)]"}`}>
+            <div className={`absolute top-0 inset-x-3 z-10 flex items-center gap-1 bg-background ${questionListOpen ? "" : "shadow-[0_2px_4px_-1px_rgba(0,0,0,0.06)]"}`}>
               <button
                 onClick={() => scrollToQuestion(stickyQuestion.id)}
                 title="跳转到该提问"
@@ -925,7 +1111,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             ) : (
               <div className="flex-1 flex items-center justify-center">
                 <div className="text-center max-w-md px-6">
-                  <AxonLogo size={64} className="mx-auto mb-4" />
+                  {/* 空态吉祥物：手绘风格 + 循环动画，颜色由这里的 class 决定（偏蓝、深浅主题各一档） */}
+                  <WelcomeMascot size={76} className="mx-auto mb-4 text-blue-500 dark:text-blue-400" />
                   {mode !== "quest" && session.workspacesLoaded && !session.workspace && session.workspaces.length === 0 ? (
                     <>
                       <p className="text-lg font-medium text-foreground">欢迎使用 Axon</p>
@@ -1000,15 +1187,20 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
           <VirtualMessageList
             ref={virtualListRef}
             messages={visibleHistory}
+            firstItemIndex={safeHiddenCount(hiddenMessageCount, historyLen)}
             estimateHeight={200}
             overscan={300}
             onScroll={stableOnScroll}
             onTopItemChange={handleTopItemChange}
-            onAtBottomChange={setListAtBottom}
             followOutput={false}
+            active={active}
             initialBottom={!session.isLoadingSession && session.chatHistory.length > 0}
             header={
               <>
+                {/* 给顶部覆盖的提问条让位（它 absolute 覆盖在列表上方，见上方注释）。
+                    常驻、不随提问条出现与否切换：切换的话列表内容高度又会跟着变，等于把问题原样搬了进来。
+                    高度与提问条一致（py-2 + text-xs 行高 ≈ 32px）。 */}
+                <div aria-hidden className="h-8" />
                 {hiddenMessageCount > 0 && (
                   <div className="flex justify-center py-2">
                     <button
@@ -1033,7 +1225,15 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                     用与真正回复相同的头部占位，让"图标 + 状态"出现在 AI 消息该出现的位置。
                     一旦 assistant 消息建好，改由它自己的头部显示（见下方 liveStatus）。 */}
                 {showPendingAssistantHeader && (
-                  <div className="py-1 animate-fade-in">
+                  <div className="py-1">
+                    {/* ⚠️ 这里不能加 `animate-fade-in`（或任何入场动画）。
+                        注意注释必须写在 div **内部** —— 放在 `cond && (` 之后会让括号里出现两个
+                        表达式，那是语法错误（TS1003/TS1005），不是"注释可有可无"的问题。
+                        这个占位块只在「消息已落终态、loading 还没收」的窗口里存在
+                        （finishLoading 有 MIN_LOADING_MS=400 的下限，短轮次走 setTimeout 延后收），
+                        于是它会在**回复完成 / 取消的那一刻**挂上、很快又卸载 —— 0.2s 的 opacity 0→1
+                        被就地重放，就是肉眼看到的那一下闪，且与回复内容无关（任何回复都经历）。
+                        同一个类在 VirtualMessageList 的列表项上造成滚动闪烁（见那里的注释），这是最后残留。 */}
                     <AssistantTurnHeader streaming liveStatus={session.statusText} startedAt={session.turnStartTime} />
                   </div>
                 )}
@@ -1067,9 +1267,11 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
           />
           )}
         {/* Loading 指示器已合并到输入区上方的统一状态条中 */}
+        {/* 「滚动到底部」：下方仍在生成时外圈蓝色脉动（.scroll-btn-running），
+            提示底部还有内容在产出；空闲时保持常态样式。 */}
         <button
           onClick={animatedScrollToBottom}
-          className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-10 w-9 h-9 rounded-full bg-background border border-border shadow-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:shadow-lg transition-all duration-200 ${showScrollBtn ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-2 pointer-events-none"}`}
+          className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-10 w-9 h-9 rounded-full bg-background border border-border shadow-md flex items-center justify-center hover:shadow-lg transition-all duration-200 ${showScrollBtn ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-2 pointer-events-none"} ${showScrollBtn && turnRunning ? "scroll-btn-running text-blue-500" : "text-muted-foreground hover:text-foreground"}`}
           title="滚动到底部"
           aria-label="滚动到底部"
         >
@@ -1079,18 +1281,6 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
       {/* 输入区域 */}
       <div className="px-3 py-4">
-        {/* 文件改动汇总条（AI 执行状态已移到回复消息头部） */}
-        <UnifiedStatusBar
-          mode={mode}
-          chatHistory={session.chatHistory}
-          pendingPaths={session.pendingPaths}
-          pendingDiffs={session.pendingDiffs}
-          onAcceptAll={session.acceptEdits}
-          onRejectAll={session.rejectEdits}
-          onUndo={session.undoEdits}
-          onListSnapshots={session.listSnapshots}
-          onRestoreSnapshot={session.restoreSnapshot}
-        />
         <div className="relative">
           {/* 斜杠命令菜单（贴输入框上方，置于 overflow-hidden 容器之外避免被裁剪） */}
           {slash.open && (
@@ -1107,28 +1297,45 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               onRequestClose={slash.close}
             />
           )}
-        {/* 吉祥物「Axo」：趴在输入框左上沿。
-            · 必须放在这个容器里、而不是输入框内部——输入框带 overflow-hidden，
-              放进去会被上边缘直接裁掉。斜杠菜单当年也是因为同一个原因提到这一层的。
-            · pointer-events-none：它悬在边框上方，不能吃掉用户点击输入框的操作。
+        {/* 吉祥物「Axo」+ 文件改动汇总（"N 已应用 / N 待确认"）合并为同一行：
+            左侧吉祥物/状态，右侧汇总按钮（点击展开改动面板）。汇总原先是输入框上方单独一条
+            bar，现并到这一行，省一行高度、也贴近输入框。
 
-            ── 为什么占真实布局空间，而不是 absolute 悬浮 ──
-            早先是 `absolute -top-[21px]`，不占空间，那 21px 是**借**上面 UnifiedStatusBar 的
-            （它有 mb-1 + min-h-[34px] 的行，合计 38px，够站）。可那条 bar 在没有文件改动时
-            整条 return null，此时输入框上方只剩外壳的 py-4（16px），吉祥物就溢出 5px
-            压到消息列表最后一行（Credits/Elapsed）上——"挨得很紧"就是这么来的。
-            改成占位元素后，21px 是它自己的，与上面渲染了什么无关：h-[26px] 是本体高度，
-            -mb-[5px] 让底部 5px 仍搭在输入框边框上，净占 21px，视觉与原来一致。
-
-            · 斜杠菜单打开时只 invisible、不卸载：菜单贴着输入框上方弹出，两者会撞在一起，
-              但直接摘掉节点会让预留的 21px 一起塌掉、输入框上跳。invisible 保留盒子。 */}
+            ── 这一行为什么留在容器里、而不是输入框内部 ──
+            输入框带 overflow-hidden，吉祥物放进去会被上边缘裁掉，所以它是输入框的兄弟节点、
+            与斜杠菜单同处这一层。
+            · 高度沿用 h-[26px] + -mb-[5px]：26px 是本体高度，-mb-[5px] 让底部 5px 搭在输入框
+              边框上，净占 21px。
+            · 斜杠菜单打开时整行只 invisible、不卸载：菜单贴着输入框上方弹出会与这行相撞，
+              直接摘掉节点会让预留的 21px 一起塌掉、输入框上跳。invisible 保留盒子。 */}
+        {/* ask_user 选项问答卡片：必须放在吉祥物行【上方】。
+            吉祥物是靠 -mb-[5px] 搭在"紧邻其下的那个元素"上沿的；卡片若夹在它和输入框之间，
+            吉祥物就会改搭在卡片上、看起来被顶到半空，破坏"趴在输入框上沿"的观感。 */}
+        {session.askUser && (
+          <AskUserCard request={session.askUser} onAnswer={session.answerUserQuestion} />
+        )}
+        <UnifiedStatusBar
+          mode={mode}
+          chatHistory={session.chatHistory}
+          pendingPaths={session.pendingPaths}
+          pendingDiffs={session.pendingDiffs}
+          onAcceptAll={session.acceptEdits}
+          onRejectAll={session.rejectEdits}
+          onUndo={session.undoEdits}
+          onListSnapshots={session.listSnapshots}
+          onRestoreSnapshot={session.restoreSnapshot}
+          slashOpen={slash.open}
+          leading={
+            <>
+              <AxonMascot mood={mascot.mood} size={26} />
+              {/* 执行中状态：贴在吉祥物右边，始终可见（消息流里的那个可能已滚出视野）。
+                  整行是 pointer-events-none，所以它不吃点击；高度由 26px 那行决定，不顶动布局。 */}
+              <MascotStatusText text={mascotStatusText} />
+            </>
+          }
+        />
         <div
-          className={`pointer-events-none flex items-start pl-3 h-[26px] -mb-[5px] z-0 select-none ${slash.open ? "invisible" : ""}`}
-        >
-          <AxonMascot mood={mascot.mood} size={26} />
-        </div>
-        <div
-          className="border border-border rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-ring focus-within:border-transparent transition-all relative bg-background"
+          className="border border-border rounded-xl overflow-hidden focus-within:ring-1 focus-within:ring-ring focus-within:border-transparent transition-all relative bg-background shadow-[0_1px_2px_rgba(0,0,0,0.04),0_6px_16px_-4px_rgba(0,0,0,0.08)] dark:shadow-[0_1px_2px_rgba(0,0,0,0.30),0_6px_16px_-4px_rgba(0,0,0,0.45)]"
           onDrop={handleDrop}
           onDragOver={(e) => e.preventDefault()}
           // focus/blur 挂在容器上而非 MentionEditor：React 的 onFocus/onBlur 底层是
@@ -1136,21 +1343,28 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
           onFocus={mascot.onFocus}
           onBlur={mascot.onBlur}
         >
-          {/* 图片预览区 */}
-          {images.length > 0 && (
-            <div className="flex gap-2 px-4 pt-3 pr-12 flex-wrap">
+          {/* 附件处理中 / 图片预览区 */}
+          {(processingAttachments.length > 0 || images.length > 0) && (
+            <div className="flex gap-3 px-4 pt-3 pr-12 flex-wrap">
+              {processingAttachments.map((attachment) => (
+                <div key={attachment.id} className="group">
+                  <ProcessingAttachmentCard attachment={attachment} onRemove={cancelProcessingAttachment} />
+                </div>
+              ))}
               {images.map((img, i) => (
-                <div key={i} className="relative group">
+                <div key={i} className="relative group rounded-xl border border-border bg-muted/20 p-1 shadow-sm">
                   <img
                     src={img}
                     alt=""
-                    className="w-16 h-16 object-cover rounded-lg border border-border cursor-zoom-in hover:opacity-90 transition-opacity"
+                    className="w-36 max-w-[45vw] h-28 object-cover rounded-lg cursor-zoom-in hover:opacity-90 transition-opacity"
                     onClick={() => setPreviewState({ images, index: i })}
                     title="点击查看大图"
                   />
+                  <span className={ATTACHMENT_BADGE_CLASS}>{imageTypeLabel(img)}</span>
                   <button
                     onClick={() => removeImage(i)}
-                    className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                    className="absolute -top-2 -right-2 w-6 h-6 bg-background text-muted-foreground border border-border rounded-full flex items-center justify-center shadow-sm opacity-0 group-hover:opacity-100 hover:text-destructive transition-all"
+                    title="移除图片"
                   >
                     <X className="w-3 h-3" />
                   </button>
@@ -1403,25 +1617,23 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               onPaste={handlePaste}
             />
           </div>
-          {/* 底部工具栏 */}
-          <div className="flex items-center justify-between px-2 pb-1.5">
-            <div className="flex items-center gap-1">
-              <ModelSelector
-                value={session.model}
-                provider={session.provider}
-                onChange={handleModelChange}
-                disabledModels={images.length > 0 && !visionFallbackModel ? models.filter((m) => !m.vision).map((m) => m.id) : []}
-                disabled={session.isCompacting || session.contextOverflow}
-                disabledTooltip={session.contextOverflow ? "上下文超限，请先压缩" : "压缩期间不可切换模型"}
-                think={session.think}
-                onThinkChange={session.setThink}
-              />
-
+          {/*
+            底部工具栏。
+            ── 排版约定（左右两组共用，改之前先读） ──
+            · 所有控件统一 28px（h-7）高、同一条中线；组内间距 gap-0.5（2px），靠控件自身的
+              hover 底色来区分彼此，而不是靠留白——留白一大，一组控件就散成几个孤立的点。
+            · 颜色只给「状态」：发送按钮（主操作）与上下文用量色。其余控件一律 muted 灰字，
+              hover 才变深。编辑模式的绿/黄点缩成 6px 状态点，不再与用量圆环抢视觉。
+            · 左组：[+] 在最左（附加内容是输入的"前置动作"，靠近输入起点），模型选择紧随其后。
+          */}
+          <div className="flex items-center justify-between gap-2 px-1.5 pb-1.5">
+            <div className="flex items-center gap-0.5 min-w-0">
               <Popover open={menuOpen} onOpenChange={setMenuOpen}>
                 <PopoverTrigger asChild>
                   <button
-                    className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-                    title="更多"
+                    className="inline-flex items-center justify-center h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=open]:bg-muted/60 data-[state=open]:text-foreground transition-colors"
+                    title="添加内容或设置改动应用方式"
+                    aria-label="更多"
                   >
                     <Plus className="w-4 h-4" />
                   </button>
@@ -1456,25 +1668,54 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
                   <div className="my-0.5 border-t border-border" />
 
-                  <div className="px-2 pt-1 pb-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
-                    <Feather className="w-3 h-3" />
-                    回复风格
-                  </div>
-                  {REPLY_STYLES.map((s) => (
+                  {mode !== "quest" && (
                     <button
-                      key={s.id}
-                      onClick={() => { setReplyStyle(s.id); setMenuOpen(false); }}
-                      className="flex items-center gap-2 w-full px-2 py-1 rounded-md text-xs hover:bg-muted/60 transition-colors text-left"
+                      type="button"
+                      role="switch"
+                      aria-checked={session.editMode === "auto"}
+                      onClick={() => session.setEditModePreference(session.editMode === "auto" ? "manual" : "auto")}
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/60"
                     >
-                      <span className="w-3.5 shrink-0 flex justify-center">
-                        {replyStyle === s.id && <Check className="w-3 h-3 text-primary" />}
+                      <span className={`size-2 shrink-0 rounded-full ${session.editMode === "auto" ? "bg-emerald-500" : "bg-amber-500"}`} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-xs font-medium text-foreground">自动应用</span>
+                        <span className="block text-[10px] leading-4 text-muted-foreground">
+                          {session.editMode === "auto" ? "代码改动直接写入文件" : "关闭后需手动确认改动"}
+                        </span>
                       </span>
-                      <span className="flex-1">{s.label}</span>
-                      <span className="text-[10px] text-muted-foreground/60">{s.hint}</span>
+                      <span className={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${session.editMode === "auto" ? "bg-emerald-500" : "bg-muted-foreground/25"}`}>
+                        <span className={`absolute top-0.5 size-3 rounded-full bg-white shadow-sm transition-transform ${session.editMode === "auto" ? "translate-x-3.5" : "translate-x-0.5"}`} />
+                      </span>
                     </button>
-                  ))}
+                  )}
                 </PopoverContent>
               </Popover>
+
+              <ModelSelector
+                value={session.model}
+                provider={session.provider}
+                onChange={handleModelChange}
+                disabledModels={images.length > 0 && !visionFallbackModel ? models.filter((m) => !m.vision).map((m) => m.id) : []}
+                disabled={session.isCompacting || session.contextOverflow}
+                disabledTooltip={session.contextOverflow ? "上下文超限，请先压缩" : "压缩期间不可切换模型"}
+              />
+              <EffortSelector
+                levels={selectedEffortLevels}
+                value={session.effort}
+                defaultValue={selectedDefaultEffort}
+                onChange={handleEffortChange}
+                disabled={session.isCompacting || session.contextOverflow}
+              />
+              {/* 上下文占比紧跟模型强度；圆环本身同时作为手动压缩入口。 */}
+              <TokenIndicator
+                used={session.tokenUsage.used}
+                max={session.tokenUsage.max}
+                cumulative={session.tokenUsage.cumulative}
+                compacting={session.isCompacting}
+                compactingMessage={session.compactingMessage}
+                overflow={session.contextOverflow}
+                onCompact={() => session.compactSession()}
+              />
 
               <input
                 ref={fileInputRef}
@@ -1492,17 +1733,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                 onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }}
               />
 
-              {replyStyle !== "default" && (
-                <span className="ml-1 px-2 py-0.5 rounded-full bg-muted text-xs text-muted-foreground">
-                  {REPLY_STYLES.find((s) => s.id === replyStyle)?.label}
-                </span>
-              )}
-
-              {/* Agent 选择器 */}
-              <AgentSelector editorRef={editorRef} />
-
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-0.5 shrink-0">
               {mode === "quest" ? (
                 /* Quest：联网搜索开关（思考开关已统一到模型选择器里，agent / quest 共用） */
                 <TooltipProvider>
@@ -1510,7 +1742,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                     <TooltipTrigger asChild>
                       <button
                         onClick={() => session.setQuestWebSearch(!session.questWebSearch)}
-                        className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${session.questWebSearch ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
+                        className={`inline-flex items-center gap-1.5 h-7 px-2 rounded-md text-xs font-medium transition-colors ${session.questWebSearch ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/60"}`}
                       >
                         <Globe className="w-3.5 h-3.5" />
                         联网
@@ -1521,90 +1753,21 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
-              ) : (
-                /* Agent：编辑模式开关 */
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        onClick={session.toggleEditMode}
-                        className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-                      >
-                        <span className={`w-1.5 h-1.5 rounded-full ${session.editMode === "manual" ? "bg-amber-500" : "bg-green-500"}`} />
-                        {session.editMode === "manual" ? "手动确认" : "自动应用"}
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" align="end" className="max-w-[240px] border-zinc-700 bg-zinc-900 text-white shadow-xl">
-                      <p className="font-medium mb-0.5 text-white">代码改动应用方式</p>
-                      <p className="text-xs text-zinc-200">
-                        {session.editMode === "manual"
-                          ? "当前：手动确认。AI 修改/创建文件后不会立即写入磁盘，需你点「接受」才生效。点击切换为自动应用。"
-                          : "当前：自动应用。AI 修改/创建文件后立即写入磁盘。点击切换为手动确认。"}
-                      </p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              )}
-              <TokenIndicator used={session.tokenUsage.used} max={session.tokenUsage.max} cumulative={session.tokenUsage.cumulative} />
-              {/*
-                压缩上下文按钮。禁用只由三件事决定：压缩进行中 / 上下文已超限 / 用量未达 35%。
-                ⚠️ 刻意【不】用"消息条数"做门槛（曾有一条 chatHistory.length < 6）：一个 agent 回合
-                无论中间跑多少轮工具，在 UI 上都只占 2 条（user + 合并后的 assistant），于是
-                "一句提问 + 大量工具轮"这种最需要压缩的形态，条数永远卡在 2，手动压缩永远点不动。
-                有没有东西可压，一律以 token 用量为准。
-              */}
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={() => session.compactSession()}
-                      disabled={session.isCompacting || session.contextOverflow || (session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35)}
-                      className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                    >
-                      {session.isCompacting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Minimize2 className="w-3.5 h-3.5" />}
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" align="end" className="max-w-[220px] border-zinc-700 bg-zinc-900 text-white shadow-xl">
-                    <p className="text-xs text-zinc-200">{session.isCompacting ? (session.compactingMessage || "压缩进行中，不可操作") : session.contextOverflow ? "请使用上方的压缩按钮" : session.tokenUsage.max > 0 && session.tokenUsage.used < session.tokenUsage.max * 0.35 ? "上下文未超过 35%，禁止手动压缩" : "压缩上下文"}</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              {session.isLoading ? (
-                /* 停止按钮：与发送按钮同一套外形（default variant 的 bg-primary + h-7 w-7 圆形），
-                   只把图标换成实心圆角方块——沿用 ChatGPT / Claude 的约定。
-                   · 不用红色 destructive：那套语义是"危险/删除"，而停止生成既不危险也不丢东西
-                     （已产出内容全部保留），红色却是整个输入区里最扎眼的，抢走视觉重心。
-                   · 不另配深色底：与发送按钮同底色，切换时只有图标变化，按钮本身不跳。 */
-                <Button
-                  size="sm"
-                  onClick={() => session.cancelTurn(session.model)}
-                  disabled={session.isCompacting}
-                  title="停止生成"
-                  aria-label="停止生成"
-                  className="h-7 w-7 rounded-full shrink-0 disabled:opacity-40"
-                >
-                  {/* ⚠️ 尺寸必须用 `size-*` 而不是 `w-* h-*`。
-                      Button 基类里有 `[&_svg:not([class*='size-'])]:size-3.5`：只要 svg 的 class
-                      里不含 "size-"，就会被强制拉到 14px（父级复合选择器特异性高于单类 w-/h-）。
-                      早先写成 w-2.5 h-2.5 正中这个陷阱——实心方块被放大到 50% 直径，
-                      和描边的发送图标一样大却重得多，看起来就成了个"甜甜圈"。
-                      8px / 28px ≈ 30%，是实心停止块的常见比例；描边图标才需要 14px。
-
-                      用内联 svg 而非 lucide 的 Square：后者是描边图标，这里要的是实心块。 */}
-                  <svg viewBox="0 0 10 10" className="size-2" aria-hidden="true">
-                    <rect x="0" y="0" width="10" height="10" rx="2" fill="currentColor" />
-                  </svg>
-                </Button>
-              ) : (
-                <Button
-                  size="sm"
-                  onClick={handleSend}
-                  disabled={!connected || !hasConfiguredSelection || (composerEmpty && images.length === 0) || !!session.compactionMigrated || session.isCompacting || session.contextOverflow}
-                  className="h-7 w-7 rounded-full shrink-0"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                </Button>
-              )}
+              ) : null}
+              {/* 发送/停止与辅助控件之间多留一点距离：主操作单独成组，不和开关挤在一起 */}
+              <span className="w-1" aria-hidden />
+              <Button
+                size="sm"
+                onClick={session.isLoading ? () => session.cancelTurn(session.model) : handleSend}
+                disabled={session.isLoading
+                  ? session.isCompacting
+                  : !connected || !hasConfiguredSelection || processingAttachments.length > 0 || (composerEmpty && images.length === 0) || !!session.compactionMigrated || session.isCompacting || session.contextOverflow}
+                title={session.isLoading ? "停止生成" : "发送消息"}
+                aria-label={session.isLoading ? "停止生成" : "发送消息"}
+                className={`axon-send-stop-button h-7 w-7 rounded-full shrink-0 disabled:opacity-40 ${session.isLoading ? "is-stopping" : "is-ready"}`}
+              >
+                <SendStopIcon stopping={session.isLoading} />
+              </Button>
             </div>
           </div>
         </div>
@@ -1636,5 +1799,6 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         onClose={() => setPreviewState(null)}
       />
     </div>
+    </PanelClientIdContext.Provider>
   );
 }

@@ -40,6 +40,8 @@ export interface LLMHandlerOutputDraft {
    * 供上层在 canary 真正驱动 UI 时精确计费/驱动压缩；provider 未返回时为 undefined。
    */
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number; cachedTokens?: number };
+  /** 本回合完整思考内容，供下一轮 DeepSeek reasoning_content 原样回传。 */
+  reasoningContent?: string;
   stage: LLMHandlerStage;
 }
 

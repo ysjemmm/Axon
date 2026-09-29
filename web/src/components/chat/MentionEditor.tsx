@@ -13,6 +13,7 @@ import { EditorContent, NodeViewWrapper, ReactNodeViewRenderer, useEditor, type 
 import { Node, mergeAttributes } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import type { AttachedFile, UserSegment } from "./types";
+import { attachmentTypeLabel } from "./attachmentType";
 
 export interface MentionEditorHandle {
   focus(): void;
@@ -68,12 +69,13 @@ function TagNodeView({ node, deleteNode }: NodeViewProps) {
   return (
     <NodeViewWrapper as="span" className="inline-flex align-middle mx-0.5" contentEditable={false}>
       <span
-        className={`inline-flex h-5 items-center gap-1 rounded-md border pl-1.5 pr-1 text-xs leading-none select-none cursor-pointer ${tagTone(data.kind)}`}
+        className={`inline-flex h-7 items-center gap-1.5 rounded-lg border pl-1.5 pr-1 text-xs leading-none select-none cursor-pointer shadow-sm ${tagTone(data.kind)}`}
         onMouseEnter={() => setPreview(true)}
         onMouseLeave={() => setPreview(false)}
         onClick={openFile}
       >
-        <span className="max-w-44 truncate font-medium">{displayName(data)}</span>
+        <span className="rounded bg-background/70 px-1 py-px text-[9px] font-semibold text-current/70">{attachmentTypeLabel(data)}</span>
+        <span className="max-w-48 truncate font-medium">{displayName(data)}</span>
         <button
           type="button"
           contentEditable={false}
@@ -83,7 +85,7 @@ function TagNodeView({ node, deleteNode }: NodeViewProps) {
             event.stopPropagation();
             deleteNode();
           }}
-          className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-current/60 hover:bg-background/50 hover:text-current"
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-current/60 hover:bg-background/50 hover:text-current"
           title="移除上下文"
         >
           ×

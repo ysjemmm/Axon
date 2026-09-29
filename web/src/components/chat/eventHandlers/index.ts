@@ -17,15 +17,17 @@ import {
 } from "./sessionHandlers";
 import {
   handleStatus, handleRetry, handleContextOverflow, handleTokenUsage, handleReasoningDelta,
+  handleWikiRecall,
   handleEditsUpdated, handleEditUndoResult,
   handleWorkspaceSet, handleEditModeSet, handleWorkspaceError,
   handleConfirmToolRequest, handleToolConfirmTimeout, handleToolWaitingInput,
+  handleAskUserRequest,
   handleConfirmCommandRequest, handleCommandRiskNotice, handleToolHistoryMismatch,
   handleFocusRelay, handleRelayUpdated, handleRelayDeleted,
   clearWaitingInput,
 } from "./stateHandlers";
 import { handleTurnCancelled } from "./turnHandlers";
-import { handleSubAgentStart, handleSubAgentEvent, handleSubAgentEnd, handleError, handleParallelBatchStart } from "./subAgentHandlers";
+import { handleSubAgentStart, handleSubAgentEvent, handleSubAgentEnd, handleError } from "./subAgentHandlers";
 
 export function createEventHandler(ctx: EventHandlerCtx): (msg: WsMessage) => void {
   return (msg: WsMessage) => {
@@ -108,6 +110,9 @@ export function createEventHandler(ctx: EventHandlerCtx): (msg: WsMessage) => vo
       case AGENT_EVENT.REASONING_DELTA:
         handleReasoningDelta(msg, ctx);
         return;
+      case AGENT_EVENT.WIKI_RECALL:
+        handleWikiRecall(msg, ctx);
+        return;
       case AGENT_EVENT.TOKEN_USAGE:
         handleTokenUsage(msg, ctx);
         return;
@@ -130,6 +135,9 @@ export function createEventHandler(ctx: EventHandlerCtx): (msg: WsMessage) => vo
       // ── 确认门 ──
       case AGENT_EVENT.CONFIRM_TOOL_REQUEST:
         handleConfirmToolRequest(msg, ctx);
+        return;
+      case AGENT_EVENT.ASK_USER_REQUEST:
+        handleAskUserRequest(msg, ctx);
         return;
       case AGENT_EVENT.TOOL_CONFIRM_TIMEOUT:
         handleToolConfirmTimeout(msg, ctx);
@@ -165,13 +173,6 @@ export function createEventHandler(ctx: EventHandlerCtx): (msg: WsMessage) => vo
       case AGENT_EVENT.SUB_AGENT_END:
         handleSubAgentEnd(msg, ctx);
         return;
-
-      // ── 并行调研/执行：批量创建 subagent 卡片，后续事件按 delegateId 路由进各自卡片 ──
-      case AGENT_EVENT.PARALLEL_RESEARCH_START:
-      case AGENT_EVENT.PARALLEL_EXECUTE_START:
-        handleParallelBatchStart(msg, ctx);
-        return;
-      // parallel_*_end：各子 Agent 已各自收到 sub_agent_end，批次级事件无需额外处理
 
       // ── 错误 ──
       case AGENT_EVENT.ERROR:

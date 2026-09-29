@@ -26,6 +26,13 @@ export class VSCodeChannel implements AgentChannel {
   }
 
   emit(event: AgentEvent): void {
+    // 旁路监听器先通知：它们（扩展侧刷新树、更新状态栏进度）不依赖 webview 是否就绪。
+    // 早先这里在 webview 为 null 时直接 return，把监听器一并跳过了 —— 后果是
+    // 聊天面板未打开时，从活动栏触发的操作在界面上了无反馈：进度永远不显示。
+    for (const l of this.listeners) {
+      try { l(event); } catch { /* 不阻塞主流程 */ }
+    }
+
     const wv = this.webview;
     if (!wv) {
       // webview 未就绪时静默丢弃（常见于 VS Code 侧栏折叠/展开重建期间），
@@ -35,9 +42,5 @@ export class VSCodeChannel implements AgentChannel {
       return;
     }
     void wv.postMessage(event);
-    // 旁路通知
-    for (const l of this.listeners) {
-      try { l(event); } catch { /* 不阻塞主流程 */ }
-    }
   }
 }

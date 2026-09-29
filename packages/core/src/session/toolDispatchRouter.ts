@@ -9,9 +9,8 @@ import { ToolName } from "../tools/index.js";
  */
 export type ToolDispatchRoute =
   | "delegate_task"
-  | "parallel_research"
-  | "parallel_execute"
   | "relay"
+  | "ask_user"
   | "command"
   | "mcp"
   | "generic";
@@ -27,9 +26,8 @@ const RELAY_TOOLS = new Set<string>([
 /** 根据工具名解析执行分支。 */
 export function resolveToolDispatchRoute(toolName: string): ToolDispatchRoute {
   if (toolName === ToolName.DelegateTask) return "delegate_task";
-  if (toolName === ToolName.ParallelResearch) return "parallel_research";
-  if (toolName === ToolName.ParallelExecute) return "parallel_execute";
   if (RELAY_TOOLS.has(toolName)) return "relay";
+  if (toolName === ToolName.AskUser) return "ask_user";
   if (toolName === ToolName.ExecuteCommand || toolName === ToolName.StartProcess) return "command";
   if (toolName.startsWith(MCP_TOOL_PREFIX)) return "mcp";
   return "generic";
