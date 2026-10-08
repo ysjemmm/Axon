@@ -122,6 +122,11 @@ export class ToolCallExecutor {
     const toolStatus = statusForTool(toolName);
     this.s.send("status", toolStatus);
 
+    // Cowork：再异步生成一句贴合当下动作的人话文案覆盖上面那条。
+    // 不 await —— 工具执行不能等文案生成，那会凭空给每次调用加上一次模型往返的延迟；
+    // 生成好了再推一条 status，没生成出来就保留上面按规则给的文案。
+    void this.s.emitHumanizedPhase(toolName, toolArgs);
+
     // 相同调用重复检测：同名工具 + 完全相同参数
     const verdict = guard.checkToolCall(toolName, toolCall.arguments);
 
@@ -172,6 +177,10 @@ export class ToolCallExecutor {
       status = out.status;
     } else if (route === "ask_user") {
       const out = await this.s.askUserToolExecutor.execute({ toolName, toolArgs, toolCallId });
+      result = out.result;
+      status = out.status;
+    } else if (route === "report_outputs") {
+      const out = await this.s.reportOutputs(toolArgs);
       result = out.result;
       status = out.status;
     } else if (route === "command") {

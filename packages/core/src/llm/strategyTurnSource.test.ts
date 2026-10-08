@@ -26,6 +26,21 @@ function buildSource(strategy: LLMStrategy) {
 }
 
 describe("StrategyTurnSource", () => {
+  it("保留 Anthropic 思考块及签名供下一轮回传", async () => {
+    const blocks = [{ thinking: "先检查文件", signature: "signed-thinking" }];
+    const strategy = makeStrategy({
+      content: "",
+      reasoningContent: "先检查文件",
+      anthropicThinkingBlocks: blocks,
+      toolCalls: [{ id: "call-1", name: "read_file", arguments: '{"path":"a.txt"}' }],
+      finishReason: "tool_calls",
+      normalizedFinishReason: "tool_calls",
+    });
+    const raw = await buildSource(strategy).run([{ role: "user", content: "读取文件" }]);
+    expect(raw.anthropicThinkingBlocks).toEqual(blocks);
+    expect(raw.reasoningContent).toBe("先检查文件");
+  });
+
   it("收集 reasoning 增量并保留分段信息", async () => {
     const strategy = makeStrategy(
       { content: "答案", toolCalls: [], finishReason: "stop", normalizedFinishReason: "complete" },

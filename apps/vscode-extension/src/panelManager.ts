@@ -69,6 +69,33 @@ export function openOrFocusPanel(options: PanelOptions): vscode.WebviewPanel {
       if (!msg || typeof msg !== "object") return;
       const m = msg as Record<string, unknown>;
 
+      if (m.type === "cowork_pick_output_dir" && typeof m.requestId === "string") {
+        let path: string | undefined;
+        let error: string | undefined;
+        try {
+          const initialPath = typeof m.initialPath === "string" && m.initialPath ? m.initialPath : undefined;
+          const uris = await vscode.window.showOpenDialog({
+            canSelectFiles: false,
+            canSelectFolders: true,
+            canSelectMany: false,
+            defaultUri: initialPath ? vscode.Uri.file(initialPath) : undefined,
+            openLabel: "设为产出位置",
+            title: "选择文档产出位置",
+          });
+          path = uris?.[0]?.fsPath;
+        } catch (err) {
+          error = (err as Error).message;
+        }
+        void panel.webview.postMessage({
+          type: "cowork_output_dir_picked",
+          clientId: typeof m.clientId === "string" ? m.clientId : undefined,
+          requestId: m.requestId,
+          path,
+          error,
+        });
+        return;
+      }
+
       if (m.type === "providers_changed") {
         options.onProvidersChanged?.();
         return;

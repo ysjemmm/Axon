@@ -495,7 +495,7 @@ function CommandCardItem({ tool, approval }: { tool: ToolCallData; approval: Ret
   return (
     <div className={`my-2 rounded-lg border bg-popover overflow-hidden tool-card-enter ${approval?.danger ? "border-red-500/80 animate-danger-pulse" : approval ? "border-amber-400/70" : (isWaitingInput && tool.status === "pending") ? "border-primary/50 animate-pulse" : tool.status === "queued" ? "border-border/50 opacity-60" : "border-border"}`}>
       {/* 标题栏 */}
-      <div className="flex items-center gap-2 py-1.5 px-2.5 text-xs border-b border-border/60 bg-foreground/[0.04]">
+      <div className="flex items-center gap-2 py-1.5 px-2.5 text-[13px] border-b border-border/60 bg-foreground/[0.04]">
         {/* 待执行用静态时钟；只有宿主实际开始执行后才显示转圈。 */}
         {tool.status === "queued" && <Clock className="w-3.5 h-3.5 shrink-0 text-muted-foreground/50" />}
         {tool.status === "pending" && isWaitingInput && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-primary" />}
@@ -605,7 +605,7 @@ export function BrowserSessionGroup({ group }: { group: BrowserSessionData }) {
     <div className={`my-2 rounded-lg border overflow-hidden ${group.hasError ? "border-red-300/60" : group.pending ? "border-amber-300/60" : "border-border"} bg-popover`}>
       {/* 标题栏 */}
       <div
-        className="flex items-center gap-2 py-1.5 px-2.5 text-xs bg-foreground/[0.04] cursor-pointer hover:bg-foreground/[0.06] transition-colors"
+        className="flex items-center gap-2 py-1.5 px-2.5 text-[13px] bg-foreground/[0.04] cursor-pointer hover:bg-foreground/[0.06] transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
         {group.pending
@@ -712,7 +712,7 @@ function GroupInFlightIcon({ queuedOnly }: { queuedOnly?: boolean }) {
 /** 卡片标题栏（工具个人信息层） */
 function CardHeader({ status, Icon, label, right }: { status: ToolStatus; Icon: typeof Server; label: string; right?: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-2 py-1.5 px-2.5 text-xs border-b border-border/60 bg-foreground/[0.04]">
+    <div className="flex items-center gap-2 py-1.5 px-2.5 text-[13px] border-b border-border/60 bg-foreground/[0.04]">
       <CardStatusIcon status={status} Icon={Icon} />
       <span className="text-muted-foreground flex-1">{label}</span>
       {right}
@@ -795,7 +795,7 @@ function ProcessOutputCard({ tool }: { tool: ToolCallData }) {
 function ProcessStopCard({ tool }: { tool: ToolCallData }) {
   const tid = typeof tool.args?.terminalId === "string" ? (tool.args.terminalId as string) : undefined;
   return (
-    <div className="flex items-center gap-2 py-1.5 px-2.5 my-2 rounded-lg border border-border bg-muted/20 text-xs">
+    <div className="flex items-center gap-2 py-1.5 px-2.5 my-2 rounded-lg border border-border bg-muted/20 text-[13px]">
       <CardStatusIcon status={tool.status} Icon={Power} />
       <span className="text-muted-foreground">停止后台进程</span>
       {tid && <span className="px-1.5 py-0.5 rounded bg-muted text-[10px] font-mono text-muted-foreground">{tid}</span>}
@@ -849,7 +849,7 @@ function BrowserLogsCard({ tool }: { tool: ToolCallData }) {
 /** close_browser 卡片（一层）：工具信息 */
 function BrowserCloseCard({ tool }: { tool: ToolCallData }) {
   return (
-    <div className="flex items-center gap-2 py-1.5 px-2.5 my-2 rounded-lg border border-border bg-muted/20 text-xs">
+    <div className="flex items-center gap-2 py-1.5 px-2.5 my-2 rounded-lg border border-border bg-muted/20 text-[13px]">
       <CardStatusIcon status={tool.status} Icon={X} />
       <span className="text-muted-foreground">关闭浏览器</span>
     </div>
@@ -967,7 +967,7 @@ export function ToolCallItem({ tool, onAcceptEdit, onRejectEdit, onUndoEdit }: T
   }
 
   return (
-    <div className={`flex items-center gap-2 py-1.5 px-2.5 my-2 rounded-lg border text-xs ${borderClass}`}>
+    <div className={`flex items-center gap-2 py-1.5 px-2.5 my-2 rounded-lg border text-[13px] ${borderClass}`}>
       {renderIcon()}
       {/* MCP 工具：badge 显示 server 名 + 描述显示"调用 工具名" */}
       {tool.mcpServer && (
@@ -1031,7 +1031,7 @@ function FileEditItem({
 
   return (
     <>
-      <div className={`flex items-center gap-2 py-1.5 px-2.5 my-2 rounded-lg border text-xs ${borderClass}`}>
+      <div className={`flex items-center gap-2 py-1.5 px-2.5 my-2 rounded-lg border text-[13px] ${borderClass}`}>
         {icon}
         <span className={`text-muted-foreground ${struck ? "line-through" : ""}`}>{isReverted ? "已撤销" : action}</span>
         {fileName && (
@@ -1095,7 +1095,7 @@ function DiagnosticsItem({ tool }: { tool: ToolCallData }) {
   const displayNames = disambiguatePaths(files.map((f) => f.path));
 
   return (
-    <div className="flex items-center gap-2 py-1.5 px-2.5 my-2 rounded-lg border border-border bg-muted/20 text-xs flex-wrap">
+    <div className="flex items-center gap-2 py-1.5 px-2.5 my-2 rounded-lg border border-border bg-muted/20 text-[13px] flex-wrap">
       {pending
         ? <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-muted-foreground" />
         : <Bug className={`w-3.5 h-3.5 shrink-0 ${hasErrors ? "text-red-500" : "text-green-600"}`} />}
@@ -1188,7 +1188,7 @@ export function EditGroupItem({
   return (
     <div className={`my-2 rounded-lg border overflow-hidden ${group.pending ? "border-amber-300/60 bg-amber-50 dark:bg-amber-950/20" : "border-border bg-muted/20"} ${isReverted ? "opacity-60" : ""}`}>
       {/* 标题行 */}
-      <div className="flex items-center gap-2 py-1.5 px-2.5 text-xs">
+      <div className="flex items-center gap-2 py-1.5 px-2.5 text-[13px]">
         {isReverted && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">已撤销</span>}        <button
           onClick={() => setExpanded((v) => !v)}
           className="flex items-center gap-2 flex-1 text-left min-w-0"
@@ -1306,7 +1306,7 @@ export function SearchGroupItem({ group }: { group: SearchGroupData }) {
   return (
     <div className="my-2 rounded-lg border border-border bg-popover overflow-hidden">
       {/* 第一层：图标 + 标题（前景色叠加 + 底分隔线，跨主题与下层分明） */}
-      <div className="flex items-center gap-2 py-1.5 px-3 text-xs border-b border-border/60 bg-foreground/[0.04]">
+      <div className="flex items-center gap-2 py-1.5 px-3 text-[13px] border-b border-border/60 bg-foreground/[0.04]">
         {group.pending
           ? <GroupInFlightIcon queuedOnly={group.queuedOnly} />
           : <Search className="w-3.5 h-3.5 text-green-600 shrink-0" />}
@@ -1350,7 +1350,7 @@ export function ReadFileGroupItem({ group }: { group: ReadFileGroupData }) {
   return (
     <div className="my-2 rounded-lg border border-border bg-muted/20 overflow-hidden min-w-0 w-full">
       {/* 单行：状态图标 + 标题 + 文件名标签（同一行，文件多时自动换行） */}
-      <div className="flex items-center gap-2 py-1.5 px-2.5 text-xs flex-wrap">
+      <div className="flex items-center gap-2 py-1.5 px-2.5 text-[13px] flex-wrap">
         {group.pending
           ? <GroupInFlightIcon queuedOnly={group.queuedOnly} />
           : group.hasError
@@ -1424,7 +1424,7 @@ function WebSearchItem({ tool }: { tool: ToolCallData }) {
       {/* 标题行 */}
       <button
         onClick={() => setExpanded((v) => !v)}
-        className="flex items-center gap-2 w-full py-1.5 px-2.5 text-xs text-left hover:bg-muted/30 transition-colors"
+        className="flex items-center gap-2 w-full py-1.5 px-2.5 text-[13px] text-left hover:bg-muted/30 transition-colors"
       >
         <ChevronRight className={`w-3.5 h-3.5 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`} />
         {pending
@@ -1475,7 +1475,7 @@ function WebFetchItem({ tool }: { tool: ToolCallData }) {
   if (failed && fr?.error) {
     return (
       <div className="my-2 rounded-lg border border-red-200 dark:border-red-900/50 bg-red-50/50 dark:bg-red-950/20 overflow-hidden">
-        <div className="flex items-center gap-2 py-1.5 px-2.5 text-xs">
+        <div className="flex items-center gap-2 py-1.5 px-2.5 text-[13px]">
           <span className="text-amber-500 shrink-0">⚠</span>
           <span className="text-foreground font-medium">Web fetch failed</span>
         </div>
@@ -1491,7 +1491,7 @@ function WebFetchItem({ tool }: { tool: ToolCallData }) {
 
   return (
     <div className="my-2 rounded-lg border border-border bg-muted/20 overflow-hidden">
-      <div className="flex items-center gap-2 py-1.5 px-2.5 text-xs">
+      <div className="flex items-center gap-2 py-1.5 px-2.5 text-[13px]">
         {pending
           ? <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-muted-foreground" />
           : <Globe className="w-3.5 h-3.5 shrink-0 text-blue-500" />}

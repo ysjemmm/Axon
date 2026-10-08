@@ -5,7 +5,7 @@
  */
 
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { ToolCallStatus, type ToolMeta, type WebCapability, type ApprovalDecision, type TrustRule, type GateOutcome } from "./tools/index.js";
 import { calculateCredits, buildCreditDetail } from "./credits.js";
 import type { AgentHost } from "./host/index.js";
@@ -27,6 +27,19 @@ import { modelContextWindow } from "./llm/modelContext.js";
 import { SYSTEM_PROMPT, QUEST_SYSTEM_PROMPT } from "./systemPrompt.js";
 import { getStrategy, findProviderForModel, declaredThinkingFor, declaredEffortValuesFor, declaredCacheControlFor, declaredVisionFor, getVisionFallbackModel, getModelDisplayName, getProviderDisplayName } from "./providers.js";
 import { PromptBuilder } from "./session/promptBuilder.js";
+import {
+  createHumanizedStatusState,
+  describeAction,
+  generateIntent,
+  generatePhase,
+  shouldGeneratePhase,
+  type HumanizedStatusState,
+} from "./session/humanizedStatus.js";
+/**
+ * 单轮最多登记的产出文件数。
+ * 防止某个批量生成脚本让模型报上来几百个文件把界面刷爆。
+ */
+const MAX_REPORTED_OUTPUTS = 12;
 import { flattenToolHistory } from "./messageSanitizer.js";
 import {
   CommandToolExecutor,
@@ -254,6 +267,32 @@ export class AgentSession {
    */
   /** @internal */ think = true;
   /** @internal */ questWebSearch = false;
+
+  /**
+   * 办公化状态文案（Cowork 面板）。
+   *
+   * 开启后，每轮开始不再发那句通用的「思考中...」，而是用当前模型即时生成一句
+   * 贴合本轮任务的意图摘要（如「核对两份台账的金额差异」）。
+   *
+   * 为什么做成开关而不是默认行为：Chat/Code 那侧配合工具卡片一起看，「思考中…」
+   * 配上卡片里的工具名和参数已经够用；而 Cowork 刻意不展示工具调用，整轮就只剩
+   * 这一句，不给出具体意图的话用户完全不知道在干什么。
+   *
+   * 由 sessionHub 按 cowork 轮设置 —— AgentSession 的 mode 已把 cowork 降级为
+   * agent（见 normalizeMode），所以运行时无法自己判断，必须显式告知。
+   */
+  /** @internal */ humanizedStatus = false;
+  /** 办公化文案的本轮生成状态（节流 + 去重）。每轮用户输入时重置。 */
+  private humanizedState: HumanizedStatusState = createHumanizedStatusState();
+  /**
+   * 产出目录（Cowork）。
+   *
+   * 只用于拼进提示词告诉模型"东西往这儿放"；产出清单由模型调 report_outputs
+   * 主动登记，不靠扫这个目录推断。
+   */
+  private outputDir = "";
+  /** 本轮已生成的意图文案：作为阶段文案的上下文，让两者对得上同一个目标。 */
+  private humanizedIntent = "";
 
   constructor(cwd: string, channel: AgentChannel, host: AgentHost, existingMessages?: ChatCompletionMessageParam[], workspaces?: string[], homeDir?: string, web?: WebCapability, mode: "agent" | "quest" = "agent", mcp?: McpCapability, commandGate?: CommandGate) {
     this.mode = mode;
@@ -1090,6 +1129,131 @@ export class AgentSession {
    * 编排逻辑在 WikiController 里，本方法只负责把会话侧的能力（模型、宿主、skill 加载器、
    * 中断信号）接上去。这样编排可以脱离真实模型单测，而生成质量交给 skill 与子 Agent。
    */
+  /** 设置产出目录（Cowork 每轮注入） */
+  /** @internal */ setOutputDir(dir: string): void {
+    this.outputDir = dir || "";
+  }
+
+  /**
+   * report_outputs 工具实现（Cowork）：Agent 主动登记本轮做出的交付物。
+   *
+   * ── 为什么改成让 Agent 报，而不是我们扫目录 ──
+   * 扫目录每一步都在猜：猜扫哪几个根（用户未必设过产出目录）、猜哪些文件算产出
+   * （Agent 为处理 Excel 写的临时 .py 不算）、靠 mtime diff 猜新旧。三层猜测叠起来
+   * 失准是必然的，实际就踩到了：产出卡片空着，而状态行说"6 个文件"。
+   * Agent 自己清楚哪个是最终交付物、哪个只是中间脚本，直接问它要最准。
+   *
+   * 仍然做存在性校验：模型可能凭记忆拼路径、或把计划中要写的文件提前报上来。
+   * 过滤掉磁盘上不存在的项，并把结果如实告诉模型（它可以据此补写或改口），
+   * 而不是静默丢弃 —— 静默丢弃会让它以为交付成功了。
+   */
+  /** @internal */ async reportOutputs(
+    toolArgs: Record<string, unknown>,
+  ): Promise<{ result: string; status: "success" | "error" }> {
+    const raw = Array.isArray(toolArgs.files) ? toolArgs.files : [];
+    if (raw.length === 0) {
+      return { result: "files 为空。没有产出文件时不要调用本工具。", status: "error" };
+    }
+
+    const accepted: { path: string; note?: string }[] = [];
+    const missing: string[] = [];
+    const seen = new Set<string>();
+
+    for (const item of raw.slice(0, MAX_REPORTED_OUTPUTS)) {
+      const entry = (item || {}) as { path?: unknown; note?: unknown };
+      const p = typeof entry.path === "string" ? entry.path.trim() : "";
+      if (!p) continue;
+      // 去重：模型偶尔会把同一个文件报两次（分别作为"生成"和"改写"）
+      const key = p.replace(/\\/g, "/").toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      // 相对路径解析到工作区，与其他工具的路径语义保持一致
+      const abs = isAbsolute(p) ? p : resolve(this.cwd, p);
+      try {
+        const info = await this.host.fs.stat(abs);
+        if (info?.isFile) {
+          accepted.push({ path: abs, ...(typeof entry.note === "string" && entry.note ? { note: entry.note } : {}) });
+        } else {
+          missing.push(p);
+        }
+      } catch {
+        missing.push(p);
+      }
+    }
+
+    if (accepted.length > 0) {
+      this.send("cowork_outputs", { paths: accepted.map((f) => f.path) });
+    }
+
+    if (missing.length > 0) {
+      const hint = `以下路径在磁盘上不存在，未登记：\n${missing.map((m) => `- ${m}`).join("\n")}\n`
+        + `请确认文件确实已写入（必要时用 list_dir 核对），再重新登记这些文件。`;
+      return {
+        result: accepted.length > 0
+          ? `已登记 ${accepted.length} 个产出文件。${hint}`
+          : hint,
+        status: accepted.length > 0 ? "success" : "error",
+      };
+    }
+
+    return { result: `已登记 ${accepted.length} 个产出文件，已显示给用户。`, status: "success" };
+  }
+
+  /**
+   * 生成并推送本轮意图文案（Cowork）。
+   *
+   * 全程吞异常：这是纯展示增强，失败时前端仍有规则兜底的文案，不该因为它让一轮
+   * 办公任务报错。也不复用 this.abortController 之外的信号 —— 用户点停止时这条
+   * 请求要跟着一起断，否则会在任务已取消后又推一条状态上来。
+   */
+  private async emitHumanizedIntent(
+    strategy: ReturnType<typeof getStrategy>,
+    input: string,
+    attachedFiles?: { name: string; size: number }[],
+  ): Promise<void> {
+    try {
+      const text = await generateIntent({
+        strategy,
+        model: this.model,
+        request: input,
+        fileNames: (attachedFiles || []).map((f) => f.name),
+        signal: this.abortController?.signal,
+      });
+      // 取消后不再推：那会让已停止的任务又冒出一行"正在…"
+      if (!text || this.cancelled) return;
+      this.humanizedIntent = text;
+      this.send("status", { content: text, phase: "thinking", humanized: true });
+    } catch {
+      // 静默：保留前端的兜底文案
+    }
+  }
+
+  /**
+   * 生成并推送阶段文案（Cowork）。
+   *
+   * 由工具调用处触发，经 shouldGeneratePhase 的节流与去重后才真正发请求 ——
+   * 一轮里连着十几次 read_file 不该打十几次模型请求。
+   */
+  /** @internal */ async emitHumanizedPhase(toolName: string, args: Record<string, unknown>): Promise<void> {
+    if (!this.humanizedStatus) return;
+    const action = describeAction(toolName, args);
+    if (!shouldGeneratePhase(this.humanizedState, action)) return;
+    try {
+      const text = await generatePhase({
+        strategy: getStrategy(this.provider, this.model),
+        model: this.model,
+        intent: this.humanizedIntent,
+        action,
+        signal: this.abortController?.signal,
+      });
+      if (!text || this.cancelled) return;
+      this.send("status", { content: text, phase: "acting", humanized: true });
+    } catch {
+      // 静默：状态行会退回按工具规则生成的文案
+    }
+  }
+
   /** @internal */ async generateWiki(workspace: string, opts: WikiGenerationOptions = {}): Promise<WikiGenerationResult> {
     // 防重入：两次并发生成会互相破坏 ——
     // 第二次 startJob 会把第一次那个【仍在活跃】的作业标成 interrupted
@@ -1389,9 +1553,10 @@ export class AgentSession {
    * 正常收尾：把最终 assistant 回复（含 turnStats）落盘、推 stream_end、裁剪旧工具结果、
    * 按阈值异步触发滚动摘要。仅在"本轮无工具调用且确定为最终回复"时调用，调用后即结束本轮。
    */
-  private finalizeAssistantReply(contentBuffer: string, turnStartTime: number, streamedContentThisRound: string, rounds: number): void {
+  private async finalizeAssistantReply(contentBuffer: string, turnStartTime: number, streamedContentThisRound: string, rounds: number, anthropicThinkingBlocks?: { thinking: string; signature?: string }[]): Promise<void> {
     const out = this.turnFinalizer.finalize({
       contentBuffer,
+      anthropicThinkingBlocks,
       streamedContentThisRound,
       turnStartTime,
       model: this.model,
@@ -1506,6 +1671,7 @@ export class AgentSession {
           normalizedFinishReason: normalized,
           usage: draft.usage,
           reasoningContent: draft.reasoningContent,
+          anthropicThinkingBlocks: draft.anthropicThinkingBlocks,
         };
       } catch (err) {
         const error = err as Error;
@@ -1678,6 +1844,7 @@ export class AgentSession {
     streamedContentThisRound: string,
     rounds: number,
     commitPendingText: () => void,
+    anthropicThinkingBlocks?: { thinking: string; signature?: string }[],
   ): Promise<"continue" | "done"> {
     const decision = this.noToolTurnDecider.decide({ contentBuffer, finishReason, guard, ts });
 
@@ -1747,6 +1914,19 @@ export class AgentSession {
       return "continue";
     }
 
+    // 连续两次空回复不是一次成功响应：上游虽然给了 finish=stop/complete，却没有返回
+    // 正文、思考或工具调用。旧逻辑会 finalizeAssistantReply("")，于是界面只剩 Credits
+    // 和一个空白 Axon 消息。改为展示明确的临时错误回复，并正常结束本轮。
+    if (decision.action === "abort_empty") {
+      this.emitTransientError(
+        "上游模型连续返回空响应。请重试；若持续出现，请检查该 Provider 的 Chat 协议兼容性或切换为其原生协议。",
+        turnStartTime,
+        streamedContentThisRound,
+      );
+      this.trace("turn.end", { finishReason, emptyResponse: true }, this.turnCount);
+      return "done";
+    }
+
     // 自动语法检查注入：已移除。
     // 原因：diagnostics.check() 返回全量诊断（包括 @types/node 缺失、lib 配置不全等环境噪音），
     // 这些是 tsconfig 配置问题，模型永远无法通过改代码修复，注入给模型只会导致死循环。
@@ -1756,7 +1936,7 @@ export class AgentSession {
     // 其余收尾（持久化/stream_end/计费/压缩）仍复用 finalizeAssistantReply。
     const taken = await this.runPipelineOutput(contentBuffer, finishReason);
     const finalContent = taken !== null ? taken : contentBuffer;
-    this.finalizeAssistantReply(finalContent, turnStartTime, streamedContentThisRound, rounds);
+    await this.finalizeAssistantReply(finalContent, turnStartTime, streamedContentThisRound, rounds, anthropicThinkingBlocks);
     this.trace("turn.end", { finishReason, finalContent: truncateForTrace(finalContent || "", 2000) }, this.turnCount);
     return "done";
   }
@@ -1924,7 +2104,23 @@ export class AgentSession {
     // 自动压缩（溢出强制无感 / 达 75% 阈值询问用户）；用户选择迁移到新会话时本轮中止
     if (await this.maybeAutoCompactBeforeTurn(strategy)) return;
 
+    // 每轮状态文案。
+    //
+    // Cowork（humanizedStatus=true）：先发一句保底，再异步用当前模型生成贴合本轮
+    // 任务的意图文案覆盖掉。两段式是必须的 —— 状态行在用户按下发送那一刻就得有
+    // 内容，而生成要等一次模型往返；等它回来再显示，开头那几秒就是空白。
+    //
+    // Chat/Code：保持原样的「思考中...」。那侧有工具卡片兜着信息量，没必要为每轮
+    // 多打一次模型请求。
     this.send("status", { content: "思考中...", phase: "thinking" });
+    this.humanizedState = createHumanizedStatusState();
+    this.humanizedIntent = "";
+    if (this.humanizedStatus) {
+      // 不 await：生成失败/超时都不该挡住主流程，用户宁可看到保底文案也不要干等。
+      void this.emitHumanizedIntent(strategy, input, userMeta?.attachedFiles);
+    }
+
+
 
     // 预取 IDE 上下文 / skill / power / MCP / Wiki 索引 —— 它们之间无依赖，并行拉取以缩短首字延迟
     const [ideCtx, skillsPrompt, powersPrompt, wikiRecall] = await Promise.all([
@@ -2097,7 +2293,7 @@ export class AgentSession {
       // 无工具调用 → 候选最终回复。交由专门方法处理（截断续写 / 内心 OS 重试 / 空回复兜底 /
       // 自动诊断 / 正常收尾），返回 "continue"=进入下一轮，"done"=本轮结束。
       if (toolCalls.length === 0) {
-        const outcome = await this.handleNoToolCallTurn(contentBuffer, finishReason, guard, ts, mutatedFiles, turnStartTime, streamedContentThisRound, rounds, commitPendingText);
+        const outcome = await this.handleNoToolCallTurn(contentBuffer, finishReason, guard, ts, mutatedFiles, turnStartTime, streamedContentThisRound, rounds, commitPendingText, turn.anthropicThinkingBlocks);
         if (outcome === "done") return;
         continue;
       }
@@ -2133,6 +2329,11 @@ export class AgentSession {
         // DeepSeek 等 reasoning 模型要求带 tool_calls 的 assistant 消息原样回传思考状态。
         // 使用 provider 协议字段名，PromptBuilder 会保留该字段进入下一轮请求。
         ...(turn.reasoningContent ? { reasoning_content: turn.reasoningContent } : {}),
+        // Anthropic extended thinking 下一轮必须原样回传 thinking + signature；
+        // 不能只保存统一的 reasoning_content，否则原生协议会丢失签名校验块。
+        ...(turn.anthropicThinkingBlocks && turn.anthropicThinkingBlocks.length > 0
+          ? { anthropic_thinking_blocks: turn.anthropicThinkingBlocks }
+          : {}),
         displayContent: null,
         runtimeContent: contentBuffer || null,
         tool_calls: toolCalls.map((tc) => ({

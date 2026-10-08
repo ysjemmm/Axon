@@ -62,6 +62,16 @@ describe("NoToolTurnDecider", () => {
     expect(ts.didSelfCheck).toBe(true);
   });
 
+  it("空回复重试后仍为空 → abort_empty，不再 finalize 空白消息", () => {
+    const out = new NoToolTurnDecider().decide({
+      contentBuffer: "",
+      finishReason: "complete",
+      guard: guard(),
+      ts: { didSelfCheck: true, emptyRetried: true },
+    });
+    expect(out).toEqual({ action: "abort_empty" });
+  });
+
   it("正常完成 → finalize，并写回 didSelfCheck", () => {
     const ts = { didSelfCheck: false, emptyRetried: true };
     const out = new NoToolTurnDecider().decide({

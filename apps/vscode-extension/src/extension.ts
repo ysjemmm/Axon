@@ -630,8 +630,22 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("axon.newSession", () => provider.postToWebview({ type: "command:new_session" })),
+    vscode.commands.registerCommand("axon.chatMode", () => provider.postToWebview({ type: "set_mode", mode: "quest" })),
+    vscode.commands.registerCommand("axon.codeMode", () => provider.postToWebview({ type: "set_mode", mode: "agent" })),
+    vscode.commands.registerCommand("axon.coworkMode", () => provider.postToWebview({ type: "set_mode", mode: "cowork" })),
     // 打开诊断输出面板：界面卡灰后可在此查看记录（含卡死时刻与当时的操作）
     vscode.commands.registerCommand("axon.showDiagnostics", () => showDiagLog()),
+    // 预览浮层的「在编辑器中打开」：overlay 在 workbench 侧，不直接碰文件系统，
+    // 回调到这里用扩展已有的打开逻辑（路径解析 / 二进制判定都在扩展这边）
+    vscode.commands.registerCommand("axon.openFileFromPreview", async (filePath?: string) => {
+      if (!filePath) return;
+      try {
+        await vscode.window.showTextDocument(vscode.Uri.file(filePath), { preview: true });
+      } catch {
+        // 二进制等无法以文本打开的文件：交给系统默认程序
+        await vscode.commands.executeCommand("vscode.open", vscode.Uri.file(filePath));
+      }
+    }),
     vscode.commands.registerCommand("axon.focusChat", () => {
       // 先确保辅助侧栏可见，再聚焦 Axon chat view
       vscode.commands.executeCommand("workbench.action.focusAuxiliaryBar");

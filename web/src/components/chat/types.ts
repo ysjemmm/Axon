@@ -166,6 +166,15 @@ export interface AttachedFile {
   content: string;
   size: number;
   /**
+   * 文件在磁盘上的绝对路径。
+   *
+   * 大文件上传时由宿主落盘到系统临时目录后回填：此时消息里只给路径、不给正文，
+   * 让 Agent 用 read_file 按自己的节奏读（先概览、再按用户诉求精读某几段），
+   * 而不是把几千行全文一次性灌进上下文。
+   * 小文件没有这个字段，正文直接内联。
+   */
+  path?: string;
+  /**
    * 来源类型：
    * - file=文件（用户上传 / 斜杠命令选中），terminal=终端选区，editor=编辑器代码选区
    * - folder=文件夹引用（斜杠命令选中），diagnostics=当前文件的问题/诊断

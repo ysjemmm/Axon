@@ -32,6 +32,20 @@ export const STORAGE = {
   QUEST_WEBSEARCH: "axon-quest-websearch",
   PROVIDER_EXPAND: "axon-provider-expand",
   LAST_PROVIDER: "axon-last-provider",
+  /**
+   * 文档产出目录（生成 Excel / Word / PDF / Markdown 的落盘位置）。
+   * 存绝对路径；未设置时由 Agent 按 document-forge 的约定落到工作区 output/。
+   * 面向办公场景：那个默认位置对非技术用户来说等于"找不到"，所以给一个显式入口。
+   */
+  OUTPUT_DIR: "axon-output-dir",
+  /**
+   * 上次是否停在 Cowork 面板。
+   *
+   * 单独一个键而不是并进 MODE：MODE 只存 agent/quest（Chat/Code 的子模式），
+   * Cowork 是覆盖在它们之上的独立接管态，退出时要能回到上次的 Chat/Code 模式。
+   * 两件事分开存，各自恢复。
+   */
+  COWORK_OPEN: "axon-cowork-open",
 } as const;
 
 // ═══════════════════════════════════════════════════════════════════
@@ -81,6 +95,8 @@ export const AGENT_EVENT = {
   RETRY: "retry",
   CONTEXT_OVERFLOW: "context_overflow",
   TOKEN_USAGE: "token_usage",
+  /** Cowork：本轮产出的文件（后端扫产出目录 diff 得出） */
+  COWORK_OUTPUTS: "cowork_outputs",
   EDITS_UPDATED: "edits_updated",
   EDIT_UNDO_RESULT: "edit_undo_result",
   WORKSPACE_SET: "workspace_set",
@@ -134,6 +150,8 @@ export const TOOL = {
   LIST_DIR: "list_dir",
   CHECK_DIAGNOSTICS: "check_diagnostics",
   DELEGATE_TASK: "delegate_task",
+  /** Cowork：Agent 主动登记本轮产出的文件 */
+  REPORT_OUTPUTS: "report_outputs",
 } as const;
 
 // ═══════════════════════════════════════════════════════════════════

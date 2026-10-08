@@ -41,7 +41,14 @@ export type AgentEventPayload =
    */
   | { type: "turn_cancelled"; elapsed: number; tokens: number; model?: string; modelName?: string; providerName?: string; effort?: string; credits?: number; creditDetail?: CreditDetail; reason?: "cancelled" | "error" }
   | { type: "reasoning_delta"; content: string; partIndex?: number; itemId?: string }
-  | { type: "status"; content: string }
+  /**
+   * 状态文案。
+   *
+   * humanized=true 表示这是模型为当前任务即时生成的办公化文案（Cowork），
+   * 不是后端按规则给的通用文案。前端据此决定「能否覆盖已有文案」——
+   * 生成的文案信息量更高，不该被随后到达的规则文案盖回去。
+   */
+  | { type: "status"; content: string; phase?: string; humanized?: boolean }
   | { type: "retry"; attempt: number; maxRetries: number; error: string; status: "retrying" | "failed" }
   | { type: "context_overflow" }
   | { type: "compacted"; message: string }
@@ -103,6 +110,15 @@ export type AgentEventPayload =
       mcpServer?: string;
       mcpTool?: string;
     }
+
+  /**
+   * 本轮产出的文件（Cowork）。
+   *
+   * 由轮次收尾时扫描产出目录 diff 得出，而不是收集 create_file 的参数 ——
+   * 办公任务的产物多半由 Python 脚本写出，工具参数里看不到（见 outputScanner）。
+   * paths 为绝对路径，前端渲染成可点开预览的卡片。
+   */
+  | { type: "cowork_outputs"; paths: string[] }
 
   // ── token 用量 ──
   | { type: "token_usage"; used: number; max: number; cumulative?: number }

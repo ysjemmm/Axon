@@ -340,32 +340,16 @@ input[type="file"],
 }
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
+@import "@fontsource-variable/instrument-sans";
 @import "@fontsource-variable/jetbrains-mono";
 
 @custom-variant dark (&:is(.dark *, .vscode-dark *));
 
 @theme inline {
-    /* 标题（--font-heading）：拉丁走 Lora——衬线，取它的"编辑感"做 Axon 自己的辨识度
-       （不与 Claude 同构：Claude 正文是纯无衬线，衬线是它的标题专属，我们把它作为标记）。
-       Lora 没有汉字字形，中文必须单独排在其后，否则中文会掉进浏览器默认字体、与拉丁明显不搭；
-       中文配对选思源宋体 Noto Serif SC（中英同为衬线，气质一致）。
-       注意：本机 Lora 只装了 Medium(500) / Bold(700)、没有 Regular(400)；
-       标题常用 500/600/700，会命中 Medium/Bold，不受影响——
-       但若日后有 400 字重的正文用 Lora，浏览器会拿 Medium 伪合成，字形会发飘。 */
-    --font-heading: 'Lora', "Noto Serif SC", "Source Han Serif SC", "Songti SC", "SimSun", serif;
-    /* ── 三路字体契约（改这里的值，同时改下面 :root 里那份，两处必须一致）──
-       ① 正文（--font-sans）：英文 Geist，中文交给为中文设计的黑体族。
-          中英文分开列、各取所需——不要把中文字族放到英文字体前面（会抢走拉丁字形），
-          也不要不列中文字族（中文会掉进浏览器默认字体，与英文明显不搭）。 */
-    /* 中文字族按"平台上最接近苹方风格"的顺序排：
-       PingFang SC（macOS 原生，即苹方）→ HarmonyOS Sans SC / MiSans（装了就更接近苹方的字形）
-       → Microsoft YaHei（Windows 默认中文 UI 字体，没装上面那些时的落点）
-       → Noto Sans SC / Source Han Sans SC（Linux / 安卓常见）
-       → Hiragino Sans GB（旧 macOS 中文）。
-       注意：PingFang 是 macOS 专有，Windows 上不存在，所以这条不是"加了就有"，
-       它只对 Mac 生效；Windows 上真正生效的是 YaHei 那一档。 */
-    --font-sans: 'Geist Variable', "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei", "Noto Sans SC", "Source Han Sans SC", "Hiragino Sans GB", sans-serif;
+    /* Axon UI、标题、正文和输入框统一使用 Instrument Sans。
+       该字体随 Web 资源打包，不依赖用户本机安装；中文由稳定的 CJK 字体回退渲染。 */
+    --font-heading: 'Instrument Sans Variable', 'Instrument Sans', "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
+    --font-sans: 'Instrument Sans Variable', 'Instrument Sans', "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
     /* ② 代码（--font-mono）：拉丁部分用 JetBrains Mono；**中文字族排在其后**，
        专门给代码块/路径/命令里的中文兜底。缺了这一段，代码里的中文会掉到默认字体，
        与旁边的 JetBrains Mono 完全不是一套。中文优先选等宽黑体（更纱黑体等），
@@ -486,6 +470,7 @@ input[type="file"],
     }
   body {
     @apply bg-background text-foreground;
+    font-family: var(--font-sans);
     }
   html {
     @apply font-sans;
@@ -560,6 +545,85 @@ input[type="file"],
   /* ⚠️ 这个 duration 必须与 AxonSpark.tsx 的 CYCLE_SECONDS 保持一致：
      组件按它算每根辐条的负 delay（-i * CYCLE / 8）来均分相位，两边不一致相位就不均了。 */
   animation: axon-spark-spoke 1.2s ease-in-out infinite;
+}
+
+/* 空态问候语旁的舒展星芒（EmptyStateGreeting 的 AxonBloom）。
+   与 .axon-spark-spoke 同源的约束：只动 scaleY + opacity，不动 stroke-width；
+   12 根辐条共用这一个 duration，靠组件里的负 delay 错相成绕圈波纹。
+   3.4s 是刻意放慢的——1.2s 那档是"AI 正在处理"的急促节奏，常驻在一屏静止内容里
+   会不断抢注意力；这里只要一点缓慢的呼吸感。
+   ⚠️ 改这里的 duration 必须同步改组件里的 BLOOM_CYCLE_SECONDS，否则相位不均。 */
+@keyframes axon-bloom-ray {
+  0%, 100% {
+    transform: scaleY(0.62);
+    opacity: 0.4;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+.axon-bloom-ray {
+  /* 原点取辐条内端（靠中心那头），所以是从中心朝外生长。
+     取外端会变成朝内收缩，看起来像在往里塌。 */
+  transform-origin: 20px 19px;
+  animation: axon-bloom-ray 3.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+/* Cowork 用户消息气泡。
+   ── 为什么不能用 bg-muted ──
+   在 VS Code 主题桥接里 --muted 映射到 --vscode-input-background，而多数浅色主题的
+   输入框背景就是纯白，与 --vscode-editor-background 完全同色 —— 气泡于是彻底隐形
+   （实际遇到：文字裸贴在右边，看不出是个气泡）。深色主题同理，不少主题的 input 背景
+   也和编辑器背景只差一点。
+   所以这里不取任何现成的主题色，而是从 --foreground 按固定比例混进 --background：
+   不论什么主题，都能稳定得到一块"比背景略深/略浅、但与文字始终有足够对比"的底色。 */
+.axon-user-bubble {
+  background: color-mix(in oklab, var(--foreground) 7%, var(--background));
+  border: 1px solid color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+
+/* 气泡内的附件卡片：再往上提一层亮度，才能从气泡底色里"浮"出来 */
+.axon-user-bubble .axon-bubble-chip {
+  background: color-mix(in oklab, var(--background) 82%, transparent);
+  border-color: color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+.axon-user-bubble .axon-bubble-chip:hover:not(:disabled) {
+  background: var(--background);
+}
+
+/* 高对比度主题：混色底在纯黑/纯白上可能仍不够分明，直接给实边框 */
+body.vscode-high-contrast .axon-user-bubble {
+  border-color: var(--border);
+}
+
+/* Cowork 状态文案的淡入。
+   规则占位文案在发送瞬间就位，模型生成的文案随后到达替换它——不加过渡的话那一刻
+   是生硬的字符跳变，用户会以为自己看错了。只做很轻的淡入 + 1px 上移：这一行是脚注，
+   动静大了会把注意力从正文抢走。
+   通过 React 的 key 变化重新挂载节点来触发，所以不需要 JS 参与。 */
+@keyframes axon-status-fade {
+  from {
+    opacity: 0;
+    transform: translateY(1px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.axon-status-fade {
+  animation: axon-status-fade 200ms ease-out;
+}
+
+/* 尊重系统的减少动效设置：这类纯装饰过渡应当直接消失，而不是变慢 */
+@media (prefers-reduced-motion: reduce) {
+  .axon-status-fade {
+    animation: none;
+  }
 }
 
 /* 状态文字（"思考中…"/"正在回复…"）的高光扫过。
@@ -841,10 +905,25 @@ body.vscode-high-contrast {
   }
 
   /* 停在完全展开态，而不是停在关键帧起点（scaleY 0.34 会缩成一小团） */
-  .axon-spark-spoke {
+  .axon-spark-spoke,
+  .axon-bloom-ray {
     animation: none;
     transform: none;
     opacity: 0.85;
+  }
+
+  /* Cowork 场景：全部停在"画完"的静态姿态。
+     对勾尤其要把 dashoffset 归零，否则停在起点等于整条线不可见。 */
+  .cowork-scene__paper-back,
+  .cowork-scene__paper-main,
+  .cowork-scene__pen,
+  .cowork-scene__row,
+  .cowork-scene__mote,
+  .cowork-scene__check {
+    animation: none;
+    transform: none;
+    opacity: 1;
+    stroke-dashoffset: 0;
   }
 
   /* 退回纯色文字：连渐变一起撤掉，避免停在某个相位上留下一道静态亮斑 */
@@ -886,29 +965,55 @@ body.vscode-high-contrast {
    注意：只在 VS Code webview 内生效（独立运行时 --vscode-* 不存在，回退到上方默认值）。
 */
 
-/* 字体与基础尺寸：跟随 VS Code 编辑器设置 */
+/* 基础尺寸跟随 VS Code；字体族属于 Axon 产品契约，不跟随用户编辑器设置。 */
 body[class*="vscode"] {
-  font-family: var(--vscode-font-family, 'Geist Variable', sans-serif);
+  font-family: var(--font-sans);
   font-size: var(--vscode-font-size, 13px);
   line-height: 1.5;
 }
 
-/* 对话正文跟随 VS Code 主题字体（--vscode-font-family），与输入框保持同一套 ——
-   输入框本身没有字体声明，继承的就是上面 body 的这套，所以正文对齐它即可"看到什么输什么"。
-   独立运行时（没有 --vscode-* 变量）回退到 --font-sans，不会掉进浏览器默认字体。
-   注意：主题字体（如 Segoe WPC / Segoe UI）不含汉字，中文仍由系统 CJK 回退决定，
-   在 Windows 上落点依旧是微软雅黑——换的主要是拉丁部分（Geist → Segoe UI）。
+/* Axon 对话正文使用自己的字体契约，不跟随 VS Code 的编辑器字体设置。
    代码块不受影响：仍由 --font-mono 钉死。 */
 .axon-chat-prose {
-  font-family: var(--vscode-font-family, var(--font-sans));
+  font-family: var(--font-sans);
 }
 
-/* 对话里的标题（markdown h1~h6）单独切到标题这一路（衬线）。
-   .axon-chat-prose 上面已把整块锁成无衬线，标题必须显式声明，
-   否则会被一起带成无衬线——那样改 --font-heading 只影响 Card/Dialog 标题，
-   对话里看不到任何变化。 */
+/* Markdown 标题统一使用 Instrument Sans，并采用小幅递增，避免 prose 默认的跳级字号。
+   一级到六级只相差 1~2px，主要通过字重和间距区分层级。 */
 .axon-chat-prose :is(h1, h2, h3, h4, h5, h6) {
   font-family: var(--font-heading);
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+.axon-chat-prose h1 {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.axon-chat-prose h2 {
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.axon-chat-prose h3 {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.axon-chat-prose h4 {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.axon-chat-prose h5 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.axon-chat-prose h6 {
+  font-size: 15px;
+  font-weight: 600;
 }
 
 /* 深色主题：VS Code 注入 body.vscode-dark 时应用深色变量 */
@@ -1262,6 +1367,139 @@ body.vscode-high-contrast {
   .axon-send-stop-icon__plane,
   .axon-send-stop-icon__stop,
   .axon-send-stop-icon__trail {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Cowork 空态场景动画（CoworkScene）──
+   约束与 axon-spark / axon-bloom 同源：只动 transform 与 opacity，绝不动 stroke-width
+   （后者在小尺寸下落进次像素区间，抗锯齿覆盖率跳档 = 真实抖动）；
+   同组元素共用一个 duration，靠负 delay 错相，避免互质周期叠加产生节拍。 */
+
+/* 两张纸：极缓慢的轻微起伏，像纸面呼吸 */
+@keyframes cowork-paper-float {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-2.5px) rotate(-0.4deg); }
+}
+
+.cowork-scene__paper-back {
+  transform-origin: 86px 82px;
+  animation: cowork-paper-float 7s ease-in-out infinite;
+}
+
+.cowork-scene__paper-main {
+  transform-origin: 101px 95px;
+  /* 与后层同周期、反相（负延迟半个周期）：两张纸一上一下，层次感来自相位差而非不同速度 */
+  animation: cowork-paper-float 7s ease-in-out infinite;
+  animation-delay: -3.5s;
+}
+
+/* 数据条：逐行亮起并轻微右展，像正在被填入 */
+@keyframes cowork-row-fill {
+  0%, 12% { opacity: 0.25; transform: scaleX(0.55); }
+  40%, 68% { opacity: 1; transform: scaleX(1); }
+  100% { opacity: 0.25; transform: scaleX(0.55); }
+}
+
+.cowork-scene__row {
+  transform-origin: left center;
+  animation: cowork-row-fill 2.8s ease-in-out infinite;
+}
+
+/* 笔：极轻微的摆动，支点在笔尾 */
+@keyframes cowork-pen-sway {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(-2.2deg); }
+}
+
+.cowork-scene__pen {
+  transform-origin: 175px 42px;
+  animation: cowork-pen-sway 5.5s ease-in-out infinite;
+}
+
+/* 数据碎片：缓慢上浮 + 明暗呼吸，到顶后淡出重来 */
+@keyframes cowork-mote-drift {
+  0% { opacity: 0; transform: translateY(6px) scale(0.7); }
+  25% { opacity: 0.7; }
+  70% { opacity: 0.55; }
+  100% { opacity: 0; transform: translateY(-12px) scale(1.1); }
+}
+
+.cowork-scene__mote {
+  animation: cowork-mote-drift 4.2s ease-in-out infinite;
+}
+
+/* 对勾：用 dash 偏移做"描画"效果，画完停一会儿再重来。
+   dasharray 是几何属性不参与逐像素抗锯齿跳档，与 stroke-width 不同，可以安全动画。 */
+@keyframes cowork-check-draw {
+  0%, 8% { stroke-dashoffset: 46; opacity: 0; }
+  26% { opacity: 1; }
+  52%, 82% { stroke-dashoffset: 0; opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 0; }
+}
+
+.cowork-scene__check {
+  stroke-dasharray: 46;
+  animation: cowork-check-draw 5.6s ease-in-out infinite;
+}
+
+/* ── Chat / Code / Cowork 模式切换：一个胶囊 + 滑动的凸起指示块 ──
+   配色照搬原辅助侧栏标题栏上的那版（axon-ide-shell auxiliaryBarPart.css）。
+   不能用 bg-muted / bg-background：VS Code 浅色主题下两者都映射到白色，胶囊和指示块会一起消失。
+   胶囊本身是 flex 自适应宽度，加档位不用改宽度，只需给指示块补一档位移。 */
+.axon-mode-switch {
+  position: relative;
+  display: flex;
+  padding: 2px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--foreground) 9%, var(--sidebar, var(--background)));
+}
+
+.axon-mode-switch__indicator {
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 30px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--sidebar, var(--background));
+  box-shadow: 0 1px 2px color-mix(in srgb, black 18%, transparent);
+  transition: transform 180ms cubic-bezier(0.2, 0, 0, 1);
+  pointer-events: none;
+}
+
+/* 指示块三档：每段 30px，按 data-mode 平移。
+   quest 是第一段（默认 translateX(0)，无需规则）。 */
+.axon-mode-switch[data-mode="agent"] .axon-mode-switch__indicator {
+  transform: translateX(30px);
+}
+
+.axon-mode-switch[data-mode="cowork"] .axon-mode-switch__indicator {
+  transform: translateX(60px);
+}
+
+.axon-mode-switch__btn {
+  position: relative;
+  z-index: 1;
+  width: 30px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  cursor: pointer;
+  color: color-mix(in srgb, var(--foreground) 55%, transparent);
+  transition: color 180ms ease;
+}
+
+.axon-mode-switch__btn:hover,
+.axon-mode-switch__btn[aria-pressed="true"] {
+  color: var(--foreground);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .axon-mode-switch__indicator,
+  .axon-mode-switch__btn {
     transition-duration: 0.01ms !important;
   }
 }

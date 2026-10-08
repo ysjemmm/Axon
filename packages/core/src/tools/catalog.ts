@@ -70,6 +70,9 @@ export enum ToolName {
   // 选项问答：主 Agent 向用户抛问题 + 选项，用户单选/多选作答。
   // 子 Agent 拿不到用户（会死等），故只在 ToolDefBuilder 里注入给主 Agent。
   AskUser = "ask_user",
+  // 产出登记（Cowork 专用）：Agent 自己把最终交付的文件告诉前端，渲染成可预览卡片。
+  // 只在办公面板注入 —— 比我们去扫目录猜哪些文件是产出可靠得多。
+  ReportOutputs = "report_outputs",
 }
 
 /**
@@ -291,6 +294,9 @@ export const TOOL_CATALOG: Record<ToolName, ToolSpec> = {
   [ToolName.RelayReviewTask]: { requiresArgs: true },
   // 选项问答：结果（用户的选择）要留在历史里供后续轮次参考，故不标 transient。
   [ToolName.AskUser]: { status: S("正在等待你的选择...", "thinking"), requiresArgs: true, contentLimit: NO_CONTENT_LIMIT },
+  // 产出登记：结果只是"登记成功/哪些路径不存在"的短回执。
+  // 标 transient —— 这条回执对后续轮次没有参考价值，留在历史里纯占上下文。
+  [ToolName.ReportOutputs]: { status: S("正在整理产出文件...", "editing"), requiresArgs: true, transient: true },
 };
 
 const DEFAULT_CONTENT_LIMIT = 3_000;

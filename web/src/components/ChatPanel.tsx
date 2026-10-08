@@ -8,33 +8,35 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Loader2, ImagePlus, X, Paperclip, Plus, Camera, ChevronDown, ListChecks, Globe, ShieldAlert, Undo2, AlertTriangle } from "lucide-react";
+import { Loader2, ImagePlus, X, Paperclip, Plus, Camera, ChevronDown, ListChecks, Globe, ShieldAlert, Undo2, AlertTriangle, FolderOutput } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ImageViewer } from "./chat/ImageViewer";
 import { EffortSelector, ModelSelector, useModels, findModel, getModels } from "@/components/ModelSelector";
+import { useModelEffort, resolveEffortForModel } from "./chat/useModelEffort";
 import { getVisionFallbackModel } from "@/lib/apiClient";
 import { updateDiagState } from "@/lib/diagnostics";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
 import { WorkspaceGroupManager, type WorkspaceGroup } from "@/components/WorkspaceGroupManager";
-import { WelcomeMascot } from "@/components/WelcomeMascot";
 import { AxonMascot } from "@/components/AxonMascot";
 import { useMascotMood } from "./chat/useMascotMood";
 import { MascotStatusText } from "./chat/MascotStatusText";
 import { SkillStudio } from "@/components/SkillStudio";
 
 import type { AttachedFile, ChatPanelProps, UserSegment } from "./chat/types";
-import { FILE_MAX_SIZE, isAllowedTextFile, looksBinary } from "./chat/fileUtils";
+import { FILE_MAX_SIZE, FILE_INLINE_MAX_SIZE, isAllowedTextFile, looksBinary } from "./chat/fileUtils";
 import { MessageBubble } from "./chat/MessageBubble";
 import { AssistantTurnHeader } from "./chat/AssistantTurn";
 import { UnifiedStatusBar } from "./UnifiedStatusBar";
 import { AskUserCard } from "./AskUserCard";
 import { MentionEditor, type MentionEditorHandle } from "./chat/MentionEditor";
+import { EmptyStateGreeting } from "./chat/EmptyStateGreeting";
 import { TokenIndicator } from "./chat/TokenIndicator";
-import { ATTACHMENT_BADGE_CLASS, imageTypeLabel } from "./chat/attachmentType";
+import { attachmentTypeLabel, imageTypeLabel } from "./chat/attachmentType";
 import { SendStopIcon } from "./chat/SendStopIcon";
 import { ProcessingAttachmentCard, type ProcessingAttachment } from "./chat/ProcessingAttachmentCard";
+import { AttachmentCard, FileCardBody } from "./chat/AttachmentCard";
 import { useChatSession, type SubmitPayload } from "./chat/useChatSession";
 import { useSessionEvents } from "@/hooks/useSessionEvents";
 import { useSlashCommands } from "./chat/slash/useSlashCommands";
@@ -51,6 +53,23 @@ import { PanelClientIdContext } from "@/lib/openDiff";
 /** 时间线默认保留的最近消息数；早期消息可按需从顶部逐批展开。 */
 const VISIBLE_HISTORY_LIMIT = 32;
 const RESTORE_HISTORY_BATCH_SIZE = 24;
+
+/**
+ * 空态首发时「输入框从居中落到底部」的动画时长（ms）。
+ * CSS 过渡与等待发送的定时器共用这一个值，改动时两边自动同步。
+ */
+const COMPOSER_LANDING_MS = 420;
+
+/**
+ * 长路径的展示用缩略：保留末两级，前面用 … 代替。
+ * 菜单项宽度只有 200px 出头，完整绝对路径塞不下；用户真正需要辨认的是末尾那几级
+ * （"是不是我要的那个文件夹"），盘符和中间层级可以省。
+ */
+function shortenPath(absPath: string): string {
+  const parts = absPath.replace(/\\/g, "/").split("/").filter(Boolean);
+  if (parts.length <= 2) return absPath;
+  return `…/${parts.slice(-2).join("/")}`;
+}
 
 export function ChatPanel({ clientId, sessionId, mode, connected, active, send, onSessionCreated, onCompactionMigrated, onStreamingChange }: ChatPanelProps) {
   const session = useChatSession({ clientId, sessionId, mode, connected, send, onSessionCreated, onCompactionMigrated, onStreamingChange });
@@ -184,6 +203,12 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
   // ── 输入区编排（壳层本地状态） ──────────────────────────────────────────
   const [images, setImages] = useState<string[]>([]);
+  /**
+   * 上传的文件：和图片一样以卡片形式排在输入框顶部，而不是作为 inline tag 塞进编辑器。
+   * inline 节点只适合几十像素高的标签；方形卡片放进文字行会把光标和行高一起撑乱。
+   * 发送时与编辑器内的上下文 tag（终端/文件夹/诊断等）合并，doSend 的处理逻辑不变。
+   */
+  const [uploadedFiles, setUploadedFiles] = useState<(AttachedFile & { id: string })[]>([]);
   const [processingAttachments, setProcessingAttachments] = useState<ProcessingAttachment[]>([]);
   const cancelledAttachmentIds = useRef(new Set<string>());
   const [fileError, setFileError] = useState<string>("");
@@ -197,8 +222,33 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     }
   }, []);
   const [composerEmpty, setComposerEmpty] = useState(true); // 编辑器是否为空（控制发送按钮可用态）
+  /**
+   * 空态首发的「落位动画」状态。
+   * true = 正在播放输入框从居中下落到底部的过渡；动画结束后才真正发请求（见 handleSend）。
+   */
+  const [composerLanding, setComposerLanding] = useState(false);
+  /**
+   * 空态（新会话、没有任何消息）：输入框居中显示，像 Claude 的新对话页。
+   *
+   * 两个排除项：
+   * - 会话历史加载中不算空态：那时还不知道到底有没有消息，先居中再跳回底部会闪一下。
+   * - 落位动画期间不算空态：动画一开始就要让输入框往底部走，此时消息还没插入、
+   *   chatHistory 仍是空的，不排除它的话 transform 目标不会变化、动画根本不会发生。
+   */
+  const composerCentered = session.chatHistory.length === 0 && !session.isLoadingSession && !composerLanding;
+  /** 落位动画结束后要执行的发送动作（动画期间暂存，避免消息插入打断过渡） */
+  const pendingSendRef = useRef<(() => void) | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  /** 文档产出目录选择器开关 */
+  const [outputPickerOpen, setOutputPickerOpen] = useState(false);
+  /**
+   * 文档产出目录（绝对路径，空串=未设置）。
+   * 存 localStorage 而非会话：这是「我习惯把文件放哪」的长期偏好，换会话不该重设。
+   */
+  const [outputDir, setOutputDir] = useState<string>(() => {
+    try { return localStorage.getItem(STORAGE.OUTPUT_DIR) || ""; } catch { return ""; }
+  });
   const [groupManagerOpen, setGroupManagerOpen] = useState(false);
   const [skillStudioOpen, setSkillStudioOpen] = useState(false);
   /** 图片查看器状态：当前图片组 + 索引（输入框图片与历史消息图片共用） */
@@ -456,12 +506,43 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
           if (f.kind === "editor") return `代码片段（${f.name}）：\n\`\`\`\n${f.content}\n\`\`\``;
           if (f.kind === "folder") return f.content;
           if (f.kind === "diagnostics") return `诊断信息（${f.name}）：\n\`\`\`\n${f.content}\n\`\`\``;
+          // 大文件（已落盘）：只给路径 + 开头若干行，让模型自己决定读哪一段。
+          //
+          // 全文注入会一次性吃掉大半个上下文窗口，而且把"读哪里"的判断权从模型手里拿走了。
+          // 给开头几行是为了让它知道这是什么文件（表头、格式、缩进风格），足够判断
+          // 接下来该用 read_file 读哪个区间、还是先 search 定位关键词。
+          //
+          // 判据是体积而不是"有没有 path"：小文件现在也会落盘（为了支持点击预览），
+          // 但它们该继续内联全文——几十行的文件让模型多走一轮工具调用纯属浪费。
+          if (f.path && f.size > FILE_INLINE_MAX_SIZE) {
+            const lines = f.content.split(/\r?\n/);
+            const headLines = lines.slice(0, 40);
+            const head = headLines.join("\n");
+            const omitted = lines.length - headLines.length;
+            return [
+              `文件：${f.path}`,
+              `共 ${lines.length} 行、${Math.round(f.size / 1024)} KB。这里只给出开头 ${headLines.length} 行；`,
+              `需要更多内容时用 read_file 按行号区间读取，或用 search 定位关键词后再精读。`,
+              "",
+              "```",
+              head,
+              omitted > 0 ? `\n…（还有 ${omitted} 行未展示）` : "",
+              "```",
+            ].join("\n");
+          }
           return `文件：${f.name}\n\`\`\`\n${f.content}\n\`\`\``;
         })
         .join("\n\n");
       contentForModel = text
         ? `${text}\n\n以下是我提供的上下文：\n\n${fileBlocks}`
         : `以下是我提供的上下文：\n\n${fileBlocks}`;
+    }
+
+    // 文档产出目录：用户显式指定过就随消息告知 Agent，覆盖 document-forge 的默认位置
+    // （那个默认是"工作区 output/"，对办公场景等于找不到）。
+    // 作为上下文行注入而不是新增协议字段：这是给模型看的偏好，不是需要后端解析的结构化参数。
+    if (outputDir) {
+      contentForModel = `${contentForModel}\n\n[生成文档时请保存到这个目录：${outputDir}]`;
     }
 
     const actualModel = session.model;
@@ -522,12 +603,30 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
       return;
     }
     const { text, tags, segments } = editorRef.current?.read() ?? { text: "", tags: [], segments: [] };
-    if (!text && images.length === 0 && tags.length === 0) return;
+    const sendTags: AttachedFile[] = [...uploadedFiles.map(({ id: _id, ...file }) => file), ...tags];
+    if (!text && images.length === 0 && sendTags.length === 0) return;
     pushHistory(text);
-    doSend(text, images, tags, segments);
+
+    // 空态首次发送：先播放"输入框从居中落到底部"的动画，等动画跑完再真正发请求。
+    // 为什么要等：doSend 会立刻插入用户消息并开始流式输出，消息列表随即撑开高度，
+    // 把正在做 transform 的输入框挤走——动画会被打断成一次突兀的跳变。
+    if (composerCentered) {
+      setComposerLanding(true);
+      // 输入框立即清空，和普通发送的手感一致（不要让文字留在框里跟着动画一起飞）
+      editorRef.current?.clear();
+      setComposerEmpty(true);
+      setImages([]);
+      setUploadedFiles([]);
+      showFileError("");
+      pendingSendRef.current = () => doSend(text, images, sendTags, segments);
+      return;
+    }
+
+    doSend(text, images, sendTags, segments);
     editorRef.current?.clear();
     setComposerEmpty(true);
     setImages([]);
+    setUploadedFiles([]);
     showFileError("");
   };
 
@@ -635,84 +734,22 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
       : findModel(newModel);
     if (images.length > 0 && targetModel && !targetModel.vision && !visionFallbackModel) return; // 有图片且未配置识图兜底时，禁止切到不支持 vision 的模型
     // 强度档位是模型专属配置：优先恢复该 provider:model 的用户偏好；从未设置才用模型默认值。
-    const validDefault = targetModel?.effortLevels?.some((x) => x.value === targetModel.defaultEffort)
-      ? targetModel.defaultEffort || null
-      : null;
-    const preferenceKey = targetModel ? `${targetModel.provider}:${targetModel.id}` : "";
-    let preferred: string | null | undefined;
-    try {
-      const saved = JSON.parse(localStorage.getItem(STORAGE.EFFORT_PREFERENCES) || "{}") as Record<string, string | null>;
-      if (preferenceKey && Object.prototype.hasOwnProperty.call(saved, preferenceKey)) preferred = saved[preferenceKey];
-    } catch { /* ignore invalid local storage */ }
-    const validPreferred = preferred === null || targetModel?.effortLevels?.some((x) => x.value === preferred)
-      ? preferred
-      : undefined;
-    session.setEffort(validPreferred !== undefined ? validPreferred : validDefault);
+    session.setEffort(resolveEffortForModel(targetModel));
     session.setModel(newModel, providerName);
   };
 
-  const selectedEffortModel = session.provider
-    ? models.find((m) => m.id === session.model && m.provider === session.provider)
-    : findModel(session.model);
-  const selectedEffortLevels = selectedEffortModel?.effortLevels || [];
-  const selectedDefaultEffort = selectedEffortLevels.some((x) => x.value === selectedEffortModel?.defaultEffort)
-    ? selectedEffortModel?.defaultEffort || null
-    : null;
-  const effortConfigSignature = JSON.stringify({
-    model: selectedEffortModel ? `${selectedEffortModel.provider}:${selectedEffortModel.id}` : "",
+  // 模型/强度联动与 Cowork 面板共用同一套实现，避免两处对"配置失效如何回落"的判断漂移。
+  const {
     levels: selectedEffortLevels,
     defaultEffort: selectedDefaultEffort,
+    handleEffortChange,
+  } = useModelEffort({
+    model: session.model,
+    provider: session.provider,
+    effort: session.effort,
+    setEffort: session.setEffort,
+    models,
   });
-  const previousEffortConfig = useRef<string | null>(null);
-  const effortPreferenceKey = selectedEffortModel ? `${selectedEffortModel.provider}:${selectedEffortModel.id}` : "";
-
-  const readEffortPreference = useCallback((key: string): string | null | undefined => {
-    if (!key) return undefined;
-    try {
-      const saved = JSON.parse(localStorage.getItem(STORAGE.EFFORT_PREFERENCES) || "{}") as Record<string, string | null>;
-      return Object.prototype.hasOwnProperty.call(saved, key) ? saved[key] : undefined;
-    } catch {
-      return undefined;
-    }
-  }, []);
-
-  const handleEffortChange = useCallback((next: string | null) => {
-    if (effortPreferenceKey) {
-      try {
-        const saved = JSON.parse(localStorage.getItem(STORAGE.EFFORT_PREFERENCES) || "{}") as Record<string, string | null>;
-        saved[effortPreferenceKey] = next;
-        localStorage.setItem(STORAGE.EFFORT_PREFERENCES, JSON.stringify(saved));
-      } catch { /* ignore storage failures */ }
-    }
-    session.setEffort(next);
-  }, [effortPreferenceKey, session.setEffort]);
-
-  // Provider 配置可以在独立编辑器 Tab 中实时修改。模型仓库刷新后：
-  // · 没有 level list → 清空并隐藏选择器
-  // · 当前值被删 / 默认变化导致当前值失效 → 切到最新默认（无默认则关闭）
-  // · 当前值仍合法 → 保留用户手动选择，不因无关配置刷新被覆盖
-  useEffect(() => {
-    const firstConfig = previousEffortConfig.current === null;
-    const configChanged = !firstConfig && previousEffortConfig.current !== effortConfigSignature;
-    previousEffortConfig.current = effortConfigSignature;
-    if (selectedEffortLevels.length === 0) {
-      if (session.effort !== null) session.setEffort(null);
-      return;
-    }
-    // 首次拿到配置或配置变化：优先恢复用户保存值；没有保存值才应用模型默认值。
-    if (firstConfig || configChanged) {
-      const preferred = readEffortPreference(effortPreferenceKey);
-      const validPreferred = preferred === null || selectedEffortLevels.some((x) => x.value === preferred)
-        ? preferred
-        : undefined;
-      const next = validPreferred !== undefined ? validPreferred : selectedDefaultEffort;
-      if (session.effort !== next) session.setEffort(next);
-      return;
-    }
-    // 非空值若因异常状态变得非法，才回落到默认；用户主动关闭（null）不进这个分支。
-    if (session.effort !== null && selectedEffortLevels.some((x) => x.value === session.effort)) return;
-    if (session.effort !== null) session.setEffort(selectedDefaultEffort);
-  }, [effortConfigSignature, effortPreferenceKey, readEffortPreference, selectedEffortLevels, selectedDefaultEffort, session.effort, session.setEffort]);
 
   // ── 图片/文件处理 ──────────────────────────────────────────────────────────
   const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
@@ -958,6 +995,36 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     reader.readAsText(file);
   });
 
+  /**
+   * 请求宿主把上传内容落盘到系统临时目录，拿回绝对路径。
+   *
+   * 拿不到路径（非 webview 环境、写盘失败、超时）时返回 undefined —— 调用方会退回
+   * 内联正文。宁可多占一些上下文，也不能让上传本身失败。
+   */
+  const stashUpload = (name: string, content: string): Promise<string | undefined> => {
+    const host = (window as unknown as { __axonVSCode?: { postMessage: (m: unknown) => void } }).__axonVSCode;
+    if (!host) return Promise.resolve(undefined);
+    return new Promise<string | undefined>((resolve) => {
+      const requestId = `stash-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      let settled = false;
+      const done = (value?: string) => {
+        if (settled) return;
+        settled = true;
+        window.removeEventListener("message", onMessage);
+        resolve(value);
+      };
+      const onMessage = (ev: MessageEvent) => {
+        const msg = ev.data as { type?: string; requestId?: string; path?: string };
+        if (msg?.type !== "upload_stashed" || msg.requestId !== requestId) return;
+        done(typeof msg.path === "string" ? msg.path : undefined);
+      };
+      window.addEventListener("message", onMessage);
+      host.postMessage({ type: "stash_upload", clientId, requestId, name, content });
+      // 超时兜底：宿主无响应时退回内联，不能让上传卡住
+      window.setTimeout(() => done(undefined), 5000);
+    });
+  };
+
   const addFiles = async (files: FileList | File[]) => {
     showFileError("");
     const list = Array.from(files);
@@ -972,8 +1039,13 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         const content = await readFileAsText(file);
         if (cancelledAttachmentIds.current.has(id)) continue;
         if (looksBinary(content)) { errors.push(`${file.name}：疑似二进制文件，已跳过`); continue; }
-        // 上传文件内容已在本地读到，直接作为 tag 插入编辑器（无需走扩展回灌）
-        editorRef.current?.insertTag({ name: file.name, content, size: file.size, kind: "file" });
+        // 一律落盘到临时目录，拿一个真实路径。两个用途：
+        // ① 点卡片预览时宿主按路径读盘（预览窗在 workbench 层，拿不到 webview 的内存内容）；
+        // ② 大文件发送时只给路径不给全文，让 Agent 用 read_file 自己分段读。
+        // 落盘失败不影响上传——只是失去预览入口，大文件会退回内联正文。
+        const stashedPath = await stashUpload(file.name, content);
+        if (cancelledAttachmentIds.current.has(id)) continue;
+        setUploadedFiles((prev) => [...prev, { id, name: file.name, content, size: file.size, kind: "file", path: stashedPath }]);
         added++;
       } catch {
         if (!cancelledAttachmentIds.current.has(id)) errors.push(`${file.name}：读取失败`);
@@ -982,7 +1054,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         cancelledAttachmentIds.current.delete(id);
       }
     }
-    if (added > 0) setComposerEmpty(editorRef.current?.isEmpty() ?? false);
+    if (added > 0) setComposerEmpty(false);
     if (errors.length > 0) showFileError(errors.join("；"));
   };
 
@@ -1039,6 +1111,44 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   // quickAction auto-send：handleSend 在 add_context 回调外定义，用 ref 桥接
   const handleSendRef = useRef(handleSend);
   handleSendRef.current = handleSend;
+
+  /**
+   * 空态提示词块：把预置文案填进输入框并聚焦，不直接发送。
+   * 这些文案都是半句起手式（"帮我分析这段代码："），用户几乎总要接着补自己的上下文；
+   * 点一下就发出去只会换回一句"请提供代码"，白跑一轮。
+   * 「随便聊」传空串，此时只聚焦输入框，相当于一个"我就是想开个空白对话"的确认动作。
+   */
+  /** 设定文档产出目录：存 localStorage（长期偏好，跨会话保留） */
+  const handleSelectOutputDir = useCallback((dir: string) => {
+    setOutputDir(dir);
+    try { localStorage.setItem(STORAGE.OUTPUT_DIR, dir); } catch { /* 忽略 */ }
+  }, []);
+
+  const handlePickPrompt = useCallback((prompt: string) => {
+    if (prompt) {
+      editorRef.current?.appendText(prompt);
+      setComposerEmpty(editorRef.current?.isEmpty() ?? false);
+    }
+    editorRef.current?.focus();
+  }, []);
+
+  /**
+   * 落位动画跑完后，把暂存的发送动作真正执行掉。
+   *
+   * 用定时器而不是 transitionend：后者在过渡被打断、元素中途被隐藏（切走 tab）或用户
+   * 系统开了 reduce-motion 时可能压根不触发，那条消息就永远发不出去了——宁可按固定时长
+   * 兜底，也不能让用户的输入凭空消失。
+   */
+  useEffect(() => {
+    if (!composerLanding) return;
+    const timer = setTimeout(() => {
+      const send = pendingSendRef.current;
+      pendingSendRef.current = null;
+      setComposerLanding(false);
+      send?.();
+    }, COMPOSER_LANDING_MS);
+    return () => clearTimeout(timer);
+  }, [composerLanding]);
   // Skill Studio 整页接管
   if (skillStudioOpen) {
     return <SkillStudio workspace={session.workspace} onBack={() => setSkillStudioOpen(false)} />;
@@ -1047,8 +1157,10 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   return (
     <PanelClientIdContext.Provider value={clientId}>
     <div className="flex flex-col h-full overflow-hidden">
-      {/* 消息列表 */}
-      <div className="relative flex-1 min-h-0 flex flex-col px-3">
+      {/* 消息列表。
+          空态时不吃满剩余高度（flex-none + 内容自适应），把空间让给下方的输入区，
+          使「欢迎文案 + 输入框」作为一组整体垂直居中——即 Claude 新对话页的排布。 */}
+      <div className={`relative min-h-0 flex flex-col px-3 ${composerCentered ? "flex-none" : "flex-1"}`}>
         {/* 顶部导航条：当前视图所属 AI 回答对应的用户提问。
 
             ⚠️ 必须是 absolute 覆盖层，不能是 flex 流里的兄弟节点。
@@ -1100,85 +1212,14 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         )}
         {session.chatHistory.length === 0 ? (
           <>
-            {/* 空历史占位 —— 独占整个 flex-1 区域，自然居中 */}
-            {session.isLoadingSession ? (
+            {/* 空历史占位。只保留"加载中"这一种：欢迎文案已移到输入区容器内部，
+                与输入框作为同一组垂直居中（见下方输入区的 emptyStateGreeting）。
+                留在这里的话它是独立的 flex 项，会被吃满高度的输入区顶到面板顶部。 */}
+            {session.isLoadingSession && (
               <div className="flex-1 flex items-center justify-center">
                 <div className="text-center text-muted-foreground">
                   <Loader2 className="w-8 h-8 mx-auto mb-4 animate-spin text-primary/60" />
                   <p className="text-sm">会话历史加载中...</p>
-                </div>
-              </div>
-            ) : (
-              <div className="flex-1 flex items-center justify-center">
-                <div className="text-center max-w-md px-6">
-                  {/* 空态吉祥物：手绘风格 + 循环动画，颜色由这里的 class 决定（偏蓝、深浅主题各一档） */}
-                  <WelcomeMascot size={76} className="mx-auto mb-4 text-blue-500 dark:text-blue-400" />
-                  {mode !== "quest" && session.workspacesLoaded && !session.workspace && session.workspaces.length === 0 ? (
-                    <>
-                      <p className="text-lg font-medium text-foreground">欢迎使用 Axon</p>
-                      <p className="text-sm text-muted-foreground mt-1 mb-4">AI 编程助手 · 读写代码、执行命令、搜索项目</p>
-                      <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-5 py-4 text-left mb-4">
-                        <p className="text-sm font-medium text-amber-600 dark:text-amber-400 mb-2">⚠ 尚未添加工作区</p>
-                        <p className="text-xs text-muted-foreground leading-relaxed mb-3">Axon Agent 需要至少一个工作区文件夹才能读写代码、执行命令。请先添加工作区。</p>
-                        <button
-                          onClick={() => setPickerOpen(true)}
-                          className="text-xs font-medium text-primary hover:text-primary/80 transition-colors"
-                        >
-                          → 点击添加工作区
-                        </button>
-                      </div>
-                    </>
-                  ) : mode === "quest" ? (
-                    <>
-                      <p className="text-lg font-medium text-foreground">Axon · 问答</p>
-                      <p className="text-sm text-muted-foreground mt-1 mb-6">概念、方案、答疑。我不会改你的代码。</p>
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-lg font-medium text-foreground">Axon</p>
-                      <p className="text-sm text-muted-foreground mt-1 mb-6">读写代码、执行命令、搜索项目、联网查询。</p>
-                    </>
-                  )}
-                  <div className="bg-muted/40 rounded-xl px-5 py-4 text-left">
-                    <p className="text-xs font-medium text-foreground mb-2.5">快速上手</p>
-                    <div className="space-y-2">
-                      {mode === "quest" ? (
-                        <>
-                          <div className="flex items-start gap-2.5">
-                            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">1</span>
-                            <p className="text-xs text-muted-foreground leading-relaxed">直接提问：技术方案、概念解释、代码分析、架构建议</p>
-                          </div>
-                          <div className="flex items-start gap-2.5">
-                            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">2</span>
-                            <p className="text-xs text-muted-foreground leading-relaxed">可开启「联网搜索」获取最新信息，或开启「思考过程」查看推理链</p>
-                          </div>
-                          <div className="flex items-start gap-2.5">
-                            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">3</span>
-                            <p className="text-xs text-muted-foreground leading-relaxed">问答模式只回答问题，不会读写文件或执行命令</p>
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <div className="flex items-start gap-2.5">
-                            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">1</span>
-                            <p className="text-xs text-muted-foreground leading-relaxed">打开项目文件夹（可绑定工作区组，管理多根目录）</p>
-                          </div>
-                          <div className="flex items-start gap-2.5">
-                            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">2</span>
-                            <p className="text-xs text-muted-foreground leading-relaxed">用自然语言描述需求：改 bug、加功能、分析代码、写脚本……</p>
-                          </div>
-                          <div className="flex items-start gap-2.5">
-                            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">3</span>
-                            <p className="text-xs text-muted-foreground leading-relaxed">Axon 会读文件 → 改代码 → 跑命令验证，全程自动推进</p>
-                          </div>
-                          <div className="flex items-start gap-2.5">
-                            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-[10px] font-bold text-primary shrink-0 mt-0.5">4</span>
-                            <p className="text-xs text-muted-foreground leading-relaxed">输入 <code className="px-1 py-0.5 rounded bg-muted text-[10px] font-mono">/</code> 引用当前文件、终端选区或编辑器诊断</p>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  </div>
                 </div>
               </div>
             )}
@@ -1279,9 +1320,28 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         </button>
       </div>
 
-      {/* 输入区域 */}
-      <div className="px-3 py-4">
-        <div className="relative">
+      {/* 输入区域。
+          空态：flex-grow=1 吃满剩余高度并把内容垂直居中（配合上方不再抢高度的欢迎块，
+          整组看起来落在面板中间）。首发时 composerCentered 转 false，flex-grow 回到 0，
+          容器高度收缩、带动输入框平滑落到底部——落位动画就是这么来的。
+
+          过渡放在 flex-grow 而不是 transform：transform 会让输入框脱离布局、压在消息
+          列表上；flex-grow 是真实的布局动画，动画结束时位置即最终位置，不用再校正。
+          grow 值写在 style 里（而非 flex-1/flex-none 类名）：类名简写会连带改 basis 与
+          shrink，属性一起跳变就过渡不起来了。 */}
+      <div
+        className={`px-3 py-4 flex flex-col justify-center ${composerCentered ? "min-h-0" : ""}`}
+        style={{
+          flexGrow: composerCentered ? 1 : 0,
+          flexShrink: 0,
+          flexBasis: "auto",
+          transition: `flex-grow ${COMPOSER_LANDING_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`,
+        }}
+      >
+        {/* 空态给输入框封一个最大宽度并居中：面板被拉宽时（拖宽侧栏 / 弹成独立窗口）
+            输入框若铺满整行，会和只占中间一小块的欢迎文案宽度完全脱节，看着很别扭。
+            有消息之后不限宽——那时输入框与消息气泡同宽才对齐。 */}
+        <div className={`relative ${composerCentered ? "w-full max-w-[720px] mx-auto" : ""}`}>
           {/* 斜杠命令菜单（贴输入框上方，置于 overflow-hidden 容器之外避免被裁剪） */}
           {slash.open && (
             <SlashCommandMenu
@@ -1308,32 +1368,62 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               边框上，净占 21px。
             · 斜杠菜单打开时整行只 invisible、不卸载：菜单贴着输入框上方弹出会与这行相撞，
               直接摘掉节点会让预留的 21px 一起塌掉、输入框上跳。invisible 保留盒子。 */}
+        {/* 空态欢迎文案：放在输入区容器【内部】、输入框上方，与输入框同属一个居中的组
+            （Claude 新对话页就是"一句问候 + 紧跟其下的输入框"整体居中）。
+            放在消息列表那一侧行不通：那是独立的 flex 项，会被吃满高度的输入区顶到顶部。 */}
+        {composerCentered && (
+          mode !== "quest" && session.workspacesLoaded && !session.workspace && session.workspaces.length === 0 ? (
+            // 无工作区是真正的阻塞态（Agent 读写代码、跑命令都需要它），这一屏必须讲清楚
+            // 为什么不能用、怎么解决，不能换成问候语糊过去。
+            <div className="text-center px-3 pb-5">
+              <p className="text-lg font-medium text-foreground">欢迎使用 Axon</p>
+              <p className="text-sm text-muted-foreground mt-1 mb-4">AI 编程助手 · 读写代码、执行命令、搜索项目</p>
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-5 py-4 text-left">
+                <p className="text-sm font-medium text-amber-600 dark:text-amber-400 mb-2">⚠ 尚未添加工作区</p>
+                <p className="text-xs text-muted-foreground leading-relaxed mb-3">Axon Agent 需要至少一个工作区文件夹才能读写代码、执行命令。请先添加工作区。</p>
+                <button
+                  onClick={() => setPickerOpen(true)}
+                  className="text-xs font-medium text-primary hover:text-primary/80 transition-colors"
+                >
+                  → 点击添加工作区
+                </button>
+              </div>
+            </div>
+          ) : (
+            <EmptyStateGreeting mode={mode} onPickPrompt={handlePickPrompt} />
+          )
+        )}
         {/* ask_user 选项问答卡片：必须放在吉祥物行【上方】。
             吉祥物是靠 -mb-[5px] 搭在"紧邻其下的那个元素"上沿的；卡片若夹在它和输入框之间，
             吉祥物就会改搭在卡片上、看起来被顶到半空，破坏"趴在输入框上沿"的观感。 */}
         {session.askUser && (
           <AskUserCard request={session.askUser} onAnswer={session.answerUserQuestion} />
         )}
-        <UnifiedStatusBar
-          mode={mode}
-          chatHistory={session.chatHistory}
-          pendingPaths={session.pendingPaths}
-          pendingDiffs={session.pendingDiffs}
-          onAcceptAll={session.acceptEdits}
-          onRejectAll={session.rejectEdits}
-          onUndo={session.undoEdits}
-          onListSnapshots={session.listSnapshots}
-          onRestoreSnapshot={session.restoreSnapshot}
-          slashOpen={slash.open}
-          leading={
-            <>
-              <AxonMascot mood={mascot.mood} size={26} />
-              {/* 执行中状态：贴在吉祥物右边，始终可见（消息流里的那个可能已滚出视野）。
-                  整行是 pointer-events-none，所以它不吃点击；高度由 26px 那行决定，不顶动布局。 */}
-              <MascotStatusText text={mascotStatusText} />
-            </>
-          }
-        />
+        {/* 空态不渲染这一行：新对话页只留「一句欢迎 + 输入框」，吉祥物和改动汇总
+            （"N 已应用"）在还没有任何消息时都没有信息量，纯属噪音。
+            有消息后照常出现。 */}
+        {!composerCentered && (
+          <UnifiedStatusBar
+            mode={mode}
+            chatHistory={session.chatHistory}
+            pendingPaths={session.pendingPaths}
+            pendingDiffs={session.pendingDiffs}
+            onAcceptAll={session.acceptEdits}
+            onRejectAll={session.rejectEdits}
+            onUndo={session.undoEdits}
+            onListSnapshots={session.listSnapshots}
+            onRestoreSnapshot={session.restoreSnapshot}
+            slashOpen={slash.open}
+            leading={
+              <>
+                <AxonMascot mood={mascot.mood} size={26} />
+                {/* 执行中状态：贴在吉祥物右边，始终可见（消息流里的那个可能已滚出视野）。
+                    整行是 pointer-events-none，所以它不吃点击；高度由 26px 那行决定，不顶动布局。 */}
+                <MascotStatusText text={mascotStatusText} />
+              </>
+            }
+          />
+        )}
         <div
           className="border border-border rounded-xl overflow-hidden focus-within:ring-1 focus-within:ring-ring focus-within:border-transparent transition-all relative bg-background shadow-[0_1px_2px_rgba(0,0,0,0.04),0_6px_16px_-4px_rgba(0,0,0,0.08)] dark:shadow-[0_1px_2px_rgba(0,0,0,0.30),0_6px_16px_-4px_rgba(0,0,0,0.45)]"
           onDrop={handleDrop}
@@ -1344,31 +1434,36 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
           onBlur={mascot.onBlur}
         >
           {/* 附件处理中 / 图片预览区 */}
-          {(processingAttachments.length > 0 || images.length > 0) && (
+          {(processingAttachments.length > 0 || images.length > 0 || uploadedFiles.length > 0) && (
             <div className="flex gap-3 px-4 pt-3 pr-12 flex-wrap">
               {processingAttachments.map((attachment) => (
-                <div key={attachment.id} className="group">
-                  <ProcessingAttachmentCard attachment={attachment} onRemove={cancelProcessingAttachment} />
-                </div>
+                <ProcessingAttachmentCard key={attachment.id} attachment={attachment} onRemove={cancelProcessingAttachment} />
               ))}
               {images.map((img, i) => (
-                <div key={i} className="relative group rounded-xl border border-border bg-muted/20 p-1 shadow-sm">
+                <AttachmentCard key={i} bleed onRemove={() => removeImage(i)} removeLabel="移除图片">
                   <img
                     src={img}
                     alt=""
-                    className="w-36 max-w-[45vw] h-28 object-cover rounded-lg cursor-zoom-in hover:opacity-90 transition-opacity"
+                    className="h-full w-full object-cover cursor-zoom-in hover:opacity-90 transition-opacity"
                     onClick={() => setPreviewState({ images, index: i })}
                     title="点击查看大图"
                   />
-                  <span className={ATTACHMENT_BADGE_CLASS}>{imageTypeLabel(img)}</span>
-                  <button
-                    onClick={() => removeImage(i)}
-                    className="absolute -top-2 -right-2 w-6 h-6 bg-background text-muted-foreground border border-border rounded-full flex items-center justify-center shadow-sm opacity-0 group-hover:opacity-100 hover:text-destructive transition-all"
-                    title="移除图片"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
+                  {/* 角标叠在缩略图左下角：加一层半透明底，避免压在亮色图片上看不清 */}
+                  <span className="pointer-events-none absolute bottom-1.5 left-1.5 z-[2] rounded-md bg-background/85 px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-4 tracking-wide text-foreground/80 shadow-sm backdrop-blur-sm">
+                    {imageTypeLabel(img)}
+                  </span>
+                </AttachmentCard>
+              ))}
+              {uploadedFiles.map((file) => (
+                <AttachmentCard
+                  key={file.id}
+                  onRemove={() => setUploadedFiles((prev) => prev.filter((f) => f.id !== file.id))}
+                  removeLabel={`移除 ${file.name}`}
+                  title={file.name}
+                  previewPath={file.path}
+                >
+                  <FileCardBody name={file.name} badge={attachmentTypeLabel(file)} />
+                </AttachmentCard>
               ))}
             </div>
           )}
@@ -1668,6 +1763,25 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
                   <div className="my-0.5 border-t border-border" />
 
+                  {/* 文档产出位置：生成 Excel / Word / PDF / Markdown 时的落盘目录。
+                      默认位置（工作区 output/）对非技术用户等于"找不到"，给一个显式入口
+                      让他们指定到桌面之类能看见的地方。 */}
+                  <button
+                    onClick={() => { setOutputPickerOpen(true); setMenuOpen(false); }}
+                    className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs hover:bg-muted/60 transition-colors text-left"
+                    title={outputDir || "未设置，默认落到工作区 output/"}
+                  >
+                    <FolderOutput className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block">文档产出位置</span>
+                      <span className="block truncate text-[10px] text-muted-foreground/60">
+                        {outputDir ? shortenPath(outputDir) : "默认：工作区 output/"}
+                      </span>
+                    </span>
+                  </button>
+
+                  <div className="my-0.5 border-t border-border" />
+
                   {mode !== "quest" && (
                     <button
                       type="button"
@@ -1780,6 +1894,16 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         onOpenChange={setPickerOpen}
         initialPath={session.workspace || undefined}
         onSelect={session.selectWorkspace}
+      />
+
+      {/* 文档产出目录选择弹窗（复用同一个目录选择器，只换文案） */}
+      <WorkspacePicker
+        open={outputPickerOpen}
+        onOpenChange={setOutputPickerOpen}
+        initialPath={outputDir || session.workspace || undefined}
+        title="选择文档产出位置"
+        confirmLabel="设为产出位置"
+        onSelect={handleSelectOutputDir}
       />
 
       {/* 工作区组管理弹窗 */}

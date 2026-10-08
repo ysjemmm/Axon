@@ -230,7 +230,11 @@ export class PromptBuilder {
   buildRequestMessages(): ChatCompletionMessageParam[] {
     const injections = this.buildInjections();
     const isDeepSeek = /deepseek/i.test(this.s.model);
-    const isCacheFriendly = isDeepSeek || /glm|qwen|moonshot|kimi|yi-/i.test(this.s.model);
+    // 自动 Prompt Caching（GPT / o 系列）和显式前缀缓存模型都要求：
+    // 已发过的 system + 历史保持在请求最前面，运行时注入只能追加到尾部。
+    // 否则 IDE 上下文、工作区焦点等一变化，就会从 system 后立刻截断缓存前缀。
+    const isCacheFriendly = isDeepSeek || /^(gpt|o1|o3|o4)/i.test(this.s.model)
+      || /glm|qwen|moonshot|kimi|yi-/i.test(this.s.model);
 
     // ⚠️ 这里【不能】以 turnStartMsgCount（本轮起点）为界改写历史。
     //

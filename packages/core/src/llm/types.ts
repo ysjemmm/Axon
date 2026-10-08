@@ -63,6 +63,13 @@ export interface LLMTurnResult {
    * 带 tool_calls 的 assistant 消息必须在下一轮原样回传；未产生思考时省略。
    */
   reasoningContent?: string;
+  /**
+   * Anthropic 原生 extended thinking 内容块。
+   *
+   * reasoningContent 只适合给前端展示或兼容 OpenAI 风格的 reasoning_content；
+   * Anthropic 下一轮请求还需要原始 thinking 文本及其 signature，不能只保留纯文本。
+   */
+  anthropicThinkingBlocks?: { thinking: string; signature?: string }[];
   /** 本回合的工具调用列表（为空表示模型给出了最终回复） */
   toolCalls: NormalizedToolCall[];
   /** 结束原因：stop / tool_calls / length / content_filter 等（原始协议值，历史消费方依赖，勿改语义） */

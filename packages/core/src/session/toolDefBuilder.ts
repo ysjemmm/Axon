@@ -33,7 +33,59 @@ export class ToolDefBuilder {
       return tools;
     }
     const base = getToolDefinitions() as unknown as ToolDef[];
-    return [...base, this.getDelegateToolDef(), this.getAskUserToolDef(), ...this.getRelayToolDefs(), ...this.s.mcpToolDefsCache];
+    const tools = [...base, this.getDelegateToolDef(), this.getAskUserToolDef(), ...this.getRelayToolDefs(), ...this.s.mcpToolDefsCache];
+    // Cowork：额外给一个「交付产出」工具，让 Agent 自己说清做出了什么文件。
+    // 只在办公面板注入 —— Chat/Code 那侧有工具卡片和 diff，不需要再多一个上报动作。
+    if (this.s.humanizedStatus) tools.push(this.getDeliverToolDef());
+    return tools;
+  }
+
+  /**
+   * report_outputs 工具定义（Cowork 专用）。
+   *
+   * ── 为什么要让 Agent 主动报，而不是我们去扫目录 ──
+   * 扫目录是在猜：要猜扫哪几个根（用户可能没设产出目录）、猜哪些文件算"产出"
+   * （Agent 为处理 Excel 写的临时 .py 不算）、还要靠 mtime diff 区分新旧。
+   * 每一层猜测都有失准的可能，实际也确实踩了 —— 产出卡片空着、或把临时脚本当成果。
+   *
+   * 而 Agent 自己最清楚它刚做出了什么：哪个是最终交付物、哪个只是中间脚本。
+   * 直接问它要，一次调用就拿到准确清单，还能附一句说明。
+   */
+  private getDeliverToolDef(): ToolDef {
+    return {
+      type: "function",
+      function: {
+        name: "report_outputs",
+        description:
+          "把你为用户做出来的【最终产出文件】登记一下，界面会把它们显示成可以直接点开预览的卡片。\n\n" +
+          "【什么时候调用】完成用户交给你的文档/表格任务、确实生成或改写了文件之后，" +
+          "在你给出最终回复【之前】调用一次。一轮只调用一次，把本轮所有产出一起传进来。\n\n" +
+          "【哪些算产出】用户真正要的东西：生成的 Excel/Word/PDF/CSV、改写过的原文件、导出的图片。\n" +
+          "【哪些不算】你为了干活写的临时脚本（.py/.js 等）、中间缓存、备份副本、日志。" +
+          "这些对用户没有意义，登记进去反而会让他以为那就是成果。\n\n" +
+          "【路径要求】必须是绝对路径，且文件确实已经写到磁盘上了。" +
+          "拿不准完整路径时先用 list_dir 确认，不要凭记忆拼一个。\n\n" +
+          "【没有产出就不要调用】纯问答、只是读文件分析、或任务失败没产出任何文件时，跳过这个工具。",
+        parameters: {
+          type: "object",
+          properties: {
+            files: {
+              type: "array",
+              description: "本轮产出的文件清单（绝对路径）。按对用户的重要程度排序，最重要的放第一个。",
+              items: {
+                type: "object",
+                properties: {
+                  path: { type: "string", description: "文件的绝对路径" },
+                  note: { type: "string", description: "可选：一句话说明这个文件是什么（如\"按部门汇总的总表\"）" },
+                },
+                required: ["path"],
+              },
+            },
+          },
+          required: ["files"],
+        },
+      },
+    };
   }
 
   /**

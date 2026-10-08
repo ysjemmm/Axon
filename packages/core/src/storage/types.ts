@@ -17,8 +17,14 @@ export interface SessionMeta {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
-  /** 会话模式：agent=智能体（默认），quest=纯问答 */
-  mode?: "agent" | "quest";
+  /**
+   * 会话模式：agent=智能体（默认），quest=纯问答，cowork=办公文档工作面。
+   *
+   * cowork 只是【持久化归类标记】，运行时行为与 agent 完全一致（同一套工具集与系统提示）。
+   * 加它是为了让 Cowork 的历史会话能和 Code 的分开列出 —— 两者面向的用户和任务
+   * 完全不同，混在一个列表里没有意义。
+   */
+  mode?: "agent" | "quest" | "cowork";
 }
 
 /** 持久化的待确认编辑（序列化友好，不含 Map） */
@@ -48,8 +54,11 @@ export interface SessionData {
   messages: ChatCompletionMessageParam[];
   totalTokens: number; // 当前上下文 token 占用（API 真实 prompt token）
   pendingEdits?: SerializedPendingEdit[]; // 手动模式下暂存的待确认改动
-  /** 会话模式：agent=智能体（默认），quest=纯问答（无工具/不绑工作区） */
-  mode?: "agent" | "quest";
+  /**
+   * 会话模式：agent=智能体（默认），quest=纯问答（无工具/不绑工作区），
+   * cowork=办公文档工作面（运行时同 agent，仅用于历史列表归类）
+   */
+  mode?: "agent" | "quest" | "cowork";
   createdAt: string;
   updatedAt: string;
 }

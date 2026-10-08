@@ -43,6 +43,23 @@ function systemPrefix(s: any): string {
 }
 
 describe("尾部注入在一轮内保持稳定", () => {
+  it("GPT Chat 把易变 system 注入放在历史尾部，保留可自动缓存的稳定前缀", () => {
+    const s = makeSession({
+      model: "gpt-5.6-sol",
+      messages: [
+        { role: "system", content: "SYSTEM PROMPT" },
+        { role: "user", content: "u1" },
+        { role: "assistant", content: "a1" },
+      ],
+      ideContextCache: "CURRENT IDE CONTEXT",
+    });
+
+    const request = s.promptBuilder.buildRequestMessages();
+    expect(request.slice(0, 3)).toEqual(s.messages);
+    expect(request.at(-1)?.role).toBe("system");
+    expect(request.at(-1)?.content).toBe("CURRENT IDE CONTEXT");
+  });
+
   it("同一轮中 execute_command 换了目录，system 前缀不变", () => {
     const s = makeSession();
     s.promptBuilder.beginTurn();

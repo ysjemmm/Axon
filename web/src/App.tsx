@@ -1,18 +1,19 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { SessionContainer, type SessionTab } from "./components/SessionContainer";
 import { SessionSidebar } from "./components/SessionSidebar";
+import { SessionSwitcher } from "./components/SessionSwitcher";
+import { CoworkPanel } from "./components/CoworkPanel";
 import { SkillStudio } from "./components/SkillStudio";
 import { RelayTabView } from "./components/RelayTabView";
 import { PowerStudio } from "./components/PowerStudio";
 import { McpStudio } from "./components/McpStudio";
 import { ProviderStudio } from "./components/ProviderStudio";
 import { MarketplaceStudio } from "./components/MarketplaceStudio";
-import { History, X, Plus, HelpCircle } from "lucide-react";
-import { listSessions } from "./lib/apiClient";
+import { X } from "lucide-react";
+import { listSessions, renameSession } from "./lib/apiClient";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { sessionEventBus } from "./hooks/useSessionEvents";
 import { WS_BASE } from "./lib/api";
-import { AxonLogo } from "./components/AxonLogo";
 import { STORAGE, CONTROL_CMD, TIMEOUT } from "./lib/constants";
 
 /** 生成稳定的 tab key（兼作面板 clientId） */
@@ -155,9 +156,56 @@ function App() {
     return { agent: null, quest: null };
   });
 
+  /**
+   * Cowork 是否接管整个面板。
+   *
+   * 用独立状态而不是塞进 `mode`：agent/quest 是"同一套界面的两种系统提示 + 工具集"，
+   * 共享输入框、会话 tab、模型选择器；Cowork 换掉的是整个交互范式（面向办公文档，
+   * 不出现工作区/Provider/工具卡片这些开发者概念）。
+   * 做成独立开关，切回来时 Chat/Code 的会话与 tab 原样保留。
+   */
+  const [coworkOpen, setCoworkOpen] = useState<boolean>(() => {
+    // 记住上次停在哪：Cowork 现在有自己的会话历史与隔离，重开面板回到它是对的。
+    // 默认 true —— 办公文档是这个产品面的主入口，第一次打开就落在这里。
+    try {
+      const saved = localStorage.getItem(STORAGE.COWORK_OPEN);
+      if (saved === "0") return false;
+      if (saved === "1") return true;
+    } catch { /* ignore */ }
+    return true;
+  });
+
+  /**
+   * Cowork 面板是否已挂载。
+   *
+   * 与 coworkOpen 分开：open 控制可见性，mounted 控制生命周期。
+   * 一旦打开过就永久保持挂载 —— 切回 Chat 时 Cowork 的任务记录和正在跑的
+   * 后台任务都要留着（它的任务状态在组件内，卸载即丢失）。
+   *
+   * 初值跟着 coworkOpen：默认就停在 Cowork 时必须首屏即挂载，
+   * 否则会先渲染一帧 Chat 再被覆盖，表现为启动时闪一下。
+   */
+  const [coworkMounted, setCoworkMounted] = useState(coworkOpen);
+  useEffect(() => {
+    if (coworkOpen) setCoworkMounted(true);
+  }, [coworkOpen]);
+
   // App 级持有唯一 Agent 连接，所有面板共享；事件统一分发到 sessionEventBus 按 clientId 路由
   const { connected, send } = useWebSocket(WS_BASE, (msg) => {
     const m = msg as { type?: string; clientId?: string };
+    if (m.type === "set_mode") {
+      const next = (m as any).mode;
+      if (next === "cowork") {
+        setCoworkOpen(true);
+        return;
+      }
+      if (next === "agent" || next === "quest") {
+        setCoworkOpen(false);
+        setMode(next);
+        return;
+      }
+      return;
+    }
     // 外部注入的上下文（如终端/编辑器选区）无 clientId：定向到当前激活的面板
     if (m && m.type === CONTROL_CMD.ADD_CONTEXT && !m.clientId) {
       const key = activeKeys[mode];
@@ -169,42 +217,24 @@ function App() {
   // 持久化
   useEffect(() => { try { localStorage.setItem(STORAGE.TABS, JSON.stringify(tabs)); } catch { /* 忽略 */ } }, [tabs]);
   useEffect(() => { try { localStorage.setItem(STORAGE.ACTIVE_KEYS, JSON.stringify(activeKeys)); } catch { /* 忽略 */ } }, [activeKeys]);
-  useEffect(() => { try { localStorage.setItem(STORAGE.MODE, mode); } catch { /* 忽略 */ } }, [mode]);
+  useEffect(() => {
+    // MODE 只存 agent/quest（Chat/Code 的子模式）；是否停在 Cowork 单独存，
+    // 这样从 Cowork 退出时能回到上次用的 Chat/Code 模式。
+    try { localStorage.setItem(STORAGE.MODE, mode); } catch { /* 忽略 */ }
+    try { localStorage.setItem(STORAGE.COWORK_OPEN, coworkOpen ? "1" : "0"); } catch { /* 忽略 */ }
+    // 上报给扩展用于按钮高亮（setContext axon.chatMode）：Cowork 打开时上报 cowork
+    (window as any).__axonVSCode?.postMessage({ type: "mode_changed", mode: coworkOpen ? "cowork" : mode });
+  }, [mode, coworkOpen]);
 
   const [historyOpen, setHistoryOpen] = useState(false);
-  // Tab 右键菜单状态（按 key 定位）
-  const [contextMenu, setContextMenu] = useState<{ key: string; x: number; y: number } | null>(null);
-  // Tab 重命名状态（按 key）
-  const [renamingKey, setRenamingKey] = useState<string | null>(null);
-  // Tab 列表容器 ref（用于 scrollLeft 操控）
-  const tabsContainerRef = useRef<HTMLDivElement>(null);
-
-  // 横向滚轮：必须用 addEventListener + {passive:false} 才能 preventDefault
-  useEffect(() => {
-    const el = tabsContainerRef.current;
-    if (!el) return;
-    const handler = (e: WheelEvent) => {
-      if (e.deltaY !== 0) {
-        el.scrollLeft += e.deltaY;
-        e.preventDefault();
-      }
-    };
-    el.addEventListener("wheel", handler, { passive: false });
-    return () => el.removeEventListener("wheel", handler);
-  }, []);
+  // 正在流式输出的面板 key 集合（由 SessionContainer 上报）。
+  // 收掉横向 tab 条后，"还有会话在后台跑"没有别的地方能看出来，靠它在切换器上显示计数。
+  const [runningKeys, setRunningKeys] = useState<ReadonlySet<string>>(() => new Set());
 
   // 当前模式的 tabs / 激活项
   const modeTabs = tabs.filter((t) => t.mode === mode);
   const activeKey = activeKeys[mode];
   const currentTab = tabs.find((t) => t.key === activeKey) || modeTabs[0] || null;
-
-  // 激活 tab 变化时自动滚入视野（新建 tab 时确保可见）。
-  // 注意：必须放在 activeKey 声明【之后】——它是 const，提前在 effect 闭包里引用会触发 TDZ。
-  useEffect(() => {
-    if (!activeKey || !tabsContainerRef.current) return;
-    const el = tabsContainerRef.current.querySelector(`[data-tab-key="${activeKey}"]`) as HTMLElement | null;
-    el?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
-  }, [activeKey]);
 
   // 确保当前模式至少有一个 tab，且有合法激活项（切到空模式时自动建一个）
   useEffect(() => {
@@ -217,6 +247,20 @@ function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, modeTabs.length, activeKey]);
+
+  // 空会话（id 为 null = 一条消息都没发过）一旦不再是任何模式的激活项就丢掉，
+  // 否则每点一次「新建」再切走，列表里就多一条永远空着的「新对话」。
+  // 运行中的不动：首条消息已发出、session_created 还没回来时 id 仍是 null。
+  useEffect(() => {
+    const keep = new Set([activeKeys.agent, activeKeys.quest]);
+    setTabs((prev) => {
+      const next = prev.filter((t) =>
+        t.id !== null || keep.has(t.key) || runningKeys.has(t.key)
+        // 该模式还没定激活项（启动首帧）时先不动，等上面的 effect 选定后再判断
+        || activeKeys[t.mode] === null);
+      return next.length === prev.length ? prev : next;
+    });
+  }, [activeKeys, runningKeys]);
 
   // 定时同步 tab 标题（从后端 session 列表拿真实标题）
   useEffect(() => {
@@ -244,6 +288,22 @@ function App() {
     return () => clearInterval(timer);
   }, []);
 
+  /**
+   * 切换器三档的统一入口。
+   *
+   * 三档都在【当前面板内】切换：agent/quest 换的是系统提示与工具集（共享输入框、
+   * 会话 tab、模型选择器）；cowork 整页接管本面板（换掉整个交互范式）。
+   * 切回 agent/quest 时 Chat 侧的会话与 tab 原样保留。
+   */
+  const handleSwitchMode = useCallback((next: "agent" | "quest" | "cowork") => {
+    if (next === "cowork") {
+      setCoworkOpen(true);
+      return;
+    }
+    setCoworkOpen(false);
+    setMode(next);
+  }, []);
+
   /** 设置当前模式的激活 tab */
   const setActive = useCallback((key: string) => {
     setActiveKeys((prev) => ({ ...prev, [mode]: key }));
@@ -262,20 +322,26 @@ function App() {
     setHistoryOpen(false);
   }, [tabs, mode, setActive]);
 
+  /** 新建 tab（当前模式）：已有空会话就直接切过去复用，不再叠一条新的 */
+  const openBlankTab = useCallback(() => {
+    const blank = tabs.find((t) => t.mode === mode && t.id === null && !runningKeys.has(t.key));
+    if (blank) {
+      setActive(blank.key);
+      return;
+    }
+    const newTab: SessionTab = { id: null, title: "新对话", key: genTabKey(), mode };
+    setTabs((prev) => [...prev, newTab]);
+    setActive(newTab.key);
+  }, [tabs, mode, runningKeys, setActive]);
+
   /** 从 History 点新建（当前模式） */
   const handleNewSession = useCallback(() => {
-    const newTab: SessionTab = { id: null, title: "新对话", key: genTabKey(), mode };
-    setTabs((prev) => [...prev, newTab]);
-    setActive(newTab.key);
+    openBlankTab();
     setHistoryOpen(false);
-  }, [mode, setActive]);
+  }, [openBlankTab]);
 
   /** 顶部 + 按钮：新建 tab（当前模式） */
-  const handleNewTab = useCallback(() => {
-    const newTab: SessionTab = { id: null, title: "新对话", key: genTabKey(), mode };
-    setTabs((prev) => [...prev, newTab]);
-    setActive(newTab.key);
-  }, [mode, setActive]);
+  const handleNewTab = openBlankTab;
 
   /** 关闭 tab（按 key） */
   const handleCloseTab = useCallback((key: string, e: React.MouseEvent) => {
@@ -340,139 +406,36 @@ function App() {
     }
   }, [tabs, mode, setActive]);
 
-  /** 重命名 tab */
+  /** 重命名 tab（编辑态的开关由 SessionSwitcher 自己维护，这里只负责落库） */
   const handleRenameTab = useCallback((key: string, val: string) => {
     const trimmed = val.trim();
     const tab = tabs.find((t) => t.key === key);
-    if (trimmed && tab && trimmed !== tab.title) {
-      setTabs((prev) => prev.map((t) => t.key === key ? { ...t, title: trimmed } : t));
-      if (tab.id) {
-        import("@/lib/apiClient").then(({ renameSession }) => { renameSession(tab.id!, trimmed).catch(() => {}); });
-      }
+    if (!trimmed || !tab || trimmed === tab.title) return;
+    setTabs((prev) => prev.map((t) => t.key === key ? { ...t, title: trimmed } : t));
+    if (tab.id) {
+      renameSession(tab.id!, trimmed).catch(() => {});
     }
-    setRenamingKey(null);
   }, [tabs]);
 
+
   return (
-    <div className="h-screen bg-background text-foreground flex flex-col">
-      {/* 顶层模式栏：Code / Chat。显式使用无衬线字体，避免继承用户编辑器的等宽字体设置。 */}
-      <div className="flex items-center gap-1 px-2 border-b border-border shrink-0 h-[34px] font-sans bg-[var(--vscode-editorGroupHeader-tabsBackground,transparent)]">
-        <button
-          onClick={() => setMode("agent")}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-            mode === "agent" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
-          }`}
-          title="Code：智能体"
-        >
-          <AxonLogo size={14} />
-          Code
-        </button>
-        <button
-          onClick={() => setMode("quest")}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-            mode === "quest" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
-          }`}
-          title="Chat：仅聊天"
-        >
-          <HelpCircle className="w-3.5 h-3.5" />
-          Chat
-        </button>
-      </div>
-
-      {/* 会话 Tab 栏（当前模式） */}
-      <div className="flex items-center border-b border-border shrink-0 h-[35px] bg-[var(--vscode-editorGroupHeader-tabsBackground,transparent)]">
-        <div
-          ref={tabsContainerRef}
-          className="flex-1 flex items-stretch overflow-x-auto h-full [&::-webkit-scrollbar]:h-0 [-ms-overflow-style:none] [scrollbar-width:none]"
-        >
-          {modeTabs.map((tab) => (
-            <div
-              key={tab.key}
-              data-tab-key={tab.key}
-              onClick={() => setActive(tab.key)}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setContextMenu({ key: tab.key, x: e.clientX, y: e.clientY });
-              }}
-              className={`group relative flex items-center gap-1 px-3 text-xs cursor-pointer select-none shrink-0 ${
-                tab.key === activeKey
-                  ? "bg-background text-foreground font-medium border-b-2 border-b-[var(--vscode-focusBorder,#007fd4)]"
-                  : "bg-transparent text-muted-foreground hover:text-foreground hover:bg-muted/30 border-b-2 border-b-transparent"
-              }`}
-            >
-              {renamingKey === tab.key ? (
-                <input
-                  autoFocus
-                  defaultValue={tab.title}
-                  className="bg-transparent border-b border-primary text-xs outline-none w-full min-w-[40px]"
-                  onBlur={(e) => handleRenameTab(tab.key, e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                    if (e.key === "Escape") setRenamingKey(null);
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                />
-              ) : (
-                <span className="truncate max-w-[180px]">{tab.title}</span>
-              )}
-              <span
-                onClick={(e) => handleCloseTab(tab.key, e)}
-                className="ml-0.5 p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-muted/80 transition-opacity shrink-0"
-              >
-                <X className="w-3 h-3" />
-              </span>
-            </div>
-          ))}
-        </div>
-
-        <div className="flex items-center px-1 gap-1 shrink-0 h-full">
-          <button
-            onClick={handleNewTab}
-            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors cursor-pointer"
-            title="新建对话"
-          >
-            <Plus className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => setHistoryOpen(!historyOpen)}
-            className="p-1 rounded hover:bg-muted transition-colors cursor-pointer"
-            title="历史会话"
-          >
-            <History className="w-3.5 h-3.5 text-muted-foreground" />
-          </button>
-        </div>
-      </div>
-
-      {/* Tab 右键菜单 */}
-      {contextMenu && (
-        <>
-          <div className="fixed inset-0 z-[99]" onClick={() => setContextMenu(null)} />
-          <div
-            className="fixed z-[100] bg-popover border border-border rounded-md shadow-lg py-1 min-w-[120px]"
-            style={{ left: contextMenu.x, top: contextMenu.y }}
-          >
-            <button
-              className="w-full px-3 py-1.5 text-xs text-left hover:bg-muted transition-colors"
-              onClick={() => {
-                const k = contextMenu.key;
-                setContextMenu(null);
-                setRenamingKey(k);
-              }}
-            >
-              重命名
-            </button>
-            <button
-              className="w-full px-3 py-1.5 text-xs text-left hover:bg-muted text-destructive transition-colors"
-              onClick={(e) => {
-                const k = contextMenu.key;
-                setContextMenu(null);
-                handleCloseTab(k, e as unknown as React.MouseEvent);
-              }}
-            >
-              关闭
-            </button>
-          </div>
-        </>
+    <div className="relative h-screen bg-background text-foreground flex flex-col">
+      {/* 会话切换器（单行标题 + 下拉列表，取代原横向 tab 条）。
+          Cowork 打开时整行隐藏：那一屏不该出现会话/模式这些开发者概念，
+          退出入口由 CoworkPanel 自己的「退出 Cowork」按钮提供。 */}
+      {!coworkOpen && (
+        <SessionSwitcher
+          tabs={modeTabs}
+          activeKey={activeKey}
+          runningKeys={runningKeys}
+          onSelect={setActive}
+          onNewTab={handleNewTab}
+          onCloseTab={handleCloseTab}
+          onRename={handleRenameTab}
+          onOpenHistory={() => setHistoryOpen(true)}
+          mode={mode}
+          onModeChange={handleSwitchMode}
+        />
       )}
 
       {/* 主体内容 */}
@@ -512,9 +475,44 @@ function App() {
             send={send}
             onSessionCreated={handleSessionCreated}
             onCompactionMigrated={handleCompactionMigrated}
+            onRunningKeysChange={setRunningKeys}
           />
         </div>
       </div>
+
+      {/*
+        Cowork：覆盖层 + 常驻挂载。
+
+        ⚠️ 两条都不能省，各自对应踩过的一个坑：
+        ① 不能写成 `if (coworkOpen) return <CoworkPanel />`——那会把整棵 Chat 子树
+           （连同 SessionContainer 里所有 ChatPanel 的会话状态）卸载掉，切回来表现为
+           "按钮解锁 + 会话历史加载中"。所以用覆盖层。
+        ② 也不能写成 `{coworkOpen && <CoworkPanel />}`——那样切走时 Cowork 自己被卸载，
+           任务记录（组件内 state）全丢，正在跑的任务也被打断。所以常驻挂载、只用 CSS 隐藏。
+
+        隐藏态同时关掉 pointer-events：否则这层会盖在 Chat 上吃掉所有点击。
+        首次切到 Cowork 前不挂载（coworkMounted），避免为一个多数人用不到的面板
+        在启动时白付一次渲染。
+      */}
+      {coworkMounted && (
+        <div
+          className="absolute inset-0 z-40 bg-background"
+          style={{
+            opacity: coworkOpen ? 1 : 0,
+            pointerEvents: coworkOpen ? "auto" : "none",
+          }}
+          aria-hidden={!coworkOpen}
+        >
+          {/* clientId 用固定值：Cowork 只有一个工作面（不像 Chat 有多 tab），
+              固定值让它在覆盖层反复开关之间仍能对上同一条事件流。 */}
+          <CoworkPanel
+            clientId="cowork-main"
+            connected={connected}
+            send={send}
+            onExit={() => setCoworkOpen(false)}
+          />
+        </div>
+      )}
     </div>
   );
 }

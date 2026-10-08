@@ -48,6 +48,7 @@ const THINKING_BUDGET_TOKENS = 10000;
 type AnthropicContentBlock =
   | { type: "text"; text: string }
   | { type: "image"; source: { type: "base64"; media_type: string; data: string } | { type: "url"; url: string } }
+  | { type: "thinking"; thinking: string; signature?: string }
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
   | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean };
 
@@ -204,6 +205,8 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
 
     let content = "";
     let stopReason: string | null = null;
+    /** Anthropic 原生 extended thinking 块，必须随 assistant 历史回传到下一轮。 */
+    const thinkingByIndex = new Map<number, { thinking: string; signature?: string }>();
     // 原始 usage 字段逐事件累积，语义解释统一放到流结束后做一次
     // （中途"边合并边解释"正是上下文占比被重复累加的根因，见 anthropicUsage.ts）
     const rawUsage = emptyRawUsage();
@@ -214,7 +217,9 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
       switch (eventType) {
         case "content_block_start": {
           const block = data.content_block;
-          if (block?.type === "tool_use") {
+          if (block?.type === "thinking") {
+            thinkingByIndex.set(data.index, { thinking: typeof block.thinking === "string" ? block.thinking : "" });
+          } else if (block?.type === "tool_use") {
             toolByIndex.set(data.index, { id: block.id || "", name: block.name || "", arguments: "", announced: false });
             if (block.name) {
               const rec = toolByIndex.get(data.index)!;
@@ -239,7 +244,14 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
             // 多个 thinking 块（thinking → tool_use → thinking），块号是协议原生的身份标识。
             // 丢掉它，前端就只能靠"谁还在 streaming"猜某段增量属于哪个思考块——任何提前到达
             // 的事件（如流式阶段就发出的工具卡片）都会把这个推断打翻，表现为一排并列的空"思考过程"。
+            const thinking = thinkingByIndex.get(data.index) || { thinking: "" };
+            thinking.thinking += delta.thinking;
+            thinkingByIndex.set(data.index, thinking);
             callbacks.onReasoningDelta(delta.thinking, data.index);
+          } else if (delta?.type === "signature_delta" && typeof delta.signature === "string") {
+            const thinking = thinkingByIndex.get(data.index) || { thinking: "" };
+            thinking.signature = (thinking.signature || "") + delta.signature;
+            thinkingByIndex.set(data.index, thinking);
           }
           break;
         }
@@ -322,7 +334,19 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
         }
       : undefined;
 
-    return { content, toolCalls, finishReason: rawFinishReason, normalizedFinishReason, usage };
+    const anthropicThinkingBlocks = [...thinkingByIndex.values()].filter((block) => block.thinking);
+    return {
+      content,
+      ...(anthropicThinkingBlocks.length > 0 ? { anthropicThinkingBlocks } : {}),
+      // 保留统一字段，供 OpenAI 兼容链路和现有上层逻辑使用。
+      ...(anthropicThinkingBlocks.length > 0
+        ? { reasoningContent: anthropicThinkingBlocks.map((block) => block.thinking).join("\n") }
+        : {}),
+      toolCalls,
+      finishReason: rawFinishReason,
+      normalizedFinishReason,
+      usage,
+    };
   }
 
   /** Anthropic stop_reason → Chat Completions 风格 finishReason（复用 normalizeFinishReason 词表） */
@@ -385,6 +409,20 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
 
       if (role === "assistant") {
         const blocks: AnthropicContentBlock[] = [];
+        const thinkingBlocks = (msg as any).anthropic_thinking_blocks;
+        if (Array.isArray(thinkingBlocks)) {
+          for (const block of thinkingBlocks) {
+            // 原生协议回传 thinking 块需要完整签名；旧历史或不完整的中转流没有
+            // signature 时只能跳过，不能伪造一个可能被 Anthropic 拒绝的块。
+            if (typeof block?.thinking !== "string" || !block.thinking
+              || typeof block.signature !== "string" || !block.signature) continue;
+            blocks.push({
+              type: "thinking",
+              thinking: block.thinking,
+              signature: block.signature,
+            });
+          }
+        }
         const text = this.extractText(msg.content);
         if (text) blocks.push({ type: "text", text });
         const toolCalls = (msg as any).tool_calls;

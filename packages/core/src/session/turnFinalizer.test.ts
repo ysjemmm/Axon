@@ -29,6 +29,12 @@ describe("TurnFinalizer", () => {
     expect(out.credits).toBeGreaterThanOrEqual(0);
   });
 
+  it("最终回复保留 Anthropic 思考块和签名", () => {
+    const blocks = [{ thinking: "先分析需求", signature: "signed-final" }];
+    const out = new TurnFinalizer().finalize(makeInput({ anthropicThinkingBlocks: blocks }));
+    expect((out.messages[0] as any).anthropic_thinking_blocks).toEqual(blocks);
+  });
+
   it("拿不到真实 output token 时回退字符估算", () => {
     const out = new TurnFinalizer().finalize(makeInput({ lastTurnOutputTokens: 0, lastCompletionTokens: 0, contentBuffer: "abcd", streamedContentThisRound: "abcd", lastTurnTokens: 0 }));
     expect((out.messages[0] as any).turnStats.tokens).toBe(4);

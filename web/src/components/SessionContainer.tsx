@@ -34,6 +34,11 @@ interface SessionContainerProps {
   onSessionCreated: (key: string, id: string) => void;
   /** 压缩迁移：当前 tab 会话已迁移到新会话，App 应打开新 tab */
   onCompactionMigrated?: (newSessionId: string) => void;
+  /**
+   * 正在流式输出的 tab key 集合变化时回调。
+   * 顶部会话切换器要据此显示"另有 N 个会话在跑"——收掉 tab 条后，这是唯一的后台运行线索。
+   */
+  onRunningKeysChange?: (keys: ReadonlySet<string>) => void;
 }
 
 /**
@@ -47,11 +52,22 @@ interface SessionContainerProps {
  */
 const IDLE_UNMOUNT_DELAY = 5 * 60_000;
 
-export function SessionContainer({ tabs, activeKey, connected, send, onSessionCreated, onCompactionMigrated }: SessionContainerProps) {
+export function SessionContainer({ tabs, activeKey, connected, send, onSessionCreated, onCompactionMigrated, onRunningKeysChange }: SessionContainerProps) {
   // 当前应挂载的面板 key 集合
   const [aliveKeys, setAliveKeys] = useState<Set<string>>(() => new Set(activeKey ? [activeKey] : []));
   const runningRef = useRef<Set<string>>(new Set());
   const idleTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  // runningRef 是 ref（改动不触发渲染），所以每次变更后显式把快照抛给上层。
+  // 传副本而不是 ref 本身：外部若直接持有同一个 Set，后续原地增删不会触发 React 更新。
+  // 内容没变就不上报：每次都给上层一个新 Set 会让 App 无意义重渲染，放大任何回调链上的循环。
+  const lastEmittedRef = useRef<string>("");
+  const emitRunningKeys = useCallback(() => {
+    const sig = [...runningRef.current].sort().join("|");
+    if (sig === lastEmittedRef.current) return;
+    lastEmittedRef.current = sig;
+    onRunningKeysChange?.(new Set(runningRef.current));
+  }, [onRunningKeysChange]);
 
   const cancelIdleTimer = useCallback((key: string) => {
     const t = idleTimers.current.get(key);
@@ -86,6 +102,7 @@ export function SessionContainer({ tabs, activeKey, connected, send, onSessionCr
   // tab 被关闭（从 tabs 移除）：立即卸载其面板并清理
   useEffect(() => {
     const validKeys = new Set(tabs.map((t) => t.key));
+    let runningChanged = false;
     setAliveKeys((prev) => {
       let changed = false;
       const n = new Set(prev);
@@ -94,12 +111,14 @@ export function SessionContainer({ tabs, activeKey, connected, send, onSessionCr
           n.delete(k);
           changed = true;
           cancelIdleTimer(k);
-          runningRef.current.delete(k);
+          if (runningRef.current.delete(k)) runningChanged = true;
         }
       });
       return changed ? n : prev;
     });
-  }, [tabs, cancelIdleTimer]);
+    // 关掉一个正在跑的会话后，顶部的运行中计数必须跟着减，否则会一直显示已不存在的会话。
+    if (runningChanged) emitRunningKeys();
+  }, [tabs, cancelIdleTimer, emitRunningKeys]);
 
   useEffect(() => {
     const timers = idleTimers.current;
@@ -115,7 +134,8 @@ export function SessionContainer({ tabs, activeKey, connected, send, onSessionCr
       runningRef.current.delete(key);
       if (key !== activeKey) scheduleUnmount(key);
     }
-  }, [activeKey, cancelIdleTimer, scheduleUnmount]);
+    emitRunningKeys();
+  }, [activeKey, cancelIdleTimer, scheduleUnmount, emitRunningKeys]);
 
   // 实际渲染集合：始终包含当前激活 tab（避免首帧缺失），叠加保活集合
   const keysToRender = new Set(aliveKeys);

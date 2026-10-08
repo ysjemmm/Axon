@@ -23,8 +23,11 @@ export interface UserMessageCommand {
   clientMessageId?: string;
   /** 用户消息的内联片段（文本 + tag），用于富文本气泡的持久化与恢复 */
   userSegments?: unknown[];
-  /** 会话模式：agent（默认）或 quest（纯问答） */
-  mode?: "agent" | "quest";
+  /**
+   * 会话模式：agent（默认）/ quest（纯问答）/ cowork（办公文档工作面）。
+   * cowork 的运行时行为与 agent 相同，差别只在历史列表里单独归类。
+   */
+  mode?: "agent" | "quest" | "cowork";
   /**
    * 是否启用思考（缺省视为开启）。
    *
@@ -37,6 +40,15 @@ export interface UserMessageCommand {
   effort?: string;
   /** Quest 模式专属选项（联网搜索；思考开关见顶层 think） */
   quest?: { webSearch?: boolean };
+  /**
+   * 产出目录绝对路径（Cowork）。
+   *
+   * 虽然这个路径也写在消息正文里给模型看，但后端必须单独拿到一份 ——
+   * 轮次收尾时要扫这个目录，diff 出本轮实际产出了哪些文件。
+   * 不能靠收集 create_file 的参数来替代：办公任务的产物基本都是 Python 脚本写出来的，
+   * 那条路径后端根本看不见（见 outputScanner 的说明）。
+   */
+  outputDir?: string;
 }
 
 /**
@@ -59,7 +71,7 @@ export type ControlCommandPayload =
   | UserMessageCommand
   // 会话切换/管理
   | { type: "load_session"; sessionId: string }
-  | { type: "new_session"; workspace?: string; model?: string; provider?: string; mode?: "agent" | "quest" }
+  | { type: "new_session"; workspace?: string; model?: string; provider?: string; mode?: "agent" | "quest" | "cowork" }
   | { type: "reset_session" }
   // 工作区
   | { type: "set_workspace"; workspace: string; workspaces?: string[] }

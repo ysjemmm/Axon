@@ -5,6 +5,7 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 /** 收尾器输入：把 finalizeAssistantReply 所需的会话状态显式化。 */
 export interface TurnFinalizerInput {
   contentBuffer: string;
+  anthropicThinkingBlocks?: { thinking: string; signature?: string }[];
   streamedContentThisRound: string;
   turnStartTime: number;
   model: string;
@@ -55,6 +56,9 @@ export class TurnFinalizer {
     const nextMessages = [...input.messages, {
       role: "assistant",
       content: input.contentBuffer,
+      ...(input.anthropicThinkingBlocks?.length
+        ? { anthropic_thinking_blocks: input.anthropicThinkingBlocks }
+        : {}),
       turnStats: { elapsed, tokens: turnTokens, model: input.model, providerName: input.providerName, effort: input.effort, credits, creditDetail },
     } as any];
 

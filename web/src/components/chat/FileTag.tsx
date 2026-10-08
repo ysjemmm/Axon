@@ -13,6 +13,7 @@ import { useCallback, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileText, FileCode, Folder, Bug, Terminal as TerminalIcon } from "lucide-react";
 import { attachmentTypeLabel } from "./attachmentType";
+import { canPreviewFiles, requestFilePreview } from "./filePreview";
 
 export interface FileTagData {
   /** 展示名称（可以是文件名、相对路径、标签） */
@@ -73,12 +74,12 @@ export function FileTag({ data }: { data: FileTagData }) {
     hideTimer.current = window.setTimeout(() => setPos(null), 120);
   }, []);
 
-  const clickable = looksLikePath(data.path || data.name);
+  // 预览窗开在 workbench 层，由宿主按路径读盘；浏览器形态没有宿主，不做成可点
+  const clickable = looksLikePath(data.path || data.name) && canPreviewFiles();
 
   const handleClick = () => {
     if (!clickable) return;
-    const vs = (window as any).__axonVSCode;
-    if (vs) vs.postMessage({ type: "open_file", path: data.path || data.name, startLine: data.startLine, endLine: data.endLine });
+    requestFilePreview(data.path || data.name);
   };
 
   return (

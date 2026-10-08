@@ -271,6 +271,24 @@ export class SessionHub {
     this.getOrCreateSessionChannel(sessionId).clientId = clientId;
   }
 
+  /**
+   * 归一化入站 mode。
+   *
+   * 返回两个值刻意分开：
+   * · persisted —— 落盘用，保留 cowork，让历史列表能把办公会话单独列出；
+   * · runtime   —— 给 AgentSession 用，cowork 降级为 agent。
+   *
+   * cowork 不是第三套运行时：它的工具集、系统提示与 agent 完全一致，差异化靠
+   * document-forge Power 和任务描述本身达成。若把 cowork 传进 AgentSession，
+   * toolDefBuilder / mcpController 里那些 `mode === "quest"` 的分支虽然不会误判，
+   * 但等于凭空多出一个没人实现的模式，后续每加一处判断都要多想一遍。
+   */
+  private normalizeMode(raw: unknown): { persisted: "agent" | "quest" | "cowork"; runtime: "agent" | "quest" } {
+    if (raw === "quest") return { persisted: "quest", runtime: "quest" };
+    if (raw === "cowork") return { persisted: "cowork", runtime: "agent" };
+    return { persisted: "agent", runtime: "agent" };
+  }
+
   /** 创建一个 AgentSession，使用代理 channel 而非真实 channel */
   private createSession(
     sessionId: string,
@@ -392,7 +410,8 @@ export class SessionHub {
       ? this.deps.workspaces
       : (savedSession?.workspaces && savedSession.workspaces.length > 0 ? savedSession.workspaces : [ws_dir]);
 
-    const session = this.createSession(sid, ws_dir, savedSession?.messages ? this.filterPersistable(savedSession.messages) : undefined, ws_dirs, clientId, savedSession?.mode ?? "agent");
+    // 落盘的 mode 可能是 cowork，运行时要降级成 agent（见 normalizeMode 的说明）
+    const session = this.createSession(sid, ws_dir, savedSession?.messages ? this.filterPersistable(savedSession.messages) : undefined, ws_dirs, clientId, this.normalizeMode(savedSession?.mode).runtime);
     session.setSessionId(sid);
     // 回填上次落盘的 token 统计，避免新实例 getLastTotalTokens()=0 在首次真实 usage 前
     // 被持久化回写、覆盖磁盘上的有效值（刷新后上下文显示为 0 的根因）。
@@ -747,19 +766,19 @@ export class SessionHub {
       throw new Error("请先选择已配置的 Provider 和模型");
     }
     const ws_dir = (typeof cmd.workspace === "string" && cmd.workspace) ? cmd.workspace : primaryWorkspace;
-    const mode = cmd.mode === "quest" ? "quest" : "agent";
+    const mode = this.normalizeMode(cmd.mode);
     const created = await this.storage.createSession({
       id: cmd.sessionId || "",
       title: "新对话",
       model: cmd.model,
       provider: cmd.provider,
       workspace: ws_dir,
-      mode,
+      mode: mode.persisted,
       messages: [],
       totalTokens: 0,
     });
     if (clientId) this.clientSessions.set(clientId, created.id);
-    const session = this.createSession(created.id, ws_dir, undefined, allWorkspaces, clientId, mode);
+    const session = this.createSession(created.id, ws_dir, undefined, allWorkspaces, clientId, mode.runtime);
     session.setSessionId(created.id);
     this.lastActiveSessionId = created.id;
     this.registerPersistence(session, created.id);
@@ -773,7 +792,7 @@ export class SessionHub {
     session.appendTrace("session.created", {
       workspace: ws_dir,
       workspaces: allWorkspaces,
-      mode,
+      mode: mode.persisted,
       title: "新对话",
     });
   }
@@ -817,7 +836,8 @@ export class SessionHub {
     // 建立 clientId → 新会话映射
     if (clientId) this.clientSessions.set(clientId, created.id);
 
-    const session = this.createSession(created.id, ws_dir, migrateData.messages, ws_dirs, clientId, mode);
+    // 压缩迁移继承父会话的 mode：落盘保留 cowork（新会话仍属办公历史），运行时降级为 agent
+    const session = this.createSession(created.id, ws_dir, migrateData.messages, ws_dirs, clientId, this.normalizeMode(mode).runtime);
     session.setSessionId(created.id);
     this.registerPersistence(session, created.id);
     this.activeSessions.set(created.id, session);
@@ -931,7 +951,7 @@ export class SessionHub {
 
     let sid = this.resolveSessionId(cmd);
     let session = this.getActiveSession(sid);
-    const mode = cmd.mode === "quest" ? "quest" : "agent";
+    const mode = this.normalizeMode(cmd.mode);
 
     if (!cmd.model?.trim() || !cmd.provider?.trim()) {
       throw new Error("请先在模型菜单中选择已配置的 Provider 和模型");
@@ -950,7 +970,7 @@ export class SessionHub {
         provider: cmd.provider,
         workspace: ws_dir,
         workspaces: ws_dirs.length > 1 ? ws_dirs : undefined,
-        mode,
+        mode: mode.persisted,
         messages: [],
         totalTokens: 0,
       });
@@ -959,7 +979,7 @@ export class SessionHub {
         this.clientSessions.set(clientId, sid);
         this.pendingWorkspaces.delete(clientId);
       }
-      session = this.createSession(sid, ws_dir, undefined, ws_dirs, clientId, mode);
+      session = this.createSession(sid, ws_dir, undefined, ws_dirs, clientId, mode.runtime);
       session.setSessionId(sid);
       this.registerPersistence(session, sid);
       this.activeSessions.set(sid, session);
@@ -967,7 +987,7 @@ export class SessionHub {
       session.appendTrace("session.created", {
         workspace: ws_dir,
         workspaces: ws_dirs,
-        mode,
+        mode: mode.persisted,
         title: "新对话",
       });
     }
@@ -975,8 +995,17 @@ export class SessionHub {
     // 思考开关：agent / quest 都生效，每轮注入（决定是否向模型请求思考 + 是否转发 reasoning）。
     // 缺省视为开启——老客户端不带该字段时保持原有行为。
     session.setThink(cmd.think !== false);
+    // 办公化状态文案：仅 Cowork 轮开启。
+    //
+    // 每轮注入而不是建会话时定一次：同一条会话可能先在 Cowork 里跑、之后被 Code
+    // 侧打开继续（历史列表是共享的），文案风格要跟着当前入口走，而不是跟着会话
+    // 的出生地走。runtime 已把 cowork 降级成 agent，所以这里必须看 persisted。
+    session.humanizedStatus = mode.persisted === "cowork";
+    // 产出目录：收尾时扫它，diff 出本轮实际产出了哪些文件。
+    // 用户可能中途改产出目录，所以每轮都要重新注入。
+    session.setOutputDir(typeof cmd.outputDir === "string" ? cmd.outputDir : "");
     // Quest 模式：每轮注入联网开关（决定工具集）
-    if (mode === "quest") {
+    if (mode.runtime === "quest") {
       session.setQuestOptions(cmd.quest || {});
     }
 

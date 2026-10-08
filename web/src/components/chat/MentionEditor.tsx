@@ -162,7 +162,7 @@ export const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>
     editable: !disabled,
     editorProps: {
       attributes: {
-        class: "max-h-[104px] min-h-[44px] overflow-y-auto whitespace-pre-wrap break-words text-[13px] leading-[1.5] focus:outline-none [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]",
+        class: "max-h-[104px] min-h-[44px] overflow-y-auto whitespace-pre-wrap break-words font-sans text-[14px] leading-[1.5] focus:outline-none [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]",
         role: "textbox",
         "aria-multiline": "true",
       },
@@ -286,7 +286,7 @@ export const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>
     <div className="relative flex-1 min-w-[140px]">
       <EditorContent editor={editor} />
       {empty && (
-        <div className="pointer-events-none absolute left-0 top-0 select-none text-[13px] leading-[1.5] text-muted-foreground">
+        <div className="pointer-events-none absolute left-0 top-0 select-none font-sans text-[14px] leading-[1.5] text-muted-foreground">
           {placeholder}
         </div>
       )}

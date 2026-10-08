@@ -63,6 +63,8 @@ export interface SessionMeta {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+  /** 会话模式：用于把 Code（agent）、Chat（quest）、Cowork 的历史分开列 */
+  mode?: "agent" | "quest" | "cowork";
 }
 
 export function listSessions(): Promise<{ sessions: SessionMeta[] }> {

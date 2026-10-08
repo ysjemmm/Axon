@@ -1,6 +1,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { findModel, getModels, useModels, normalizeStoredModelId } from "@/components/ModelSelector";
+import { shouldEnableThinking } from "./useModelEffort";
 import { isToolInFlight, type ToolStatus } from "@/components/ToolCallItem";
 import { listRelays, type RelayData } from "@/lib/apiClient";
 import { useSessionEvents } from "@/hooks/useSessionEvents";
@@ -126,8 +127,9 @@ export function useChatSession(opts: UseChatSessionOptions) {
   });
   /** 思考强度默认关闭；切换模型时由 ChatPanel 主动重置。 */
   const [effort, setEffort] = useState<string | null>(null);
-  /** 向后端的 think 开关由是否选中强度派生，避免两套状态互相打架。 */
-  const think = effort !== null;
+  /** 没配置强度档位但声明支持思考时仍开启，由后端选择默认强度。 */
+  const selectedModel = models.find((m) => m.id === model && (!providerState || m.provider === providerState));
+  const think = shouldEnableThinking(selectedModel, effort);
   // Quest 模式：联网搜索开关（持久化）
   const [questWebSearch, setQuestWebSearchState] = useState<boolean>(() => {
     try { return localStorage.getItem(STORAGE.QUEST_WEBSEARCH) === "1"; } catch { return false; }
@@ -235,7 +237,11 @@ export function useChatSession(opts: UseChatSessionOptions) {
   }, [model, models]);
 
   // ── 通知上层流式状态变化（供 SessionContainer 决定保活/卸载） ──
-  useEffect(() => { onStreamingChange?.(isLoading); }, [isLoading, onStreamingChange]);
+  // 回调走 ref：上层是内联箭头函数，身份每次渲染都变。若把它放进依赖，上层在回调里 setState
+  // → 重渲染 → 新回调 → effect 重跑 → 再 setState……形成死循环（React #185）。只在 isLoading 真变时通知。
+  const onStreamingChangeRef = useRef(onStreamingChange);
+  onStreamingChangeRef.current = onStreamingChange;
+  useEffect(() => { onStreamingChangeRef.current?.(isLoading); }, [isLoading]);
 
   // ── Agent 事件处理（稳定 handler，按 clientId 订阅） ────────────────────
   // ── 构建 EventHandlerCtx ──

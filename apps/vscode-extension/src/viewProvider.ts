@@ -84,6 +84,10 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
+      if (m.type === "mode_changed" && (m.mode === "agent" || m.mode === "quest" || m.mode === "cowork")) {
+        await vscode.commands.executeCommand("setContext", "axon.chatMode", m.mode);
+        return;
+      }
       // 聚焦 Axon 终端（从工具卡片"打开终端"按钮）
       if (m.type === "focus_terminal") {
         try {
@@ -152,6 +156,118 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
+      // 大文件落盘到系统临时目录，只把路径交给 Agent。
+      //
+      // 为什么需要它：webview 里拖拽/粘贴上传拿到的是浏览器 File 对象，没有本地路径，
+      // Agent 的 read_file 够不到。小文件直接把正文塞进消息没问题，但大文件这么做会
+      // 一次性灌爆上下文，而且剥夺了模型"先看概览、再按需精读"的选择权。
+      // 落盘后 Agent 就能用现成的 read_file 按行号分段取，不需要新增工具。
+      //
+      // 写到 os.tmpdir() 而不是工作区：这是会话期的中间产物，不该污染用户项目
+      // （与 document-forge 里"中间产物放临时目录"的约定一致）。
+      if (m.type === "stash_upload" && typeof m.requestId === "string") {
+        const path = require("path");
+        const fs = require("fs");
+        const os = require("os");
+        const rawName = typeof m.name === "string" ? m.name : "upload.txt";
+        // 只取基名并过滤路径分隔符：防止 "../" 之类的名字写到临时目录之外
+        const safeName = path.basename(rawName).replace(/[\\/:*?"<>|]/g, "_") || "upload.txt";
+        try {
+          const dir = path.join(os.tmpdir(), "axon-uploads", `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+          fs.mkdirSync(dir, { recursive: true });
+          const target = path.join(dir, safeName);
+          fs.writeFileSync(target, String(m.content ?? ""), "utf8");
+          this.postToWebview({
+            type: "upload_stashed",
+            clientId: typeof m.clientId === "string" ? (m.clientId as string) : undefined,
+            requestId: m.requestId as string,
+            path: target,
+          });
+        } catch (err) {
+          this.postToWebview({
+            type: "upload_stashed",
+            clientId: typeof m.clientId === "string" ? (m.clientId as string) : undefined,
+            requestId: m.requestId as string,
+            error: (err as Error).message,
+          });
+        }
+        return;
+      }
+
+      // 文件预览：宿主读文件，渲染交给 workbench 级 overlay（axon.showFilePreviewModal）。
+      //
+      // 为什么不回传 webview 自己渲染：webview 的 DOM 被裁在侧栏宽度内，表格和网页
+      // 根本放不下（实测被挤成竖条）。overlay 挂在 workbench 的 document.body 上，
+      // 才能盖住整个 IDE 窗口。
+      if (m.type === "preview_file" && typeof m.path === "string") {
+        void this.showFilePreview(String(m.path));
+        return;
+      }
+
+      // Cowork：原生文件选择器，拿文件的绝对路径。
+      //
+      // 为什么必须走原生对话框：webview 里的 <input type="file"> 和拖放都只能拿到
+      // File 对象，拿不到本地绝对路径（浏览器安全限制）。而 Cowork 处理的是 Excel/PDF
+      // 这类二进制大文件，Agent 需要真实路径才能用 openpyxl / pdfplumber 直接读 ——
+      // 把内容 base64 塞进消息既撑爆上下文也读不了二进制。
+      if (m.type === "cowork_pick_files" && typeof m.requestId === "string") {
+        const uris = await vscode.window.showOpenDialog({
+          canSelectFiles: true,
+          canSelectFolders: false,
+          canSelectMany: true,
+          openLabel: "选择要处理的文件",
+          title: "选择要处理的表格或文档",
+          filters: {
+            "表格与文档": ["xlsx", "xls", "csv", "docx", "doc", "pdf", "txt", "md"],
+            "所有文件": ["*"],
+          },
+        });
+        const files: { path: string; name: string; size: number }[] = [];
+        for (const uri of uris || []) {
+          try {
+            const stat = await vscode.workspace.fs.stat(uri);
+            files.push({ path: uri.fsPath, name: require("path").basename(uri.fsPath), size: stat.size });
+          } catch {
+            // 取不到大小不影响使用，路径才是关键
+            files.push({ path: uri.fsPath, name: require("path").basename(uri.fsPath), size: 0 });
+          }
+        }
+        this.postToWebview({
+          type: "cowork_files_picked",
+          clientId: typeof m.clientId === "string" ? (m.clientId as string) : undefined,
+          requestId: m.requestId as string,
+          files,
+        });
+        return;
+      }
+
+      if (m.type === "cowork_pick_output_dir" && typeof m.requestId === "string") {
+        let path: string | undefined;
+        let error: string | undefined;
+        try {
+          const initialPath = typeof m.initialPath === "string" && m.initialPath ? m.initialPath : undefined;
+          const uris = await vscode.window.showOpenDialog({
+            canSelectFiles: false,
+            canSelectFolders: true,
+            canSelectMany: false,
+            defaultUri: initialPath ? vscode.Uri.file(initialPath) : undefined,
+            openLabel: "设为产出位置",
+            title: "选择文档产出位置",
+          });
+          path = uris?.[0]?.fsPath;
+        } catch (err) {
+          error = (err as Error).message;
+        }
+        this.postToWebview({
+          type: "cowork_output_dir_picked",
+          clientId: typeof m.clientId === "string" ? m.clientId : undefined,
+          requestId: m.requestId,
+          path,
+          error,
+        });
+        return;
+      }
+
       // 搜索工作区资源（文件/文件夹）——输入框斜杠命令的二级选择
       if (m.type === "search_resources" && typeof m.requestId === "string") {
         const clientId = typeof m.clientId === "string" ? (m.clientId as string) : undefined;
@@ -207,6 +323,7 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
         vscode.commands.executeCommand("axon.openProvider");
         return;
       }
+
 
       // 打开 Marketplace 源管理面板
       if (m.type === "open_marketplace_manager") {
@@ -370,6 +487,156 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
 
   postToWebview(message: unknown): void {
     void this.view?.webview.postMessage(message);
+  }
+
+  /**
+   * 读取文件并交给 workbench overlay 渲染。
+   *
+   * 先弹出 loading 再异步读：Office 要起 Python 子进程、PDF 要做 base64，
+   * 大文件这两步都可能是几百毫秒，先给界面反馈比干等更好。
+   */
+  private async showFilePreview(rawPath: string): Promise<void> {
+    const path = require("path");
+    const fs = require("fs/promises");
+    const filePath = path.resolve(rawPath);
+    const name = path.basename(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    const badge = (ext.replace(/^\./, "") || "file").toUpperCase();
+
+    const render = async (payload: Record<string, unknown>) => {
+      await vscode.commands.executeCommand("axon.showFilePreviewModal", { name, path: filePath, badge, ...payload });
+    };
+
+    await render({ loading: true });
+
+    /** 二进制预览的体积上限：base64 会膨胀 1/3，再大就会把 IPC 和内存压爆 */
+    const MAX_BINARY_BYTES = 24 * 1024 * 1024;
+    /** 文本预览的体积上限：超出只取前面一段，避免 overlay 卡死在几十 MB 的日志上 */
+    const MAX_TEXT_BYTES = 2 * 1024 * 1024;
+
+    const imageMime: Record<string, string> = {
+      ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+      ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp", ".ico": "image/x-icon",
+    };
+    const textExts = new Set([
+      ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".json5", ".yaml", ".yml", ".xml",
+      ".css", ".scss", ".less", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".vue", ".svelte",
+      ".py", ".java", ".kt", ".kts", ".go", ".rs", ".rb", ".php", ".swift", ".scala", ".dart",
+      ".lua", ".r", ".c", ".h", ".cpp", ".cc", ".hpp", ".cs", ".m", ".mm",
+      ".sql", ".graphql", ".proto", ".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd",
+      ".log", ".ini", ".toml", ".env", ".conf", ".cfg", ".properties", ".gradle", ".dockerfile", ".makefile",
+    ]);
+
+    try {
+      const stat = await fs.stat(filePath).catch(() => null);
+      if (!stat || !stat.isFile()) {
+        await render({ kind: "unsupported", message: "文件不存在或无法读取" });
+        return;
+      }
+
+      if ([".html", ".htm", ".svg"].includes(ext)) {
+        if (stat.size > MAX_TEXT_BYTES) {
+          await render({ kind: "unsupported", message: "文件过大，暂不支持预览" });
+          return;
+        }
+        await render({ kind: ext === ".svg" ? "svg" : "html", content: await fs.readFile(filePath, "utf8") });
+        return;
+      }
+
+      if (imageMime[ext] || ext === ".pdf") {
+        if (stat.size > MAX_BINARY_BYTES) {
+          await render({ kind: "unsupported", message: "文件过大，暂不支持预览" });
+          return;
+        }
+        const buf = await fs.readFile(filePath);
+        await render({ kind: ext === ".pdf" ? "pdf" : "image", mime: imageMime[ext], content: buf.toString("base64") });
+        return;
+      }
+
+      if ([".xls", ".doc", ".ppt"].includes(ext)) {
+        await render({ kind: "unsupported", message: "旧版 Office 格式暂不支持预览，请另存为 xlsx、docx 或 pptx" });
+        return;
+      }
+
+      if ([".xlsx", ".docx", ".pptx"].includes(ext)) {
+        await render(await this.convertOfficeForPreview(filePath));
+        return;
+      }
+
+      if (textExts.has(ext) || !ext) {
+        const buf = await fs.readFile(filePath);
+        const truncated = buf.length > MAX_TEXT_BYTES;
+        const text = buf.subarray(0, MAX_TEXT_BYTES).toString("utf8");
+        await render({
+          kind: "text",
+          content: truncated ? `${text}\n\n…（文件过大，仅显示前 ${Math.round(MAX_TEXT_BYTES / 1024)} KB）` : text,
+        });
+        return;
+      }
+
+      await render({ kind: "unsupported", message: "该文件类型不支持预览" });
+    } catch (err) {
+      await render({ kind: "unsupported", message: `无法预览：${(err as Error).message}` });
+    }
+  }
+
+  /**
+   * Office 文档转结构化文本。
+   *
+   * 用 spawn 而不是 spawnSync：同步版会阻塞扩展主线程，几 MB 的工作簿能卡住整个
+   * 扩展宿主（连带侧栏无响应）。超时 20 秒兜底，防止 Python 卡住不退。
+   */
+  private convertOfficeForPreview(filePath: string): Promise<Record<string, unknown>> {
+    const path = require("path");
+    const cp = require("child_process");
+    const script = path.join(this.context.extensionPath, "scripts", "preview-office.py");
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (payload: Record<string, unknown>) => {
+        if (settled) return;
+        settled = true;
+        resolve(payload);
+      };
+
+      // python 不在 PATH 时退回 python3（macOS / 部分 Linux 发行版）
+      const tryRun = (bin: string, onFail: () => void) => {
+        // ⚠️ PYTHONIOENCODING 必须显式设成 utf-8。
+        //
+        // Windows 上 Python 默认用系统 ANSI 编码（中文环境是 GBK）写 stdout，
+        // 而这边按 UTF-8 解码 —— 中文表头会全变成替换字符（实测 "PC应用" → "PCӦ��"）。
+        // 英文和路径看不出问题，所以很容易漏掉。
+        const child = cp.spawn(bin, [script, filePath], {
+          windowsHide: true,
+          env: { ...process.env, PYTHONIOENCODING: "utf-8" },
+        });
+        const timer = setTimeout(() => {
+          child.kill();
+          finish({ kind: "unsupported", message: "解析文档超时" });
+        }, 20_000);
+
+        // 先攒 Buffer 再整体解码：多字节字符可能跨 chunk 边界被切开，
+        // 逐块 toString 会把切断处解成替换字符。
+        const chunks: Buffer[] = [];
+        child.stdout?.on("data", (chunk: Buffer) => { chunks.push(chunk); });
+        child.on("error", () => { clearTimeout(timer); onFail(); });
+        child.on("close", (code: number) => {
+          clearTimeout(timer);
+          const stdout = Buffer.concat(chunks).toString("utf8").trim();
+          if (code === 0 && stdout) {
+            try {
+              finish(JSON.parse(stdout) as Record<string, unknown>);
+              return;
+            } catch { /* 落到下方的失败分支 */ }
+          }
+          finish({ kind: "unsupported", message: "当前环境缺少预览该文档所需的解析能力" });
+        });
+      };
+
+      tryRun("python", () => {
+        tryRun("python3", () => finish({ kind: "unsupported", message: "未检测到 Python，无法预览该文档" }));
+      });
+    });
   }
 
   /** 从扩展命令把资源加入聊天输入框（用于资源管理器右键菜单）。 */

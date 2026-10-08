@@ -73,6 +73,8 @@ const TOOL_KIND_MAP: Record<ToolName, ToolKind> = {
   // 选项问答：向用户抛选择。归到 other——它不是读写/命令/联网任何一类，
   // 也不想被 orchestration 那套（子 Agent 分组）呈现逻辑带走。
   [ToolName.AskUser]: "other",
+  // 产出登记：不读不写磁盘，只是把"已经做好的文件"告诉前端，归 other
+  [ToolName.ReportOutputs]: "other",
 };
 
 /**

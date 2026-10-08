@@ -42,6 +42,8 @@ export interface LLMHandlerOutputDraft {
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number; cachedTokens?: number };
   /** 本回合完整思考内容，供下一轮 DeepSeek reasoning_content 原样回传。 */
   reasoningContent?: string;
+  /** Anthropic 原生思考块及签名，供下一轮原样回传。 */
+  anthropicThinkingBlocks?: { thinking: string; signature?: string }[];
   stage: LLMHandlerStage;
 }
 

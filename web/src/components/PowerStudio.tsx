@@ -34,6 +34,9 @@ import {
   removePowerMcpServer,
   getMcpConfig,
   openFileInEditor,
+  listSkills,
+  readSkillFile,
+  savePowerSkillContent,
   type RawMcpServer,
   type PowerDetail,
 } from "@/lib/apiClient";
@@ -512,7 +515,6 @@ function SkillsTab({ power, workspace, onChanged }: { power: PowerDetail; worksp
     setLoadingSkills(true);
     setSelectedNames(new Set());
     try {
-      const { listSkills } = await import("@/lib/apiClient");
       const data = await listSkills();
       // 过滤掉已经在 power 里的
       const existing = new Set(skills.map((s) => s.name));
@@ -545,7 +547,6 @@ function SkillsTab({ power, workspace, onChanged }: { power: PowerDetail; worksp
   /** 把一个现有 Skill 复制进 Power（读取完整 SKILL.md 内容覆盖写入），返回是否成功。 */
   const addOneExisting = async (skillName: string): Promise<boolean> => {
     try {
-      const { readSkillFile, savePowerSkillContent } = await import("@/lib/apiClient");
       let content = "";
       try {
         const data = await readSkillFile(skillName, "SKILL.md", workspace);

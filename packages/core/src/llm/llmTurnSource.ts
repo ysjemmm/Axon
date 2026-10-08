@@ -31,6 +31,8 @@ export interface LLMTurnRawResult {
   content: string;
   /** 本回合完整思考内容，供带 tool_calls 的 assistant 历史回传。 */
   reasoningContent?: string;
+  /** Anthropic 原生思考块，保留签名供下一次请求原样回传。 */
+  anthropicThinkingBlocks?: { thinking: string; signature?: string }[];
   /** 本回合按到达顺序产出的 reasoning 增量序列。 */
   reasoningDeltas: ReasoningDeltaInput[];
   /** 本回合识别出的工具调用草案。 */

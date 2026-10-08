@@ -23,10 +23,16 @@ interface WorkspacePickerProps {
   initialPath?: string;
   /** 确认选择回调，参数为选中目录的绝对路径 */
   onSelect: (path: string) => void;
+  /** 对话框标题。缺省为「选择工作区目录」；复用为其它用途（如选文档产出目录）时传入 */
+  title?: string;
+  /** 确认按钮文案。缺省为「选为工作区」 */
+  confirmLabel?: string;
 }
 
 export function WorkspacePicker({
   open, onOpenChange, initialPath, onSelect,
+  title = "选择工作区目录",
+  confirmLabel = "选为工作区",
 }: WorkspacePickerProps) {
   const [result, setResult] = useState<BrowseResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -59,7 +65,7 @@ export function WorkspacePicker({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="!max-w-[600px] w-[600px] max-h-[70vh] !flex flex-col gap-0 p-0 overflow-hidden">
         <DialogHeader className="px-4 py-3 pr-12 border-b border-border space-y-0 shrink-0">
-          <DialogTitle className="text-sm">选择工作区目录</DialogTitle>
+          <DialogTitle className="text-sm">{title}</DialogTitle>
         </DialogHeader>
 
         {/* 当前路径 / 面包屑 */}
@@ -122,7 +128,7 @@ export function WorkspacePicker({
               onClick={() => { onSelect(current); onOpenChange(false); }}
             >
               <Check className="w-4 h-4 mr-1" />
-              选为工作区
+              {confirmLabel}
             </Button>
           </div>
         </div>

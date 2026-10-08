@@ -21,6 +21,7 @@ export type NoToolTurnDecision =
   | { action: "continue_truncated" }
   | { action: "continue_incomplete"; forceFinalizePrompt?: boolean }
   | { action: "continue_empty_retry" }
+  | { action: "abort_empty" }
   | { action: "finalize" };
 
 /**
@@ -30,7 +31,7 @@ export type NoToolTurnDecision =
  * - error → 非正常中断
  * - truncated → 续写
  * - incomplete → 纠正/强制收尾
- * - empty → 重试一次
+ * - empty → 重试一次；连续两次为空则按上游异常中止，绝不能落空白消息
  * - 其余 → finalize
  *
  * 调用方负责真正注入消息 / 调 finalize / 落盘，本类只决定动作，不做副作用。
@@ -59,6 +60,10 @@ export class NoToolTurnDecider {
     if (!contentBuffer && !ts.emptyRetried) {
       ts.emptyRetried = true;
       return { action: "continue_empty_retry" };
+    }
+
+    if (!contentBuffer) {
+      return { action: "abort_empty" };
     }
 
     return { action: "finalize" };

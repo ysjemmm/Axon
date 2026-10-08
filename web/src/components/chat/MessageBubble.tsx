@@ -180,7 +180,7 @@ function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRej
               <textarea
                 value={draftUserText}
                 onChange={(e) => setDraftUserText(e.target.value)}
-                className="w-full h-[100px] resize-none overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-[13px] leading-relaxed outline-none focus:ring-1 focus:ring-primary/40"
+                className="w-full h-[100px] resize-none overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-[14px] leading-relaxed outline-none focus:ring-1 focus:ring-primary/40"
                 autoFocus
               />
               <div className="mt-1.5 flex justify-end gap-1.5">
@@ -224,7 +224,7 @@ function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRej
               )}
               {hasSegments ? (
                 <div className="relative">
-                  <p className={`text-[13px] whitespace-pre-wrap leading-[1.5] overflow-hidden ${collapsed ? "max-h-40" : ""}`}>
+                  <p className={`text-[14px] whitespace-pre-wrap leading-[1.5] overflow-hidden ${collapsed ? "max-h-40" : ""}`}>
                     {message.userSegments!.map((seg, i) =>
                       seg.type === "text" ? <span key={i}>{seg.text}</span> : <FileTag key={i} data={{ name: seg.tag.name, path: seg.tag.name, content: seg.tag.content, kind: seg.tag.kind }} />,
                     )}
@@ -253,7 +253,7 @@ function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRej
                   )}
                   {message.content && (
                     <div className="relative">
-                      <p className={`text-[13px] whitespace-pre-wrap leading-relaxed overflow-hidden ${collapsed ? "max-h-40" : ""}`}>{message.content}</p>
+                      <p className={`text-[14px] whitespace-pre-wrap leading-relaxed overflow-hidden ${collapsed ? "max-h-40" : ""}`}>{message.content}</p>
                       {collapsed && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-muted to-transparent" />}
                     </div>
                   )}

@@ -1,7 +1,6 @@
 # 打包 vsix 时排除的内容：只保留运行时产物（dist/ media/ package.json 图标）
 # 源码与构建脚本不进 vsix（运行时不需要——@axon/* 已被 esbuild bundle 进 dist/extension.js）
 src/**
-scripts/**
 esbuild.mjs
 tsconfig.json
 .vscodeignore

@@ -192,7 +192,7 @@
       "activitybar": [
         {
           "id": "axon-manage",
-          "title": "Axon",
+          "title": "Axon Workspace",
           "icon": "media/axon.svg"
         },
         {
@@ -209,7 +209,7 @@
       "secondarySidebar": [
         {
           "id": "axon-chat",
-          "title": "Axon",
+          "title": "Axon Workspace",
           "icon": "media/axon.svg"
         }
       ]
@@ -266,6 +266,24 @@
       ]
     },
     "commands": [
+      {
+        "command": "axon.chatMode",
+        "title": "Axon: Chat 模式",
+        "icon": "$(comment-discussion)",
+        "enablement": "axon.chatMode != quest"
+      },
+      {
+        "command": "axon.codeMode",
+        "title": "Axon: Code 模式",
+        "icon": "$(code)",
+        "enablement": "axon.chatMode != agent"
+      },
+      {
+        "command": "axon.coworkMode",
+        "title": "Axon: Cowork 模式",
+        "icon": "$(table)",
+        "enablement": "axon.chatMode != cowork"
+      },
       {
         "command": "axon.newSession",
         "title": "Axon: 新建对话"
@@ -611,6 +629,17 @@
         }
       ],
       "view/title": [
+        {
+          "command": "axon.chatMode",
+          "when": "view == axon.chat",
+          "group": "navigation@0"
+        },
+        {
+          "command": "axon.codeMode",
+          "when": "view == axon.chat",
+          "group": "navigation@1"
+        },
+
         {
           "command": "axon.relay.refresh",
           "when": "view == axon.relay",

@@ -12,6 +12,53 @@ import { normalizeFinishReason } from "./finishReasonMapper.js";
 import { supportsThinking, supportsCacheControl } from "./thinkingSupport.js";
 import { parseDsmlToolCalls, looksLikeDsmlStart } from "./dsmlParser.js";
 
+/**
+ * 归一化 Chat 兼容网关的文本增量。
+ *
+ * 标准 OpenAI 只返回 content 字符串；Claude/推理模型中转站还常见：
+ * - reasoning_content / reasoning / analysis / thinking 字符串；
+ * - channel="analysis" + content 字符串；
+ * - content 为结构化 parts（analysis/reasoning/thinking 与 text 混排）。
+ *
+ * 若不在这里分流，analysis 会落进正文，表现为英文内心 OS 直接显示给用户；部分
+ * 网关返回结构化 parts 时还会被隐式转成 "[object Object]" 或整段丢失。
+ */
+function extractChatDeltaText(delta: any): { reasoning: string; text: string } {
+  let reasoning = "";
+  let text = "";
+
+  const explicitReasoning = delta?.reasoning_content ?? delta?.reasoning ?? delta?.analysis ?? delta?.thinking;
+  if (typeof explicitReasoning === "string") reasoning += explicitReasoning;
+
+  const content = delta?.content;
+  if (typeof content === "string") {
+    const channel = String(delta?.channel ?? delta?.type ?? "").toLowerCase();
+    if (channel === "analysis" || channel === "reasoning" || channel === "thinking") reasoning += content;
+    else text += content;
+  } else if (Array.isArray(content)) {
+    for (const part of content) {
+      if (!part) continue;
+      const partType = String(part.type ?? part.channel ?? "text").toLowerCase();
+      const value = typeof part.text === "string"
+        ? part.text
+        : typeof part.content === "string"
+          ? part.content
+          : typeof part.analysis === "string"
+            ? part.analysis
+            : typeof part.reasoning === "string"
+              ? part.reasoning
+              : typeof part.thinking === "string"
+                ? part.thinking
+                : "";
+      if (!value) continue;
+      if (partType.includes("analysis") || partType.includes("reasoning") || partType.includes("thinking")) reasoning += value;
+      else text += value;
+    }
+  }
+
+  return { reasoning, text };
+}
+
 export class ChatCompletionsStrategy implements LLMStrategy {
   readonly name = "chat_completions";
 
@@ -55,10 +102,13 @@ export class ChatCompletionsStrategy implements LLMStrategy {
     });
 
     // ── Prompt Caching ──────────────────────────────────────────────
-    // 是否下发 cache_control 由模型声明 + 启发式兜底决定（见 supportsCacheControl），
-    // 不再每加一个模型就改这堆 isXXX 变量。不支持的端点收到 cache_control 会直接 400。
-    const canCache = supportsCacheControl(model, modelSupportsCacheControl);
-    const cachedMessages = canCache && safeMessages.length > 6
+    // OpenAI GPT / o 系列采用自动 Prompt Caching：服务端按逐 token 一致的稳定前缀自动命中，
+    // 不需要、也不应把消息改写成 Anthropic 风格的 cache_control content part。
+    // 其它明确声明 cacheControl=true 的兼容端点继续使用 ephemeral breakpoint。
+    const isNativeOpenAI = /^(gpt|o1|o3|o4)/i.test(model);
+    const usesExplicitCacheBreakpoints = !isNativeOpenAI
+      && supportsCacheControl(model, modelSupportsCacheControl);
+    const requestMessages = usesExplicitCacheBreakpoints && safeMessages.length > 6
       ? applyCacheBreakpoints(safeMessages)
       : safeMessages;
 
@@ -89,13 +139,14 @@ export class ChatCompletionsStrategy implements LLMStrategy {
     // stream_options（include_usage）是 OpenAI 专有参数。经中转网关的非 OpenAI 原生模型
     // （deepseek / glm 等）收到后可能断流或返回格式异常的 chunk，故仅对原生 OpenAI（GPT 系）
     // 及确认兼容的 provider 下发。
-    const isNativeOpenAI = /^(gpt|o1|o3|o4)/i.test(model);
     // 「会下发 reasoning_effort 的厂商族」单列：开启与关闭两个分支共用，
     // 免得两处各写一遍正则、日后改一处漏一处。
     const effortFamilies = isQwen37Plus || isDeepSeek4Plus || isGLM52Plus;
-    // Provider 显式配置并由用户选中的 effort 优先于模型名启发式：
-    // 自定义中转站的模型 id 可以完全不带厂商名，靠正则识别必然漏掉。
-    const enableReasoningEffort = canThink && (!!effort || effortFamilies);
+    // 支持思考的模型就应该下发 reasoning_effort，否则端点可能不分离思考内容，
+    // 导致 reasoning 混进正文（kiro-reverse 等中转站需要这个参数来开启 thinking）。
+    // 有用户选择的 effort 值就用它；没有就给 "high" 作为安全默认。
+    const enableReasoningEffort = canThink;
+    const effectiveEffort = effort || "high";
     // ── 显式关闭思考 ──
     // 「不发参数」不等于「让它别想」。实测 deepseek-v4-flash @ 企业网关（A/B 对照）：
     // 不带任何思考参数时端点仍返回 reasoning_content（172 字）且 usage.reasoning_tokens=51
@@ -108,7 +159,7 @@ export class ChatCompletionsStrategy implements LLMStrategy {
     const stream: any = await this.client.chat.completions.create(
       {
         model,
-        messages: cachedMessages,
+        messages: requestMessages,
         ...(hasTools
           ? {
               tools: tools as ChatCompletionTool[],
@@ -127,11 +178,10 @@ export class ChatCompletionsStrategy implements LLMStrategy {
         // 避免思考过程混进 content 被当作正文输出（智谱官方要求成对下发的参数）。
         ...(isGLM5Thinking ? { thinking: { type: "enabled" } } : {}),
         // 部分 thinking 模型支持 reasoning_effort，用于控制隐藏思考强度。
-        // 默认给 high，避免推理模型在简单任务上过度思考；未确认支持的模型绝不猜传。
-        // Provider 配置的实际值原样下发；未选择时保留旧默认 high。
+        // 只下发 Provider 配置中由用户实际选中的值；未选择时不猜默认值。
         // OpenAI SDK 把值限制成官方联合类型；自定义中转站可能接受其它字符串，
         // Provider 配置就是用户对该端点的明确声明，因此这里只在 SDK 类型层放宽，运行时原样透传。
-        ...(enableReasoningEffort ? { reasoning_effort: (effort || "high") as any } : {}),
+        ...(enableReasoningEffort ? { reasoning_effort: effectiveEffort as any } : {}),
         // 显式关闭思考（见 thinkingDisabled）。只在「开启时确实会下发参数」的分支上对称地关，
         // 免得给本就不支持思考的模型塞无关参数。
         ...(thinkingDisabled && isGLM ? { thinking: { type: "disabled" } } : {}),
@@ -140,6 +190,9 @@ export class ChatCompletionsStrategy implements LLMStrategy {
         // 刻意继续用 reasoning_effort 而非改成 thinking —— 与上面的「开启」分支保持同一参数名，
         // 不为同一厂商引入第二种写法。
         ...(thinkingDisabled && effortFamilies ? { reasoning_effort: "none" as unknown as "high" } : {}),
+        // 兜底：非特定厂商族的 thinking 模型关闭思考时也下发 "none"，
+        // 确保端点真的停掉推理，而不是继续隐式思考并计费。
+        ...(thinkingDisabled && !effortFamilies && !isGLM ? { reasoning_effort: "none" as unknown as "high" } : {}),
         stream: true,
         // 让流式响应在末尾附带真实 token 用量（精确值，替代上层字符数估算）。
         // 仅对 OpenAI 原生模型下发；中转网关模型（glm/deepseek）不兼容该参数，会断流。
@@ -195,24 +248,27 @@ export class ChatCompletionsStrategy implements LLMStrategy {
         continue;
       }
       const choice = choices[0];
-      const delta = choice?.delta;
+      // 少数兼容网关即使请求 stream=true，也会在最终块返回 choice.message 而非 choice.delta。
+      const delta = choice?.delta ?? choice?.message;
       if (choice?.finish_reason) finishReason = choice.finish_reason;
       if (!delta) continue;
 
+      const extracted = extractChatDeltaText(delta);
+
       // 思考过程
-      const reasoning = (delta as any).reasoning_content || (delta as any).reasoning;
+      const reasoning = extracted.reasoning;
       if (reasoning) {
         reasoningContent += reasoning;
         callbacks.onReasoningDelta(reasoning);
       }
 
       // 正文
-      if (delta.content) {
+      if (extracted.text) {
         if (dsmlActive) {
           // 已在 DSML 工具调用块内：文本累积到 dsmlBuffer，不作为正文发送
-          dsmlBuffer += delta.content;
+          dsmlBuffer += extracted.text;
         } else {
-          content += delta.content;
+          content += extracted.text;
           // deepseek 用 DSML 文本协议输出工具调用时，content 会以 "<|DSML|tool_calls>" 开头。
           // 检测到即切换 DSML 模式，避免原始 token 泄漏给前端。
           if (isDeepSeek && looksLikeDsmlStart(content.replace(/｜/g, "|").trimStart())) {
@@ -220,7 +276,7 @@ export class ChatCompletionsStrategy implements LLMStrategy {
             dsmlBuffer = content;
             content = "";
           } else {
-            callbacks.onTextDelta(delta.content);
+            callbacks.onTextDelta(extracted.text);
           }
         }
       }

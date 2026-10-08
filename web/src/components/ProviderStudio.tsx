@@ -10,11 +10,11 @@
  */
 
 import { useState, useEffect, useCallback, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { Loader2, Cloud, Plus, Trash2, Save, KeyRound, ChevronRight, ChevronDown, CornerDownLeft, Pencil, Ban, RotateCcw, Download, Globe, ArrowUpToLine, ArrowDownToLine, Eye, WalletCards, Play } from "lucide-react";
+import { Loader2, Cloud, Plus, Trash2, Save, KeyRound, ChevronRight, ChevronDown, CornerDownLeft, Pencil, Ban, RotateCcw, Download, ArrowUpToLine, ArrowDownToLine, Eye, WalletCards, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { VisionFallbackSelector } from "@/components/ModelSelector";
-import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   getProviders,
   setBuiltinProviderKey,
@@ -878,21 +878,38 @@ function ModelRow({ model, editable, confirmDelete, onToggle, onEdit, onDelete }
   );
 }
 
+/**
+ * 支持思考的模型默认带出的强度档位。
+ *
+ * 取 low / high / max 三档：OpenAI 系（reasoning_effort）与多数 OpenAI 兼容中转站都认
+ * low/medium/high，max 是近两年高端推理型号（以及 Claude/GLM 一类中转包装）常见的加强档。
+ * 这只是省掉手填的初值，任何一档对不上端点都可以在表单里直接改名/改值/删掉。
+ */
+const DEFAULT_EFFORT_LEVELS: readonly { label: string; value: string }[] = [
+  { label: "Low", value: "low" },
+  { label: "High", value: "high" },
+  { label: "Max", value: "max" },
+];
+
+/**
+ * 自动带出三档时默认选中的那一档。
+ * 取 high 而不是 max：max 在不少端点上要么不认、要么明显更贵更慢，不适合当"什么都没配"时的落点。
+ * 必须是 DEFAULT_EFFORT_LEVELS 里的某个 value，否则会被下方的回落逻辑判成无效档位而清成关闭。
+ */
+const DEFAULT_EFFORT_VALUE = "high";
+
+/** 每次取一份新副本，避免多个表单共享同一批对象引用后互相串改 */
+const cloneDefaultEffortLevels = () => DEFAULT_EFFORT_LEVELS.map((x) => ({ ...x }));
+
+/** 是否仍是"一字未改的默认三档"——用来判断取消思考时能否安全清空 */
+const isDefaultEffortLevels = (levels: readonly { label: string; value: string }[]) =>
+  levels.length === DEFAULT_EFFORT_LEVELS.length &&
+  levels.every((x, i) => x.label === DEFAULT_EFFORT_LEVELS[i].label && x.value === DEFAULT_EFFORT_LEVELS[i].value);
+
 /** 能力标签的中文文案：只影响下拉框展示，不参与写入 */
 const TAG_LABELS: Record<BuiltinModelTag, string> = {
   vision: "视觉",
   thinking: "思考",
-};
-
-/**
- * 内置清单的展示名厂商 → 表单「厂商」下拉的取值。
- * 只映射下拉里真实存在的三项；其余厂商（Google / xAI / DeepSeek / 智谱 / Kimi …）下拉里
- * 没有对应项，**故意不映射**——对不上就不写，让它保持用户当前选择，而不是塞一个不存在的值。
- */
-const BUILTIN_VENDOR_TO_FORM_ID: Record<string, string> = {
-  OpenAI: "openai",
-  Anthropic: "anthropic",
-  阿里通义千问: "qwen",
 };
 
 /**
@@ -1065,43 +1082,58 @@ function ModelForm({ initial, existingIds = [], onSave, onCancel }: { initial?: 
   // 编辑则严格反映该模型存下来的值——**不能因为"默认是勾上的"就把存量模型悄悄改成勾上**。
   // 缓存这项尤其要紧：端点不支持 cache_control 却收到它，会直接 400。
   const isNew = !initial;
+  const thinkingDefault = isNew ? true : !!initial?.thinking;
   const [id, setId] = useState(initial?.id || "");
   const [name, setName] = useState(initial?.name || "");
   const [win, setWin] = useState(String(initial?.contextWindow || 1_000_000));
   const [vision, setVision] = useState(!!initial?.vision);
-  const [vendor, setVendor] = useState(initial?.vendor || (isNew ? "openai" : ""));
   const [protocol, setProtocol] = useState<"chat" | "responses" | "anthropic">(initial?.protocol || "chat");
   const [cacheControl, setCacheControl] = useState(isNew ? true : !!initial?.cacheControl);
-  const [thinking, setThinking] = useState(isNew ? true : !!initial?.thinking);
+  const [thinking, setThinking] = useState(thinkingDefault);
   // 每个模型自己声明可选档位：展示名可以是「高级 / Extra」，实际 value 原样发给端点（high / xhigh）。
-  // 不预置默认值，避免替用户猜中转站接受哪些参数；未配置时输入区不显示强度选择器。
-  const [effortLevels, setEffortLevels] = useState<{ label: string; value: string }[]>(
-    () => (initial?.effortLevels || []).map((x) => ({ label: x.label, value: x.value })),
+  // 未配置时输入区不显示强度选择器。
+  const [effortLevels, setEffortLevels] = useState<{ label: string; value: string }[]>(() => {
+    const existing = (initial?.effortLevels || []).map((x) => ({ label: x.label, value: x.value }));
+    if (existing.length > 0) return existing;
+    // 思考开着 + 一档都没配 → 直接带出默认三档，省掉"每加一个模型都手填一遍强度"。
+    // 只对新建生效：存量模型没配过档位是用户的既有选择，不在编辑时悄悄塞进去。
+    return isNew && thinkingDefault ? cloneDefaultEffortLevels() : [];
+  });
+  // 新建且自动带出了三档时，默认强度一并落到 high——否则用户还得再点一次下拉才算配完。
+  const [defaultEffort, setDefaultEffort] = useState(
+    initial?.defaultEffort || (isNew && thinkingDefault ? DEFAULT_EFFORT_VALUE : "__off__"),
   );
-  const [defaultEffort, setDefaultEffort] = useState(initial?.defaultEffort || "__off__");
   // 删除/改名了默认档位时立即回落到关闭，避免下拉显示一个已不存在的 value。
   useEffect(() => {
     if (defaultEffort === "__off__") return;
     if (!effortLevels.some((x) => x.value.trim() === defaultEffort)) setDefaultEffort("__off__");
   }, [effortLevels, defaultEffort]);
 
-  const vendorOptions = [
-    { id: "openai", label: "OpenAI" },
-    { id: "anthropic", label: "Anthropic" },
-    { id: "qwen", label: "Qwen" },
-    { id: "ollama", label: "Ollama" },
-  ];
-
-  // 选择厂商 = Anthropic 时不自动切协议：多数中转站把 Claude 包装成 OpenAI 兼容格式，
-  // 走 chat 协议即可，只有该端点【只】提供原生 Anthropic Messages API 时才需要手动
-  // 把下方协议切到 Anthropic（该端点没有 /v1/chat/completions，会 404）。
+  /**
+   * 「思考」勾选联动强度档位：
+   * - 勾上且一档没配 → 补上默认三档；
+   * - 取消勾选 → 只清掉"原封不动的默认三档"，用户手填/改过的档位一律保留
+   *   （取消思考不该顺手销毁他填过的东西，重新勾上还能接着用）。
+   */
+  const toggleThinking = (next: boolean) => {
+    setThinking(next);
+    if (!next) {
+      // 清掉默认三档后，默认强度会被上方的回落 effect 自动带回"关闭"，这里不用再管。
+      if (isDefaultEffortLevels(effortLevels)) setEffortLevels([]);
+      return;
+    }
+    if (effortLevels.length === 0) {
+      setEffortLevels(cloneDefaultEffortLevels());
+      setDefaultEffort(DEFAULT_EFFORT_VALUE);
+    }
+  };
 
   const trimmedId = id.trim();
   // 同一 provider 内 model id 唯一：与已有模型（编辑时不含自身）重名就不允许提交。
   // 后端写入时同样会拦（见 @axon/core 的 assertUniqueModelIds），这里只是省掉一次白跑的请求。
   const duplicateId = isDuplicateModelId(trimmedId, existingIds);
 
-  /** 选中内置模型后预填结构化字段（窗口 / 协议 / 缓存 / 多模态 / 厂商） */
+  /** 选中内置模型后预填结构化字段（窗口 / 协议 / 缓存 / 多模态） */
   const applyBuiltin = (m: BuiltinModel) => {
     if (m.label) setName(m.label);
     if (m.contextWindow) setWin(String(m.contextWindow));
@@ -1109,9 +1141,8 @@ function ModelForm({ initial, existingIds = [], onSave, onCancel }: { initial?: 
     setProtocol(protocolForVendor(m.vendor));
     setCacheControl(!!m.cacheControl);
     setVision(!!m.tags?.includes("vision"));
-    setThinking(!!m.tags?.includes("thinking"));
-    const vendorId = BUILTIN_VENDOR_TO_FORM_ID[m.vendor];
-    if (vendorId) setVendor(vendorId);
+    // 走同一套联动：内置清单标了 thinking 的，选中即带出默认三档。
+    toggleThinking(!!m.tags?.includes("thinking"));
   };
 
   const submit = () => {
@@ -1134,7 +1165,6 @@ function ModelForm({ initial, existingIds = [], onSave, onCancel }: { initial?: 
       defaultEffort: normalizedEfforts.some((x) => x.value === defaultEffort) ? defaultEffort : undefined,
       cacheControl: cacheControl || undefined,
       protocol,
-      vendor: vendor || undefined,
       disabled: initial?.disabled,
     });
   };
@@ -1149,22 +1179,6 @@ function ModelForm({ initial, existingIds = [], onSave, onCancel }: { initial?: 
       )}
       <div className="flex items-center gap-2">
         <Input placeholder="显示名（可选）" value={name} onChange={(e) => setName(e.target.value)} className="h-8 text-sm flex-1" />
-        <Select value={vendor} onValueChange={setVendor}>
-          <SelectTrigger className="h-8 text-sm w-[130px]">
-            <SelectValue placeholder="厂商" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              <SelectLabel>厂商</SelectLabel>
-              {vendorOptions.map((v) => (
-                <SelectItem key={v.id} value={v.id}>
-                  <Globe className="w-3 h-3 mr-1" />
-                  {v.label}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
       </div>
       <div className="flex items-center gap-2 flex-wrap">
         <Input placeholder="上下文窗口" value={win} onChange={(e) => setWin(e.target.value)} className="h-8 text-sm w-32" />
@@ -1176,7 +1190,7 @@ function ModelForm({ initial, existingIds = [], onSave, onCancel }: { initial?: 
           多模态
         </label>
         <label className="flex items-center gap-1 text-xs text-muted-foreground cursor-pointer">
-          <input type="checkbox" checked={thinking} onChange={(e) => setThinking(e.target.checked)} className="w-3 h-3 accent-primary" />
+          <input type="checkbox" checked={thinking} onChange={(e) => toggleThinking(e.target.checked)} className="w-3 h-3 accent-primary" />
           思考
         </label>
         <label className="flex items-center gap-1 text-xs text-muted-foreground cursor-pointer">
@@ -1192,7 +1206,7 @@ function ModelForm({ initial, existingIds = [], onSave, onCancel }: { initial?: 
         <div className="flex items-center justify-between gap-2">
           <div>
             <div className="text-xs font-medium">思考强度档位</div>
-            <div className="text-[10px] text-muted-foreground">左边是界面名称，右边是原样发给 API 的值。留空则不显示强度选择器。</div>
+            <div className="text-[10px] text-muted-foreground">左边是界面名称，右边是原样发给 API 的值。勾上「思考」会自动带出 low / high / max 三档，可自行增删改；留空则不显示强度选择器。</div>
           </div>
           <Button
             type="button"

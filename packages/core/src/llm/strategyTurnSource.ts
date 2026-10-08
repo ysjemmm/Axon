@@ -126,6 +126,7 @@ export class StrategyTurnSource implements LLMTurnSource {
       content: turn.content || content,
       // reasoning 必须随带 tool_calls 的 assistant 历史回传给下一轮（DeepSeek V4 硬要求）。
       reasoningContent: turn.reasoningContent,
+      anthropicThinkingBlocks: turn.anthropicThinkingBlocks,
       reasoningDeltas,
       toolCalls,
       finishReason: turn.normalizedFinishReason,

@@ -190,7 +190,7 @@ export function AppliedChangesBar({
   };
 
   return (
-    <div className={`${headless ? "" : "mb-2"} rounded-lg border border-border bg-popover/50 overflow-hidden text-xs`}>
+    <div className={`${headless ? "" : "mb-2"} rounded-lg border border-border bg-popover/50 overflow-hidden text-[13px]`}>
       {/* ── 标题栏（headless 模式下隐藏） ── */}
       {!headless && (
       <div className="flex items-center gap-1.5 px-2 py-1">
