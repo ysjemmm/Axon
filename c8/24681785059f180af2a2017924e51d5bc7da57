@@ -1,0 +1,18 @@
+packages/host-vscode/src/processes.ts
+  h_e871cedce7b867 23,70
+packages/host-vscode/src/terminalDisplay.ts
+  h_e871cedce7b867 26,114-115,154-228,249-257,262,265,267
+packages/host-vscode/src/terminalIdentity.ts
+  h_e871cedce7b867 1-89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c824681785059f180af2a2017924e51d5bc7da57",
+  "prompts": {},
+  "humans": {
+    "h_e871cedce7b867": {
+      "author": "码扬 <mayang@tsign.cn>"
+    }
+  }
+}
