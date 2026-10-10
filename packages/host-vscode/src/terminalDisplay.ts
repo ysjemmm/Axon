@@ -23,6 +23,7 @@
 
 import * as vscode from "vscode";
 import { spawn } from "node:child_process";
+import { commandTerminalEnv, isAxonCommandTerminal } from "./terminalIdentity.js";
 
 // ═══════════════════════════════════════════════════════════════
 //  常量
@@ -110,7 +111,8 @@ export interface TerminalRunOptions {
 /**
  * 终端池：每个 session（terminalKey）维护一个终端列表。
  * - 空闲终端优先复用（保留历史输出）
- * - 全部忙时新建终端，不 dispose 旧终端
+ * - 池里没有空闲时，先认领窗口里遗留的 Axon 命令终端（重载后池子会空，但终端还在）
+ * - 一个可复用的都没有才新建终端，不 dispose 旧终端
  * - cwd 不匹配时复用 + cd 切换目录
  */
 
@@ -149,7 +151,81 @@ vscode.window.onDidCloseTerminal((closed) => {
   }
 });
 
-/** 从池中获取空闲终端，没有则新建 */
+/** 造一条池记录（认领与新建共用，保证 id 生成规则一致）。 */
+function pooledEntryFrom(terminal: vscode.Terminal, cwd: string): PooledTerminal {
+  return {
+    id: `axon-t${++poolCounter}-${Date.now().toString(36)}`,
+    terminal,
+    cwd,
+    busy: true,
+  };
+}
+
+/** 读取终端当前工作目录；拿不到时返回空串（表示未知）。 */
+function readTerminalCwd(terminal: vscode.Terminal): string {
+  try {
+    return terminal.shellIntegration?.cwd?.fsPath ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * 终端此刻是否正在执行命令（尽力判定）。
+ *
+ * 判定依据是 shell integration 中最后一次执行有没有拿到退出码。拿不到 executions
+ * （版本不支持 / 该终端没启用 SI）时一律按「空闲」处理——这是刻意的取舍：重载后旧的读流
+ * 早已断开，那类终端本来就是「AI 已经不再管」的状态，借来复用仍优于再开一个新终端。
+ * 判错的方向也安全：被误判成忙只会退回「新建终端」，也就是本次改动之前的行为。
+ */
+function isTerminalExecutingCommand(terminal: vscode.Terminal): boolean {
+  try {
+    const si = terminal.shellIntegration as
+      | (vscode.TerminalShellIntegration & { executions?: readonly { exitCode?: number }[] })
+      | undefined;
+    const executions = si?.executions;
+    if (!executions || executions.length === 0) return false;
+    return executions[executions.length - 1]?.exitCode === undefined;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 从窗口已有终端里认领一个可用的 Axon 命令终端。
+ *
+ * 为什么需要认领：终端池是内存态，窗口重载后就空了，而 VS Code 会把上次的终端继续留在
+ * 面板里。池子只认自己新建的终端，于是重载后每条命令都要再开一个新终端，左侧越堆越多。
+ *
+ * 可认领的条件（缺一不可）：
+ * - Axon 创建的命令终端（后台进程终端排除，它上面通常正跑着 dev server / watch）；
+ * - shell 仍存活（exitStatus 非空说明终端已退出，无法再执行命令）；
+ * - 不属于任何 session 的池子（别的会话正在管的终端不能抢）；
+ * - 此刻没在执行命令。
+ *
+ * 有多个候选时优先挑工作目录与本次请求一致的（省掉一次 cd），否则取第一个。
+ */
+function adoptOrphanCommandTerminal(cwd?: string): PooledTerminal | null {
+  const managed = new Set<vscode.Terminal>();
+  for (const pool of terminalPools.values()) {
+    for (const entry of pool) managed.add(entry.terminal);
+  }
+
+  let fallback: { terminal: vscode.Terminal; cwd: string } | null = null;
+  for (const terminal of vscode.window.terminals) {
+    if (managed.has(terminal)) continue;
+    if (terminal.exitStatus) continue;
+    if (!isAxonCommandTerminal(terminal)) continue;
+    if (isTerminalExecutingCommand(terminal)) continue;
+
+    const terminalCwd = readTerminalCwd(terminal);
+    if (cwd && terminalCwd === cwd) return pooledEntryFrom(terminal, terminalCwd);
+    fallback ??= { terminal, cwd: terminalCwd };
+  }
+  return fallback ? pooledEntryFrom(fallback.terminal, fallback.cwd) : null;
+}
+
+/** 从池中获取空闲终端，没有可用的则新建 */
 function acquireTerminal(terminalKey: string, cwd?: string): { terminal: vscode.Terminal; id: string; cwdChanged: boolean } {
   const pool = terminalPools.get(terminalKey) ?? [];
   terminalPools.set(terminalKey, pool);
@@ -170,18 +246,25 @@ function acquireTerminal(terminalKey: string, cwd?: string): { terminal: vscode.
     }
   }
 
-  // 全部忙 → 新建
-  const id = `axon-t${++poolCounter}-${Date.now().toString(36)}`;
+  // 池里没有空闲 → 认领面板里遗留的 Axon 命令终端
+  const adopted = adoptOrphanCommandTerminal(cwd);
+  if (adopted) {
+    pool.push(adopted);
+    // 认领来的终端读不到当前目录时按「需要 cd」处理：宁可多执行一条 cd，也不能让命令跑错目录
+    return { terminal: adopted.terminal, id: adopted.id, cwdChanged: !!cwd && adopted.cwd !== cwd };
+  }
+
+  // 一个可复用的都没有 → 新建
   const t = vscode.window.createTerminal({
     name: "Axon",
     iconPath: new vscode.ThemeIcon("sparkle"),
     cwd: cwd || undefined,
-    env: { GIT_PAGER: "cat", AXON_AI_TERMINAL: "1" },
+    env: commandTerminalEnv({ GIT_PAGER: "cat" }),
   });
 
-  const entry: PooledTerminal = { id, terminal: t, cwd: cwd ?? "", busy: true };
+  const entry = pooledEntryFrom(t, cwd ?? "");
   pool.push(entry);
-  return { terminal: t, id, cwdChanged: false };
+  return { terminal: t, id: entry.id, cwdChanged: false };
 }
 
 /** 归还终端到池中 */

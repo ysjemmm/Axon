@@ -20,6 +20,7 @@ import type {
   BackgroundProcessStatus,
 } from "@axon/core";
 import { interruptTimedOutTask, timedOutRegistry } from "./terminalDisplay.js";
+import { processTerminalEnv } from "./terminalIdentity.js";
 
 interface ProcEntry {
   terminalId: string;
@@ -66,7 +67,7 @@ export class VSCodeProcessManager implements HostProcessManager {
       name: `Axon: ${label}`,
       cwd: opts.cwd,
       iconPath: new vscode.ThemeIcon("server-process"),
-      env: { AXON_AI_TERMINAL: "1" },
+      env: processTerminalEnv(),
     });
     terminal.show(false);
 
