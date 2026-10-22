@@ -569,10 +569,14 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
     };
     const videoMime: Record<string, string> = { ".mp4": "video/mp4", ".webm": "video/webm" };
     /**
-     * 视频预览的体积上限。视频要以 base64 经命令通道整段送进 workbench，再内嵌进预览页，
-     * 比图片更吃内存：1080p 十几秒的 mp4 通常在 10MB 量级，超过这个上限的请改用系统播放器。
+     * 视频预览的体积上限。
+     *
+     * 视频要经命令通道整段送进 workbench，再拼进预览页的 HTML 里 —— base64 本身膨胀 1/3，
+     * 等于同一个文件在内存里存在三份（原始 Buffer、base64 串、拼接后的 HTML）。
+     * 上限放太宽会把这三份一起放大，容易把 IPC 和渲染进程拖死，所以收到 12MB：
+     * 典型的 720p 十几秒成片在 1~3MB，够用；更大的请用系统播放器。
      */
-    const MAX_VIDEO_BYTES = 32 * 1024 * 1024;
+    const MAX_VIDEO_BYTES = 12 * 1024 * 1024;
     const textExts = new Set([
       ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".json5", ".yaml", ".yml", ".xml",
       ".css", ".scss", ".less", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".vue", ".svelte",

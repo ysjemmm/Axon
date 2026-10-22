@@ -426,7 +426,6 @@ export class NodeMediaRenderer implements HostMediaRenderer {
         },
       })
     ).bin;
-    const encoder = await detectVideoEncoder(ffmpeg);
 
     const tmp = await mkdtemp(join(tmpdir(), "axon-media-"));
     const warnings: string[] = [];
@@ -501,6 +500,9 @@ export class NodeMediaRenderer implements HostMediaRenderer {
           req.signal,
         );
       } else {
+        // 只有 mp4 才需要 H.264 编码器。探测放在这个分支里而不是开头：
+        // 否则一份没有 H.264 的 ffmpeg 会让本来能出的 GIF 也一起失败。
+        const encoder = await detectVideoEncoder(ffmpeg);
         const audioArgs = audioPath
           // apad 把音频补成无限长、-shortest 再按画面截断：旁白比画面短时尾部补静音，而不是把画面截短
           ? ["-i", audioPath, "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-af", "apad", "-shortest"]

@@ -58,12 +58,8 @@ const MACOS_RELEASE_BASE =
 export interface FfmpegAsset {
   /** 资产文件名（拼在 RELEASE_BASE 后面） */
   file: string;
-  /** 压缩包类型：决定用哪种方式解压 */
-  archive: "zip" | "tar.xz";
   /** 下载体积（字节，用于进度展示；与真实大小有偏差不影响下载） */
   sizeHint: number;
-  /** 解压后二进制在包内的相对路径 */
-  binaryInArchive: string;
   /** 该资产所属的下载基址；缺省用 RELEASE_BASE（BtbN），macOS 用自建构建 */
   baseUrl?: string;
   /**
@@ -79,42 +75,30 @@ export interface FfmpegAsset {
 const ASSETS: Record<string, FfmpegAsset> = {
   "win32-x64": {
     file: "ffmpeg-n8.1.3-20-gc8de997cb1-win64-lgpl-8.1.zip",
-    archive: "zip",
     sizeHint: 170_498_048,
-    binaryInArchive: "bin/ffmpeg.exe",
   },
   "win32-arm64": {
     file: "ffmpeg-n8.1.3-20-gc8de997cb1-winarm64-lgpl-8.1.zip",
-    archive: "zip",
     sizeHint: 116_391_936,
-    binaryInArchive: "bin/ffmpeg.exe",
   },
   "linux-x64": {
     file: "ffmpeg-n8.1.3-20-gc8de997cb1-linux64-lgpl-8.1.tar.xz",
-    archive: "tar.xz",
     sizeHint: 137_052_160,
-    binaryInArchive: "bin/ffmpeg",
   },
   "linux-arm64": {
     file: "ffmpeg-n8.1.3-20-gc8de997cb1-linuxarm64-lgpl-8.1.tar.xz",
-    archive: "tar.xz",
     sizeHint: 116_077_773,
-    binaryInArchive: "bin/ffmpeg",
   },
   // macOS：本仓库 CI 自建（LGPL + VideoToolbox），见文件头说明
   "darwin-arm64": {
     file: "ffmpeg-darwin-arm64.tar.gz",
-    archive: "tar.xz",
     sizeHint: 40 * 1024 * 1024,
-    binaryInArchive: "ffmpeg",
     baseUrl: MACOS_RELEASE_BASE,
     darwinPostProcess: true,
   },
   "darwin-x64": {
     file: "ffmpeg-darwin-x64.tar.gz",
-    archive: "tar.xz",
     sizeHint: 45 * 1024 * 1024,
-    binaryInArchive: "ffmpeg",
     baseUrl: MACOS_RELEASE_BASE,
     darwinPostProcess: true,
   },
