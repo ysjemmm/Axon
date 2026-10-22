@@ -1,0 +1,136 @@
+# 为 macOS 构建 LGPL 版 ffmpeg（供 Axon 的动画渲染能力自动获取）
+#
+# 为什么自建：macOS 没有现成的、许可干净、可商业分发的静态构建。
+#   · OSXExperts.net 的产物标明"仅供教育用途"，且编译时启用了 x264/x265（GPL）
+#   · evermeet.cx 是 GPLv3 构建（ffmpeg-static 的 macOS 二进制就来自这里）
+#   · BtbN（Windows/Linux 用的那个源）不提供 macOS 产物
+#
+# 本配置产出的二进制是纯 LGPL（--disable-gpl / --disable-nonfree / --disable-version3），
+# H.264 走系统框架 VideoToolbox（--enable-videotoolbox），许可干净且是硬件加速。
+#
+# 产物：ffmpeg-darwin-arm64.tar.gz / ffmpeg-darwin-x64.tar.gz（各带 .sha256）
+# 客户端下载后还会做 xattr 去隔离 + ad-hoc 签名（见 packages/host-node/src/ffmpegProvision.ts）
+#
+# 跑完后把 ffmpegProvision.ts 里的 MACOS_RELEASE_BASE 改成这个 release 的实际地址。
+
+name: Build ffmpeg for macOS (LGPL)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "ffmpeg-macos-*"
+
+permissions:
+  contents: write
+
+env:
+  FFMPEG_VERSION: "n8.1.3"
+  # 产物统一发布到这个 tag；客户端按 macos-v1 拼下载地址
+  RELEASE_TAG: "macos-v1"
+
+jobs:
+  build:
+    name: macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macos-14 / 15 是 Apple Silicon，macos-13 是 Intel
+          - runner: macos-14
+            arch: arm64
+          - runner: macos-13
+            arch: x64
+    steps:
+      - name: 取 FFmpeg 源码
+        run: |
+          set -euo pipefail
+          curl -fsSL -o ffmpeg.tar.gz "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/${FFMPEG_VERSION}.tar.gz"
+          tar -xzf ffmpeg.tar.gz
+          echo "SRC_DIR=$(basename "$(ls -d FFmpeg-*/ | head -1)")" >> "$GITHUB_ENV"
+
+      - name: 配置（LGPL + VideoToolbox，不启用任何 GPL 组件）
+        run: |
+          set -euo pipefail
+          cd "$SRC_DIR"
+          ./configure \
+            --prefix="$PWD/dist" \
+            --disable-debug \
+            --disable-doc \
+            --disable-shared --enable-static \
+            --disable-autodetect \
+            --disable-network \
+            --disable-gpl --disable-nonfree --disable-version3 \
+            --disable-ffplay --disable-ffprobe \
+            --enable-videotoolbox \
+            --enable-audiotoolbox
+          # 许可证自检：配置里绝不能出现 GPL / nonfree
+          if grep -qE '^CONFIG_(GPL|NONFREE)=yes' ffbuild/config.mak; then
+            echo "::error::配置里启用了 GPL/nonfree 组件，产物不能随产品分发"
+            exit 1
+          fi
+          echo "LGPL 自检通过"
+
+      - name: 编译
+        run: |
+          set -euo pipefail
+          cd "$SRC_DIR"
+          make -j"$(sysctl -n hw.ncpu)"
+
+      - name: 瘦身并签名
+        run: |
+          set -euo pipefail
+          cd "$SRC_DIR"
+          strip -x ffmpeg || strip ffmpeg || true
+          # ad-hoc 签名：Apple Silicon 只执行有签名的二进制
+          codesign --force --sign - ffmpeg
+
+      - name: 校验产物（静态 + 编码器齐全）
+        run: |
+          set -euo pipefail
+          cd "$SRC_DIR"
+          echo "── 动态依赖（应只有系统框架）──"
+          otool -L ffmpeg
+          if otool -L ffmpeg | grep -q -E '/opt/homebrew|/usr/local/(opt|lib)'; then
+            echo "::error::产物链接了非系统库，分发后会缺依赖"
+            exit 1
+          fi
+          echo "── 编码器自检 ──"
+          ./ffmpeg -hide_banner -encoders 2>/dev/null | grep -E 'h264_videotoolbox|aac' || {
+            echo "::error::缺少 H.264 / AAC 编码器"
+            exit 1
+          }
+          echo "── 冒烟渲染（2 秒测试片）──"
+          ./ffmpeg -hide_banner -loglevel error -f lavfi -i "testsrc2=size=640x360:rate=12:duration=2" \
+            -f lavfi -i "sine=frequency=440:duration=2" \
+            -c:v h264_videotoolbox -pix_fmt yuv420p -b:v 2M -c:a aac -shortest -y smoke.mp4
+          ./ffmpeg -hide_banner -i smoke.mp4 2>&1 | grep -E 'Video: h264|Audio: aac'
+
+      - name: 打包
+        run: |
+          set -euo pipefail
+          cd "$SRC_DIR"
+          OUT="ffmpeg-darwin-${{ matrix.arch }}.tar.gz"
+          tar -czf "$OUT" ffmpeg
+          shasum -a 256 "$OUT" | cut -d' ' -f1 > "$OUT.sha256"
+          ls -lh "$OUT"
+          echo "── sha256 ──"; cat "$OUT.sha256"
+
+      - name: 发布到 release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ffmpeg macOS (LGPL)
+          body: |
+            供 Axon 动画渲染能力自动获取的 macOS 版 ffmpeg。
+
+            - 构建配置：LGPL（--disable-gpl --disable-nonfree --disable-version3）
+            - H.264：VideoToolbox（系统框架，硬件加速）
+            - 音频：AudioToolbox / 原生 aac
+            - 产物：`ffmpeg-darwin-arm64.tar.gz`（Apple Silicon）、`ffmpeg-darwin-x64.tar.gz`（Intel），各带 `.sha256`
+            - 源码：FFmpeg ${{ env.FFMPEG_VERSION }}
+          # 用 glob 匹配：SRC_DIR 是运行时才写进 $GITHUB_ENV 的，在这里的表达式里还取不到
+          files: |
+            FFmpeg-*/ffmpeg-darwin-*.tar.gz
+            FFmpeg-*/ffmpeg-darwin-*.tar.gz.sha256
