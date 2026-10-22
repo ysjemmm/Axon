@@ -9,13 +9,20 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
-import { ChevronLeft, ChevronRight, Copy, RotateCcw, RotateCw, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronLeft, ChevronRight, Copy, Download, RotateCcw, RotateCw, X, ZoomIn, ZoomOut } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 
 const MIN_SCALE = 0.25;
 const MAX_SCALE = 8;
 const SCALE_STEP = 1.25;
 const ROTATE_STEP = 90;
+
+function imageExtension(src: string): string {
+  const mime = /^data:image\/([^;,]+)/i.exec(src)?.[1]?.toLowerCase();
+  if (mime === "jpeg") return "jpg";
+  if (mime === "svg+xml") return "svg";
+  return mime || "png";
+}
 
 export interface ImageViewerProps {
   open: boolean;
@@ -139,6 +146,14 @@ export function ImageViewer({ open, images, index, onIndexChange, onClose }: Ima
     }
   };
 
+  const downloadImage = () => {
+    if (!src) return;
+    const anchor = document.createElement("a");
+    anchor.href = src;
+    anchor.download = `axon-image-${index + 1}.${imageExtension(src)}`;
+    anchor.click();
+  };
+
   const onWheel = (e: ReactWheelEvent) => {
     if (e.deltaY < 0) zoomIn();
     else zoomOut();
@@ -209,6 +224,7 @@ export function ImageViewer({ open, images, index, onIndexChange, onClose }: Ima
               onPointerUp={endDrag}
               onPointerCancel={endDrag}
               onDoubleClick={resetTransform}
+              onContextMenu={(event) => event.preventDefault()}
             >
               <img
                 src={src}
@@ -265,6 +281,10 @@ export function ImageViewer({ open, images, index, onIndexChange, onClose }: Ima
               >
                 <Copy className="w-3.5 h-3.5" />
                 <span>{copyStatus === "ok" ? "已复制" : copyStatus === "err" ? "复制失败" : "复制图片"}</span>
+              </button>
+              <button onClick={downloadImage} className={btn} title="下载图片">
+                <Download className="w-3.5 h-3.5" />
+                <span>下载图片</span>
               </button>
             </div>
           </>

@@ -13,7 +13,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { ChevronDown, Plus, History, X, Check, Loader2, MessagesSquare, CodeXml, Table2 } from "lucide-react";
+import { ChevronDown, Plus, History, X, Check, Loader2, MessagesSquare, CodeXml, Table2, GitFork } from "lucide-react";
 import type { SessionTab } from "./SessionContainer";
 
 /**
@@ -31,6 +31,8 @@ interface SessionSwitcherProps {
   runningKeys: ReadonlySet<string>;
   onSelect: (key: string) => void;
   onNewTab: () => void;
+  /** 从当前会话分叉出一个新会话（只继承记忆，不复制对话历史） */
+  onForkSession: () => void;
   onCloseTab: (key: string, e: React.MouseEvent) => void;
   onRename: (key: string, title: string) => void;
   /** 打开完整历史会话面板 */
@@ -46,6 +48,7 @@ export function SessionSwitcher({
   runningKeys,
   onSelect,
   onNewTab,
+  onForkSession,
   onCloseTab,
   onRename,
   onOpenHistory,
@@ -133,6 +136,18 @@ export function SessionSwitcher({
         >
           <History className="w-3.5 h-3.5" />
         </button>
+        {/* 分叉：从当前会话派生一个新会话，只带走「记忆」而不带对话历史。
+            未落盘的空白会话没有可分叉的内容，故不显示。 */}
+        {current?.id && (
+          <button
+            onClick={onForkSession}
+            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors cursor-pointer shrink-0"
+            title="分叉会话（只继承记忆，不复制对话历史）"
+            aria-label="分叉会话"
+          >
+            <GitFork className="w-3.5 h-3.5" />
+          </button>
+        )}
 
         {/* Chat / Code / Cowork 模式切换：IDE 形态下原本挂在辅助侧栏标题栏，那行已隐藏，由这里接管 */}
         {/* 样式见 index.css 的 .axon-mode-switch（配色与原生标题栏那版一致） */}

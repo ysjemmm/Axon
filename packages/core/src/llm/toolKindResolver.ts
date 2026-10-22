@@ -73,8 +73,15 @@ const TOOL_KIND_MAP: Record<ToolName, ToolKind> = {
   // 选项问答：向用户抛选择。归到 other——它不是读写/命令/联网任何一类，
   // 也不想被 orchestration 那套（子 Agent 分组）呈现逻辑带走。
   [ToolName.AskUser]: "other",
+  // 声明式表单：同样不读不写磁盘，只把"需要用户填的内容"呈现出来，归 other
+  [ToolName.AskForm]: "other",
   // 产出登记：不读不写磁盘，只是把"已经做好的文件"告诉前端，归 other
   [ToolName.ReportOutputs]: "other",
+  // 产物：本质是写文件（落到产物目录），归 edit。与 wiki_save_page 同理——
+  // 它不产生 fileDiff，所以不会进「代码改动」那套审阅呈现；渲染成产物卡片由前端单独接管。
+  [ToolName.CreateArtifact]: "edit",
+  // 会话记忆：不读不写磁盘，只改会话自己的一个字段，同样归 other
+  [ToolName.UpdateMemory]: "other",
 };
 
 /**

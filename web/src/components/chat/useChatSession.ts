@@ -8,6 +8,7 @@ import { useSessionEvents } from "@/hooks/useSessionEvents";
 import { registerPathBadgeRoots } from "../MarkdownRenderer";
 import type { AttachedFile, ChatMessage, CreditDetail, TextSegment, UserSegment } from "./types";
 import type { CommandDecision } from "./commandApprovalContext";
+import type { FormSpecData, FormSubmitData } from "./formTypes";
 import { STORAGE, TIMEOUT, CONTROL_CMD } from "@/lib/constants";
 // 拆分后的模块
 // 鎷嗗垎鍚庣殑妯″潡
@@ -50,6 +51,8 @@ export interface SubmitPayload {
     effort?: string;
     /** Quest 模式专属选项（联网搜索；思考开关已上移到 think） */
     quest?: { webSearch?: boolean };
+    /** 用户设置的产物目录（绝对路径）；缺省表示用默认位置，由后端兜底解析 */
+    artifactDir?: string;
   };
 }
 
@@ -67,11 +70,13 @@ interface UseChatSessionOptions {
   send: (cmd: Record<string, unknown>) => void;
   onSessionCreated: (id: string) => void;
   onCompactionMigrated?: (newSessionId: string) => void;
+  /** 会话分叉完成：父组件刷新会话列表并切到新会话 */
+  onSessionForked?: (newSessionId: string, sourceId?: string) => void;
   onStreamingChange?: (streaming: boolean) => void;
 }
 
 export function useChatSession(opts: UseChatSessionOptions) {
-  const { clientId, sessionId, mode, connected, send: baseSend, onSessionCreated, onCompactionMigrated, onStreamingChange } = opts;
+  const { clientId, sessionId, mode, connected, send: baseSend, onSessionCreated, onCompactionMigrated, onSessionForked, onStreamingChange } = opts;
   const models = useModels();
 
   // ── 会话状态 ──────────────────────────────────────────────────────────
@@ -156,6 +161,11 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const [undoNotice, setUndoNotice] = useState<{ id: number; text: string } | null>(null);
   const [toolConfirm, setToolConfirm] = useState<{ toolName: string; title: string; kind?: string } | null>(null);
   const [waitingInputIds, setWaitingInputIds] = useState<Set<string>>(new Set());
+  // ask_form 表单请求（Agent 交付一张声明式表单，等用户填写提交）。结构对齐 eventHandlers 的 FormRequest。
+  const [formRequest, setFormRequest] = useState<{ toolCallId: string; spec: FormSpecData } | null>(null);
+  // 会话记忆（Markdown）：模型调 update_memory 或用户导入后，由 session_memory 事件推来。
+  // 它不进消息历史（在 core 侧就是分开存的），这里只用于展示与导入/导出。
+  const [memory, setMemory] = useState<string>("");
   // ask_user 问答请求（Agent 抛问题 + 选项，等用户作答）。结构对齐 eventHandlers 的 AskUserRequest。
   const [askUser, setAskUser] = useState<{ toolCallId: string; questions: { question: string; options: { id: string; label: string; description?: string }[]; multi: boolean; allowOther: boolean }[] } | null>(null);
   const [commandApprovals, setCommandApprovals] = useState<Record<string, CommandApproval>>({});
@@ -182,6 +192,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const commandApprovalsRef = useRef<Record<string, CommandApproval>>({}); commandApprovalsRef.current = commandApprovals;
   const onSessionCreatedRef = useRef(onSessionCreated); onSessionCreatedRef.current = onSessionCreated;
   const onCompactionMigratedRef = useRef(onCompactionMigrated); onCompactionMigratedRef.current = onCompactionMigrated;
+  const onSessionForkedRef = useRef(onSessionForked); onSessionForkedRef.current = onSessionForked;
   const ownedSessionId = useRef<string | null>(null);
   const lastLoadedSessionId = useRef<string | null>(null);
   const hasEverConnected = useRef(false);
@@ -224,6 +235,12 @@ export function useChatSession(opts: UseChatSessionOptions) {
     baseSend({ ...cmd, clientId });
   }, [baseSend, clientId]);
 
+  /** 写入/覆盖会话记忆（记忆面板保存、导入 .md 都走这条） */
+  const saveMemory = useCallback((content: string) => {
+    setMemory(content);
+    send({ type: "set_memory", memory: content });
+  }, [send]);
+
   // 面板首次连接或恢复时也同步当前选择，避免状态栏继续停留在上一个 Provider。
   useEffect(() => {
     if (!connected) return;
@@ -254,11 +271,14 @@ export function useChatSession(opts: UseChatSessionOptions) {
     setPendingPaths, setPendingDiffs, setPendingExpanded, setUndoNotice,
     setToolConfirm, setWaitingInputIds, setCommandApprovals, setCommandRiskNotice,
     setAskUser,
+    setFormRequest,
+    setMemory,
     setContextOverflow, setToolHistoryMismatch,
     cancelled, cancelledTurnMsgId, cancelledTurnGeneration, turnGeneration,
     turnStartTime,
     modelRef, statusPhaseRef, toolResultResetTimer,
     compactionMigratedRef, onSessionCreatedRef, onCompactionMigratedRef,
+    onSessionForkedRef,
     ownedSessionId,
     typewriter,
     clientId, send, finishLoading,
@@ -619,6 +639,55 @@ export function useChatSession(opts: UseChatSessionOptions) {
     send({ type: "edit_user_message", messageId, content, userIndex, images, attachedFiles: attachedFiles?.map((f) => ({ name: f.name, size: f.size })) });
   }, [send, chatHistory]);
 
+  /**
+   * 从某条 AI 回复分叉：新会话带上「截至这一轮为止」的完整历史前缀。
+   *
+   * 锚点必须传「这一轮从哪条用户消息开始」，而不是被点的那条 assistant 消息 ——
+   * 落盘的 assistant 消息没有 id，后端无从按 id 定位；而前端一条 assistant 气泡
+   * 本来就覆盖后端一串消息（assistant + tool_calls + 工具结果 + 收尾正文），
+   * 用回合起点定位，两端才在同一个口径上。
+   *
+   * 两个字段一起发：
+   * · upToMessageId = 锚点气泡的 id（就是发给后端的 clientMessageId）；
+   * · upToUserIndex = 锚点是历史里第几条用户消息 —— 老会话 / 压缩摘要出来的用户消息
+   *   没有 clientMessageId（前端只能给 `hist-u-N` 这种临时 id），后端查不到 id 时按它兜底。
+   *   口径与 editUserMessage 的 userIndex 一致：只数用户消息，跳过系统提示等非用户条目。
+   */
+  // 历史通过 ref 读：MessageBubble 是 memo 且比较函数不看回调身份，
+  // 老消息不会因为 chatHistory 变化而重渲染，闭包里捕获的 chatHistory 会是旧的。
+  // 前缀在这些场景下可能被压缩/编辑改写过，用旧快照算序号就可能算错。
+  const chatHistoryRef = useRef(chatHistory);
+  chatHistoryRef.current = chatHistory;
+  const forkFromMessage = useCallback((message: ChatMessage) => {
+    // 还没有会话 id（首轮刚发出、后端尚未回 session_created）就没有可截断的落盘历史
+    if (!sessionId) return;
+    const history = chatHistoryRef.current;
+    const clickedIdx = history.findIndex((m) => m.id === message.id);
+    if (clickedIdx < 0) return;
+    // 往回找这一轮的起点用户消息；找不到（极端情况下历史以 assistant 开头）就不发请求，
+    // 免得让用户得到一个「以为带了历史、实际只有记忆」的会话
+    let anchorIdx = -1;
+    for (let i = clickedIdx; i >= 0; i--) {
+      if (history[i].role === "user") { anchorIdx = i; break; }
+    }
+    if (anchorIdx < 0) return;
+    const anchorId = history[anchorIdx].id;
+    let upToUserIndex = 0;
+    for (let i = 0; i < anchorIdx; i++) {
+      if (history[i].role === "user") upToUserIndex++;
+    }
+    // `hist-u-N` 是会话加载时为「没有 clientMessageId 的历史用户消息」临时生成的 id
+    // （老会话 / 压缩摘要出来的用户消息），后端不可能匹配到，只发序号。
+    // 反过来，有真实 id 时就不发序号：id 查不到说明这条消息已经被压缩掉了，
+    // 这时候让后端明确报错，比按一个可能已经错位的序号截出一段牛头不对马嘴的历史好。
+    const hasRealId = !anchorId.startsWith("hist-u-");
+    send({
+      type: CONTROL_CMD.FORK_SESSION,
+      sessionId,
+      ...(hasRealId ? { upToMessageId: anchorId } : { upToUserIndex }),
+    });
+  }, [send, sessionId]);
+
   const answerUserQuestion = useCallback((answers: { selected: string[]; other?: string; skipped?: boolean }[]) => {
     const req = askUser;
     setAskUser(null);
@@ -626,6 +695,25 @@ export function useChatSession(opts: UseChatSessionOptions) {
       send({ type: "answer_user_question", toolCallId: req.toolCallId, answers });
     }
   }, [send, askUser]);
+
+  /**
+   * 提交表单：把当前全部字段值与触发的动作回传后端，挂起中的 agent loop 随即继续。
+   * 卡片立刻收起（与问答卡片同一处理）——表单的"已提交"态由内联面板自己维护，
+   * 阻塞式这张留着只会占位置，用户已经看得见 AI 接着往下做了。
+   */
+  const submitForm = useCallback((payload: FormSubmitData) => {
+    const req = formRequest;
+    setFormRequest(null);
+    if (req) {
+      send({
+        type: "submit_form",
+        toolCallId: req.toolCallId,
+        action: payload.action,
+        values: payload.values,
+        selectedRows: payload.selectedRows,
+      });
+    }
+  }, [send, formRequest]);
 
   const confirmTool = useCallback((confirmed: boolean, options?: { mode?: "strict" | "auto" }) => {
     setToolConfirm(null);
@@ -701,6 +789,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
     pendingPaths, pendingDiffs, pendingExpanded, setPendingExpanded,
     messageQueue, toolConfirm,
     askUser,
+    formRequest,
+    memory,
     waitingInputIds,
     commandApprovals, commandRiskNotice, setCommandRiskNotice,
     contextOverflow, dismissContextOverflow, forceCompact,
@@ -715,7 +805,11 @@ export function useChatSession(opts: UseChatSessionOptions) {
     // 动作
     submit, removeFromQueue, cancelTurn,
     setEditModePreference, acceptEdits, rejectEdits, undoEdits, editUserMessage, confirmTool,
+    /** 从某条 AI 回复分叉：新会话带截至那一轮为止的历史前缀 */
+    forkFromMessage,
     answerUserQuestion,
+    submitForm,
+    saveMemory,
     approveCommand, dismissCommandRiskNotice,
     setModel, selectWorkspace, selectGroup, groupUpdated,
     listSnapshots: () => send({ type: "list_snapshots" }),

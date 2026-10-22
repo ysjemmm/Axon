@@ -25,6 +25,7 @@ import type { AgentHost } from "../host/index.js";
 import type { SessionStorage } from "../storage/types.js";
 import type { SessionHubDeps } from "./types.js";
 import { filterPersistableMessages, filterTransientMessages, slimDiffBodies, findDiffBody } from "./persistable.js";
+import { buildForkMessages } from "./forkHistory.js";
 
 /**
  * 每个 session 的代理 channel：拦截该 session emit 的所有事件，
@@ -384,6 +385,8 @@ export class SessionHub {
         messages: persistable,
         // 仅在有有效值时写入 totalTokens：避免尚未拿到真实 usage 时用 0 覆盖磁盘已有统计。
         ...(total > 0 ? { totalTokens: total } : {}),
+        // 会话记忆同样只在非空时写：一条空串不该把磁盘上已攒下的记忆抹掉
+        ...(s.getMemory().trim() ? { memory: s.getMemory() } : {}),
       }).catch(() => {});
     });
   }
@@ -416,6 +419,7 @@ export class SessionHub {
     // 回填上次落盘的 token 统计，避免新实例 getLastTotalTokens()=0 在首次真实 usage 前
     // 被持久化回写、覆盖磁盘上的有效值（刷新后上下文显示为 0 的根因）。
     session.hydrateTokenUsage(savedSession?.totalTokens);
+    session.hydrateMemory(savedSession?.memory);
     this.registerPersistence(session, sid);
     this.activeSessions.set(sid, session);
 
@@ -454,6 +458,8 @@ export class SessionHub {
         return;
       case "new_session":
         return this.handleNewSession(cmd, clientId, allWorkspaces, primaryWorkspace);
+      case "fork_session":
+        return this.handleForkSession(cmd, clientId, allWorkspaces, primaryWorkspace);
       case "cancel":
         this.getActiveSession(this.resolveSessionId(cmd))?.cancel();
         return;
@@ -465,9 +471,26 @@ export class SessionHub {
         if (sid) await this.storage.updateSession(sid, { messages: this.filterPersistable(s.getMessages()) });
         return;
       }
-      case "compact_session":
-        this.getActiveSession(this.resolveSessionId(cmd))?.compactSession(cmd.model, cmd.provider);
+      case "compact_session": {
+        const sid = this.resolveSessionId(cmd);
+        const session = this.getActiveSession(sid);
+        if (!session) return;
+        // 回复过程中禁止手动压缩。理由不是"界面别乱动"，而是会真的压坏：
+        // 压缩会把 messages 整体换成摘要版，而正在跑的 agent loop 还要继续往这个数组里 push
+        // 本轮的 assistant / tool 结果 —— 中途替换会让这一轮的 tool_call 与 tool 结果配不上，
+        // 下一轮请求直接 400。所以这里挡掉并说明原因，而不是让它压到一半留下残缺历史。
+        // 判定复用 runningSessions：它本来就在维护"哪些会话正在跑一轮"（两条入口都会登记）。
+        if (sid && this.runningSessions.has(sid)) {
+          this.sendTo(sid, cmd.clientId, {
+            type: "compacting_end",
+            success: false,
+            message: "AI 正在回复中，回复结束后再压缩上下文",
+          } as AgentEvent);
+          return;
+        }
+        session.compactSession(cmd.model, cmd.provider);
         return;
+      }
       case "force_compact_session":
         this.getActiveSession(this.resolveSessionId(cmd))?.forceCompactSession((cmd as any).model, (cmd as any).provider);
         return;
@@ -525,6 +548,13 @@ export class SessionHub {
         return this.handleDeleteRelay(cmd, clientId, primaryWorkspace);
       case "confirm_tool":
         this.getActiveSession(this.resolveSessionId(cmd))?.resolveToolConfirmation(cmd.confirmed, (cmd as any).mode);
+        return;
+      case "submit_form":
+        this.getActiveSession(this.resolveSessionId(cmd))?.resolveFormSubmit(cmd.toolCallId ?? "", {
+          action: cmd.action,
+          values: cmd.values ?? {},
+          selectedRows: cmd.selectedRows,
+        });
         return;
       case "answer_user_question":
         this.getActiveSession(this.resolveSessionId(cmd))?.resolveUserAnswer(
@@ -628,6 +658,9 @@ export class SessionHub {
       pendingPaths: session.getPendingPaths(),
       pendingDiffs: session.getPendingDiffs(),
       pendingEditIds: session.getPendingEditIds(),
+      // 随会话一起回填记忆，供记忆面板显示与编辑：分叉出的会话只带记忆，
+      // 不在加载时下发的话，面板会显示「空」、与后端实际注入的内容对不上。
+      memory: session.getMemory() || savedSession?.memory || "",
     } as AgentEvent);
     session.appendTrace("session.loaded", {
       workspace: ws_dir,
@@ -794,6 +827,127 @@ export class SessionHub {
       workspaces: allWorkspaces,
       mode: mode.persisted,
       title: "新对话",
+    });
+  }
+
+  /**
+   * 会话分叉：从源会话派生一个新会话。两个入口共用本方法，差别只在是否带历史前缀：
+   *
+   * · 会话列表 / 顶栏「分叉」（不带截断参数）—— 只继承记忆（SessionData.memory），
+   *   不复制对话历史。用户要继承的是结论，不是过程：新会话 messages 留空，交给
+   *   AgentSession 构造函数按 mode 播种 system prompt；记忆随后由 hydrateMemory 回填，
+   *   作为尾部注入每轮发出（见 PromptBuilder.buildInjections），于是分叉出来的会话
+   *   一开口就带着此前沉淀的结论。⚠️ 这个入口的语义是既有契约，不要改。
+   *
+   * · 某条 AI 回复上的「从这里分叉」（带截断参数）—— 额外把截至那一轮为止的消息
+   *   一并复制进新会话（含该轮的回复与工具调用），记忆照旧复制。截取规则见
+   *   session/forkHistory.ts：锚点是「回合起点用户消息」，不是被点的 assistant 消息
+   *   （后者在落盘数据里没有 id）。
+   *
+   * 与「压缩迁移」的区别：迁移要把压缩后的消息一并带过去（否则接不上正在进行的任务），
+   * 分叉的历史则停在一个完整的轮末，不带 pendingEdits。源会话在两种入口下都不变。
+   */
+  private async handleForkSession(
+    cmd: Extract<ControlCommand, { type: "fork_session" }>,
+    clientId: string | undefined,
+    allWorkspaces: string[],
+    primaryWorkspace: string,
+  ): Promise<void> {
+    const sourceId = (typeof cmd.sessionId === "string" && cmd.sessionId)
+      ? cmd.sessionId
+      : this.resolveSessionId(cmd);
+    // 读源会话：分叉是「复制一份结论」，源必须是磁盘上真实存在的会话。
+    // 读不到就明确回一个可读提示，不静默返回 —— 用户点了按钮却什么都没发生最难排查。
+    const source = sourceId ? await this.storage.getSession(sourceId) : null;
+    if (!source) {
+      this.emitResult(null, clientId, {
+        type: "error",
+        content: "找不到要分叉的会话，它可能已被删除。",
+      } as AgentEvent);
+      return;
+    }
+
+    const ws_dir = source.workspace || primaryWorkspace;
+    const ws_dirs = source.workspaces && source.workspaces.length > 0 ? source.workspaces : allWorkspaces;
+    // 落盘的 mode 可能是 cowork，运行时降级成 agent（见 normalizeMode 的说明）
+    const mode = this.normalizeMode(source.mode);
+    const title = `${source.title} · 分叉`;
+
+    // 有没有截断参数，决定这次分叉带不带历史前缀：
+    // · 不带（会话列表 / 顶栏入口）→ 维持原语义：messages 留空，只带记忆；
+    // · 带（某条 AI 回复上的「从这里分叉」）→ 复制到那一轮为止。
+    // 传了锚点却定位不到时明确报错并中止，而不是悄悄降级成「只带记忆」——
+    // 那样用户会得到一个看似成功、实际丢了全部历史的会话，比直接失败更难排查。
+    const withHistory = (typeof cmd.upToMessageId === "string" && cmd.upToMessageId.length > 0)
+      || typeof cmd.upToUserIndex === "number";
+    let forkMessages: ChatCompletionMessageParam[] = [];
+    if (withHistory) {
+      const cut = buildForkMessages(source.messages, {
+        upToMessageId: cmd.upToMessageId,
+        upToUserIndex: cmd.upToUserIndex,
+      });
+      if (!cut.ok) {
+        this.emitResult(null, clientId, {
+          type: "error",
+          content: `无法从这里分叉：${cut.reason}。可以改用会话列表里的「分叉」只带走记忆。`,
+        } as AgentEvent);
+        return;
+      }
+      forkMessages = cut.messages;
+    }
+
+    // totalTokens 归零、不带 pendingEdits：新会话尚未消耗上下文，也没有待确认改动。
+    const created = await this.storage.createSession({
+      id: "",
+      title,
+      model: source.model,
+      provider: source.provider,
+      workspace: ws_dir,
+      workspaces: ws_dirs.length > 1 ? ws_dirs : undefined,
+      // 连同工作区组绑定一起继承：源会话若是多根工作区组，新会话应落在同一组里（否则只剩路径、丢了组）
+      workspaceGroupId: source.workspaceGroupId,
+      mode: mode.persisted,
+      messages: forkMessages,
+      totalTokens: 0,
+      memory: source.memory,
+    });
+
+    // 刻意【不】改写 clientSessions[clientId]：分叉不像压缩迁移那样冻结旧会话，
+    // 前端会为新会话新开一个 tab（新 clientId），旧 tab 应继续停在源会话上。
+    // 若在这里把发起面板的映射改指新会话，旧 tab 后续的指令就会串到新会话去。
+    // 新 tab 挂载时会用 load_session 建立自己的映射。
+    // 带历史时把同一份（已清洗的）消息交给运行实例，新会话打开就能接着聊；
+    // 不带历史时仍传 undefined，让构造函数按 mode 播种 system prompt。
+    const session = this.createSession(
+      created.id,
+      ws_dir,
+      forkMessages.length > 0 ? forkMessages : undefined,
+      ws_dirs,
+      clientId,
+      mode.runtime,
+    );
+    session.setSessionId(created.id);
+    // 回填记忆：新实例的 memory 默认为空，不回填的话尾部注入拿不到结论，分叉就白做了。
+    session.hydrateMemory(source.memory);
+    this.lastActiveSessionId = created.id;
+    this.registerPersistence(session, created.id);
+    this.activeSessions.set(created.id, session);
+
+    // 回推给发起请求的面板（经新会话的代理 channel）。侧栏入口不带 clientId 时会广播，
+    // 由前端去重后打开新会话 tab —— 三个入口因此复用同一条事件。
+    this.sendTo(created.id, clientId, {
+      type: "session_forked",
+      sessionId: created.id,
+      sourceId,
+    } as AgentEvent);
+    session.appendTrace("session.created", {
+      workspace: ws_dir,
+      workspaces: ws_dirs,
+      mode: mode.persisted,
+      title,
+      forkedFrom: sourceId,
+      // 复制了多少条历史：0 表示「只带记忆」的老语义
+      forkedMessages: forkMessages.length,
     });
   }
 
@@ -1004,6 +1158,11 @@ export class SessionHub {
     // 产出目录：收尾时扫它，diff 出本轮实际产出了哪些文件。
     // 用户可能中途改产出目录，所以每轮都要重新注入。
     session.setOutputDir(typeof cmd.outputDir === "string" ? cmd.outputDir : "");
+    // Chat 产物目录：同样每轮注入，用户中途改了目录下一轮就生效；空串走默认位置。
+    session.setArtifactDir(typeof cmd.artifactDir === "string" ? cmd.artifactDir : "");
+    // Cowork 附件快照：开启后每轮对附件做原稿副本（查看改动/恢复原稿的依据）。
+    // 与 humanizedStatus 同理挂在 Cowork 轮上；同会话复用同一 sessionId 的快照区。
+    if (mode.persisted === "cowork" && sid) session.enableCoworkSnapshots(sid);
     // Quest 模式：每轮注入联网开关（决定工具集）
     if (mode.runtime === "quest") {
       session.setQuestOptions(cmd.quest || {});

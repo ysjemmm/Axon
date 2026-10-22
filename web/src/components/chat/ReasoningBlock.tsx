@@ -78,6 +78,8 @@ export function ReasoningBlock({ content, streaming }: { content: string; stream
       >
         {/* min-h-0 是必须的：grid 子项默认 min-height:auto，高度不会被压到 0 */}
         <div className="min-h-0 overflow-hidden">
+          {/* 这里把正文压到 text-xs；正文里的行内代码 / 引用块 / 表格用的是 em 字号，会跟着一起缩。
+              若把它们改回 px，就会在这个更小的上下文里比正文还大（曾出现「思考过程里代码字体特别大」）。 */}
           <div
             ref={scrollRef}
             className="pl-4 border-l-2 border-muted-foreground/15 max-h-52 overflow-y-auto [&_.prose]:text-muted-foreground/70 [&_.prose]:text-xs [&_.prose]:leading-snug [&_.prose_p]:my-0.5 [&_.prose_ul]:my-0.5 [&_.prose_ol]:my-0.5"

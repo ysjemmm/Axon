@@ -179,8 +179,20 @@ export class ToolCallExecutor {
       const out = await this.s.askUserToolExecutor.execute({ toolName, toolArgs, toolCallId });
       result = out.result;
       status = out.status;
+    } else if (route === "ask_form") {
+      const out = await this.s.formToolExecutor.execute({ toolName, toolArgs, toolCallId });
+      result = out.result;
+      status = out.status;
     } else if (route === "report_outputs") {
-      const out = await this.s.reportOutputs(toolArgs);
+      const out = await this.s.reportOutputs(toolArgs, meta);
+      result = out.result;
+      status = out.status;
+    } else if (route === "update_memory") {
+      const out = this.s.updateMemory(toolArgs);
+      result = out.result;
+      status = out.status;
+    } else if (route === "create_artifact") {
+      const out = await this.s.createArtifact(toolArgs, meta);
       result = out.result;
       status = out.status;
     } else if (route === "command") {

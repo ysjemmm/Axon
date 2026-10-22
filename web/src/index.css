@@ -232,6 +232,42 @@ code:not(.hljs):not(.prose code) {
   user-select: none;
 }
 
+/* 正文图片加载失败后的降级胶囊：告诉用户这是哪个文件，点一下还能打开 */
+.axon-image-fallback {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 0.2em 0.55em;
+  border: 1px dashed color-mix(in oklab, var(--border) 90%, transparent);
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+  color: var(--muted-foreground);
+  font-size: 0.9em;
+  line-height: 1.5;
+  cursor: pointer;
+  word-break: break-all;
+  transition: border-color 0.15s, color 0.15s;
+}
+.axon-image-fallback:hover {
+  border-color: color-mix(in oklab, var(--foreground) 35%, transparent);
+  color: var(--foreground);
+}
+
+/* 正文链接：主题链接色 + 常驻细下划线（低对比），hover 时下划线加深。
+   常驻下划线是为了让链接在密集段落里一眼可辨；颜色压得住才不会一堆蓝字抢走正文。 */
+.prose a[data-external-link] {
+  color: var(--vscode-textLink-foreground, #3794ff);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  text-decoration-color: color-mix(in oklab, currentColor 40%, transparent);
+  transition: text-decoration-color 0.15s, color 0.15s;
+}
+.prose a[data-external-link]:hover {
+  text-decoration-color: currentColor;
+  color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground, #3794ff));
+}
+
 /* 文件路径链接：文件图标徽章 + 文件名，点击可打开文件 */
 .axon-path-link {
   display: inline-flex !important;
@@ -268,18 +304,24 @@ code:not(.hljs):not(.prose code) {
   white-space: nowrap;
 }
 
-/* 行内代码：作为紧凑的 inline badge 渲染。
-   不再给垂直 margin，也不把 line-height 拉高；否则在列表项里会把同一行的中文文本
-   和 code badge 顶部/基线错开，看起来像“高度没对齐”。
+/* 行内代码：作为 inline badge 渲染。
+   行高与正文对齐（正文 leading-relaxed ≈ 1.625）——此前锁在 1.25，短 token 看不出问题，
+   但长 URL / 长参数折行成多行后，行距只有正文的 2/3，视觉上明显更挤。
+   单行时高度略增，仍落在正文行高内，配合 vertical-align: middle 不至于顶开行距。
    .axon-path-link 排除在外：它需要 inline-flex 让图标+文件名保持水平对齐。 */
 .prose :not(pre) > code:not(.axon-path-link) {
-  display: inline-block;
+  display: inline;
   white-space: pre-wrap;      /* 短 token 不断行；超长内容（如长句/长参数说明）自动换行，不横向滚动 */
   word-break: break-word;     /* 单个超长无空格片段（如长 URL）也能强制断行，避免撑破容器 */
-  padding: 0.08em 0.38em !important;
+  /* 行内片段按每个换行片段分别绘制背景，避免连续多行的灰色块贴成一整条。
+     这里不再用 inline-block：它会把整个 code 包成一个满行高的盒子，连续标签换行时几乎没有视觉间隔。 */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  padding: 0.04em 0.38em !important;
   margin: 0 0.16em !important;
-  line-height: 1.25 !important;
-  vertical-align: middle;
+  /* 使用正文的绝对行高，保证长文本换行时文字节奏与正文一致 */
+  line-height: 22.75px !important;
+  vertical-align: baseline;
   max-width: 100%;
 }
 
@@ -297,11 +339,11 @@ code:not(.hljs):not(.prose code) {
   table-layout: auto;          /* 列宽随内容自适应 */
   border-collapse: collapse;
   margin: 0;                    /* 间距交给外层 wrap */
-  font-size: 13px;
+  font-size: 0.93em;            /* 相对字号：跟着所在容器缩（思考块正文是 text-xs），别写 px */
   line-height: 1.6;
 }
 .prose .axon-table-wrap thead {
-  background: color-mix(in oklab, var(--foreground) 5%, var(--background));
+  background: color-mix(in oklab, var(--foreground) 3%, var(--background));
 }
 .prose .axon-table-wrap th,
 .prose .axon-table-wrap td {
@@ -309,7 +351,7 @@ code:not(.hljs):not(.prose code) {
   text-align: left;
   vertical-align: top;
   border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  font-size: 0.93em;
   line-height: 1.6;
   word-break: break-word;       /* 长内容换行，不撑爆列宽 */
 }
@@ -594,9 +636,50 @@ input[type="file"],
   background: var(--background);
 }
 
+/* Cowork 产出标签：AI 声明创建为绿、编辑为黄；旧会话未标类型保持中性。 */
+.axon-output-chip {
+  background: color-mix(in oklab, var(--output-accent) 15%, var(--background));
+  border-color: color-mix(in oklab, var(--output-accent) 48%, var(--background));
+  color: color-mix(in oklab, var(--output-text) 72%, var(--foreground));
+}
+
+.axon-output-chip--created {
+  --output-accent: #10b981;
+  --output-text: #059669;
+}
+
+.axon-output-chip--edited {
+  --output-accent: #f59e0b;
+  --output-text: #b45309;
+}
+
+.axon-output-chip--unknown {
+  --output-accent: #94a3b8;
+  --output-text: #64748b;
+}
+
+.axon-output-chip:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--output-accent) 24%, var(--background));
+  border-color: var(--output-accent);
+}
+
+.axon-output-chip:focus-visible {
+  outline: 2px solid var(--output-accent);
+  outline-offset: 2px;
+}
+
+.axon-output-chip-badge {
+  background: color-mix(in oklab, var(--output-accent) 20%, transparent);
+  color: inherit;
+}
+
 /* 高对比度主题：混色底在纯黑/纯白上可能仍不够分明，直接给实边框 */
 body.vscode-high-contrast .axon-user-bubble {
   border-color: var(--border);
+}
+
+body.vscode-high-contrast .axon-output-chip {
+  border-color: var(--vscode-contrastBorder, currentColor);
 }
 
 /* Cowork 状态文案的淡入。
@@ -976,6 +1059,15 @@ body[class*="vscode"] {
    代码块不受影响：仍由 --font-mono 钉死。 */
 .axon-chat-prose {
   font-family: var(--font-sans);
+}
+
+/* 引用块：只保留一根中性左竖线，背景一律透明。
+   实测过 Tailwind Typography 的 blockquote 本身不带底色，所以这层兜底既防插件/主题
+   版本变化，也防外层容器把背景透进来——引用块一旦有底色，就会被误读成 callout 卡片。 */
+.axon-chat-prose blockquote {
+  background: transparent;
+  border-left: 2px solid var(--border);
+  padding-left: 0.875rem;
 }
 
 /* Markdown 标题统一使用 Instrument Sans，并采用小幅递增，避免 prose 默认的跳级字号。

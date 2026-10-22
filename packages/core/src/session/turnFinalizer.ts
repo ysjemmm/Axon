@@ -6,6 +6,14 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 export interface TurnFinalizerInput {
   contentBuffer: string;
   anthropicThinkingBlocks?: { thinking: string; signature?: string }[];
+  /**
+   * 本轮思考内容（chat 协议的 reasoning_content）。
+   *
+   * DeepSeek 官方文档：请求带 tools 时，历史轮次的 reasoning_content 必须完整回传，
+   * 即使该轮没有实际调用工具；漏传会 400。不带 tools 时会被忽略，传了也无害。
+   * 我们无法确定用户什么时候会带工具，所以凡是模型返回过思考就一律保留。
+   */
+  reasoningContent?: string;
   streamedContentThisRound: string;
   turnStartTime: number;
   model: string;
@@ -56,6 +64,7 @@ export class TurnFinalizer {
     const nextMessages = [...input.messages, {
       role: "assistant",
       content: input.contentBuffer,
+      ...(input.reasoningContent ? { reasoning_content: input.reasoningContent } : {}),
       ...(input.anthropicThinkingBlocks?.length
         ? { anthropic_thinking_blocks: input.anthropicThinkingBlocks }
         : {}),

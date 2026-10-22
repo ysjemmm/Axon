@@ -122,7 +122,29 @@ md.renderer.rules.link_open = function (tokens, idx, options, env, self) {
   }
   tokens[idx].attrSet("target", "_blank");
   tokens[idx].attrSet("rel", "noopener noreferrer");
+  // 没有显式 title 时用地址补上：正文里链接文字常被写成简称（「官网」「文档」），
+  // hover 看不出指向哪里，容易被误点。AI 自己写了 title 就尊重它，不覆盖。
+  if (!tokens[idx].attrGet("title") && href) {
+    tokens[idx].attrSet("title", href);
+  }
   return defaultRender(tokens, idx, options, env, self);
+};
+
+/**
+ * 图片：保留原始地址供前端做加载失败降级。
+ *
+ * 为什么需要：正文里的图片地址可能是本地绝对路径（AI 引用本机截图/产物）或已失效的外链，
+ * 在 webview 里必然加载失败。原样渲染会露出破图图标 + alt 文字，像页面坏了。
+ * 这里只负责把原始地址带到 DOM 上，真正的降级由 MarkdownRenderer 的 error 处理完成
+ *（它手上才有 DOM，也才知道该换成什么样）。
+ */
+const defaultImageRender = md.renderer.rules.image;
+md.renderer.rules.image = function (tokens, idx, options, env, self) {
+  const src = tokens[idx].attrGet("src") || "";
+  if (src) tokens[idx].attrSet("data-axon-src", src);
+  // alt 文本要由默认规则从 children 里生成，不能绕过
+  if (defaultImageRender) return defaultImageRender(tokens, idx, options, env, self);
+  return self.renderToken(tokens, idx, options);
 };
 
 // 代码块：带高亮 + 复制按钮。只有显式 opt-in 的 SVG / Mermaid / HTML 才增强渲染。
@@ -137,6 +159,14 @@ md.renderer.rules.fence = function (tokens, idx) {
   const enableEnhance = ENHANCED_LANGS.has(lang) && meta.includes(ENHANCED_RENDER_MARKER);
   const canPreview = ENHANCED_LANGS.has(lang) && !enableEnhance;
 
+  // 内联表单：```form axon-render —— AI 交付一块声明式交互面板。
+  // 刻意做成独立分支、独立属性：svg/mermaid/html 那条 hydrate 链路是"把 <pre> 换成静态节点"，
+  // 已经调稳了；表单要挂 React 组件并长期接收输入，混进去只会把两边的边界搅乱。
+  // 源码照旧留在隐藏的 <pre> 里：JSON 还没写完（流式）或写错时保持可读，不至于白屏。
+  if (lang === "form" && meta.includes(ENHANCED_RENDER_MARKER)) {
+    return `<div class="axon-inline-form my-3" data-inline-form="1"><pre class="hidden m-0 p-0"><code>${md.utils.escapeHtml(token.content)}</code></pre></div>\n`;
+  }
+
   // 走缓存：流式重解析时靠前的代码块内容逐字不变，没必要每次重跑高亮
   const highlightedCode = highlightOrEscape(token.content, lang);
 
@@ -148,7 +178,7 @@ md.renderer.rules.fence = function (tokens, idx) {
   // 普通代码块：采用更清爽的样式——弱化头部分割、增大内边距、把语言名作为轻量标签。
   if (enableEnhance) {
     return `<div class="axon-codeblock my-3 rounded-lg overflow-hidden px-4 py-1.5" style="background:var(--axon-code-bg);border:1px solid var(--axon-code-border)"${enhanceAttr}>
-    <pre class="overflow-auto max-h-[28rem] m-0 p-0" style="background:transparent"><code class="text-[12px] leading-[1.6] font-mono hljs" style="color:var(--vscode-editor-foreground,var(--hl-text,#383a42))">${highlightedCode}</code></pre>
+    <pre class="overflow-auto max-h-[28rem] m-0 p-0" style="background:transparent"><code class="text-[13px] leading-[1.75] font-mono hljs" style="color:var(--vscode-editor-foreground,var(--hl-text,#383a42))">${highlightedCode}</code></pre>
   </div>\n`;
   }
 
@@ -169,7 +199,7 @@ md.renderer.rules.fence = function (tokens, idx) {
       </div>
     </div>
     <div class="axon-codeblock-scroll overflow-x-auto overflow-y-hidden">
-      <pre class="axon-codeblock-pre max-h-[28rem] m-0 p-0" style="background:transparent"><code class="text-[12px] leading-[1.6] font-mono hljs" style="color:var(--vscode-editor-foreground,var(--hl-text,#383a42))">${highlightedCode}</code></pre>
+      <pre class="axon-codeblock-pre max-h-[28rem] m-0 p-0" style="background:transparent"><code class="text-[13px] leading-[1.75] font-mono hljs" style="color:var(--vscode-editor-foreground,var(--hl-text,#383a42))">${highlightedCode}</code></pre>
     </div>
   </div>\n`;
 };

@@ -17,6 +17,7 @@ import {
   type ToolStatus, type SearchGroupData, type ReadFileGroupData, type EditGroupData,
 } from "@/components/ToolCallItem";
 import type { Segment, ToolSegment, SubAgentSegment, WikiRecallSegment } from "./types";
+import { ArtifactCard } from "./ArtifactCard";
 import { resolveQueuedWaitingIds } from "./toolCardPhase";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { RetryBlock } from "./RetryBlock";
@@ -683,6 +684,14 @@ export function renderSegments(
       }
       const groupSeg = segments[groupStart] as ToolSegment;
       nodes.push(<SkillBadgeCard key={`useskill-${groupSeg.id}`} skills={skillNames} pending={pending} queuedOnly={pending && !executing} />);
+      continue;
+    }
+
+    // create_artifact 段：渲染成产物卡片，不走普通工具卡片。
+    // 每次调用就是一份独立产物（同名会存成新版本），所以不做合并/去重，一次调用一张卡。
+    if (seg.type === "tool" && seg.name === "create_artifact") {
+      nodes.push(<ArtifactCard key={seg.id} seg={seg} />);
+      i++;
       continue;
     }
 

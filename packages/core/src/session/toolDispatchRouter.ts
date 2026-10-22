@@ -11,7 +11,10 @@ export type ToolDispatchRoute =
   | "delegate_task"
   | "relay"
   | "ask_user"
+  | "ask_form"
   | "report_outputs"
+  | "update_memory"
+  | "create_artifact"
   | "command"
   | "mcp"
   | "generic";
@@ -29,7 +32,10 @@ export function resolveToolDispatchRoute(toolName: string): ToolDispatchRoute {
   if (toolName === ToolName.DelegateTask) return "delegate_task";
   if (RELAY_TOOLS.has(toolName)) return "relay";
   if (toolName === ToolName.AskUser) return "ask_user";
+  if (toolName === ToolName.AskForm) return "ask_form";
   if (toolName === ToolName.ReportOutputs) return "report_outputs";
+  if (toolName === ToolName.UpdateMemory) return "update_memory";
+  if (toolName === ToolName.CreateArtifact) return "create_artifact";
   if (toolName === ToolName.ExecuteCommand || toolName === ToolName.StartProcess) return "command";
   if (toolName.startsWith(MCP_TOOL_PREFIX)) return "mcp";
   return "generic";

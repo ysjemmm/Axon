@@ -22,6 +22,9 @@ import {
   handleWorkspaceSet, handleEditModeSet, handleWorkspaceError,
   handleConfirmToolRequest, handleToolConfirmTimeout, handleToolWaitingInput,
   handleAskUserRequest,
+  handleFormRequest,
+  handleSessionMemory,
+  handleSessionForked,
   handleConfirmCommandRequest, handleCommandRiskNotice, handleToolHistoryMismatch,
   handleFocusRelay, handleRelayUpdated, handleRelayDeleted,
   clearWaitingInput,
@@ -76,6 +79,9 @@ export function createEventHandler(ctx: EventHandlerCtx): (msg: WsMessage) => vo
         return;
       case AGENT_EVENT.SESSION_ERROR:
         handleSessionError(msg, ctx);
+        return;
+      case AGENT_EVENT.SESSION_FORKED:
+        handleSessionForked(msg, ctx);
         return;
 
       // ── 压缩 ──
@@ -138,6 +144,12 @@ export function createEventHandler(ctx: EventHandlerCtx): (msg: WsMessage) => vo
         return;
       case AGENT_EVENT.ASK_USER_REQUEST:
         handleAskUserRequest(msg, ctx);
+        return;
+      case AGENT_EVENT.FORM_REQUEST:
+        handleFormRequest(msg, ctx);
+        return;
+      case AGENT_EVENT.SESSION_MEMORY:
+        handleSessionMemory(msg, ctx);
         return;
       case AGENT_EVENT.TOOL_CONFIRM_TIMEOUT:
         handleToolConfirmTimeout(msg, ctx);

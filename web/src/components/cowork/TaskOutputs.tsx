@@ -12,10 +12,13 @@
 import { FileText } from "lucide-react";
 import { canPreviewFiles, requestFilePreview } from "@/components/chat/filePreview";
 import { attachmentTypeLabel } from "@/components/chat/attachmentType";
+import type { OutputFile } from "./restoreOutputs";
 
 interface TaskOutputsProps {
   /** 文件的绝对路径列表。某一项为空串表示「只知道文件名、没有路径」（老会话） */
-  paths: string[];
+  paths?: string[];
+  /** AI 登记且经磁盘校验的产出；不用于用户上传附件 */
+  files?: OutputFile[];
   /**
    * 文件名兜底（与 paths 一一对应）。
    * 本次修复之前存下的会话只有文件名没有路径，此时仍要把名字显示出来 ——
@@ -35,9 +38,15 @@ function baseName(rawPath: string): string {
   return rawPath.replace(/\\/g, "/").split("/").filter(Boolean).pop() || rawPath;
 }
 
-export function TaskOutputs({ paths, fallbackNames, onBubble = false }: TaskOutputsProps) {
+/** 请求查看 AI 对某文件的改动（原稿 vs 现文件对比，由宿主渲染） */
+function requestCoworkChanges(path: string, snapshotDir: string): void {
+  (window as unknown as { __axonVSCode?: { postMessage: (m: unknown) => void } })
+    .__axonVSCode?.postMessage({ type: "cowork_get_changes", path, snapshotDir });
+}
+
+export function TaskOutputs({ paths = [], files, fallbackNames, onBubble = false }: TaskOutputsProps) {
   // 两个来源取较长的那个：路径缺失时靠 fallbackNames 撑出条目数
-  const count = Math.max(paths.length, fallbackNames?.length || 0);
+  const count = Math.max(paths.length, files?.length || 0, fallbackNames?.length || 0);
   if (count === 0) return null;
   // 浏览器形态没有宿主可以读盘，做成可点就是点了没反应，此时降级为纯展示
   const hostCanPreview = canPreviewFiles();
@@ -45,7 +54,9 @@ export function TaskOutputs({ paths, fallbackNames, onBubble = false }: TaskOutp
   return (
     <div className="flex flex-wrap gap-1.5">
       {Array.from({ length: count }, (_, i) => {
-        const path = paths[i] || "";
+        const path = files?.[i]?.path || paths[i] || "";
+        const kind = files?.[i]?.kind;
+        const snapshotDir = files?.[i]?.snapshotDir;
         const name = path ? baseName(path) : (fallbackNames?.[i] || "");
         if (!name) return null;
         // 没有路径就点不了（老会话）：给个不可点的卡片而不是假的可点卡片
@@ -57,28 +68,42 @@ export function TaskOutputs({ paths, fallbackNames, onBubble = false }: TaskOutp
             disabled={!clickable}
             onClick={clickable ? () => requestFilePreview(path) : undefined}
             title={clickable ? `预览 ${path}` : name}
-            // 气泡内用 .axon-bubble-chip（由 index.css 按 --foreground 混色给底），
-            // 不用 bg-background/70 —— 气泡底色本身就是混出来的，半透明白叠在上面
-            // 在深色主题下会发灰、在浅色主题下又几乎看不见。
+            // 仅 AI 明确声明的类型着色；用户附件和未标类型的旧产出保持中性。
             className={`inline-flex max-w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-[12px] text-foreground transition-colors disabled:cursor-default ${
               onBubble
                 ? "axon-bubble-chip"
-                : "border-border bg-background enabled:hover:border-foreground/30 enabled:hover:bg-muted/40"
+                : kind === "created" ? "axon-output-chip axon-output-chip--created"
+                  : kind === "edited" ? "axon-output-chip axon-output-chip--edited"
+                    : "axon-output-chip axon-output-chip--unknown"
             }`}
           >
-            <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <FileText className={`h-3.5 w-3.5 shrink-0 ${onBubble ? "text-muted-foreground" : ""}`} />
             <span className="truncate">{name}</span>
-            {/* 格式角标：气泡内同样不能用 bg-muted（会和气泡底色糊成一片），
-                改用 foreground 混色，任何主题下都能分出层次 */}
+            {kind === "edited" && snapshotDir && (
+              <span
+                role="button"
+                tabIndex={0}
+                className="ml-1 shrink-0 rounded px-1 text-[10px] font-medium text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+                title="查看 AI 改了什么（原稿对比）"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  requestCoworkChanges(path, snapshotDir);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.stopPropagation();
+                    requestCoworkChanges(path, snapshotDir);
+                  }
+                }}
+              >
+                查看改动
+              </span>
+            )}
             <span
-              className="shrink-0 rounded px-1 py-px text-[10px] font-semibold uppercase leading-4 tracking-wide text-muted-foreground"
-              // 两种形态都用混色：bg-muted 在浅色 VS Code 主题下等于纯白，
-              // 角标会连边都看不见。气泡内比例略低，避免在已经加深的底上过重。
-              style={{
-                background: onBubble
-                  ? "color-mix(in oklab, var(--foreground) 9%, transparent)"
-                  : "color-mix(in oklab, var(--foreground) 8%, transparent)",
-              }}
+              className={`shrink-0 rounded px-1 py-px text-[10px] font-semibold uppercase leading-4 tracking-wide ${
+                onBubble ? "text-muted-foreground" : "axon-output-chip-badge"
+              }`}
+              style={onBubble ? { background: "color-mix(in oklab, var(--foreground) 9%, transparent)" } : undefined}
             >
               {attachmentTypeLabel({ name, kind: "file" })}
             </span>

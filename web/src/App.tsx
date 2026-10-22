@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { SessionContainer, type SessionTab } from "./components/SessionContainer";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { SessionSwitcher } from "./components/SessionSwitcher";
@@ -227,6 +227,8 @@ function App() {
   }, [mode, coworkOpen]);
 
   const [historyOpen, setHistoryOpen] = useState(false);
+  // 会话列表刷新信号：分叉完成后 +1，让侧栏立刻重拉一次（不必等 5s 轮询）
+  const [sessionListVersion, setSessionListVersion] = useState(0);
   // 正在流式输出的面板 key 集合（由 SessionContainer 上报）。
   // 收掉横向 tab 条后，"还有会话在后台跑"没有别的地方能看出来，靠它在切换器上显示计数。
   const [runningKeys, setRunningKeys] = useState<ReadonlySet<string>>(() => new Set());
@@ -406,6 +408,39 @@ function App() {
     }
   }, [tabs, mode, setActive]);
 
+  /**
+   * 会话分叉完成：刷新会话列表并切到新会话。
+   *
+   * 去重是必须的：侧栏入口不带 clientId（那是聊天面板的标识），后端于是广播该事件，
+   * 每个已挂载面板都会回调一次本函数——不挡的话会叠出多个 tab。
+   */
+  const forkedHandledRef = useRef<string | null>(null);
+  const handleSessionForked = useCallback((newSessionId: string) => {
+    if (forkedHandledRef.current === newSessionId) return;
+    forkedHandledRef.current = newSessionId;
+    setSessionListVersion((v) => v + 1);
+    setHistoryOpen(false);
+    const existing = tabs.find((t) => t.id === newSessionId && t.mode === mode);
+    if (existing) {
+      setActive(existing.key);
+    } else {
+      const newTab: SessionTab = { id: newSessionId, title: "新对话（继承记忆）", key: genTabKey(), mode };
+      setTabs((prev) => [...prev, newTab]);
+      setActive(newTab.key);
+    }
+  }, [tabs, mode, setActive]);
+
+  /** 侧栏「分叉」：全局入口，不带 clientId（后端据此广播结果，前端会去重） */
+  const handleForkFromSidebar = useCallback((id: string) => {
+    send({ type: "fork_session", sessionId: id });
+  }, [send]);
+
+  /** 顶部「分叉」：作用于当前会话，带上面板 clientId 让结果定向回本面板 */
+  const handleForkCurrent = useCallback(() => {
+    if (!currentTab?.id) return;
+    send({ type: "fork_session", sessionId: currentTab.id, clientId: currentTab.key });
+  }, [send, currentTab]);
+
   /** 重命名 tab（编辑态的开关由 SessionSwitcher 自己维护，这里只负责落库） */
   const handleRenameTab = useCallback((key: string, val: string) => {
     const trimmed = val.trim();
@@ -430,6 +465,7 @@ function App() {
           runningKeys={runningKeys}
           onSelect={setActive}
           onNewTab={handleNewTab}
+          onForkSession={handleForkCurrent}
           onCloseTab={handleCloseTab}
           onRename={handleRenameTab}
           onOpenHistory={() => setHistoryOpen(true)}
@@ -461,7 +497,9 @@ function App() {
                   filterMode={mode}
                   onSelectSession={handleSelectSession}
                   onNewSession={handleNewSession}
+                  onForkSession={handleForkFromSidebar}
                   onSessionDeleted={handleSessionDeleted}
+                  refreshToken={sessionListVersion}
                 />
               </div>
             </div>
@@ -475,6 +513,7 @@ function App() {
             send={send}
             onSessionCreated={handleSessionCreated}
             onCompactionMigrated={handleCompactionMigrated}
+            onSessionForked={handleSessionForked}
             onRunningKeysChange={setRunningKeys}
           />
         </div>

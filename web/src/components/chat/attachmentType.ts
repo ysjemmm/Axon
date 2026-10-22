@@ -15,6 +15,7 @@ export function attachmentTypeLabel(file: Pick<AttachedFile, "name" | "kind">): 
     case "folder": return "文件夹";
     case "terminal": return "终端";
     case "editor": return "代码";
+    case "paste": return "文本";
     case "diagnostics": return "诊断";
   }
   const clean = file.name.split(/[?#]/)[0];

@@ -79,8 +79,18 @@ export class PromptBuilder {
   }
 
   /**
-   * 上下文使用率提醒（≥60% 才出现）。百分比随每次请求的 token 占用逐步上涨，
-   * 实时取的话同一轮里每涨 1% 就改一次注入，同样会断前缀缓存。
+   * 触发「上下文较满」提醒的占用比例。
+   *
+   * 与 compactor 的一次性大压缩线（75%）对齐：早先是 60%，于是在系统自己都还判定
+   * 「不需要压缩」的时候，模型就先替用户下了「别在这个会话继续做」的结论——而这句话
+   * 会被写进可见回复、随历史长期留存，压缩完之后还在继续说。
+   */
+  private static readonly USAGE_NOTICE_THRESHOLD = 0.75;
+
+  /**
+   * 上下文使用率提醒（≥75% 才出现）。百分比随每次请求的 token 占用逐步上涨，
+   * 实时取的话同一轮里每涨 1% 就改一次注入，同样会断前缀缓存；但占用**回落**（压缩）
+   * 时必须立刻作废它，见 frozen()。
    */
   private buildUsageNotice(): string | null {
     // 用 lastTotalTokens（本地估算的上下文占用）而非 lastPromptTokens（端点报的计费口径）：
@@ -88,12 +98,12 @@ export class PromptBuilder {
     // 读一个由它自己写入的字段（上一次的值）而非同步重算，才不会形成循环。
     if (!(this.s.lastTotalTokens > 0 && this.s.getContextWindow() > 0)) return null;
     const usagePercent = this.s.lastTotalTokens / this.s.getContextWindow();
-    if (usagePercent < 0.6) return null;
+    if (usagePercent < PromptBuilder.USAGE_NOTICE_THRESHOLD) return null;
     const pct = Math.round(usagePercent * 100);
     return (
       `⚠️ 上下文使用率已达 ${pct}%。如果用户接下来要求做一个较大的功能（需要读写多个文件、多轮工具调用），` +
-      `你应该在开始前简要提醒用户：当前会话上下文已较满（${pct}%），复杂任务可能导致上下文溢出或响应变慢，` +
-      `建议开一个新会话来做这个功能。如果用户坚持在当前会话做，则正常执行不再重复提醒。`
+      `可以简短提一句「会话已较长，必要时可另开一个新会话」，一句话带过即可。` +
+      `不要把它说成「这个任务做不完 / 做不了」，也不要每轮重复；用户选择继续就正常执行、不再提及。`
     );
   }
 
@@ -107,7 +117,16 @@ export class PromptBuilder {
 
   /** 取本轮定格值；未调用过 beginTurn（内部调用路径）时退回实时计算，行为与旧版一致 */
   private frozen(): FrozenInjections {
-    return this.turnFrozen ?? this.computeVolatile();
+    const frozen = this.turnFrozen;
+    if (!frozen) return this.computeVolatile();
+    // 定格只为防「上涨」——每涨 1% 就改写注入会断前缀缓存。反过来，占用**回落到阈值以下**时
+    // 必须立刻作废这条提醒：否则模型会在已经压缩过的会话里继续告诉用户「上下文较满」，
+    // 用户看到的是压缩后的 10%、模型说的却是压缩前的 80%。
+    // 回落只可能来自压缩，而压缩自己就重写了历史、那次缓存早已失效，所以这里刷新不额外破费。
+    if (frozen.usageNotice && this.buildUsageNotice() === null) {
+      return { ...frozen, usageNotice: null };
+    }
+    return frozen;
   }
 
   /**
@@ -341,6 +360,19 @@ export class PromptBuilder {
     // 未使用 Wiki 的项目此处为 null，整条注入不存在。
     if (this.s.wikiPromptCache) {
       injections.push({ role: "system", content: this.s.wikiPromptCache, _tailInjected: true } as ChatCompletionMessageParam);
+    }
+
+    // 会话记忆：整份文档作为一条尾部注入。
+    // 刻意不并进系统提示开头：它的内容随会话推进而变化，放前面会让整段前缀缓存
+    // 从变化点起失效；放尾部，变化的代价就只落在这一条自己身上。
+    if (this.s.memory && this.s.memory.trim()) {
+      injections.push({
+        role: "system",
+        content:
+          "【会话记忆】以下内容由你此前主动写入、或由用户导入，是本次会话已确认的背景前提。" +
+          "直接当作已知事实使用：不要重新询问，也不要在回复里复述它。\n\n" + this.s.memory.trim(),
+        _tailInjected: true,
+      } as ChatCompletionMessageParam);
     }
 
     // 上下文使用率提醒：只在接近上限时出现，取本轮定格值（见 buildUsageNotice / turnFrozen）

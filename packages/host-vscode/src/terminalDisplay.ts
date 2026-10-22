@@ -192,6 +192,34 @@ function isTerminalExecutingCommand(terminal: vscode.Terminal): boolean {
 }
 
 /**
+ * 把「其它会话池子里、当前空闲」的终端摘出池子（只摘登记，不 dispose 终端）。
+ *
+ * 为什么必须摘：终端池按会话分（每个 VSCodeCommandRunner 实例一个 key），而 VS Code 面板里的
+ * 终端是全局的。会话结束只是实例被丢弃，池子登记还留在模块级 Map 里 —— 那些终端就永远
+ * 「属于某个池子」，而认领条件要求「不属于任何池子」，于是别的会话永远认领不到它们，只能
+ * 再开一个新的：会话开得越多，面板里的 Axon 终端攒得越多。
+ *
+ * 摘掉登记后它们回到「无主终端」状态，下一个会话的第一条命令就会通过认领直接复用，
+ * 既不新建终端，也不影响终端里已有的输出（终端对象本身原样留在面板里）。
+ *
+ * 只摘空闲的：池子里 busy 的说明命令还在它里面跑（典型是超时后仍在执行的长命令），
+ * 这时摘出去被别的会话认领，等于往一个忙着的终端里塞命令。这类终端整体留在池里，
+ * 等它空下来后的下一次摘除自然会带走它。
+ */
+function releaseIdlePoolsExcept(keepKey: string): void {
+  for (const [key, pool] of terminalPools) {
+    if (key === keepKey) continue;
+    const stillBusy = pool.filter((e) => e.busy && !e.terminal.exitStatus);
+    if (stillBusy.length === pool.length) continue; // 全在忙：整体保留，一个都不摘
+    if (stillBusy.length === 0) {
+      terminalPools.delete(key);
+    } else {
+      terminalPools.set(key, stillBusy);
+    }
+  }
+}
+
+/**
  * 从窗口已有终端里认领一个可用的 Axon 命令终端。
  *
  * 为什么需要认领：终端池是内存态，窗口重载后就空了，而 VS Code 会把上次的终端继续留在
@@ -205,7 +233,10 @@ function isTerminalExecutingCommand(terminal: vscode.Terminal): boolean {
  *
  * 有多个候选时优先挑工作目录与本次请求一致的（省掉一次 cd），否则取第一个。
  */
-function adoptOrphanCommandTerminal(cwd?: string): PooledTerminal | null {
+function adoptOrphanCommandTerminal(cwd: string | undefined, keepKey: string): PooledTerminal | null {
+  // 先摘掉其它会话池里空闲的登记，让它们在本轮扫描里成为「无主终端」可被认领
+  releaseIdlePoolsExcept(keepKey);
+
   const managed = new Set<vscode.Terminal>();
   for (const pool of terminalPools.values()) {
     for (const entry of pool) managed.add(entry.terminal);
@@ -247,7 +278,7 @@ function acquireTerminal(terminalKey: string, cwd?: string): { terminal: vscode.
   }
 
   // 池里没有空闲 → 认领面板里遗留的 Axon 命令终端
-  const adopted = adoptOrphanCommandTerminal(cwd);
+  const adopted = adoptOrphanCommandTerminal(cwd, terminalKey);
   if (adopted) {
     pool.push(adopted);
     // 认领来的终端读不到当前目录时按「需要 cd」处理：宁可多执行一条 cd，也不能让命令跑错目录

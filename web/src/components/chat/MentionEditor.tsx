@@ -58,6 +58,26 @@ function tagTone(kind: AttachedFile["kind"]): string {
 function TagNodeView({ node, deleteNode }: NodeViewProps) {
   const data = node.attrs.data as AttachedFile;
   const [preview, setPreview] = useState(false);
+  const tagRef = useRef<HTMLSpanElement>(null);
+  /** 预览浮层位置：贴在标签正上方（上方空间不足时翻到下方），跟随标签而不是写死 */
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null);
+
+  const showPreview = () => {
+    const el = tagRef.current;
+    if (el) {
+      const r = el.getBoundingClientRect();
+      // 340 是浮层宽度、8 是左右留白：先夹住横向，避免靠边溢出
+      const left = Math.max(8, Math.min(r.left, window.innerWidth - 348));
+      // 正上方优先。此前这里写的是固定的 bottom: 42，浮层永远浮在输入框那一带，
+      // 于是 hover 时直接把标签本身盖住了。
+      setPos(
+        r.top > 220
+          ? { left, bottom: window.innerHeight - r.top + 6 }
+          : { left, top: r.bottom + 6 },
+      );
+    }
+    setPreview(true);
+  };
 
   const openFile = () => {
     const looksLikePath = /[/\\]/.test(data.name) || /\.\w{1,10}$/.test(data.name);
@@ -69,8 +89,9 @@ function TagNodeView({ node, deleteNode }: NodeViewProps) {
   return (
     <NodeViewWrapper as="span" className="inline-flex align-middle mx-0.5" contentEditable={false}>
       <span
+        ref={tagRef}
         className={`inline-flex h-7 items-center gap-1.5 rounded-lg border pl-1.5 pr-1 text-xs leading-none select-none cursor-pointer shadow-sm ${tagTone(data.kind)}`}
-        onMouseEnter={() => setPreview(true)}
+        onMouseEnter={showPreview}
         onMouseLeave={() => setPreview(false)}
         onClick={openFile}
       >
@@ -91,11 +112,11 @@ function TagNodeView({ node, deleteNode }: NodeViewProps) {
           ×
         </button>
       </span>
-      {preview &&
+      {preview && pos &&
         createPortal(
           <div
             className="fixed z-[9999] w-[340px] max-w-[80vw] overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg"
-            style={{ left: Math.max(8, Math.min(window.innerWidth - 348, 12)), bottom: 42 }}
+            style={{ left: pos.left, top: pos.top, bottom: pos.bottom }}
             onMouseEnter={() => setPreview(true)}
             onMouseLeave={() => setPreview(false)}
           >
@@ -113,7 +134,12 @@ const ContextTag = Node.create({
   group: "inline",
   inline: true,
   atom: true,
-  selectable: true,
+  // ⚠️ 必须 false：ProseMirror 把 Left/Right 默认绑定到 selectNodeLeft/selectNodeRight，
+  // 而 selectable=true 的行内 atom 会先被整体选中（NodeSelection）。选中态下没有文本光标，
+  // 于是在标签右侧按左键会"卡"住不亮，再按一下才跨过去——用户反馈的"按左键 tag 左边没光标"。
+  // 关掉整体选中后，方向键直接跨过节点、光标正常落在标签左右两侧；
+  // 删除仍可用标签上的 × 或退格（atom 的 deleteBackward 会整块删掉）。
+  selectable: false,
   addAttributes() {
     return {
       contextId: { default: "" },
@@ -177,6 +203,26 @@ export const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>
         const plainText = event.clipboardData?.getData("text/plain");
         if (!plainText) return false;
         event.preventDefault();
+
+        // 超过阈值的长文本折叠成一个 tag，而不是直接展开进编辑器——
+        // 这样输入框不会被撑成几十行，用户还能 hover 看全文。
+        // 阈值 500：大约半屏代码 / 一段文档，恰好是"还好看"与"已经太多了"的分界。
+        const PASTE_COLLAPSE_THRESHOLD = 500;
+        if (plainText.length > PASTE_COLLAPSE_THRESHOLD) {
+          const lineCount = plainText.split(/\r\n|\r|\n/).length;
+          const data: AttachedFile = {
+            name: `已粘贴文本（${lineCount} 行 · ${plainText.length} 字符）`,
+            content: plainText,
+            size: plainText.length,
+            kind: "paste",
+          };
+          editor?.commands.insertContent({
+            type: "contextTag",
+            attrs: { contextId: `paste-${Date.now()}`, data },
+          });
+          return true;
+        }
+
         editor?.commands.insertContent(textToContent(plainText));
         return true;
       },

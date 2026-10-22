@@ -54,8 +54,14 @@ export interface HostFileSystem {
   /** 读取文件文本内容；文件不存在返回 null（不抛错） */
   read(absPath: string): Promise<string | null>;
 
+  /** 读取文件原始字节；文件不存在返回 null。二进制安全（Office 文档快照等场景）。 */
+  readBinary?(absPath: string): Promise<Uint8Array | null>;
+
   /** 写入文件文本内容；父目录不存在时由实现负责创建 */
   write(absPath: string, content: string): Promise<void>;
+
+  /** 写入原始字节；父目录不存在时由实现负责创建。 */
+  writeBinary?(absPath: string, bytes: Uint8Array): Promise<void>;
 
   /**
    * 追加文本到文件末尾；文件/父目录不存在时由实现负责创建。

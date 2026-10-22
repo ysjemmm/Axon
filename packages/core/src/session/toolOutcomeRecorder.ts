@@ -124,6 +124,8 @@ export class ToolOutcomeRecorder {
       searchResults: (meta as any).searchResults,
       fetchResult: (meta as any).fetchResult,
       powerActivated: (meta as any).powerActivated,
+      // 产物：实时事件也要带上，前端据此在这个工具段的位置直接渲染卡片
+      artifact: meta.artifact,
       pending: isPending,
       userMessage: meta.userMessage,
       hidden: meta.hidden,
@@ -155,6 +157,9 @@ export class ToolOutcomeRecorder {
       fileDiff: meta.fileDiff,
       fileDiffs: meta.fileDiffs,
       readRange: meta.readRange,
+      reportedOutputs: meta.reportedOutputs,
+      reportedOutputItems: meta.reportedOutputItems,
+      artifact: meta.artifact,
       diagnostics: meta.diagnostics,
       searchResults: (meta as any).searchResults,
       fetchResult: (meta as any).fetchResult,

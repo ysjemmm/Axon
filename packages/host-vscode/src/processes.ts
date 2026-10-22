@@ -30,6 +30,8 @@ interface ProcEntry {
   buffer: string;
   status: BackgroundProcessStatus;
   exitCode: number | null;
+  /** AI 是否已读过它的输出：决定这个「已退出」的终端能否在下次新建终端时被回收 */
+  readByAgent: boolean;
 }
 
 /** 单进程输出缓冲上限（字符）：约 256KB，超出后保留尾部 */
@@ -61,6 +63,12 @@ export class VSCodeProcessManager implements HostProcessManager {
       }
     }
 
+    // 真要新建终端了：顺手把「已退出且已被 AI 读过」的旧进程终端收掉，避免面板越堆越多。
+    // 只碰这类终端——进程确实退出（end 事件）才说明它此刻没在执行命令；输出已被读过，
+    // 说明不再需要从终端面板看它（缓冲还在，get_process_output 随时可查）。
+    // 正在跑的、以及已退出但还没读过的（进程崩了时用户往往要先看一眼报错）都不动。
+    this.reclaimExitedTerminals();
+
     const terminalId = `bg-${++this.counter}`;
     const label = command.length > 40 ? command.slice(0, 40) + "…" : command;
     const terminal = vscode.window.createTerminal({
@@ -79,6 +87,7 @@ export class VSCodeProcessManager implements HostProcessManager {
       buffer: "",
       status: "running",
       exitCode: null,
+      readByAgent: false,
     };
     this.procs.set(terminalId, entry);
 
@@ -121,9 +130,36 @@ export class VSCodeProcessManager implements HostProcessManager {
     }
   }
 
+  /**
+   * 回收已退出的进程终端（dispose 终端，保留 entry 与缓冲）。
+   *
+   * 触发时机刻意选在「马上要新建终端之前」：不主动清屏，只在确实又要多开一个终端时收敛，
+   * 这样面板里的 "Axon: <命令>" 终端数量大致等于「在跑的进程数 + 1」。
+   *
+   * 判定条件缺一不可，且都指向「绝对没在执行命令」：
+   * - status === "exited"：进程自己发了结束事件；running 的一律不碰，哪怕它看起来没输出；
+   * - readByAgent：AI 已经读过输出，回收不损失它需要的信息（缓冲仍在，可继续查询）；
+   * - exitStatus 为空：终端本身已经随进程结束关闭时无需再 dispose。
+   * 进程终端与命令终端互不认领（命令终端的认领逻辑显式排除后台进程终端），
+   * 所以这里不会波及任何正在执行命令的命令终端。
+   */
+  private reclaimExitedTerminals(): void {
+    for (const entry of this.procs.values()) {
+      if (entry.status !== "exited") continue;
+      if (!entry.readByAgent) continue;
+      if (entry.terminal.exitStatus) continue;
+      try {
+        entry.terminal.dispose();
+      } catch {
+        /* 终端可能已被用户关闭，忽略 */
+      }
+    }
+  }
+
   async getOutput(terminalId: string, lines?: number): Promise<ProcessOutputResult | null> {
     const entry = this.procs.get(terminalId);
     if (entry) {
+      entry.readByAgent = true;
       let output = entry.buffer;
       if (typeof lines === "number" && lines > 0) {
         const all = output.split("\n");

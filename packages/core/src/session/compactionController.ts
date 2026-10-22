@@ -59,8 +59,11 @@ export class CompactionController {
       this.s.isCompacting = false;
       this.s.lastPromptTokens = 0;
       this.s.send("compacting_end", { success: true, message: successMessage });
-      this.s.persistMessages();
+      // ⚠️ 顺序不能反：持久化回调写盘时读的是 getLastTotalTokens()，必须先把压缩后的
+      // 占用重算出来再落盘。反过来则磁盘上留下压缩【前】的旧占用，刷新页面时
+      // hydrateTokenUsage 把它回填，界面从 4% 跳回 61%，要等用户发下一句话重算才降下来。
       this.s.updateAndSendTokenUsage();
+      this.s.persistMessages();
     } catch (err) {
       this.s.isCompacting = false;
       this.s.send("compacting_end", { success: false, message: `压缩失败：${(err as Error).message}` });
@@ -91,8 +94,9 @@ export class CompactionController {
         this.s.messages = newMessages;
         this.s.rollingSummaryAccumulated = 0; // 重置计数
         this.s.lastPromptTokens = 0; // 重置缓存，让 updateAndSendTokenUsage 从压缩后的 messages 重新估算
-        this.s.persistMessages();
+        // 同 doCompact：先重算占用再落盘，否则磁盘留着压缩前的旧值
         this.s.updateAndSendTokenUsage();
+        this.s.persistMessages();
         console.debug("[rolling] 滚动摘要完成，上下文体积已缩减");
         // 静默通知前端（状态栏可显示但不弹窗）
         this.s.send("rolling_summary_done", { success: true });
@@ -187,7 +191,9 @@ export class CompactionController {
         this.s.isCompacting = false;
         this.s.lastPromptTokens = 0;
         this.s.send("compacting_end", { success: true, message: "切换模型后上下文已自动压缩" });
+        // 先重算再落盘（同 doCompact）：这条路径原先完全不落盘，磁盘会一直停在压缩前的占用
         this.s.updateAndSendTokenUsage();
+        this.s.persistMessages();
       } catch (err) {
         this.s.isCompacting = false;
         this.s.send("compacting_end", { success: false, message: `压缩失败：${(err as Error).message}` });
@@ -207,7 +213,9 @@ export class CompactionController {
           this.s.isCompacting = false;
           this.s.lastPromptTokens = 0;
           this.s.send("compacting_end", { success: true, message: "上下文已压缩" });
+          // 先重算再落盘（同 doCompact），否则磁盘留着压缩前旧占用
           this.s.updateAndSendTokenUsage();
+          this.s.persistMessages();
         } catch (err) {
           this.s.isCompacting = false;
           this.s.send("compacting_end", { success: false, message: `压缩失败：${(err as Error).message}` });

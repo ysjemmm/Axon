@@ -339,6 +339,32 @@ export function handleAskUserRequest(msg: WsMessage, ctx: EventHandlerCtx): void
   });
 }
 
+/** ask_form 表单请求：把声明式表单交给输入区上方的表单卡片渲染。 */
+export function handleFormRequest(msg: WsMessage, ctx: EventHandlerCtx): void {
+  const toolCallId = (msg as any).toolCallId as string;
+  const form = (msg as any).form;
+  // 字段结构合法性已由 core 侧（formSchema.normalizeFormSpec）保证，这里只挡明显不成形的载荷。
+  if (!toolCallId || !form || !Array.isArray(form.fields) || form.fields.length === 0) return;
+  ctx.setFormRequest({ toolCallId, spec: form });
+}
+
+/** 会话记忆：模型调用 update_memory、或用户导入 .md 之后，把最新内容交给记忆面板 */
+export function handleSessionMemory(msg: WsMessage, ctx: EventHandlerCtx): void {
+  const memory = (msg as any).memory;
+  if (typeof memory !== "string") return;
+  ctx.setMemory(memory);
+}
+
+/**
+ * 会话分叉完成：新会话已创建。交给上层刷新会话列表并切到新会话 ——
+ * 分叉出的会话只带记忆、不带历史，用户通常马上就会接着往下做。
+ */
+export function handleSessionForked(msg: WsMessage, ctx: EventHandlerCtx): void {
+  const newSessionId = (msg as any).sessionId as string;
+  if (!newSessionId) return;
+  ctx.onSessionForkedRef.current?.(newSessionId, (msg as any).sourceId as string | undefined);
+}
+
 export function handleToolHistoryMismatch(msg: WsMessage, ctx: EventHandlerCtx): void {
   ctx.setToolHistoryMismatch({ model: (msg as any).model as string });
 }

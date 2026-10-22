@@ -24,6 +24,7 @@ import type { WsMessage } from "@/hooks/useWebSocket";
 import { resolveModel, shouldEnableThinking } from "@/components/chat/useModelEffort";
 import { AGENT_EVENT, CONTROL_CMD, TOOL } from "@/lib/constants";
 import { describeIntent, describeStatusPhase, describeToolPhase, isScriptFile } from "./taskIntent";
+import { restoreOutputs, type HistoryMessage, type OutputFile } from "./restoreOutputs";
 
 /** 一条任务的生命周期状态 */
 export type CoworkTaskStatus = "running" | "done" | "failed" | "cancelled";
@@ -63,8 +64,8 @@ export interface CoworkTask {
    * 读到/生成了什么是办公用户最关心的事实，比"调了几次工具"有用得多。
    */
   touchedFiles: string[];
-  /** 本轮产出文件的绝对路径（去重）：终态下渲染成可点开预览的卡片 */
-  outputs: string[];
+  /** 本轮产出：类型由 AI 登记，旧数据无类型时不猜测 */
+  outputs: OutputFile[];
   /** Agent 的最终回复正文（流式累积） */
   reply: string;
   /** 失败原因 */
@@ -187,6 +188,7 @@ export function useCoworkSession({ clientId, connected, send }: UseCoworkSession
       case AGENT_EVENT.SESSION_LOADED: {
         const history = (msg as { messages?: unknown[] }).messages || [];
         const restored: CoworkTask[] = [];
+        let turnMessages: HistoryMessage[] = [];
         let index = 0;
         for (const raw of history) {
           const m = raw as {
@@ -196,6 +198,9 @@ export function useCoworkSession({ clientId, connected, send }: UseCoworkSession
             attachedFiles?: { name: string; path?: string }[];
           };
           if (m.role === "user") {
+            const previous = restored[restored.length - 1];
+            if (previous) previous.outputs = restoreOutputs(turnMessages);
+            turnMessages = [];
             // displayText 是用户真正打的字；content 里还夹着文件路径清单和产出目录提示
             const text = typeof m.displayText === "string" && m.displayText
               ? m.displayText
@@ -224,7 +229,10 @@ export function useCoworkSession({ clientId, connected, send }: UseCoworkSession
             const last = restored[restored.length - 1];
             if (last) last.reply = last.reply ? `${last.reply}\n\n${m.content}` : m.content;
           }
+          if (restored.length > 0) turnMessages.push(m as HistoryMessage);
         }
+        const last = restored[restored.length - 1];
+        if (last) last.outputs = restoreOutputs(turnMessages);
         setTasks(restored);
         setLoadingHistory(false);
         const total = (msg as { totalTokens?: number }).totalTokens;
@@ -253,7 +261,9 @@ export function useCoworkSession({ clientId, connected, send }: UseCoworkSession
         patchActive((t) => ({
           phase: describeToolPhase(name, m.args),
           touchedFiles: countable && !t.touchedFiles.includes(base) ? [...t.touchedFiles, base] : t.touchedFiles,
-          outputs: isOutput && !t.outputs.includes(rawPath) ? [...t.outputs, rawPath] : t.outputs,
+          outputs: isOutput && !t.outputs.some((file) => file.path === rawPath)
+            ? [...t.outputs, { path: rawPath }]
+            : t.outputs,
         }));
         return;
       }
@@ -300,12 +310,15 @@ export function useCoworkSession({ clientId, connected, send }: UseCoworkSession
         return;
 
       // ── 本轮产出的文件 ──
-      // 后端扫产出目录 diff 得出，覆盖掉按工具调用猜的那份：
-      // 办公任务的产物多半由 Python 脚本写出，靠 create_file 参数只能收到临时脚本，
-      // 正好把噪音当结果、把结果当没有（这是实际遇到的问题）。
+      // AI 登记的产出经后端校验后覆盖按工具调用推测的清单；
+      // 文件类型由 AI 声明，缺失时保持中性，不按扩展名猜测。
       case AGENT_EVENT.COWORK_OUTPUTS: {
-        const paths = (msg as { paths?: string[] }).paths;
-        if (Array.isArray(paths) && paths.length > 0) patchActive({ outputs: paths });
+        const { paths, files } = msg as { paths?: string[]; files?: OutputFile[] };
+        if (Array.isArray(files) && files.length > 0) {
+          patchActive({ outputs: files });
+        } else if (Array.isArray(paths) && paths.length > 0) {
+          patchActive({ outputs: paths.map((path) => ({ path })) });
+        }
         return;
       }
 
@@ -429,7 +442,7 @@ export function useCoworkSession({ clientId, connected, send }: UseCoworkSession
     // 对它来说不如写文件本身显眼。在用户消息里点一句，命中率高得多。
     // 这也是产出卡片的唯一数据来源：不登记就什么都不显示。
     lines.push("");
-    lines.push("做完后，如果生成或改写了文件，请调用 report_outputs 把最终产出的文件登记一下（临时脚本不用登记）。");
+    lines.push("做完后，如果生成或改写了文件，请调用 report_outputs 登记最终产出，并为每个文件标明 kind：本轮新建用 created，修改已有文件用 edited（临时脚本不用登记）。");
 
     send({
       type: CONTROL_CMD.USER_MESSAGE,

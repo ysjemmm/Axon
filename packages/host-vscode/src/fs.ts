@@ -39,6 +39,23 @@ export class VSCodeFileSystem implements HostFileSystem {
     await vscode.workspace.fs.writeFile(uri, te.encode(content));
   }
 
+  async readBinary(absPath: string): Promise<Uint8Array | null> {
+    try {
+      return await vscode.workspace.fs.readFile(this.uri(absPath));
+    } catch {
+      return null;
+    }
+  }
+
+  async writeBinary(absPath: string, bytes: Uint8Array): Promise<void> {
+    try {
+      await vscode.workspace.fs.createDirectory(vscode.Uri.file(dirname(absPath)));
+    } catch {
+      /* 已存在或无需创建，忽略 */
+    }
+    await vscode.workspace.fs.writeFile(this.uri(absPath), bytes);
+  }
+
   /**
    * 追加写。这是本类唯一绕开 vscode.workspace.fs 的方法——因为它没有追加语义，
    * 只有全量 writeFile。用 read + write 模拟追加会退化成 O(n²)：每追加一行都要

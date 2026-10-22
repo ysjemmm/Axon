@@ -86,4 +86,20 @@ describe("reasoning_content 在历史→下一轮请求消息中的透传", () =
       "用户想看 a.ts 的内容，我应该调用 read_file。",
     );
   });
+
+  it("非工具轮的最终回复也保留 reasoning_content", () => {
+    // DeepSeek 官方文档：请求带 tools 时，历史【所有】轮次的 reasoning_content 都要回传，
+    // 即使该轮没有实际调用工具。所以最终回复这条也不能丢。
+    const history = [
+      { role: "system", content: "system prompt" },
+      { role: "user", content: "解释一下这段代码" },
+      { role: "assistant", content: "这段代码做的是……", reasoning_content: "先看它导入了什么" },
+    ];
+    const s = new AgentSession("d:\\projects\\Axon", channelStub, minimalHost(), history as any);
+    s.compactionConfig.enabled = false;
+    const msgs = s.promptBuilder.buildRequestMessages();
+    const assistant = msgs.find((m: any) => m.role === "assistant" && !m.tool_calls);
+    expect(assistant).toBeTruthy();
+    expect((assistant as any).reasoning_content).toBe("先看它导入了什么");
+  });
 });

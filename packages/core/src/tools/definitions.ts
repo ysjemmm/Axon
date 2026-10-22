@@ -126,6 +126,10 @@ export function getToolDefinitions() {
           "- 监听/守护：webpack --watch / tsc --watch / nodemon / jest --watch\n" +
           "- 任何不会自动退出、需要持续运行的进程\n" +
           "⚠️ 这类命令绝不能用 execute_command——它会同步等进程退出，导致卡死直到超时。\n\n" +
+          "【不要用它跑会结束的长命令】构建、编译、测试、安装（mvn / gradle / npm install / tsc 等）" +
+          "即使耗时很久，也仍然用 execute_command：它超时后命令会继续在终端里跑，用 " +
+          "get_process_output(terminalId) 轮询进度即可。用 start_process 跑这类命令会多留一个终端，" +
+          "而且容易把同一条命令跑第二遍。\n\n" +
           "【返回】立即返回 terminalId（进程句柄）。之后用 get_process_output 看启动日志/报错，用 stop_process 停止。\n" +
           "若已有相同命令+目录的进程在跑，会复用它并提示（不重复起服务）。",
         parameters: {
@@ -750,6 +754,15 @@ export interface ToolMeta {
   fileDiff?: { path: string; absPath?: string; oldContent: string; newContent: string; editId?: string };
   /** apply_patch 等单次调用改多个文件的工具：按文件累计的 diff 列表（fileDiff 仅保留最后一个，向后兼容单文件工具）。 */
   fileDiffs?: { path: string; absPath?: string; oldContent: string; newContent: string; editId?: string }[];
+  /** Cowork report_outputs 经磁盘校验后实际登记的路径；随工具结果保存，供历史恢复。 */
+  reportedOutputs?: string[];
+  /** 校验后的产出及 AI 声明的创建/编辑类型；类型缺失的旧调用保持中性。 */
+  reportedOutputItems?: { path: string; kind?: "created" | "edited"; snapshotDir?: string }[];
+  /**
+   * Chat 产物：create_artifact 成功落盘后的描述。随工具结果保存，前端据此渲染产物卡片，
+   * 重开会话时也靠它从历史里还原（卡片不能只存在于一次性的实时事件里）。
+   */
+  artifact?: { path: string; title: string; type: string; language?: string; size: number; version: number };
   /** 编辑工具执行成功但没有实际内容变化（newContent 与 preEditContent 完全相同）。 */
   noopEdit?: boolean;
   readRange?: { startLine: number; endLine: number };

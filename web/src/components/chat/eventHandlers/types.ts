@@ -13,6 +13,7 @@ import type {
 import type { CommandApproval } from "../useChatSession";
 import type { RelayData } from "@/lib/apiClient";
 import type { TypewriterApi } from "../useTypewriter";
+import type { FormSpecData } from "../formTypes";
 
 export interface EventHandlerCtx {
   // ── 状态 setter ──
@@ -42,6 +43,9 @@ export interface EventHandlerCtx {
   setUndoNotice: (n: { id: number; text: string } | null) => void;
   setToolConfirm: (c: { toolName: string; title: string; kind?: string } | null) => void;
   setAskUser: (a: AskUserRequest | null) => void;
+  setFormRequest: (r: FormRequest | null) => void;
+  /** 会话记忆的最新内容（模型写入或用户导入之后推送） */
+  setMemory: (m: string) => void;
   setWaitingInputIds: (s: Set<string> | ((prev: Set<string>) => Set<string>)) => void;
   setCommandApprovals: (c: Record<string, CommandApproval> | ((prev: Record<string, CommandApproval>) => Record<string, CommandApproval>)) => void;
   setCommandRiskNotice: (c: { id?: string; command: string; reason: string } | null) => void;
@@ -80,6 +84,8 @@ export interface EventHandlerCtx {
   ownedSessionId: MutableRefObject<string | null>;
   onSessionCreatedRef: MutableRefObject<(id: string) => void>;
   onCompactionMigratedRef: MutableRefObject<((id: string) => void) | undefined>;
+  /** 会话分叉完成回调：新会话只带记忆，上层刷新会话列表并切到新会话 */
+  onSessionForkedRef: MutableRefObject<((newSessionId: string, sourceId?: string) => void) | undefined>;
 
   // ── 打字机 API ──
   typewriter: TypewriterApi;
@@ -104,6 +110,12 @@ export interface AskUserQuestionData {
 export interface AskUserRequest {
   toolCallId: string;
   questions: AskUserQuestionData[];
+}
+
+/** ask_form 表单请求：Agent 交付一张声明式表单，等用户填写后提交。 */
+export interface FormRequest {
+  toolCallId: string;
+  spec: FormSpecData;
 }
 
 export type { WsMessage };

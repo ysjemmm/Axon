@@ -268,6 +268,55 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
+      // Chat 产物目录选择。
+      //
+      // 与上面 cowork_pick_output_dir 刻意各写一份、消息名也不共用：Cowork 可能整体下线，
+      // 共用一个处理分支的话，删 Cowork 时会连带误伤 Chat 的产物功能。
+      if (m.type === "pick_artifact_dir" && typeof m.requestId === "string") {
+        let path: string | undefined;
+        let error: string | undefined;
+        try {
+          const initialPath = typeof m.initialPath === "string" && m.initialPath ? m.initialPath : undefined;
+          const uris = await vscode.window.showOpenDialog({
+            canSelectFiles: false,
+            canSelectFolders: true,
+            canSelectMany: false,
+            defaultUri: initialPath ? vscode.Uri.file(initialPath) : undefined,
+            openLabel: "设为产物目录",
+            title: "选择产物保存位置",
+          });
+          path = uris?.[0]?.fsPath;
+        } catch (err) {
+          error = (err as Error).message;
+        }
+        this.postToWebview({
+          type: "artifact_dir_picked",
+          clientId: typeof m.clientId === "string" ? m.clientId : undefined,
+          requestId: m.requestId,
+          path,
+          error,
+        });
+        return;
+      }
+
+      // Cowork：查看 AI 对某文件的改动（原稿 vs 现文件）。
+      //
+      // 原稿在内核快照目录里（cowork-snapshots/<sessionId>/<turn>/），路径编码规则
+      // 与 CoworkSnapshotter 一致（分隔符全部替换成 __）。两边各转一次文本
+      // （复用 preview-office.py），diff 由 workbench overlay 渲染。
+      if (m.type === "cowork_get_changes" && typeof m.requestId === "string"
+        && typeof m.path === "string" && typeof m.snapshotDir === "string") {
+        void this.showCoworkChanges(m.requestId, String(m.path), String(m.snapshotDir));
+        return;
+      }
+
+      // Cowork：恢复原稿（快照覆盖现文件）。恢复后自动打开预览，让用户立刻确认结果。
+      if (m.type === "cowork_restore_snapshot" && typeof m.requestId === "string"
+        && typeof m.path === "string" && typeof m.snapshotDir === "string") {
+        void this.restoreCoworkSnapshot(m.requestId, String(m.path), String(m.snapshotDir));
+        return;
+      }
+
       // 搜索工作区资源（文件/文件夹）——输入框斜杠命令的二级选择
       if (m.type === "search_resources" && typeof m.requestId === "string") {
         const clientId = typeof m.clientId === "string" ? (m.clientId as string) : undefined;
@@ -637,6 +686,107 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
         tryRun("python3", () => finish({ kind: "unsupported", message: "未检测到 Python，无法预览该文档" }));
       });
     });
+  }
+
+  /**
+   * Cowork：展示「AI 改了什么」——原稿与现文件各转一次文本，行级对比交给 overlay。
+   *
+   * 快照文件名 = 原路径把 \ 和 / 全部替换成 __（CoworkSnapshotter 的编码规则）。
+   * 文本类文件（csv/txt/md）不走 Python，直接读；Office 走 convertOfficeForPreview。
+   */
+  private async showCoworkChanges(requestId: string, filePath: string, snapshotDir: string): Promise<void> {
+    const path = require("path");
+    const fs = require("fs/promises");
+    const name = path.basename(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    const badge = (ext.replace(/^\./, "") || "file").toUpperCase();
+    // 与 CoworkSnapshotter.snapshotFileName 相同的编码：所有平台保留字符替换成 __
+    const snapshotPath = path.join(snapshotDir, filePath.replace(/[\\/:*?"<>|]+/g, "__"));
+
+    const render = async (payload: Record<string, unknown>) => {
+      await vscode.commands.executeCommand("axon.showFilePreviewModal", {
+        name, path: filePath, badge, ...payload,
+      });
+    };
+
+    try {
+      const original = await fs.readFile(snapshotPath).catch(() => null);
+      if (!original) {
+        await render({ kind: "unsupported", message: "原稿快照不存在（可能已被清理），无法对比" });
+        return;
+      }
+      await render({ loading: true });
+
+      const toText = async (absPath: string): Promise<string | null> => {
+        const stat = await fs.stat(absPath).catch(() => null);
+        if (!stat || !stat.isFile()) return null;
+        if ([".xlsx", ".docx", ".pptx"].includes(path.extname(absPath).toLowerCase())) {
+          const converted = await this.convertOfficeForPreview(absPath);
+          return typeof converted.content === "string" ? converted.content : null;
+        }
+        const buf = await fs.readFile(absPath);
+        // 与预览一致的文本上限：对比场景 2MB 足够，超出截断并注明
+        const MAX = 2 * 1024 * 1024;
+        const text = buf.subarray(0, MAX).toString("utf8");
+        return buf.length > MAX ? `${text}\n…（过大，仅对比前 2MB）` : text;
+      };
+
+      const [beforeText, afterText] = await Promise.all([toText(snapshotPath), toText(filePath)]);
+      if (afterText === null) {
+        await render({ kind: "unsupported", message: "当前文件不存在或无法读取" });
+        return;
+      }
+      await render({
+        kind: "diff",
+        before: beforeText ?? "",
+        after: afterText,
+        snapshotDir,
+        restorable: true,
+      });
+    } catch (err) {
+      await render({ kind: "unsupported", message: `无法对比：${(err as Error).message}` });
+    }
+  }
+
+  /**
+   * Cowork：用原稿快照覆盖现文件。
+   *
+   * 恢复前再读一次快照确认存在（用户可能隔了几天才点恢复）；恢复后打开预览
+   * 让用户立刻看到结果，并回发事件让前端把标签状态刷新为「已恢复」。
+   */
+  /** overlay「恢复原稿」按钮的入口（extension.ts 注册的命令转发到这里） */
+  async restoreCoworkSnapshotFromOverlay(filePath: string, snapshotDir: string): Promise<void> {
+    await this.restoreCoworkSnapshot(`overlay-${Date.now()}`, filePath, snapshotDir);
+  }
+
+  private async restoreCoworkSnapshot(requestId: string, filePath: string, snapshotDir: string): Promise<void> {
+    const path = require("path");
+    const fs = require("fs/promises");
+    // 与 CoworkSnapshotter.snapshotFileName 相同的编码：所有平台保留字符替换成 __
+    const snapshotPath = path.join(snapshotDir, filePath.replace(/[\\/:*?"<>|]+/g, "__"));
+    let error: string | undefined;
+    try {
+      const bytes = await fs.readFile(snapshotPath).catch(() => null);
+      if (!bytes) {
+        error = "原稿快照不存在（可能已被清理）";
+      } else {
+        await fs.writeFile(filePath, bytes);
+      }
+    } catch (err) {
+      error = (err as Error).message;
+    }
+    this.postToWebview({
+      type: "cowork_snapshot_restored",
+      clientId: undefined,
+      requestId,
+      path: filePath,
+      error,
+    });
+    if (!error) {
+      await this.showFilePreview(filePath);
+    } else {
+      vscode.window.showWarningMessage(`恢复原稿失败：${error}`);
+    }
   }
 
   /** 从扩展命令把资源加入聊天输入框（用于资源管理器右键菜单）。 */

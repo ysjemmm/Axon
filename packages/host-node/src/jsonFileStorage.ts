@@ -119,6 +119,8 @@ export class JsonFileStorage implements SessionStorage {
             updatedAt: data.updatedAt,
             messageCount: data.messages.length,
             mode: data.mode,
+            hasMemory: !!data.memory?.trim(),
+            memoryChars: data.memory?.length ?? 0,
           });
         } catch {
           // 跳过损坏的文件
@@ -159,7 +161,7 @@ export class JsonFileStorage implements SessionStorage {
 
   async updateSession(
     id: string,
-    patch: Partial<Pick<SessionData, "title" | "model" | "provider" | "workspace" | "workspaces" | "workspaceGroupId" | "messages" | "totalTokens" | "pendingEdits">>,
+    patch: Partial<Pick<SessionData, "title" | "model" | "provider" | "workspace" | "workspaces" | "workspaceGroupId" | "messages" | "totalTokens" | "pendingEdits" | "memory">>,
   ): Promise<void> {
     const filePath = this.sessionPath(id);
     await this.withWriteLock(filePath, async () => {

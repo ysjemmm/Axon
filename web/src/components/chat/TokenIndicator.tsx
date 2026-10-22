@@ -6,7 +6,7 @@
  * 又让用户去猜那个小箭头图标是什么意思。现在合成一个：
  *   · 常态：圆环显示用量，hover 看明细；可压缩时点击即压缩
  *   · 压缩中（手动 / 自动都算）：圆环播放流转动画，禁止点击
- *   · 不可压缩（用量不足 35% / 已超限走顶部横幅）：只读，tooltip 说明原因
+ *   · 不可压缩（用量不足 35% / 已超限走顶部横幅 / AI 正在回复中）：只读，tooltip 说明原因
  */
 
 import { Activity, Minimize2 } from "lucide-react";
@@ -26,18 +26,20 @@ interface TokenIndicatorProps {
   compactingMessage?: string | null;
   /** 上下文已超限：此时压缩入口在顶部横幅，这里只读 */
   overflow?: boolean;
+  /** AI 正在回复中：此时禁止手动压缩（后端会挡，压缩会破坏正在跑的回合） */
+  replying?: boolean;
   /** 点击压缩。不传则圆环只读 */
   onCompact?: () => void;
 }
 
-export function TokenIndicator({ used, max, compacting = false, compactingMessage, overflow = false, onCompact }: TokenIndicatorProps) {
+export function TokenIndicator({ used, max, compacting = false, compactingMessage, overflow = false, replying = false, onCompact }: TokenIndicatorProps) {
   const hasMax = max > 0;
   const ratio = hasMax ? Math.min(used / max, 1) : 0;
   const percent = ratio * 100;
 
   // 能不能手动压缩：由用量决定，而不是消息条数（理由见 ChatPanel 旧注释：一个 agent 回合在 UI 上只占 2 条）
   const belowThreshold = hasMax && ratio < MANUAL_COMPACT_MIN_RATIO;
-  const canCompact = !!onCompact && !compacting && !overflow && !belowThreshold;
+  const canCompact = !!onCompact && !compacting && !overflow && !belowThreshold && !replying;
 
   // 颜色：绿 → 黄 → 红
   const strokeColor = percent < 50 ? "#22c55e" : percent < 80 ? "#eab308" : "#ef4444";
@@ -59,9 +61,11 @@ export function TokenIndicator({ used, max, compacting = false, compactingMessag
       ? "上下文已超限，请使用上方横幅中的压缩按钮"
       : belowThreshold
         ? `用量未达 ${MANUAL_COMPACT_MIN_RATIO * 100}%，暂无需压缩`
-        : onCompact
-          ? "点击压缩上下文"
-          : null;
+        : replying
+          ? "AI 正在回复中，回复结束后可压缩上下文"
+          : onCompact
+            ? "点击压缩上下文"
+            : null;
 
   return (
     <TooltipProvider>

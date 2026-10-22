@@ -34,6 +34,8 @@ interface SessionContainerProps {
   onSessionCreated: (key: string, id: string) => void;
   /** 压缩迁移：当前 tab 会话已迁移到新会话，App 应打开新 tab */
   onCompactionMigrated?: (newSessionId: string) => void;
+  /** 会话分叉完成：App 应刷新会话列表并切到新会话 */
+  onSessionForked?: (newSessionId: string, sourceId?: string) => void;
   /**
    * 正在流式输出的 tab key 集合变化时回调。
    * 顶部会话切换器要据此显示"另有 N 个会话在跑"——收掉 tab 条后，这是唯一的后台运行线索。
@@ -52,7 +54,7 @@ interface SessionContainerProps {
  */
 const IDLE_UNMOUNT_DELAY = 5 * 60_000;
 
-export function SessionContainer({ tabs, activeKey, connected, send, onSessionCreated, onCompactionMigrated, onRunningKeysChange }: SessionContainerProps) {
+export function SessionContainer({ tabs, activeKey, connected, send, onSessionCreated, onCompactionMigrated, onSessionForked, onRunningKeysChange }: SessionContainerProps) {
   // 当前应挂载的面板 key 集合
   const [aliveKeys, setAliveKeys] = useState<Set<string>>(() => new Set(activeKey ? [activeKey] : []));
   const runningRef = useRef<Set<string>>(new Set());
@@ -177,6 +179,7 @@ export function SessionContainer({ tabs, activeKey, connected, send, onSessionCr
               send={send}
               onSessionCreated={(id) => onSessionCreated(t.key, id)}
               onCompactionMigrated={onCompactionMigrated}
+              onSessionForked={onSessionForked}
               onStreamingChange={(streaming) => handleStreamingChange(t.key, streaming)}
             />
           </div>

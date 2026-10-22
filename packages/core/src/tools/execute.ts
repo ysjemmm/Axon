@@ -451,7 +451,9 @@ export async function executeToolCall(
           `· 不要重试此命令——它还在执行。\n` +
           queryHint +
           `· 后续 execute_command 会排队等它结束后再执行（同一终端串行），不会与它冲突。\n` +
-          `· 如需在后台运行常驻/长任务，请改用 start_process（返回 terminalId，可用 get_process_output 查询结果）。\n` +
+          `· 长命令（构建 / 测试 / 安装等）本来就该用 execute_command：超时后它仍在终端里继续跑，` +
+          `不需要改用 start_process 重跑一遍——那样会多开一个终端，并把同一条命令再跑一遍。\n` +
+          `· start_process 只留给不会自己退出的常驻进程（dev server / watch / 监听）。\n` +
           `· 用户也可以直接在 Axon 终端面板查看/操作这个正在运行的命令。`
         );
       }

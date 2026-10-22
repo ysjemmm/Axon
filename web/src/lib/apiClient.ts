@@ -65,10 +65,22 @@ export interface SessionMeta {
   messageCount: number;
   /** 会话模式：用于把 Code（agent）、Chat（quest）、Cowork 的历史分开列 */
   mode?: "agent" | "quest" | "cowork";
+  /** 该会话是否已沉淀记忆；「从会话导入」列表据此过滤 */
+  hasMemory?: boolean;
+  /** 记忆字数（列表里做摘要用，不把整份记忆塞进列表响应） */
+  memoryChars?: number;
 }
 
 export function listSessions(): Promise<{ sessions: SessionMeta[] }> {
   return get("/api/sessions");
+}
+
+/**
+ * 读取单个会话的完整数据（含 memory）。
+ * 「从会话导入记忆」用它取源会话那份记忆——列表接口只带字数，不带正文。
+ */
+export function getSession(id: string): Promise<{ id: string; title: string; memory?: string }> {
+  return get(`/api/sessions/${encodeURIComponent(id)}`);
 }
 
 export function deleteSession(id: string): Promise<{ ok: boolean }> {

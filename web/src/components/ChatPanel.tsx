@@ -8,7 +8,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Loader2, ImagePlus, X, Paperclip, Plus, Camera, ChevronDown, ListChecks, Globe, ShieldAlert, Undo2, AlertTriangle, FolderOutput } from "lucide-react";
+import { Loader2, ImagePlus, X, Paperclip, Plus, Camera, ChevronDown, ListChecks, Globe, Brain, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -29,7 +29,10 @@ import { FILE_MAX_SIZE, FILE_INLINE_MAX_SIZE, isAllowedTextFile, looksBinary } f
 import { MessageBubble } from "./chat/MessageBubble";
 import { AssistantTurnHeader } from "./chat/AssistantTurn";
 import { UnifiedStatusBar } from "./UnifiedStatusBar";
+import { NoticeBar, type NoticeItem } from "./chat/NoticeBar";
 import { AskUserCard } from "./AskUserCard";
+import { FormPanel } from "./chat/FormPanel";
+import { MemoryPanel } from "./chat/MemoryPanel";
 import { MentionEditor, type MentionEditorHandle } from "./chat/MentionEditor";
 import { EmptyStateGreeting } from "./chat/EmptyStateGreeting";
 import { TokenIndicator } from "./chat/TokenIndicator";
@@ -44,6 +47,9 @@ import { useSlashCommandHost } from "./chat/slash/useSlashCommandHost";
 import { SlashCommandMenu } from "./chat/slash/SlashCommandMenu";
 import { DEFAULT_SLASH_COMMANDS } from "./chat/slash/commands";
 import { CommandApprovalContext } from "./chat/commandApprovalContext";
+import { InlineFormContext } from "./chat/inlineFormContext";
+import { formatInlineFormMessage } from "./chat/inlineFormMessage";
+import type { FormSpecData, FormSubmitData } from "./chat/formTypes";
 import { QuestionListPanel } from "./chat/QuestionListPanel";
 import { VirtualMessageList, type VirtualMessageListHandle } from "./chat/VirtualMessageList";
 import { nextHiddenCount, safeHiddenCount } from "./chat/scrollAnchor";
@@ -60,20 +66,46 @@ const RESTORE_HISTORY_BATCH_SIZE = 24;
  */
 const COMPOSER_LANDING_MS = 420;
 
+/** 单行版式下编辑区与工具栏之间的间距（对应容器上的 gap-1）。 */
+const COMPOSER_ROW_GAP = 4;
+/** 单行版式下工具栏自身左右内边距合计（对应 toolbar 上的 px-1.5）。 */
+const COMPOSER_TOOLBAR_PAD = 12;
 /**
- * 长路径的展示用缩略：保留末两级，前面用 … 代替。
- * 菜单项宽度只有 200px 出头，完整绝对路径塞不下；用户真正需要辨认的是末尾那几级
- * （"是不是我要的那个文件夹"），盘符和中间层级可以省。
+ * 单行版式里编辑区至少要留出的宽度。
+ * 面板窄到工具栏吃掉大半宽度时，勉强并排会把输入区挤成一条缝（连发送按钮都可能被裁掉），
+ * 这时宁可退回多行版式——多行本来就是"一定放得下"的那一侧。
  */
-function shortenPath(absPath: string): string {
-  const parts = absPath.replace(/\\/g, "/").split("/").filter(Boolean);
-  if (parts.length <= 2) return absPath;
-  return `…/${parts.slice(-2).join("/")}`;
+const COMPOSER_MIN_INLINE_EDITOR_WIDTH = 200;
+
+/**
+ * 数编辑区「真实渲染出来的行数」。
+ *
+ * 用 Range 量内容占据的矩形、总高除以行高。自动折行会多出一个行盒，所以它同时覆盖
+ * 「用户敲了回车」和「长文本被折行」两种情况——只数 "\n" 的个数会漏掉后者。
+ *
+ * 不能用 scrollHeight：contentEditable 带 min-height(44px)，空文档的 scrollHeight 就是 44，
+ * 换算下来永远"两行多"，空态根本收不回一行。
+ */
+function measureRenderedLines(root: HTMLElement): number {
+  const range = document.createRange();
+  range.selectNodeContents(root);
+  let top = Number.POSITIVE_INFINITY;
+  let bottom = Number.NEGATIVE_INFINITY;
+  for (const rect of Array.from(range.getClientRects())) {
+    if (rect.width <= 0 && rect.height <= 0) continue;
+    if (rect.top < top) top = rect.top;
+    if (rect.bottom > bottom) bottom = rect.bottom;
+  }
+  if (!Number.isFinite(top) || bottom - top <= 0) return 1; // 空文档：一个空段落，按一行算
+  const lineHeight = Number.parseFloat(window.getComputedStyle(root).lineHeight) || 21;
+  // 行内 tag（28px 高）比行高略高，所以按四舍五入收，别把一行算成两行
+  return Math.max(1, Math.round((bottom - top) / lineHeight));
 }
 
-export function ChatPanel({ clientId, sessionId, mode, connected, active, send, onSessionCreated, onCompactionMigrated, onStreamingChange }: ChatPanelProps) {
-  const session = useChatSession({ clientId, sessionId, mode, connected, send, onSessionCreated, onCompactionMigrated, onStreamingChange });
+export function ChatPanel({ clientId, sessionId, mode, connected, active, send, onSessionCreated, onCompactionMigrated, onSessionForked, onStreamingChange }: ChatPanelProps) {
+  const session = useChatSession({ clientId, sessionId, mode, connected, send, onSessionCreated, onCompactionMigrated, onSessionForked, onStreamingChange });
   const [hiddenMessageCount, setHiddenMessageCount] = useState(0);
+  const [memoryOpen, setMemoryOpen] = useState(false);
   /** 上一次的会话消息总数：用于区分"追加消息"与"压缩/编辑后变短" */
   const prevHistoryLenRef = useRef(session.chatHistory.length);
 
@@ -221,6 +253,12 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
       fileErrorTimer.current = setTimeout(() => setFileError(""), 3000);
     }
   }, []);
+  /** 手动关掉文件错误提示（状态条右侧的 ×）：同时清掉自动消失的定时器。 */
+  const dismissFileError = useCallback(() => {
+    if (fileErrorTimer.current) clearTimeout(fileErrorTimer.current);
+    fileErrorTimer.current = null;
+    setFileError("");
+  }, []);
   const [composerEmpty, setComposerEmpty] = useState(true); // 编辑器是否为空（控制发送按钮可用态）
   /**
    * 空态首发的「落位动画」状态。
@@ -239,16 +277,14 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   /** 落位动画结束后要执行的发送动作（动画期间暂存，避免消息插入打断过渡） */
   const pendingSendRef = useRef<(() => void) | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  /** 文档产出目录选择器开关 */
-  const [outputPickerOpen, setOutputPickerOpen] = useState(false);
-  /**
-   * 文档产出目录（绝对路径，空串=未设置）。
-   * 存 localStorage 而非会话：这是「我习惯把文件放哪」的长期偏好，换会话不该重设。
-   */
-  const [outputDir, setOutputDir] = useState<string>(() => {
-    try { return localStorage.getItem(STORAGE.OUTPUT_DIR) || ""; } catch { return ""; }
+  // ── 产物目录 ──
+  // 空串 = 未设置，后端落到默认位置 ~/.axon/artifacts/<会话id>/。
+  // 存 localStorage 是面板级偏好（跨会话保留），不进会话数据：换会话不该丢掉用户选的目录。
+  const [artifactDir, setArtifactDir] = useState<string>(() => {
+    try { return localStorage.getItem(STORAGE.ARTIFACT_DIR) || ""; } catch { return ""; }
   });
+  const pendingArtifactPickRef = useRef<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [groupManagerOpen, setGroupManagerOpen] = useState(false);
   const [skillStudioOpen, setSkillStudioOpen] = useState(false);
   /** 图片查看器状态：当前图片组 + 索引（输入框图片与历史消息图片共用） */
@@ -307,11 +343,116 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     updateDiagState({ streaming: session.isLoading });
   }, [session.isLoading]);
 
+  // ── 输入区版式：单行 / 多行 ──────────────────────────────────────────────
+  // 空态（以及只有一行文字时）整块只有一行高：编辑区与工具栏并排；
+  // 内容超过一行（敲回车、粘贴多行、或长文本自动折行）时切成上下两段，并随内容继续长高。
+  const [composerMultiline, setComposerMultiline] = useState(false);
+  /** state 的同步镜像：同一次事件里可能连跑两遍判定，读 state 会拿到旧值 */
+  const composerMultilineRef = useRef(false);
+  /** 输入区内容层：它的自然高度就是动画的目标高度 */
+  const inputAreaRef = useRef<HTMLDivElement>(null);
+  const editorWrapRef = useRef<HTMLDivElement>(null);
+  const toolbarLeftRef = useRef<HTMLDivElement>(null);
+  const toolbarRightRef = useRef<HTMLDivElement>(null);
+  const [inputAreaHeight, setInputAreaHeight] = useState<number | null>(null);
+  /** 会话记忆是否已沉淀过内容（决定记忆图标的着色与状态点） */
+  const hasMemory = session.memory.trim().length > 0;
+
+  /**
+   * 「如果现在切回单行版式，这行内容会不会折行？」
+   *
+   * 单行版式里编辑区被工具栏挤窄，多行版式里是满宽——同一段文字在两种版式下的行数可能不一样。
+   * 不收这个口子，宽度刚好落在「满宽一行、窄版两行」区间的内容就会
+   * 展开 → 折行 → 收起 → 不折行 → 展开……来回抖。
+   *
+   * 做法：把编辑区同步收窄到单行版式的可用宽度，量一次真实行数，再复原。三段都在同一个
+   * JS 任务里完成（中间不会被绘制），所以看不到闪烁；而且只有「多行版式 + 当前只剩一行」
+   * 这个边界才会走到（典型是删字删到只剩一行），不是每次按键都做。
+   */
+  const wouldWrapInCompactRow = useCallback((): boolean => {
+    const editorEl = editorRef.current?.getEditorElement();
+    const wrap = editorWrapRef.current;
+    const leftW = toolbarLeftRef.current?.getBoundingClientRect().width ?? 0;
+    const rightW = toolbarRightRef.current?.getBoundingClientRect().width ?? 0;
+    // 量不到宽度就保守地留在多行：多行是"一定放得下"的那一侧，不会来回切
+    if (!editorEl || !wrap || leftW <= 0) return true;
+    // 单行版式下编辑区可用宽度 ≈ 满宽 - 工具栏自然宽 - 组间距 - 工具栏内边距。
+    // 这里没扣掉「多行版式右内边距更大」那几十像素，量出来比实际窄一点——
+    // 只会让刚好塞满一行的文本晚一步收窄，不会抖。
+    const capacity = editorEl.clientWidth - leftW - rightW - COMPOSER_ROW_GAP - COMPOSER_TOOLBAR_PAD;
+    if (capacity < COMPOSER_MIN_INLINE_EDITOR_WIDTH) return true;
+    const style = window.getComputedStyle(wrap);
+    const hPad = (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0);
+    const prevWidth = wrap.style.width;
+    let wrapped = true;
+    try {
+      wrap.style.width = `${capacity + hPad}px`;
+      // 读矩形会强制同步布局，量到的是收窄之后的真实排版
+      wrapped = measureRenderedLines(editorEl) > 1;
+    } finally {
+      // 复原必须无条件执行：内联宽度留在收窄值上会把编辑区永久压窄
+      wrap.style.width = prevWidth;
+    }
+    return wrapped;
+  }, []);
+
+  /**
+   * 重新判定单行 / 多行。判据是真实排版高度，不是 "\n" 的个数。
+   * 只在结果真的变了才 setState，避免每次按键都多渲染一遍输入区。
+   */
+  const evaluateComposerLayout = useCallback(() => {
+    const editorEl = editorRef.current?.getEditorElement();
+    if (!editorEl) return;
+    let next = measureRenderedLines(editorEl) > 1;
+    // 单行版式里编辑区已经被挤到没法用（面板太窄）：退回多行版式。
+    // 反过来在多行版式里由 wouldWrapInCompactRow 按同一个阈值把关，两边一致不会来回切。
+    // clientWidth 为 0 说明面板处于隐藏状态（量不到宽度），这时别据此判定。
+    const inlineWidth = editorEl.clientWidth;
+    if (!next && !composerMultilineRef.current && inlineWidth > 0 && inlineWidth < COMPOSER_MIN_INLINE_EDITOR_WIDTH) {
+      next = true;
+    }
+    if (!next && composerMultilineRef.current) next = wouldWrapInCompactRow();
+    if (next === composerMultilineRef.current) return;
+    composerMultilineRef.current = next;
+    setComposerMultiline(next);
+  }, [wouldWrapInCompactRow]);
+
+  // 编辑区宽度变化（面板拖拽 / 窗口缩放 / 版式切换本身）后重新判定。
+  // 只认宽度：高度变化是本组件自己的排版产物，跟着它重算会和 ResizeObserver 形成回环。
+  useEffect(() => {
+    const wrap = editorWrapRef.current;
+    if (!wrap || typeof ResizeObserver === "undefined") return;
+    let lastWidth = -1;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width ?? 0;
+      if (Math.abs(width - lastWidth) < 0.5) return;
+      lastWidth = width;
+      evaluateComposerLayout();
+    });
+    observer.observe(wrap);
+    return () => observer.disconnect();
+  }, [evaluateComposerLayout]);
+
+  // 高度动画的数据源：量内层（内容自然高度），写到外层的内联 height 上。
+  // 分成两个元素是为了打破回环——内层高度不受外层的固定高度约束，外层也就不会量到自己。
+  useEffect(() => {
+    const inner = inputAreaRef.current;
+    if (!inner || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      const height = inner.getBoundingClientRect().height;
+      if (height > 0) setInputAreaHeight(height); // 面板被隐藏时量到 0，别把盒子压没
+    });
+    observer.observe(inner);
+    return () => observer.disconnect();
+  }, []);
+
   /** 编辑器内容变化：刷新空态 + 驱动斜杠检测 */
   const handleEditorChange = useCallback((before: string) => {
     setComposerEmpty(editorRef.current?.isEmpty() ?? true);
     slash.handleTextChange(before);
-  }, [slash]);
+    // 内容一变就重判版式：变长（换行 / 折行 / 粘贴）展开，删回一行收起
+    evaluateComposerLayout();
+  }, [slash, evaluateComposerLayout]);
 
   /** 当前模型是否支持图片（含自定义 provider 模型，故走合并列表） */
   const models = useModels();
@@ -504,6 +645,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         .map((f) => {
           if (f.kind === "terminal") return `终端输出（${f.name}）：\n\`\`\`\n${f.content}\n\`\`\``;
           if (f.kind === "editor") return `代码片段（${f.name}）：\n\`\`\`\n${f.content}\n\`\`\``;
+          // 粘贴的长文本按纯文本发送：用户粘的是散文/日志，包成代码块会让模型当成源码读
+          if (f.kind === "paste") return `粘贴文本（${f.name}）：\n${f.content}`;
           if (f.kind === "folder") return f.content;
           if (f.kind === "diagnostics") return `诊断信息（${f.name}）：\n\`\`\`\n${f.content}\n\`\`\``;
           // 大文件（已落盘）：只给路径 + 开头若干行，让模型自己决定读哪一段。
@@ -540,10 +683,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
     // 文档产出目录：用户显式指定过就随消息告知 Agent，覆盖 document-forge 的默认位置
     // （那个默认是"工作区 output/"，对办公场景等于找不到）。
-    // 作为上下文行注入而不是新增协议字段：这是给模型看的偏好，不是需要后端解析的结构化参数。
-    if (outputDir) {
-      contentForModel = `${contentForModel}\n\n[生成文档时请保存到这个目录：${outputDir}]`;
-    }
+    // 文档产出目录只属于 Cowork（CoworkPanel 自己维护那一套），Code/Chat 不再注入该偏好。
 
     const actualModel = session.model;
     const actualProvider = session.provider || findModel(session.model)?.provider;
@@ -575,6 +715,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         think: session.think,
         effort: actualEffort,
         quest: mode === "quest" ? { webSearch: session.questWebSearch } : undefined,
+        // 空串不下发：后端把「缺省」解释为「用默认位置」，省得协议里出现两种等价的空值
+        artifactDir: artifactDir || undefined,
       },
     };
 
@@ -1060,7 +1202,32 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
   // 接收外部注入的上下文 → 作为内联 tag 插入编辑器。
   // 带 contextId（斜杠命令触发，已先插入占位 tag）→ 补全该 tag；否则（终端/编辑器选区）→ 在光标处插入新 tag。
+  const updateArtifactDir = useCallback((dir: string) => {
+    setArtifactDir(dir);
+    try {
+      if (dir) localStorage.setItem(STORAGE.ARTIFACT_DIR, dir);
+      else localStorage.removeItem(STORAGE.ARTIFACT_DIR);
+    } catch { /* 忽略写入失败 */ }
+  }, []);
+
+  /** 请求宿主弹出系统目录选择框；浏览器形态没有宿主，无法选目录，直接忽略 */
+  const pickArtifactDir = useCallback(() => {
+    const host = (window as unknown as { __axonVSCode?: { postMessage: (m: unknown) => void } }).__axonVSCode;
+    if (!host) return;
+    const requestId = `artifact-dir-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    pendingArtifactPickRef.current = requestId;
+    host.postMessage({ type: "pick_artifact_dir", clientId, requestId, initialPath: artifactDir });
+  }, [clientId, artifactDir]);
+
   useSessionEvents(clientId, useCallback((msg) => {
+    // 宿主选完产物目录后的回包。requestId 对不上说明是别的面板/过期的请求，直接忽略。
+    if (msg.type === "artifact_dir_picked") {
+      const r = msg as { requestId?: string; path?: string; error?: string };
+      if (r.requestId !== pendingArtifactPickRef.current) return;
+      pendingArtifactPickRef.current = null;
+      if (r.path) updateArtifactDir(r.path);
+      return;
+    }
     if (msg.type !== CONTROL_CMD.ADD_CONTEXT) return;
     const text = (msg as { text?: string }).text;
     if (text === undefined) return;
@@ -1106,7 +1273,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         requestAnimationFrame(() => handleSendRef.current());
       }
     }
-  }, [clientId]));
+  }, [clientId, updateArtifactDir]));
 
   // quickAction auto-send：handleSend 在 add_context 回调外定义，用 ref 桥接
   const handleSendRef = useRef(handleSend);
@@ -1118,11 +1285,39 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
    * 点一下就发出去只会换回一句"请提供代码"，白跑一轮。
    * 「随便聊」传空串，此时只聚焦输入框，相当于一个"我就是想开个空白对话"的确认动作。
    */
-  /** 设定文档产出目录：存 localStorage（长期偏好，跨会话保留） */
-  const handleSelectOutputDir = useCallback((dir: string) => {
-    setOutputDir(dir);
-    try { localStorage.setItem(STORAGE.OUTPUT_DIR, dir); } catch { /* 忽略 */ }
-  }, []);
+  /**
+   * 内联表单提交：把用户填写的内容整理成一条用户消息发给 AI。
+   *
+   * 不新增协议——内联表单没有挂起门，提交在语义上就是「用户说了这段话」，
+   * 走与输入框完全相同的一条链路，排队/取消/计费/历史回放因此自动与手打消息一致。
+   */
+  const inlineFormCtx = useMemo(
+    () => ({
+      submit: (spec: FormSpecData, payload: FormSubmitData) => {
+        const text = formatInlineFormMessage(spec, payload);
+        const actualModel = session.model;
+        const actualProvider = session.provider || findModel(session.model)?.provider;
+        const effortModel = findModel(actualModel);
+        const actualEffort = effortModel?.effortLevels?.some((x) => x.value === session.effort) ? session.effort || undefined : undefined;
+        session.submit({
+          userBubble: { content: text, effort: actualEffort },
+          send: {
+            content: text,
+            displayText: text,
+            model: actualModel,
+            provider: actualProvider,
+            workspace: mode === "quest" ? undefined : (session.workspace || undefined),
+            workspaces: mode === "quest" ? undefined : (session.workspaces.length > 0 ? session.workspaces : undefined),
+            mode,
+            think: session.think,
+            effort: actualEffort,
+            quest: mode === "quest" ? { webSearch: session.questWebSearch } : undefined,
+          },
+        });
+      },
+    }),
+    [session, mode],
+  );
 
   const handlePickPrompt = useCallback((prompt: string) => {
     if (prompt) {
@@ -1154,6 +1349,119 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     return <SkillStudio workspace={session.workspace} onBack={() => setSkillStudioOpen(false)} />;
   }
 
+  /**
+   * 输入框上方状态条的条目集合（「提示类」提示）。
+   *
+   * 这些提示原先全部平铺在输入框容器【内部】，每多一条就把输入框顶高一截；现在统一交给
+   * NoticeBar 收敛成上面一条满宽胶囊：单条按自己的样式渲染，多条自动合成一条汇总。
+   * 这里只做「业务状态 → NoticeItem」的映射，文案与回调沿用原来的语义：
+   * · 自动消失仍由各自的定时器负责（fileError 3s、undoNotice 3s、commandRiskNotice 8s，
+   *   见上方的 showFileError 与两个 useEffect）；
+   * · 关闭、动作按钮、按钮禁用条件与原先完全一致，不新增也不减少可执行的操作。
+   * 决策类提示（工具确认 / 压缩选择 / Credits 暂停）不在此列，它们留在输入框内部。
+   */
+  const noticeItems: NoticeItem[] = [];
+  // 1) 文件 / 附件错误（3 秒自动消失，可手动关）
+  if (fileError) {
+    noticeItems.push({
+      id: "file-error",
+      tone: "error",
+      title: "文件处理失败",
+      detail: fileError,
+      onDismiss: dismissFileError,
+    });
+  }
+  // 2) 撤销失败轻提示（保守策略：文件未被改动）。3 秒后自动消失，也可手动关
+  if (session.undoNotice) {
+    noticeItems.push({
+      id: "undo-notice",
+      tone: "warn",
+      title: "撤销未生效",
+      detail: session.undoNotice.text,
+      onDismiss: () => session.setUndoNotice(null),
+    });
+  }
+  // 3) 命令风险提醒：已信任的命令命中风险模式（如递归删除）时照常执行，这里只做提示、
+  //    不需要应答。8 秒后自动消失，也可手动关闭。
+  if (session.commandRiskNotice) {
+    noticeItems.push({
+      id: "command-risk",
+      tone: "warn",
+      title: "风险提醒（命令已执行）",
+      detail: `${session.commandRiskNotice.command} · 原因：${session.commandRiskNotice.reason}`,
+      // 命令行与原因合起来通常很长，条上必然被截断，给浮层看全文
+      expandable: true,
+      onDismiss: session.dismissCommandRiskNotice,
+    });
+  }
+  // 4) 上下文超限：引导用户压缩上下文（不压缩就没法继续对话）
+  if (session.contextOverflow) {
+    noticeItems.push({
+      id: "context-overflow",
+      tone: "warn",
+      title: "上下文超出模型窗口限制",
+      detail: "无法继续对话，需先压缩上下文",
+      actions: [{ label: "压缩上下文", onClick: session.forceCompact }],
+      onDismiss: session.dismissContextOverflow,
+    });
+  }
+  // 5) 模型历史格式不兼容：deepseek 输出 DSML 退化时出现，用户主动整理不兼容记忆
+  if (session.toolHistoryMismatch) {
+    noticeItems.push({
+      id: "tool-history-mismatch",
+      tone: "warn",
+      title: "检测到模型工具调用格式不兼容",
+      detail: "历史记忆里可能残留了其它模型的工具调用痕迹，建议整理记忆让模型恢复稳定",
+      expandable: true,
+      actions: [{ label: "整理记忆", onClick: session.flattenToolHistory }],
+      onDismiss: session.dismissToolHistoryMismatch,
+    });
+  }
+  // 6) 会话已压缩并迁移：输入框此时不可用，引导跳转到新会话
+  if (session.compactionMigrated) {
+    const migratedSessionId = session.compactionMigrated.newSessionId;
+    noticeItems.push({
+      id: "compaction-migrated",
+      tone: "info",
+      title: "当前会话已压缩并迁移",
+      detail: "记忆已应用到新会话，AI 将在新会话中继续回复",
+      expandable: true,
+      actions: [{ label: "跳转到新会话", onClick: () => session.navigateToMigratedSession(migratedSessionId) }],
+    });
+  }
+  // 7) 排队消息：当前回复结束后自动发送。条上只显示条数，逐条明细与「移除」进浮层。
+  if (session.messageQueue.length > 0) {
+    noticeItems.push({
+      id: "message-queue",
+      tone: "info",
+      title: "排队中",
+      detail: `${session.messageQueue.length} 条（当前回复结束后自动发送）`,
+      overlayExtra: (
+        <div className="mt-1.5 max-h-[200px] space-y-1 overflow-y-auto">
+          {session.messageQueue.map((q) => {
+            const ub = q.payload.userBubble;
+            const label = ub.content || (ub.attachedFiles && ub.attachedFiles.length > 0 ? `[${ub.attachedFiles.length} 个文件]` : "[图片]");
+            return (
+              <div key={q.id} className="flex items-center gap-2 rounded bg-muted/40 px-2 py-1 text-foreground/80">
+                <span className="flex-1 truncate" title={label}>
+                  {label}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => session.removeFromQueue(q.id)}
+                  className="px-1.5 py-0.5 rounded text-[10px] text-muted-foreground hover:text-red-500 hover:bg-muted/60 shrink-0"
+                  title="移除此条"
+                >
+                  移除
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      ),
+    });
+  }
+
   return (
     <PanelClientIdContext.Provider value={clientId}>
     <div className="flex flex-col h-full overflow-hidden">
@@ -1172,7 +1480,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             改成覆盖在列表顶部后，视口高度与它是否出现无关。 */}
         {stickyQuestion && (
           <Popover open={questionListOpen} onOpenChange={setQuestionListOpen}>
-            <div className={`absolute top-0 inset-x-3 z-10 flex items-center gap-1 bg-background ${questionListOpen ? "" : "shadow-[0_2px_4px_-1px_rgba(0,0,0,0.06)]"}`}>
+            <div className={`absolute top-0 inset-x-0 z-10 flex items-center gap-1 bg-background ${questionListOpen ? "" : "shadow-[0_5px_14px_-7px_rgba(0,0,0,0.24)] dark:shadow-[0_5px_14px_-7px_rgba(0,0,0,0.55)]"}`}>
               <button
                 onClick={() => scrollToQuestion(stickyQuestion.id)}
                 title="跳转到该提问"
@@ -1283,6 +1591,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             }
             renderMessage={(msg, idx) => (
               <CommandApprovalContext.Provider value={commandApprovalCtx}>
+              <InlineFormContext.Provider value={inlineFormCtx}>
                 <MessageBubble
                   message={msg as any}
                   liveStatus={idx === visibleHistory.length - 1 ? liveAssistantStatus : undefined}
@@ -1292,6 +1601,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                   onUndoEdit={session.undoEdits}
                   onEditUserMessage={session.editUserMessage}
                   replyingToMessageId={replyingToMessageId}
+                  // 会话还没落盘（首轮刚发出）时不给入口：没有可截断的后端历史
+                  onForkFromMessage={sessionId ? session.forkFromMessage : undefined}
                   onQuoteToInput={(qMsg) => {
                     if (qMsg.userSegments && qMsg.userSegments.length > 0) {
                       editorRef.current?.appendSegments(qMsg.userSegments);
@@ -1303,10 +1614,18 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                   }}
                   onImagePreview={(imgs, idx) => setPreviewState({ images: imgs, index: idx })}
                 />
+              </InlineFormContext.Provider>
               </CommandApprovalContext.Provider>
             )}
           />
           )}
+        {/* ask_form 表单卡片：渲染在会话区容器内（不是输入区），与消息同宽、跟会话是一体的；
+            最大高度取会话区的一半，超出部分内部滚动——否则一张长表单会把输入框挤出可视区。 */}
+        {session.formRequest && (
+          <div className="shrink-0 max-h-[50%] overflow-y-auto">
+            <FormPanel spec={session.formRequest.spec} onSubmit={session.submitForm} />
+          </div>
+        )}
         {/* Loading 指示器已合并到输入区上方的统一状态条中 */}
         {/* 「滚动到底部」：下方仍在生成时外圈蓝色脉动（.scroll-btn-running），
             提示底部还有内容在产出；空闲时保持常态样式。 */}
@@ -1338,10 +1657,12 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
           transition: `flex-grow ${COMPOSER_LANDING_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`,
         }}
       >
-        {/* 空态给输入框封一个最大宽度并居中：面板被拉宽时（拖宽侧栏 / 弹成独立窗口）
-            输入框若铺满整行，会和只占中间一小块的欢迎文案宽度完全脱节，看着很别扭。
-            有消息之后不限宽——那时输入框与消息气泡同宽才对齐。 */}
-        <div className={`relative ${composerCentered ? "w-full max-w-[720px] mx-auto" : ""}`}>
+        {/* 空态输入框宽度 = min(面板宽度, max(640px, 80%))。
+            两头都要顾：早先写死 720px，面板拖宽后输入框不再跟随；改成纯铺满整行，超宽面板上
+            一行字又太长。用 max() 让两者同时成立——宽面板恒为 80%（两侧留出边距），
+            窄面板不低于 640px（低于此工具栏与 placeholder 就会挤）。用 max-width 而非 width：
+            面板比 640 还小时 max-width 不生效，宽度自然回落到满宽，永远不会溢出。 */}
+        <div className={`relative ${composerCentered ? "w-full max-w-[max(640px,80%)] mx-auto" : ""}`}>
           {/* 斜杠命令菜单（贴输入框上方，置于 overflow-hidden 容器之外避免被裁剪） */}
           {slash.open && (
             <SlashCommandMenu
@@ -1399,6 +1720,12 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         {session.askUser && (
           <AskUserCard request={session.askUser} onAnswer={session.answerUserQuestion} />
         )}
+        {/* 提示类状态条：必须放在吉祥物行【上方】。
+            吉祥物靠 -mb-[5px] 搭在"紧邻其下的那个元素"上沿；状态条若插在吉祥物与输入框
+            之间，吉祥物就会改搭在状态条上、被顶到半空，破坏"趴在输入框上沿"的观感。
+            放在这里也不会推动输入框：条本身固定 34px，详情浮层是绝对定位、不参与布局。 */}
+        {/* 没有提示时整条不渲染（组件卸载即重置「详情」浮层的开合状态） */}
+        {noticeItems.length > 0 && <NoticeBar items={noticeItems} />}
         {/* 空态不渲染这一行：新对话页只留「一句欢迎 + 输入框」，吉祥物和改动汇总
             （"N 已应用"）在还没有任何消息时都没有信息量，纯属噪音。
             有消息后照常出现。 */}
@@ -1446,6 +1773,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                     alt=""
                     className="h-full w-full object-cover cursor-zoom-in hover:opacity-90 transition-opacity"
                     onClick={() => setPreviewState({ images, index: i })}
+                    onContextMenu={(event) => event.preventDefault()}
                     title="点击查看大图"
                   />
                   {/* 角标叠在缩略图左下角：加一层半透明底，避免压在亮色图片上看不清 */}
@@ -1468,34 +1796,13 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             </div>
           )}
           {/* 文件 / 上下文预览区已移到输入框内，与输入文字同处一行（见下方内联 tag） */}
-          {fileError && <div className="px-4 pt-2 text-xs text-destructive">{fileError}</div>}
-          {/* 排队消息 */}
-          {session.messageQueue.length > 0 && (
-            <div className="px-3 pr-12 pt-2 pb-1 border-b border-border/40">
-              <div className="text-[10px] text-muted-foreground/60 font-medium mb-1">排队中（当前回复结束后自动发送）</div>
-              <div className="max-h-20 overflow-y-auto space-y-1">
-                {session.messageQueue.map((q) => {
-                  const ub = q.payload.userBubble;
-                  const label = ub.content || (ub.attachedFiles && ub.attachedFiles.length > 0 ? `[${ub.attachedFiles.length} 个文件]` : "[图片]");
-                  return (
-                    <div key={q.id} className="flex items-center gap-2 px-2 py-1 rounded bg-muted/40 text-xs text-foreground/80">
-                      <span className="flex-1 truncate">{label}</span>
-                      <button
-                        onClick={() => session.removeFromQueue(q.id)}
-                        className="px-1.5 py-0.5 rounded text-[10px] text-muted-foreground hover:text-red-500 hover:bg-muted/60 shrink-0"
-                        title="移除此条"
-                      >
-                        移除
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-          {/* 工具确认条 */}
+          {/* 文件错误 / 排队中 / 命令风险 / 上下文超限 / 工具格式不兼容 / 会话已迁移 等
+              「提示类」信息已上移到输入框上方的状态条（见本组件 render 顶部的 <NoticeBar>），
+              不再占用输入框内部的高度。 */}
+          {/* 工具确认条 —— 决策类，仍留在输入框内部（挡住输入、等用户回答）。
+              配色向输入框上方的状态条看齐（ask 蓝），结构、按钮与行为不动。 */}
           {session.toolConfirm && (
-            <div className="flex items-center gap-2 px-3 py-2 bg-primary/5 border border-primary/20 rounded-lg mb-2">
+            <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-950/25 border border-blue-200 dark:border-blue-900/60 rounded-xl mb-2">
               <ListChecks className="w-4 h-4 text-primary shrink-0" />
               <span className="text-xs flex-1 min-w-0 truncate">
                 {session.toolConfirm.kind === "mcp"
@@ -1535,50 +1842,11 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               </button>
             </div>
           )}
-          {/* 模型历史格式不兼容提示：deepseek 输出 DSML 退化时出现，用户主动整理不兼容记忆 */}
-          {session.toolHistoryMismatch && (
-            <div className="flex items-start gap-2 px-3 py-2 bg-amber-50 dark:bg-amber-950/20 border border-amber-300/50 rounded-lg mb-2">
-              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium text-foreground">检测到模型工具调用格式不兼容</p>
-                <p className="text-[11px] text-muted-foreground mt-0.5">
-                  当前模型输出了非标准格式，可能是历史记忆里残留了其它模型的工具调用痕迹。建议整理一下记忆（把早期工具调用转换成纯文本），让模型恢复稳定。
-                </p>
-              </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                <button
-                  onClick={() => session.flattenToolHistory()}
-                  className="px-2.5 py-1 rounded text-xs font-medium bg-amber-500/80 text-white hover:bg-amber-500 transition-colors"
-                >
-                  整理记忆
-                </button>
-                <button
-                  onClick={() => session.dismissToolHistoryMismatch()}
-                  className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
-                  title="关闭"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
-          )}
-          {/* 撤销失败轻提示（保守策略：文件未被改动）。3 秒后自动消失 */}
-          {session.undoNotice && (
-            <div className="flex items-start gap-2 px-3 py-2 bg-amber-50 dark:bg-amber-950/20 border border-amber-300/50 rounded-lg mb-2">
-              <Undo2 className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-              <p className="flex-1 min-w-0 text-[11px] text-muted-foreground">{session.undoNotice.text}</p>
-              <button
-                onClick={() => session.setUndoNotice(null)}
-                className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors shrink-0"
-                title="关闭"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
-          {/* 压缩选择弹窗：自动压缩触发时（>=75%），给用户选择继续或新会话 */}
+          {/* 撤销失败 / 工具格式不兼容都属于「提示类」，已上移到输入框上方的状态条 */}
+          {/* 压缩选择弹窗：自动压缩触发时（>=75%），给用户选择继续或新会话。
+              决策类，留在输入框内；仅把配色/圆角对齐到状态条的 ask 蓝。 */}
           {session.compactionNeeded && (
-            <div className="flex flex-col gap-2 px-3 py-3 bg-primary/5 border border-primary/30 rounded-lg mb-2">
+            <div className="flex flex-col gap-2 px-3 py-3 bg-blue-50 dark:bg-blue-950/25 border border-blue-200 dark:border-blue-900/60 rounded-xl mb-2">
               <div className="flex items-start gap-2">
                 <span className="text-sm">⚠️</span>
                 <div className="flex-1 min-w-0">
@@ -1604,9 +1872,10 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               </div>
             </div>
           )}
-          {/* Credits 预算暂停弹窗：单轮花费达到硬暂停阈值时，给用户选择继续或停止 */}
+          {/* Credits 预算暂停弹窗：单轮花费达到硬暂停阈值时，给用户选择继续或停止。
+              决策类，留在输入框内；仅把配色/圆角对齐到状态条的 warn 琥珀。 */}
           {session.creditBudgetPaused && (
-            <div className="flex flex-col gap-2 px-3 py-3 bg-amber-500/10 border border-amber-500/30 rounded-lg mb-2">
+            <div className="flex flex-col gap-2 px-3 py-3 bg-amber-50 dark:bg-amber-950/25 border border-amber-200 dark:border-amber-900/60 rounded-xl mb-2">
               <div className="flex items-start gap-2">
                 <span className="text-sm">💰</span>
                 <div className="flex-1 min-w-0">
@@ -1632,256 +1901,264 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               </div>
             </div>
           )}
-          {/* 会话已迁移提示：输入框不可用，引导跳转到新会话 */}
-          {session.compactionMigrated && (
-            <div className="flex flex-col gap-2 px-3 py-3 bg-muted/30 border border-border rounded-lg mb-2">
-              <div className="flex items-start gap-2">
-                <span className="text-sm">📋</span>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-foreground">当前会话已压缩并迁移</p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">
-                    记忆已压缩并应用到新会话中，AI 将在新会话中继续回复你的问题。
-                  </p>
+          {/* 会话已迁移 / 命令风险 / 上下文超限都属于「提示类」，已上移到输入框上方的状态条 */}
+          {/* 命令信任授权改为内联在对应命令卡片下方（无感模式），见 ToolCallItem。此处不再用模态弹窗 */}
+          {/* 输入区：单行版式 = 编辑区与工具栏并排一行；多行版式 = 编辑区在上、工具栏在下。
+              外层是「高度动画壳」：内层高度由内容自然撑开（文字逐行变高、或版式切换都会改变它），
+              外层写内联 height 并做 CSS 过渡——height 从旧值过渡到新值，盒子才会平滑长高/收拢，
+              而不是被内容顶得一跳一跳。prefers-reduced-motion 下由 motion-reduce 关掉过渡，直接切换。 */}
+          <div
+            className="overflow-hidden transition-[height] duration-200 ease-out motion-reduce:transition-none"
+            style={inputAreaHeight != null ? { height: inputAreaHeight } : undefined}
+          >
+            <div
+              ref={inputAreaRef}
+              className={composerMultiline ? "flex flex-col" : "flex items-center gap-1"}
+            >
+              {/* 输入框：contentEditable 富文本，tag 内联在光标处（MentionEditor）
+                  多行版式：满宽、沿用原来的内边距；
+                  单行版式：flex-1 吃掉工具栏之外的剩余宽度（min-w-0 才允许被压窄），
+                  右侧只留一点缝，工具栏自己的 px 会再补一点间距。
+                  单行时还要把编辑区自己的 min-height 压到一行高（原本 44px，是给多行留的
+                  舒适点按高度）：否则一行文字贴在 44px 盒子的顶上，同一行里的工具栏却被
+                  垂直居中，看起来按钮比文字低半截。用后代选择器改 ProseMirror 的 min-height，
+                  不去动 MentionEditor 的默认值（多行版式仍然要 44px）。 */}
+              <div
+                ref={editorWrapRef}
+                className={
+                  composerMultiline
+                    ? "w-full px-3 pr-10 pt-2 pb-1"
+                    : "min-w-0 flex-1 pl-3 pr-1 py-1.5 [&_.ProseMirror]:min-h-[22px]"
+                }
+              >
+                <MentionEditor
+                  ref={editorRef}
+                  disabled={!connected || !hasConfiguredSelection}
+                  placeholder={!connected ? "等待连接..." : !hasConfiguredSelection ? "请先配置 Provider 并选择模型" : canSendImages ? "给 Axon 发消息...（可粘贴或拖拽图片）" : "给 Axon 发消息..."}
+                  onChange={handleEditorChange}
+                  onKeyDown={(e) => {
+                    // 吉祥物只是旁观者：先记一笔按键类型，不影响后续任何消费判定
+                    mascot.noteKey(e.key);
+                    // 斜杠菜单优先消费方向键/回车/Esc，未消费时再走默认发送逻辑
+                    if (slash.handleKeyDown(e)) return;
+                    handleKeyDown(e);
+                  }}
+                  onPaste={handlePaste}
+                />
+              </div>
+              {/*
+                底部工具栏。
+                ── 排版约定（左右两组共用，改之前先读） ──
+                · 所有控件统一 28px（h-7）高、同一条中线；组内间距 gap-0.5（2px），靠控件自身的
+                  hover 底色来区分彼此，而不是靠留白——留白一大，一组控件就散成几个孤立的点。
+                · 颜色只给「状态」：发送按钮（主操作）与上下文用量色。其余控件一律 muted 灰字，
+                  hover 才变深。编辑模式的绿/黄点缩成 6px 状态点，不再与用量圆环抢视觉。
+                · 左组：[+] 在最左（附加内容是输入的"前置动作"，靠近输入起点），模型选择紧随其后。
+                · 单行版式下这一整组贴在编辑区右侧（shrink-0，不跟着编辑区一起压缩），
+                  多行版式下回到整行：左边一组、右边发送。
+              */}
+              <div
+                className={
+                  composerMultiline
+                    ? "flex items-center justify-between gap-2 px-1.5 pb-1.5"
+                    : "flex shrink-0 items-center gap-0.5 px-1.5"
+                }
+              >
+                <div ref={toolbarLeftRef} className="flex items-center gap-0.5 min-w-0">
+                  <Popover open={menuOpen} onOpenChange={setMenuOpen}>
+                    <PopoverTrigger asChild>
+                      <button
+                        className="inline-flex items-center justify-center h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=open]:bg-muted/60 data-[state=open]:text-foreground transition-colors"
+                        title="添加内容或设置改动应用方式"
+                        aria-label="更多"
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" side="top" className="w-52 p-1 gap-0">
+                      <button
+                        onClick={() => { docInputRef.current?.click(); setMenuOpen(false); }}
+                        className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs hover:bg-muted/60 transition-colors text-left"
+                      >
+                        <Paperclip className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                        <span className="flex-1">上传文件</span>
+                        <span className="text-[10px] text-muted-foreground/60">≤256KB</span>
+                      </button>
+                      <button
+                        onClick={() => { fileInputRef.current?.click(); setMenuOpen(false); }}
+                        disabled={!canSendImages}
+                        className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs hover:bg-muted/60 transition-colors text-left disabled:opacity-40 disabled:cursor-not-allowed"
+                        title={canSendImages ? "" : "当前模型不支持图片"}
+                      >
+                        <ImagePlus className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                        <span className="flex-1">上传图片</span>
+                      </button>
+                      <button
+                        onClick={() => { captureScreenshot(); setMenuOpen(false); }}
+                        disabled={!canSendImages}
+                        className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs hover:bg-muted/60 transition-colors text-left disabled:opacity-40 disabled:cursor-not-allowed"
+                        title={canSendImages ? "" : "当前模型不支持图片"}
+                      >
+                        <Camera className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                        <span className="flex-1">截图</span>
+                      </button>
+
+                      <div className="my-0.5 border-t border-border" />
+
+                      {/* 产物目录：AI 生成的 HTML / SVG / 文档等成品存放位置。
+                          没设置时显示「默认位置」，让用户知道不填也有地方可去；
+                          已设置时可以点右侧 × 恢复默认。 */}
+                      <div className="group/artifact flex items-center rounded-md hover:bg-muted/60 transition-colors">
+                        <button
+                          type="button"
+                          onClick={() => { pickArtifactDir(); setMenuOpen(false); }}
+                          disabled={!(window as unknown as { __axonVSCode?: unknown }).__axonVSCode}
+                          className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left disabled:opacity-40 disabled:cursor-not-allowed"
+                          title={artifactDir || "默认保存到 ~/.axon/artifacts/<会话>/"}
+                        >
+                          <FolderOpen className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-xs font-medium text-foreground">产物目录</span>
+                            <span className="block truncate text-[10px] leading-4 text-muted-foreground">
+                              {artifactDir || "默认位置（~/.axon/artifacts）"}
+                            </span>
+                          </span>
+                        </button>
+                        {artifactDir && (
+                          <button
+                            type="button"
+                            onClick={() => updateArtifactDir("")}
+                            className="mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-background/60 hover:text-foreground"
+                            title="恢复默认位置"
+                            aria-label="恢复默认产物目录"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+
+                      {mode !== "quest" && (
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={session.editMode === "auto"}
+                          onClick={() => session.setEditModePreference(session.editMode === "auto" ? "manual" : "auto")}
+                          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/60"
+                        >
+                          <span className={`size-2 shrink-0 rounded-full ${session.editMode === "auto" ? "bg-emerald-500" : "bg-amber-500"}`} />
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-xs font-medium text-foreground">自动应用</span>
+                            <span className="block text-[10px] leading-4 text-muted-foreground">
+                              {session.editMode === "auto" ? "代码改动直接写入文件" : "关闭后需手动确认改动"}
+                            </span>
+                          </span>
+                          <span className={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${session.editMode === "auto" ? "bg-emerald-500" : "bg-muted-foreground/25"}`}>
+                            <span className={`absolute top-0.5 size-3 rounded-full bg-white shadow-sm transition-transform ${session.editMode === "auto" ? "translate-x-3.5" : "translate-x-0.5"}`} />
+                          </span>
+                        </button>
+                      )}
+                    </PopoverContent>
+                  </Popover>
+
+                  <ModelSelector
+                    value={session.model}
+                    provider={session.provider}
+                    onChange={handleModelChange}
+                    disabledModels={images.length > 0 && !visionFallbackModel ? models.filter((m) => !m.vision).map((m) => m.id) : []}
+                    disabled={session.isCompacting || session.contextOverflow}
+                    disabledTooltip={session.contextOverflow ? "上下文超限，请先压缩" : "压缩期间不可切换模型"}
+                  />
+                  {/* 会话记忆入口：早先是输入框最上沿的整行文字按钮，空态白占一行高度。
+                      现在收成工具栏里的一个图标（紧挨模型选择）：有记忆时图标着色 + 右上角
+                      一个小状态点，字数放进 title 里悬停可见；没有记忆时保持中性灰。 */}
+                  <button
+                    type="button"
+                    onClick={() => setMemoryOpen(true)}
+                    className="relative inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+                    title={
+                      hasMemory
+                        ? `会话记忆 · 已沉淀 ${session.memory.length} 字（点击查看 / 编辑 / 导出 / 导入）`
+                        : "会话记忆 · 空（模型会在会话里自动沉淀，也可导入 .md）"
+                    }
+                    aria-label="会话记忆"
+                  >
+                    <Brain className={`h-4 w-4 ${hasMemory ? "text-primary" : ""}`} />
+                    {hasMemory && (
+                      <span className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-primary" />
+                    )}
+                  </button>
+                  <EffortSelector
+                    levels={selectedEffortLevels}
+                    value={session.effort}
+                    defaultValue={selectedDefaultEffort}
+                    onChange={handleEffortChange}
+                    disabled={session.isCompacting || session.contextOverflow}
+                  />
+                  {/* 上下文占比紧跟模型强度；圆环本身同时作为手动压缩入口。 */}
+                  <TokenIndicator
+                    used={session.tokenUsage.used}
+                    max={session.tokenUsage.max}
+                    cumulative={session.tokenUsage.cumulative}
+                    compacting={session.isCompacting}
+                    compactingMessage={session.compactingMessage}
+                    overflow={session.contextOverflow}
+                    replying={session.isLoading}
+                    onCompact={() => session.compactSession()}
+                  />
+
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => { if (e.target.files) addImages(e.target.files); e.target.value = ""; }}
+                  />
+                  <input
+                    ref={docInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }}
+                  />
+
+                </div>
+                <div ref={toolbarRightRef} className="flex items-center gap-0.5 shrink-0">
+                  {mode === "quest" ? (
+                    /* Quest：联网搜索开关（思考开关已统一到模型选择器里，agent / quest 共用） */
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            onClick={() => session.setQuestWebSearch(!session.questWebSearch)}
+                            className={`inline-flex items-center gap-1.5 h-7 px-2 rounded-md text-xs font-medium transition-colors ${session.questWebSearch ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/60"}`}
+                          >
+                            <Globe className="w-3.5 h-3.5" />
+                            联网
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" align="end" className="max-w-[220px]">
+                          <p className="text-xs text-white">开启后允许联网搜索与抓取网页；关闭时仅基于模型知识作答。</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  ) : null}
+                  {/* 发送/停止与辅助控件之间多留一点距离：主操作单独成组，不和开关挤在一起 */}
+                  <span className="w-1" aria-hidden />
+                  <Button
+                    size="sm"
+                    onClick={session.isLoading ? () => session.cancelTurn(session.model) : handleSend}
+                    disabled={session.isLoading
+                      ? session.isCompacting
+                      : !connected || !hasConfiguredSelection || processingAttachments.length > 0 || (composerEmpty && images.length === 0) || !!session.compactionMigrated || session.isCompacting || session.contextOverflow}
+                    title={session.isLoading ? "停止生成" : "发送消息"}
+                    aria-label={session.isLoading ? "停止生成" : "发送消息"}
+                    className={`axon-send-stop-button h-7 w-7 rounded-full shrink-0 disabled:opacity-40 ${session.isLoading ? "is-stopping" : "is-ready"}`}
+                  >
+                    <SendStopIcon stopping={session.isLoading} />
+                  </Button>
                 </div>
               </div>
-              <button
-                onClick={() => session.navigateToMigratedSession(session.compactionMigrated!.newSessionId)}
-                className="self-end px-3 py-1.5 rounded-md text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors inline-flex items-center gap-1.5"
-              >
-                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 4l5 4-5 4M14 8H3" /></svg>
-                跳转到新会话
-              </button>
-            </div>
-          )}
-          {/* 命令风险提醒：已信任的命令命中风险模式（如递归删除）时照常执行，
-                这里只做提示、不需要应答。8 秒后自动消失，也可手动关闭。 */}
-          {session.commandRiskNotice && (
-            <div className="flex items-start gap-2 px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded-lg mb-2">
-              <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium text-amber-700 dark:text-amber-500">风险提醒（命令已执行）</p>
-                <p className="text-[11px] text-muted-foreground mt-0.5 break-all font-mono">
-                  {session.commandRiskNotice.command}
-                </p>
-                <p className="text-[11px] text-muted-foreground mt-0.5">原因：{session.commandRiskNotice.reason}</p>
-              </div>
-              <button
-                onClick={session.dismissCommandRiskNotice}
-                className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors shrink-0"
-                title="关闭"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
-          {/* 命令信任授权改为内联在对应命令卡片下方（无感模式），见 ToolCallItem。此处不再用模态弹窗 */}
-          {/* 上下文超限提示：引导用户压缩上下文 */}
-          {session.contextOverflow && (
-            <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded-lg mb-2">
-              <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
-              <p className="flex-1 text-xs text-foreground">上下文超出模型窗口限制，无法继续对话</p>
-              <button
-                onClick={session.forceCompact}
-                className="px-2.5 py-1 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shrink-0"
-              >
-                压缩上下文
-              </button>
-              <button
-                onClick={session.dismissContextOverflow}
-                className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors shrink-0"
-                title="关闭"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
-          {/* 输入框：contentEditable 富文本，tag 内联在光标处（MentionEditor） */}
-          <div className="px-3 pr-10 pt-2 pb-1">
-            <MentionEditor
-              ref={editorRef}
-              disabled={!connected || !hasConfiguredSelection}
-              placeholder={!connected ? "等待连接..." : !hasConfiguredSelection ? "请先配置 Provider 并选择模型" : canSendImages ? "给 Axon 发消息...（可粘贴或拖拽图片）" : "给 Axon 发消息..."}
-              onChange={handleEditorChange}
-              onKeyDown={(e) => {
-                // 吉祥物只是旁观者：先记一笔按键类型，不影响后续任何消费判定
-                mascot.noteKey(e.key);
-                // 斜杠菜单优先消费方向键/回车/Esc，未消费时再走默认发送逻辑
-                if (slash.handleKeyDown(e)) return;
-                handleKeyDown(e);
-              }}
-              onPaste={handlePaste}
-            />
-          </div>
-          {/*
-            底部工具栏。
-            ── 排版约定（左右两组共用，改之前先读） ──
-            · 所有控件统一 28px（h-7）高、同一条中线；组内间距 gap-0.5（2px），靠控件自身的
-              hover 底色来区分彼此，而不是靠留白——留白一大，一组控件就散成几个孤立的点。
-            · 颜色只给「状态」：发送按钮（主操作）与上下文用量色。其余控件一律 muted 灰字，
-              hover 才变深。编辑模式的绿/黄点缩成 6px 状态点，不再与用量圆环抢视觉。
-            · 左组：[+] 在最左（附加内容是输入的"前置动作"，靠近输入起点），模型选择紧随其后。
-          */}
-          <div className="flex items-center justify-between gap-2 px-1.5 pb-1.5">
-            <div className="flex items-center gap-0.5 min-w-0">
-              <Popover open={menuOpen} onOpenChange={setMenuOpen}>
-                <PopoverTrigger asChild>
-                  <button
-                    className="inline-flex items-center justify-center h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=open]:bg-muted/60 data-[state=open]:text-foreground transition-colors"
-                    title="添加内容或设置改动应用方式"
-                    aria-label="更多"
-                  >
-                    <Plus className="w-4 h-4" />
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent align="start" side="top" className="w-52 p-1 gap-0">
-                  <button
-                    onClick={() => { docInputRef.current?.click(); setMenuOpen(false); }}
-                    className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs hover:bg-muted/60 transition-colors text-left"
-                  >
-                    <Paperclip className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
-                    <span className="flex-1">上传文件</span>
-                    <span className="text-[10px] text-muted-foreground/60">≤256KB</span>
-                  </button>
-                  <button
-                    onClick={() => { fileInputRef.current?.click(); setMenuOpen(false); }}
-                    disabled={!canSendImages}
-                    className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs hover:bg-muted/60 transition-colors text-left disabled:opacity-40 disabled:cursor-not-allowed"
-                    title={canSendImages ? "" : "当前模型不支持图片"}
-                  >
-                    <ImagePlus className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
-                    <span className="flex-1">上传图片</span>
-                  </button>
-                  <button
-                    onClick={() => { captureScreenshot(); setMenuOpen(false); }}
-                    disabled={!canSendImages}
-                    className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs hover:bg-muted/60 transition-colors text-left disabled:opacity-40 disabled:cursor-not-allowed"
-                    title={canSendImages ? "" : "当前模型不支持图片"}
-                  >
-                    <Camera className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
-                    <span className="flex-1">截图</span>
-                  </button>
-
-                  <div className="my-0.5 border-t border-border" />
-
-                  {/* 文档产出位置：生成 Excel / Word / PDF / Markdown 时的落盘目录。
-                      默认位置（工作区 output/）对非技术用户等于"找不到"，给一个显式入口
-                      让他们指定到桌面之类能看见的地方。 */}
-                  <button
-                    onClick={() => { setOutputPickerOpen(true); setMenuOpen(false); }}
-                    className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs hover:bg-muted/60 transition-colors text-left"
-                    title={outputDir || "未设置，默认落到工作区 output/"}
-                  >
-                    <FolderOutput className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block">文档产出位置</span>
-                      <span className="block truncate text-[10px] text-muted-foreground/60">
-                        {outputDir ? shortenPath(outputDir) : "默认：工作区 output/"}
-                      </span>
-                    </span>
-                  </button>
-
-                  <div className="my-0.5 border-t border-border" />
-
-                  {mode !== "quest" && (
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={session.editMode === "auto"}
-                      onClick={() => session.setEditModePreference(session.editMode === "auto" ? "manual" : "auto")}
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/60"
-                    >
-                      <span className={`size-2 shrink-0 rounded-full ${session.editMode === "auto" ? "bg-emerald-500" : "bg-amber-500"}`} />
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-xs font-medium text-foreground">自动应用</span>
-                        <span className="block text-[10px] leading-4 text-muted-foreground">
-                          {session.editMode === "auto" ? "代码改动直接写入文件" : "关闭后需手动确认改动"}
-                        </span>
-                      </span>
-                      <span className={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${session.editMode === "auto" ? "bg-emerald-500" : "bg-muted-foreground/25"}`}>
-                        <span className={`absolute top-0.5 size-3 rounded-full bg-white shadow-sm transition-transform ${session.editMode === "auto" ? "translate-x-3.5" : "translate-x-0.5"}`} />
-                      </span>
-                    </button>
-                  )}
-                </PopoverContent>
-              </Popover>
-
-              <ModelSelector
-                value={session.model}
-                provider={session.provider}
-                onChange={handleModelChange}
-                disabledModels={images.length > 0 && !visionFallbackModel ? models.filter((m) => !m.vision).map((m) => m.id) : []}
-                disabled={session.isCompacting || session.contextOverflow}
-                disabledTooltip={session.contextOverflow ? "上下文超限，请先压缩" : "压缩期间不可切换模型"}
-              />
-              <EffortSelector
-                levels={selectedEffortLevels}
-                value={session.effort}
-                defaultValue={selectedDefaultEffort}
-                onChange={handleEffortChange}
-                disabled={session.isCompacting || session.contextOverflow}
-              />
-              {/* 上下文占比紧跟模型强度；圆环本身同时作为手动压缩入口。 */}
-              <TokenIndicator
-                used={session.tokenUsage.used}
-                max={session.tokenUsage.max}
-                cumulative={session.tokenUsage.cumulative}
-                compacting={session.isCompacting}
-                compactingMessage={session.compactingMessage}
-                overflow={session.contextOverflow}
-                onCompact={() => session.compactSession()}
-              />
-
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={(e) => { if (e.target.files) addImages(e.target.files); e.target.value = ""; }}
-              />
-              <input
-                ref={docInputRef}
-                type="file"
-                multiple
-                className="hidden"
-                onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }}
-              />
-
-            </div>
-            <div className="flex items-center gap-0.5 shrink-0">
-              {mode === "quest" ? (
-                /* Quest：联网搜索开关（思考开关已统一到模型选择器里，agent / quest 共用） */
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        onClick={() => session.setQuestWebSearch(!session.questWebSearch)}
-                        className={`inline-flex items-center gap-1.5 h-7 px-2 rounded-md text-xs font-medium transition-colors ${session.questWebSearch ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/60"}`}
-                      >
-                        <Globe className="w-3.5 h-3.5" />
-                        联网
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" align="end" className="max-w-[220px]">
-                      <p className="text-xs text-white">开启后允许联网搜索与抓取网页；关闭时仅基于模型知识作答。</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              ) : null}
-              {/* 发送/停止与辅助控件之间多留一点距离：主操作单独成组，不和开关挤在一起 */}
-              <span className="w-1" aria-hidden />
-              <Button
-                size="sm"
-                onClick={session.isLoading ? () => session.cancelTurn(session.model) : handleSend}
-                disabled={session.isLoading
-                  ? session.isCompacting
-                  : !connected || !hasConfiguredSelection || processingAttachments.length > 0 || (composerEmpty && images.length === 0) || !!session.compactionMigrated || session.isCompacting || session.contextOverflow}
-                title={session.isLoading ? "停止生成" : "发送消息"}
-                aria-label={session.isLoading ? "停止生成" : "发送消息"}
-                className={`axon-send-stop-button h-7 w-7 rounded-full shrink-0 disabled:opacity-40 ${session.isLoading ? "is-stopping" : "is-ready"}`}
-              >
-                <SendStopIcon stopping={session.isLoading} />
-              </Button>
             </div>
           </div>
         </div>
@@ -1896,15 +2173,6 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         onSelect={session.selectWorkspace}
       />
 
-      {/* 文档产出目录选择弹窗（复用同一个目录选择器，只换文案） */}
-      <WorkspacePicker
-        open={outputPickerOpen}
-        onOpenChange={setOutputPickerOpen}
-        initialPath={outputDir || session.workspace || undefined}
-        title="选择文档产出位置"
-        confirmLabel="设为产出位置"
-        onSelect={handleSelectOutputDir}
-      />
 
       {/* 工作区组管理弹窗 */}
       <WorkspaceGroupManager
@@ -1923,6 +2191,15 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         onClose={() => setPreviewState(null)}
       />
     </div>
+
+    {/* 会话记忆面板：查看 / 编辑 / 导出 / 导入 .md */}
+    {memoryOpen && (
+      <MemoryPanel
+        memory={session.memory}
+        onSave={(content) => session.saveMemory(content)}
+        onClose={() => setMemoryOpen(false)}
+      />
+    )}
     </PanelClientIdContext.Provider>
   );
 }

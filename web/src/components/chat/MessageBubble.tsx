@@ -66,7 +66,7 @@ async function copyMessage(text: string, images: string[]): Promise<void> {
   await navigator.clipboard.writeText(text);
 }
 
-function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRejectEdit, onUndoEdit, onQuoteToInput, onEditUserMessage, onImagePreview, replyingToMessageId }: { message: ChatMessage; liveStatus?: string; /** 当前运行任务起点；仅流式回复传入 */ startedAt?: number; onAcceptEdit?: (path: string) => void; onRejectEdit?: (path: string) => void; onUndoEdit?: (path: string) => void; onQuoteToInput?: (message: ChatMessage) => void; onEditUserMessage?: (messageId: string, content: string, images?: string[], attachedFiles?: AttachedFile[]) => void; onImagePreview?: (images: string[], index: number) => void; replyingToMessageId?: string }) {
+function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRejectEdit, onUndoEdit, onQuoteToInput, onEditUserMessage, onImagePreview, onForkFromMessage, replyingToMessageId }: { message: ChatMessage; liveStatus?: string; /** 当前运行任务起点；仅流式回复传入 */ startedAt?: number; onAcceptEdit?: (path: string) => void; onRejectEdit?: (path: string) => void; onUndoEdit?: (path: string) => void; onQuoteToInput?: (message: ChatMessage) => void; onEditUserMessage?: (messageId: string, content: string, images?: string[], attachedFiles?: AttachedFile[]) => void; onImagePreview?: (images: string[], index: number) => void; /** 从这条 AI 回复分叉（带上此前的对话） */ onForkFromMessage?: (message: ChatMessage) => void; replyingToMessageId?: string }) {
   const [userExpanded, setUserExpanded] = useState(false);
   const [editingUser, setEditingUser] = useState(false);
   const [draftUserText, setDraftUserText] = useState("");
@@ -213,6 +213,7 @@ function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRej
                       type="button"
                       key={i}
                       onClick={() => onImagePreview?.(message.images!, i)}
+                      onContextMenu={(event) => event.preventDefault()}
                       className="relative overflow-hidden rounded-xl border border-border bg-background/60 p-1 shadow-sm hover:border-foreground/20 hover:shadow-md transition-all"
                       title="点击查看大图"
                     >
@@ -277,7 +278,24 @@ function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRej
   }
 
   // AI 回复：品牌头 + segments 混排
-  return <AssistantTurn message={message} liveStatus={liveStatus} startedAt={startedAt} onAcceptEdit={onAcceptEdit} onRejectEdit={onRejectEdit} onUndoEdit={onUndoEdit} />;
+  //
+  // 「分叉」只挂在 assistant 消息上（用户消息没有可截断的回复点）。
+  // 流式中的回合不给入口：此刻后端还在往 messages 里追加这一轮的工具结果，
+  // 截出来的历史可能停在一个半截工具轮上，语义也不明确（用户想分的是"这条回复"，
+  // 而它还没说完）。取消 / 失败这种终态可以分叉 —— 那一轮已经落盘，截过去是完整的一轮。
+  return (
+    <div className="group/fork">
+      <AssistantTurn
+        message={message}
+        liveStatus={liveStatus}
+        startedAt={startedAt}
+        onAcceptEdit={onAcceptEdit}
+        onRejectEdit={onRejectEdit}
+        onUndoEdit={onUndoEdit}
+        onForkFromMessage={onForkFromMessage}
+      />
+    </div>
+  );
 }
 
 export const MessageBubble = memo(MessageBubbleImpl, (prev, next) => prev.message === next.message && prev.replyingToMessageId === next.replyingToMessageId && prev.liveStatus === next.liveStatus && prev.startedAt === next.startedAt);

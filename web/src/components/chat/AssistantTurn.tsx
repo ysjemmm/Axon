@@ -3,6 +3,7 @@ import { Code } from "lucide-react";
 import { AxonSpark } from "@/components/AxonSpark";
 import type { ChatMessage, TextSegment } from "./types";
 import { formatElapsed } from "./format";
+import { GitFork } from "lucide-react";
 import { renderSegments } from "./renderSegments";
 
 /**
@@ -96,6 +97,7 @@ function AssistantTurnImpl({
   onAcceptEdit,
   onRejectEdit,
   onUndoEdit,
+  onForkFromMessage,
 }: {
   message: ChatMessage;
   /** 本轮进行中的状态文字；仅最后一条 assistant 消息在流式期间会收到 */
@@ -105,6 +107,8 @@ function AssistantTurnImpl({
   onAcceptEdit?: (path: string) => void;
   onRejectEdit?: (path: string) => void;
   onUndoEdit?: (path: string) => void;
+  /** 从这里分叉：带上此前的对话另起一个会话 */
+  onForkFromMessage?: (message: ChatMessage) => void;
 }) {
   const [showRaw, setShowRaw] = useState(false);
   const segments = message.segments || [];
@@ -207,6 +211,19 @@ function AssistantTurnImpl({
               {" · "}Elapsed: {formatElapsed(message.turnStats.elapsed)}
               {uncertain ? "(?)" : ""}
             </span>
+            {/* 分叉入口跟在时间后面，同一条元信息行里：单独起一行会把回复底部撑高，
+                而且它和 Credits/Elapsed 属于同一层级的"这条回复的附属信息"。
+                跟随 Elapsed 一起 hover 才出现（Elapsed 本身也是 hover 才显示）。 */}
+            {!message.streaming && onForkFromMessage && (
+              <button
+                type="button"
+                onClick={() => onForkFromMessage(message)}
+                title="从这里分叉（带上此前的对话）"
+                className="ml-1 hidden align-middle text-muted-foreground/60 hover:text-foreground transition-colors group-hover/assistant:inline-flex"
+              >
+                <GitFork className="w-3 h-3" />
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -218,5 +235,8 @@ function AssistantTurnImpl({
 // 只有最后一条 assistant 消息会拿到非 undefined 的 liveStatus，历史消息不受影响。
 export const AssistantTurn = memo(
   AssistantTurnImpl,
-  (prev, next) => prev.message === next.message && prev.liveStatus === next.liveStatus,
+  (prev, next) =>
+    prev.message === next.message &&
+    prev.liveStatus === next.liveStatus &&
+    prev.onForkFromMessage === next.onForkFromMessage,
 );

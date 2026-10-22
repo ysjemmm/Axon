@@ -49,6 +49,14 @@ export interface UserMessageCommand {
    * 那条路径后端根本看不见（见 outputScanner 的说明）。
    */
   outputDir?: string;
+  /**
+   * Chat 产物目录（绝对路径）。
+   *
+   * 与上面的 outputDir 刻意分开：outputDir 是 Cowork 的，且每轮缺省即清空；
+   * 这个字段属于 Chat 的「产物」功能，缺省/空串表示「用默认位置」
+   * （~/.axon/artifacts/<会话id>/），由 AgentSession.getArtifactDir() 兜底解析。
+   */
+  artifactDir?: string;
 }
 
 /**
@@ -72,6 +80,42 @@ export type ControlCommandPayload =
   // 会话切换/管理
   | { type: "load_session"; sessionId: string }
   | { type: "new_session"; workspace?: string; model?: string; provider?: string; mode?: "agent" | "quest" | "cowork" }
+  /**
+   * 会话分叉：从 sessionId 指向的已有会话派生出一个新会话。
+   *
+   * 两种入口，共用这一条指令：
+   * · 不带截断参数（会话列表 / 顶栏「分叉」）—— 新会话只继承源会话的「记忆」
+   *   （SessionData.memory），不复制对话消息历史。用户要带走的是结论而不是过程。
+   *   记忆会随每轮请求作为尾部注入发出（见 PromptBuilder.buildInjections），
+   *   因此分叉后模型立刻就知道此前沉淀下的结论。源会话保持不变。
+   * · 带截断参数（某条 AI 回复上的「从这里分叉」）—— 额外把截至那一轮为止的历史
+   *   一并复制进新会话，见下面两个字段。此时记忆同样会复制。
+   */
+  | {
+      type: "fork_session";
+      sessionId: string;
+      /**
+       * 历史截断锚点：「回合起点」用户消息的 clientMessageId。
+       *
+       * ⚠️ 这里传的不是被点的那条 assistant 消息 —— 落盘的 assistant 消息**没有 id**
+       * （ChatCompletionMessageParam 里只有 user 带 clientMessageId、tool 带 tool_call_id），
+       * 后端无法按 assistant 消息的 id 定位。而前端一条 assistant 气泡实际覆盖后端一串消息
+       * （assistant + tool_calls + n 条 tool 结果 + 收尾正文），于是用「包住这条回复的那一轮
+       * 是从哪条用户消息开始的」来锚定：后端把这个 id 对应的用户消息及其后的整轮
+       * （直到下一条真实用户消息之前）一起带走，语义恰好等于前端那一条气泡。
+       *
+       * 缺省 = 不复制历史（只有记忆）。
+       */
+      upToMessageId?: string;
+      /**
+       * 兜底锚点：锚点用户消息在历史里的序号（从 0 开始，只数真实用户消息，跳过截图注入）。
+       *
+       * 存在的理由：老会话（clientMessageId 落盘之前）与压缩生成的摘要用户消息都没有
+       * clientMessageId，前端只能给出序号。口径与 edit_user_message 的 userIndex 完全一致。
+       * 两者都传时优先按 id 匹配，id 匹配不上再用序号。
+       */
+      upToUserIndex?: number;
+    }
   | { type: "reset_session" }
   // 工作区
   | { type: "set_workspace"; workspace: string; workspaces?: string[] }
@@ -102,6 +146,8 @@ export type ControlCommandPayload =
   | { type: "undo_edits"; path: string }
   // 闪电回滚
   | { type: "list_snapshots" }
+  /** 导入记忆：把一份 .md 的内容写进当前会话（前端导入文件后发这条） */
+  | { type: "set_memory"; memory: string }
   | { type: "restore_snapshot"; snapshotId: string }
   // 按需取某次改动的前后全文（会话快照里只下发路径与 editId，打开 diff 时再取正文）。
   // requestId 原样回带在 diff_content 事件上，前端据此配对请求。
@@ -110,6 +156,18 @@ export type ControlCommandPayload =
   | { type: "delete_relay"; relayId: string; workspace?: string }
   // 工具确认（用户确认/拒绝创建 Relay 等需要确认的操作）
   | { type: "confirm_tool"; confirmed: boolean; mode?: "strict" | "auto" }
+  // 表单提交（ask_form 工具 / 内联表单块）：当前全部字段值 + 触发的动作
+  | {
+      type: "submit_form";
+      /** 阻塞式表单对应 ask_form 的工具调用 id */
+      toolCallId?: string;
+      /** 动作标识："submit" | 自定义按钮 id | row:<表格名>:<行下标>:<动作 id> */
+      action: string;
+      /** 当前全部字段值 */
+      values: Record<string, unknown>;
+      /** 表格名 → 被勾选的行下标 */
+      selectedRows?: Record<string, string[]>;
+    }
   // 选项问答（ask_user 工具）的用户作答：answers 与请求里的 questions 一一对应
   | {
       type: "answer_user_question";

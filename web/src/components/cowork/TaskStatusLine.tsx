@@ -8,12 +8,11 @@
  * （MarkdownRenderer 渲染开销不小）。把计时器放在这一层，秒级刷新只重渲染这一行，
  * 不会带着整条回复一起重算。
  *
- * 终态不再跑定时器，改用落定的 elapsedMs —— 任务做完了还在那里嗒嗒走秒，
- * 既浪费也让人以为还没结束。
+ * 完成后状态行不再展示；取消和失败仍保留必要的反馈。
  */
 
 import { useEffect, useState } from "react";
-import { Check, Loader2, X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { formatElapsed } from "./taskIntent";
 import type { CoworkTask } from "./useCoworkSession";
 
@@ -50,20 +49,6 @@ export function TaskStatusLine({ task }: TaskStatusLineProps) {
           {task.phase || "思考中"}
         </span>
         {showElapsed && (
-          <span className="ml-auto shrink-0 tabular-nums text-muted-foreground/70">{formatElapsed(elapsed)}</span>
-        )}
-      </div>
-    );
-  }
-
-  if (task.status === "done") {
-    return (
-      <div className="flex items-center gap-2 px-1 text-[12px] text-muted-foreground">
-        <span className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white dark:bg-emerald-500">
-          <Check className="size-2.5" strokeWidth={3} />
-        </span>
-        <span className="shrink-0 font-medium text-foreground/80">完成</span>
-        {showElapsed && elapsed > 0 && (
           <span className="ml-auto shrink-0 tabular-nums text-muted-foreground/70">{formatElapsed(elapsed)}</span>
         )}
       </div>

@@ -35,6 +35,16 @@ describe("TurnFinalizer", () => {
     expect((out.messages[0] as any).anthropic_thinking_blocks).toEqual(blocks);
   });
 
+  it("最终回复保留 chat 协议的 reasoning_content（带 tools 的请求必须全量回传）", () => {
+    const out = new TurnFinalizer().finalize(makeInput({ reasoningContent: "先确认文件再回答" }));
+    expect((out.messages[0] as any).reasoning_content).toBe("先确认文件再回答");
+  });
+
+  it("没有思考内容时不写该字段，不污染非推理模型的历史", () => {
+    const out = new TurnFinalizer().finalize(makeInput());
+    expect((out.messages[0] as any).reasoning_content).toBeUndefined();
+  });
+
   it("拿不到真实 output token 时回退字符估算", () => {
     const out = new TurnFinalizer().finalize(makeInput({ lastTurnOutputTokens: 0, lastCompletionTokens: 0, contentBuffer: "abcd", streamedContentThisRound: "abcd", lastTurnTokens: 0 }));
     expect((out.messages[0] as any).turnStats.tokens).toBe(4);

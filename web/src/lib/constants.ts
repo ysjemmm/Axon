@@ -39,6 +39,12 @@ export const STORAGE = {
    */
   OUTPUT_DIR: "axon-output-dir",
   /**
+   * Chat 产物目录（AI 生成的 HTML / SVG / 文档等成品的落盘位置）。
+   * 存绝对路径；未设置（空）时后端落到默认位置 ~/.axon/artifacts/<会话id>/。
+   * 与上面的 OUTPUT_DIR 刻意分开：那个属于 Cowork，Chat 的产物功能不能依赖它。
+   */
+  ARTIFACT_DIR: "axon-chat-artifact-dir",
+  /**
    * 上次是否停在 Cowork 面板。
    *
    * 单独一个键而不是并进 MODE：MODE 只存 agent/quest（Chat/Code 的子模式），
@@ -83,6 +89,8 @@ export const AGENT_EVENT = {
   SESSION_CREATED: "session_created",
   SESSION_LOADED: "session_loaded",
   SESSION_ERROR: "session_error",
+  /** 会话分叉完成：新会话（sessionId）已从源会话（sourceId）派生，只继承记忆 */
+  SESSION_FORKED: "session_forked",
   // ── 压缩 ──
   COMPACTING_START: "compacting_start",
   COMPACTION_NEEDED: "compaction_needed",
@@ -95,7 +103,7 @@ export const AGENT_EVENT = {
   RETRY: "retry",
   CONTEXT_OVERFLOW: "context_overflow",
   TOKEN_USAGE: "token_usage",
-  /** Cowork：本轮产出的文件（后端扫产出目录 diff 得出） */
+  /** Cowork：AI 登记且经后端校验的本轮产出文件 */
   COWORK_OUTPUTS: "cowork_outputs",
   EDITS_UPDATED: "edits_updated",
   EDIT_UNDO_RESULT: "edit_undo_result",
@@ -106,6 +114,8 @@ export const AGENT_EVENT = {
   CONFIRM_TOOL_REQUEST: "confirm_tool_request",
   TOOL_CONFIRM_TIMEOUT: "tool_confirm_timeout",
   ASK_USER_REQUEST: "ask_user_request",
+  FORM_REQUEST: "form_request",
+  SESSION_MEMORY: "session_memory",
   CONFIRM_COMMAND_REQUEST: "confirm_command_request",
   COMMAND_RISK_NOTICE: "command_risk_notice",
   // ── Relay ──
@@ -133,6 +143,8 @@ export const CONTROL_CMD = {
   USER_MESSAGE: "user_message",
   ADD_CONTEXT: "add_context",
   FLATTEN_TOOL_HISTORY: "flatten_tool_history",
+  /** 会话分叉：带截断锚点时新会话额外继承截至那一轮为止的历史 */
+  FORK_SESSION: "fork_session",
 } as const;
 
 // ═══════════════════════════════════════════════════════════════════

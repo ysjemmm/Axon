@@ -114,11 +114,10 @@ export type AgentEventPayload =
   /**
    * 本轮产出的文件（Cowork）。
    *
-   * 由轮次收尾时扫描产出目录 diff 得出，而不是收集 create_file 的参数 ——
-   * 办公任务的产物多半由 Python 脚本写出，工具参数里看不到（见 outputScanner）。
-   * paths 为绝对路径，前端渲染成可点开预览的卡片。
+   * 由 AI 主动登记并经文件存在性校验。paths 保持旧版兼容；
+   * files 带每个文件的创建/编辑类型，前端据此显示对应颜色。
    */
-  | { type: "cowork_outputs"; paths: string[] }
+  | { type: "cowork_outputs"; paths: string[]; files?: { path: string; kind?: "created" | "edited"; snapshotDir?: string }[] }
 
   // ── token 用量 ──
   | { type: "token_usage"; used: number; max: number; cumulative?: number }
@@ -176,6 +175,15 @@ export type AgentEventPayload =
       }[];
     }
 
+  // ── 声明式表单（ask_form 工具：Agent 交付一张表单/控件面板，用户填写提交后结果回传） ──
+  | {
+      type: "form_request";
+      /** 关联的 ask_form 工具调用 id（前端提交时原样回传，用于校验归属） */
+      toolCallId: string;
+      /** 表单声明（结构见 core 的 FormSpec；前端按字段 type 渲染对应控件） */
+      form: Record<string, unknown>;
+    }
+
   // ── 编辑模式 / 待确认改动 ──
   | { type: "edit_mode_set"; mode: "auto" | "manual" }
   | {
@@ -201,6 +209,8 @@ export type AgentEventPayload =
   // ── 会话生命周期 ──
   | { type: "session_created"; sessionId: string; workspace: string; workspaces?: string[] }
   | { type: "session_loaded"; sessionId: string; [k: string]: unknown }
+  /** 会话分叉完成：sessionId 为新会话，sourceId 为被分叉的源会话 */
+  | { type: "session_forked"; sessionId: string; sourceId: string }
   /** get_diff_content 的应答。found=false 表示已找不到该次改动的正文（例如会话被压缩过） */
   | { type: "diff_content"; requestId: string; found: boolean; oldContent?: string; newContent?: string }
   | { type: "session_title_updated"; title: string }
@@ -225,6 +235,8 @@ export type AgentEventPayload =
 
   // ── 闪电回滚 ──
   | { type: "snapshots_listed"; snapshots: Array<{ id: string; createdAt: number; label: string; files: string[] }> }
+  /** 会话记忆的最新内容：模型调用 update_memory 或用户导入 .md 之后推送 */
+  | { type: "session_memory"; memory: string }
   | { type: "snapshot_restored"; snapshotId: string; ok: boolean }
   // ── 模型历史格式不兼容（deepseek 输出 DSML 退化）──
   | { type: "tool_history_mismatch"; model: string };

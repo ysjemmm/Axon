@@ -311,7 +311,7 @@ export function CoworkPanel({ clientId, connected, send, onExit }: CoworkPanelPr
           不藏进菜单是刻意的——办公用户最关心"东西存哪了"，这个信息必须一眼能看到、
           一点能改，而不是像 Chat 那侧藏在加号菜单里。 */}
       <header className="shrink-0 border-b border-border">
-        <div className="mx-auto flex w-full max-w-[780px] items-center justify-between gap-3 px-4 py-2.5">
+        <div className="mx-auto flex w-full max-w-[max(640px,80%)] items-center justify-between gap-3 px-4 py-2.5">
         {/* 整行用 flex + items-center 对齐，不靠 inline 基线：
             按钮是 inline-flex，它的基线取自第一个 flex 项，而那是个
             display:block 的图标（没有基线），于是回退成盒底边对齐，
@@ -380,7 +380,7 @@ export function CoworkPanel({ clientId, connected, send, onExit }: CoworkPanelPr
         }}
       >
         {loadingHistory && (
-          <div className="flex w-full max-w-[780px] items-center justify-center gap-2 py-10 text-[13px] text-muted-foreground">
+          <div className="mx-auto flex w-full max-w-[max(640px,80%)] items-center justify-center gap-2 py-10 text-[13px] text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             正在打开历史任务
           </div>
@@ -388,7 +388,7 @@ export function CoworkPanel({ clientId, connected, send, onExit }: CoworkPanelPr
 
         {!loadingHistory && tasks.length > 0 && (
           // ref 挂滚动容器：贴底跟随 + 用户上滚即停（与 Code 侧同一套判据）
-          <div ref={scrollRef} className="min-h-0 w-full max-w-[780px] flex-1 overflow-y-auto py-4">
+          <div ref={scrollRef} className="mx-auto min-h-0 w-full max-w-[max(640px,80%)] flex-1 overflow-y-auto py-4">
             {tasks.map((task, taskIndex) => (
               <div
                 key={task.id}
@@ -428,17 +428,17 @@ export function CoworkPanel({ clientId, connected, send, onExit }: CoworkPanelPr
                   </div>
                 )}
 
-                {/* 状态行：意图 + 阶段 + 耗时，终态转成结果摘要或错误。
-                    摆在回复下方而不是上方 —— 进行中它是全卡片唯一内容（自然在顶），
-                    有了回复之后用户的注意力在正文上，状态退成脚注更合理。 */}
-                <div className="mt-2">
-                  <TaskStatusLine task={task} />
-                </div>
+                {/* 完成后直接收起状态行；不留下多余的空白间距。 */}
+                {task.status !== "done" && (
+                  <div className="mt-2">
+                    <TaskStatusLine task={task} />
+                  </div>
+                )}
 
                 {/* 产出文件：点一下直接预览，不用去资源管理器里翻 */}
                 {task.status === "done" && task.outputs.length > 0 && (
                   <div className="mt-2 px-1">
-                    <TaskOutputs paths={task.outputs} />
+                    <TaskOutputs files={task.outputs} />
                   </div>
                 )}
               </div>
@@ -491,7 +491,7 @@ export function CoworkPanel({ clientId, connected, send, onExit }: CoworkPanelPr
           grow 值写在 style 里（而非 flex-1 类名）：类名简写会连带改 basis 与 shrink，
           属性一起跳变就过渡不起来了。 */}
       <div
-        className={`mx-auto flex w-full max-w-[780px] flex-col px-4 pb-4 ${isEmpty ? "justify-start pt-4" : "justify-center"}`}
+        className={`mx-auto flex w-full max-w-[max(640px,80%)] flex-col px-4 pb-4 ${isEmpty ? "justify-start pt-4" : "justify-center"}`}
         style={{
           flexGrow: isEmpty ? 1 : 0,
           flexShrink: 0,

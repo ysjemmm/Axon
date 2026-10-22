@@ -35,6 +35,9 @@ import {
   shouldGeneratePhase,
   type HumanizedStatusState,
 } from "./session/humanizedStatus.js";
+import { CoworkSnapshotter } from "./cowork/snapshotter.js";
+import { resolveArtifactDir } from "./session/artifactDir.js";
+import { artifactExtension, parseArtifactArgs, pickVersionedPath, sanitizeStem } from "./session/artifactFile.js";
 /**
  * 单轮最多登记的产出文件数。
  * 防止某个批量生成脚本让模型报上来几百个文件把界面刷爆。
@@ -67,6 +70,8 @@ import { McpController } from "./session/mcpController.js";
 import { DelegateRunner } from "./session/delegateRunner.js";
 import { RelayToolRunner } from "./session/relayToolRunner.js";
 import { AskUserToolExecutor, type AskUserQuestion, type AskUserAnswer } from "./session/askUserToolExecutor.js";
+import { FormToolExecutor } from "./session/formToolExecutor.js";
+import type { FormSpec, FormSubmitPayload } from "./session/formSchema.js";
 import { CommandGateController } from "./session/commandGateController.js";
 import { resolveInWorkspaces } from "./tools/search.js";
 import { CommandGate } from "./tools/index.js";
@@ -117,6 +122,14 @@ export class AgentSession {
   /** 对话轮次计数（用于快照 id） */
   /** @internal */ turnCount = 0;
   /** @internal */ lastTotalTokens = 0;
+  /**
+   * 会话记忆（Markdown）——本次会话里「值得跨会话带走」的结论的浓缩。
+   *
+   * 刻意不放进 messages：它不参与对话轮次，只作为一条尾部注入每轮发一次，
+   * 因此不污染历史与存档，内容变化时也不会打断历史那一段的前缀缓存。
+   * 落盘在 SessionData.memory，由 update_memory 工具或用户导入 .md 维护。
+   */
+  /** @internal */ memory = "";
   /** @internal */ lastPromptTokens = 0;
   /** @internal */ lastCompletionTokens = 0;
   /**
@@ -189,6 +202,10 @@ export class AgentSession {
   private askUserResolve: ((answers: AskUserAnswer[] | null) => void) | null = null;
   /** 当前正在等待作答的工具调用 id：用于校验回传答案是否对应本次提问（旧卡片/失效会话直接忽略）。 */
   private askUserPendingToolCallId: string | null = null;
+  // 表单门（ask_form）：与问答门同构——不设超时（表单就是要等用户填完），仅会话取消时解除。
+  private formSubmitResolve: ((payload: FormSubmitPayload | null) => void) | null = null;
+  /** 当前正在等待提交的表单对应工具调用 id：用于校验回传是否属于本次表单（旧卡片/失效会话直接忽略）。 */
+  private formPendingToolCallId: string | null = null;
   // 压缩选择门：自动压缩触发时（>=75%），await 此 Promise 阻塞直到用户在"继续/新会话"中选择
   /** @internal */ compactionChoiceResolve: ((choice: "continue" | "new_session") => void) | null = null;
   // 迁移数据：compactionChoice = new_session 时，存储压缩后的消息供 sessionHub 在新会话中注入
@@ -208,6 +225,7 @@ export class AgentSession {
   /** @internal */ readonly delegatedToolExecutor: DelegatedToolExecutor;
   /** @internal */ readonly relayToolExecutor: RelayToolExecutor;
   /** @internal */ readonly askUserToolExecutor: AskUserToolExecutor;
+  /** @internal */ readonly formToolExecutor: FormToolExecutor;
   /** @internal */ readonly mcpToolExecutor: McpToolExecutor;
   /** @internal */ readonly genericToolExecutor: GenericToolExecutor;
   /** 纯逻辑协作者：收尾 / 无工具决策 / 工具结果三段式拆分。 */
@@ -291,6 +309,18 @@ export class AgentSession {
    * 主动登记，不靠扫这个目录推断。
    */
   private outputDir = "";
+  /**
+   * Chat 产物目录（用户在 + 菜单里设置的绝对路径）。
+   * 空串 = 未设置，取默认位置，见 getArtifactDir()。每轮由 sessionHub 注入，
+   * 用户中途改目录下一轮即生效。
+   */
+  private artifactDir = "";
+  /** Cowork 附件快照器：用户文件被改写前留原稿副本（查看改动/恢复原稿的依据） */
+  private coworkSnapshotter: CoworkSnapshotter | null = null;
+  /** 本轮 Cowork 快照目录；轮结束登记产出时随结果一起落盘 */
+  private currentCoworkSnapshotDir = "";
+  /** 本轮完成快照的附件路径（用于判断产出是否可恢复原稿） */
+  private snapshotPaths: string[] = [];
   /** 本轮已生成的意图文案：作为阶段文案的上下文，让两者对得上同一个目标。 */
   private humanizedIntent = "";
 
@@ -361,6 +391,9 @@ export class AgentSession {
     });
     this.askUserToolExecutor = new AskUserToolExecutor({
       waitForUserAnswer: (toolCallId, questions) => this.waitForUserAnswer(toolCallId, questions),
+    });
+    this.formToolExecutor = new FormToolExecutor({
+      waitForFormSubmit: (toolCallId, spec) => this.waitForFormSubmit(toolCallId, spec),
     });
     this.mcpToolExecutor = new McpToolExecutor({
       runMcpTool: (name, args) => this.runMcpTool(name, args),
@@ -502,6 +535,115 @@ export class AgentSession {
       this.onMessagesChanged?.();
     } catch (err) {
       console.warn("[session] 增量持久化回调出错（忽略）:", (err as Error).message);
+    }
+  }
+
+  /** 当前会话记忆（Markdown）；供尾部注入与前端读取 */
+  getMemory(): string {
+    return this.memory;
+  }
+
+  /** 从持久化快照回填会话记忆（会话从磁盘恢复时由宿主调用） */
+  hydrateMemory(memory?: string): void {
+    if (typeof memory === "string" && memory.trim()) this.memory = memory;
+  }
+
+  /** 写入/覆盖会话记忆（模型调 update_memory、用户导入 .md 都走这里），立即落盘并推给前端 */
+  setMemory(content: string): void {
+    this.memory = typeof content === "string" ? content : "";
+    this.persistMessages();
+    this.send("session_memory", { memory: this.memory });
+  }
+
+  /**
+   * update_memory 工具实现：把本次会话的精华浓缩成一份 Markdown 写回会话。
+   *
+   * ── 为什么是整份替换，而不是追加 ──
+   * 记忆的语义是「当前应该被记住的全部内容」。追加式只增不减，几十轮之后必然长成
+   * 一篇流水账，真正重要的结论反而被埋掉；整份替换逼着模型每次都重新收敛一遍。
+   *
+   * ── 关于上下文开销 ──
+   * 入参就是整份文档，所以在 catalog 里标了 transient：工具【结果】跨轮会被裁掉。
+   * 调用本身仍留在历史的 assistant 消息里，因此只在真正值得记的时候写，不要每轮重写。
+   * 记忆的正式落点是 SessionData.memory，随后由 PromptBuilder 作为尾部注入每轮发一条。
+   */
+  /** @internal */ updateMemory(toolArgs: Record<string, unknown>): { result: string; status: "success" | "error" } {
+    const content = typeof toolArgs.content === "string" ? toolArgs.content.trim() : "";
+    if (!content) {
+      return { result: "content 为空，没有任何内容被写入。确实要清空记忆时，请改成传一句明确的清空说明。", status: "error" };
+    }
+    this.setMemory(content);
+    return {
+      result: `会话记忆已更新（${content.length} 字符）。它会随后续每次请求自动注入，不必在回复里复述。`,
+      status: "success",
+    };
+  }
+
+  /**
+   * create_artifact 工具实现：把模型交付的一份独立成品写进产物目录，并通知前端渲染卡片。
+   *
+   * ── 为什么由后端写盘，而不是让模型 create_file 后再登记 ──
+   * 1) Quest（纯问答）模式没有任何写文件工具，靠 create_file 那条路根本出不了产物；
+   * 2) 路径和文件名由后端定：模型给的标题不可信（可能带 ../、Windows 非法字符），
+   *    统一经 sanitizeStem 清洗后拼进产物目录，写不出目录之外；
+   * 3) 一次调用就拿到确定的路径、类型、版本，不用事后扫目录去猜哪个文件算产物。
+   *
+   * 失败时 result 是给模型看的，要说清楚原因和怎么改，否则它会原样重试。
+   */
+  /** @internal */ async createArtifact(
+    toolArgs: Record<string, unknown>,
+    meta?: ToolMeta,
+  ): Promise<{ result: string; status: "success" | "error" }> {
+    // result 是给模型看的（含字段名和纠错步骤），meta.userMessage 才是给用户看的：
+    // 前端失败卡片优先展示后者，所以每条失败路径都要单独填一句不带内部字段名的人话。
+    const parsed = parseArtifactArgs(toolArgs);
+    if (!parsed.ok) {
+      if (meta) meta.userMessage = "产物内容不完整或格式有误，未能保存";
+      return { result: parsed.error, status: "error" };
+    }
+
+    const dir = this.getArtifactDir();
+    if (!dir) {
+      if (meta) meta.userMessage = "暂时无法确定产物保存位置";
+      return {
+        result: "当前无法确定产物保存位置（会话尚未建立）。请直接在回复里用代码块给出内容，稍后再试。",
+        status: "error",
+      };
+    }
+
+    try {
+      await this.host.fs.mkdirp(dir);
+      const stem = sanitizeStem(parsed.title);
+      const ext = artifactExtension(parsed.type, parsed.language);
+      const absPath = await pickVersionedPath(dir, stem, ext, async (p) => !!(await this.host.fs.stat(p)));
+      await this.host.fs.write(absPath, parsed.content);
+
+      // 版本号从最终文件名反推：report.html → 1，report-v3.html → 3
+      const versionMatch = /-v(\d+)\.[^.]+$/.exec(absPath);
+      const version = versionMatch ? Number(versionMatch[1]) : 1;
+      const size = Buffer.byteLength(parsed.content, "utf8");
+      const artifact = {
+        path: absPath,
+        title: parsed.title,
+        type: parsed.type,
+        ...(parsed.language ? { language: parsed.language } : {}),
+        size,
+        version,
+      };
+
+      // 先填 meta（随工具结果落盘，历史恢复靠它），再发实时事件（当前这一轮立刻渲染卡片）
+      if (meta) meta.artifact = artifact;
+      this.send("artifact_created", artifact);
+
+      return {
+        result:
+          `产物已保存：${absPath}（${size} 字节${version > 1 ? `，同名已存在，保存为第 ${version} 版` : ""}）。` +
+          `界面已显示为可预览的卡片，回复里不必再贴一遍完整内容，简短说明它是什么、怎么用即可。`,
+        status: "success",
+      };
+    } catch (err) {
+      if (meta) meta.userMessage = "保存产物失败，请检查产物目录是否可写";
+      return { result: `保存产物失败：${(err as Error).message}`, status: "error" };
     }
   }
 
@@ -728,6 +870,13 @@ export class AgentSession {
       this.askUserPendingToolCallId = null;
       resolveAsk(null);
     }
+    // 表单门同样不设超时，必须一起解除，否则等提交的 agent loop 会一直挂着。
+    if (this.formSubmitResolve) {
+      const resolveForm = this.formSubmitResolve;
+      this.formSubmitResolve = null;
+      this.formPendingToolCallId = null;
+      resolveForm(null);
+    }
     if (this.abortController) {
       this.abortController.abort();
       this.abortController = null;
@@ -863,6 +1012,28 @@ export class AgentSession {
     this.askUserPendingToolCallId = toolCallId;
     return new Promise<AskUserAnswer[] | null>((resolve) => {
       this.askUserResolve = resolve;
+    });
+  }
+
+  /** 外部 resolve 表单门（由 SessionHub.dispatch submit_form 调用）。 */
+  resolveFormSubmit(toolCallId: string, payload: FormSubmitPayload | null): void {
+    // 与问答门同一道校验：只接受"当前这张表单"的提交；旧卡片、失效会话（reload 后）回传的一律忽略。
+    if (this.formPendingToolCallId !== toolCallId || !this.formSubmitResolve) return;
+    const resolve = this.formSubmitResolve;
+    this.formSubmitResolve = null;
+    this.formPendingToolCallId = null;
+    resolve(payload);
+  }
+
+  /**
+   * 等待用户提交一次表单（ask_form 工具）：发 form_request 后【无限阻塞】。
+   * 不设超时（表单就是要等用户填完）；仅当会话被取消时由 cancel() 解除，返回 null 让 agent loop 收敛。
+   */
+  /** @internal */ waitForFormSubmit(toolCallId: string, spec: FormSpec): Promise<FormSubmitPayload | null> {
+    this.send("form_request", { toolCallId, form: spec as unknown as Record<string, unknown> });
+    this.formPendingToolCallId = toolCallId;
+    return new Promise<FormSubmitPayload | null>((resolve) => {
+      this.formSubmitResolve = resolve;
     });
   }
 
@@ -1134,6 +1305,42 @@ export class AgentSession {
     this.outputDir = dir || "";
   }
 
+  /** 设置 Chat 产物目录（每轮注入；空串表示用默认位置） */
+  /** @internal */ setArtifactDir(dir: string): void {
+    this.artifactDir = typeof dir === "string" ? dir.trim() : "";
+  }
+
+  /**
+   * 当前生效的产物目录（绝对路径）。
+   *
+   * 用户设置过就用用户的；没设置则落到 ~/.axon/artifacts/<会话id>/。
+   * 默认位置放用户目录而不是工作区：产物是交付物，不该混进项目源码、污染 git。
+   * 按会话分子目录，是为了不同会话里同名产物（report.html）互不覆盖。
+   *
+   * 相对路径一律按工作区解析，与其他工具的路径语义一致。
+   * 会话 id 还没建立（极早期）或没有 homeDir 时返回空串，调用方应据此判定「无法落盘」，
+   * 而不是悄悄写到进程工作目录。
+   */
+  getArtifactDir(): string {
+    return resolveArtifactDir({
+      configured: this.artifactDir,
+      cwd: this.cwd,
+      homeDir: this.homeDir,
+      sessionId: this.getSessionId(),
+    });
+  }
+
+  /**
+   * 开启 Cowork 附件快照（Cowork 面板每轮注入）。
+   *
+   * 幂等：同一会话重复调用只更新 sessionId 归属，不重复建目录。
+   */
+  /** @internal */ enableCoworkSnapshots(sessionId: string): void {
+    if (!this.homeDir) return;
+    if (this.coworkSnapshotter && this.coworkSnapshotter.sessionId === sessionId) return;
+    this.coworkSnapshotter = new CoworkSnapshotter(this.host, this.homeDir, sessionId);
+  }
+
   /**
    * report_outputs 工具实现（Cowork）：Agent 主动登记本轮做出的交付物。
    *
@@ -1149,18 +1356,19 @@ export class AgentSession {
    */
   /** @internal */ async reportOutputs(
     toolArgs: Record<string, unknown>,
+    meta?: ToolMeta,
   ): Promise<{ result: string; status: "success" | "error" }> {
     const raw = Array.isArray(toolArgs.files) ? toolArgs.files : [];
     if (raw.length === 0) {
       return { result: "files 为空。没有产出文件时不要调用本工具。", status: "error" };
     }
 
-    const accepted: { path: string; note?: string }[] = [];
+    const accepted: { path: string; kind?: "created" | "edited"; note?: string }[] = [];
     const missing: string[] = [];
     const seen = new Set<string>();
 
     for (const item of raw.slice(0, MAX_REPORTED_OUTPUTS)) {
-      const entry = (item || {}) as { path?: unknown; note?: unknown };
+      const entry = (item || {}) as { path?: unknown; kind?: unknown; note?: unknown };
       const p = typeof entry.path === "string" ? entry.path.trim() : "";
       if (!p) continue;
       // 去重：模型偶尔会把同一个文件报两次（分别作为"生成"和"改写"）
@@ -1173,7 +1381,11 @@ export class AgentSession {
       try {
         const info = await this.host.fs.stat(abs);
         if (info?.isFile) {
-          accepted.push({ path: abs, ...(typeof entry.note === "string" && entry.note ? { note: entry.note } : {}) });
+          accepted.push({
+            path: abs,
+            ...(entry.kind === "created" || entry.kind === "edited" ? { kind: entry.kind } : {}),
+            ...(typeof entry.note === "string" && entry.note ? { note: entry.note } : {}),
+          });
         } else {
           missing.push(p);
         }
@@ -1183,7 +1395,18 @@ export class AgentSession {
     }
 
     if (accepted.length > 0) {
-      this.send("cowork_outputs", { paths: accepted.map((f) => f.path) });
+      const paths = accepted.map((f) => f.path);
+      if (meta) {
+        meta.reportedOutputs = paths;
+        meta.reportedOutputItems = accepted.map(({ path, kind }) => ({
+          path,
+          kind,
+          // 有原稿快照的 edited 文件才标记可恢复；created 没有原稿可回
+          ...(kind === "edited" && this.currentCoworkSnapshotDir
+            && this.snapshotPaths.includes(path) ? { snapshotDir: this.currentCoworkSnapshotDir } : {}),
+        }));
+      }
+      this.send("cowork_outputs", { paths, files: accepted.map(({ path, kind }) => ({ path, kind })) });
     }
 
     if (missing.length > 0) {
@@ -1553,10 +1776,11 @@ export class AgentSession {
    * 正常收尾：把最终 assistant 回复（含 turnStats）落盘、推 stream_end、裁剪旧工具结果、
    * 按阈值异步触发滚动摘要。仅在"本轮无工具调用且确定为最终回复"时调用，调用后即结束本轮。
    */
-  private async finalizeAssistantReply(contentBuffer: string, turnStartTime: number, streamedContentThisRound: string, rounds: number, anthropicThinkingBlocks?: { thinking: string; signature?: string }[]): Promise<void> {
+  private async finalizeAssistantReply(contentBuffer: string, turnStartTime: number, streamedContentThisRound: string, rounds: number, anthropicThinkingBlocks?: { thinking: string; signature?: string }[], reasoningContent?: string): Promise<void> {
     const out = this.turnFinalizer.finalize({
       contentBuffer,
       anthropicThinkingBlocks,
+      reasoningContent,
       streamedContentThisRound,
       turnStartTime,
       model: this.model,
@@ -1845,12 +2069,31 @@ export class AgentSession {
     rounds: number,
     commitPendingText: () => void,
     anthropicThinkingBlocks?: { thinking: string; signature?: string }[],
+    reasoningContent?: string,
   ): Promise<"continue" | "done"> {
     const decision = this.noToolTurnDecider.decide({ contentBuffer, finishReason, guard, ts });
 
     // provider/网关级失败不能按正常 stop 收尾。
     if (decision.action === "abort_error") {
-      if (contentBuffer) this.messages.push({ role: "assistant", content: contentBuffer });
+      // ⚠️ 这条路径必须自己把错误"显示"出来：stampAbortedTurnStats 只负责把本轮标成 error
+      // 并落盘，它一条文案都不发。于是当上游失败、又一个字都没流出来时，界面上只剩一个
+      // 空气泡 + 一个 (?)，用户看不出这是请求失败了，只会以为模型"没话可说"。
+      // 口径与 emitTransientError 一致：只做一次性展示，不写进 messages（避免污染上下文）。
+      if (!streamedContentThisRound && !contentBuffer) {
+        this.send("stream_start", {});
+      }
+      this.send("stream_delta", {
+        content:
+          "❌ 出错了：本轮请求没有成功完成（上游返回 error，未产生任何内容）。可以重试；" +
+          "若持续出现，请检查该 Provider 的协议兼容性，或换一个模型试试。详细信息见输出面板日志。",
+      });
+      if (contentBuffer) {
+        this.messages.push({
+          role: "assistant",
+          content: contentBuffer,
+          ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
+        });
+      }
       this.stampAbortedTurnStats(turnStartTime, streamedContentThisRound || contentBuffer, "error");
       return "done";
     }
@@ -1859,7 +2102,11 @@ export class AgentSession {
     if (decision.action === "continue_truncated") {
       console.log("[agent] 输出被截断（length），注入续写引导");
       commitPendingText();
-      this.messages.push({ role: "assistant", content: contentBuffer });
+      this.messages.push({
+        role: "assistant",
+        content: contentBuffer,
+        ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
+      });
       // 用正向指令引导续写，避免负面措辞（"不要重复"）反而把"重复"植入模型注意力焦点
       this.messages.push({
         role: "user",
@@ -1874,7 +2121,11 @@ export class AgentSession {
       // 超过重试上限：不再续写，避免模型反复吐内心 OS 陷入死循环，转为强制收尾
       if (decision.forceFinalizePrompt) {
         console.log("[agent] reasoning 泄露续写已达上限，强制收尾");
-        this.messages.push({ role: "assistant", content: contentBuffer });
+        this.messages.push({
+          role: "assistant",
+          content: contentBuffer,
+          ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
+        });
         this.messages.push({
           role: "system",
           content: "你已多次输出未完成的内心 OS。现在必须基于已有信息，要么调用一个具体工具继续推进，要么给出完整的中文最终回答。二选一，不要再输出任何英文思考片段。",
@@ -1885,7 +2136,11 @@ export class AgentSession {
       }
       // 把这次半成品记入历史，注入引导，让下一轮纠正
       console.log("[agent] 检测到未完成回复，注入引导让模型重新生成:", JSON.stringify(contentBuffer.slice(0, 100)));
-      this.messages.push({ role: "assistant", content: contentBuffer });
+      this.messages.push({
+        role: "assistant",
+        content: contentBuffer,
+        ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
+      });
       this.messages.push({
         role: "system",
         content:
@@ -1936,7 +2191,7 @@ export class AgentSession {
     // 其余收尾（持久化/stream_end/计费/压缩）仍复用 finalizeAssistantReply。
     const taken = await this.runPipelineOutput(contentBuffer, finishReason);
     const finalContent = taken !== null ? taken : contentBuffer;
-    await this.finalizeAssistantReply(finalContent, turnStartTime, streamedContentThisRound, rounds, anthropicThinkingBlocks);
+    await this.finalizeAssistantReply(finalContent, turnStartTime, streamedContentThisRound, rounds, anthropicThinkingBlocks, reasoningContent);
     this.trace("turn.end", { finishReason, finalContent: truncateForTrace(finalContent || "", 2000) }, this.turnCount);
     return "done";
   }
@@ -2063,6 +2318,23 @@ export class AgentSession {
     if (userMeta?.attachedFiles && userMeta.attachedFiles.length > 0) userExtra.attachedFiles = userMeta.attachedFiles;
     if (userMeta?.userSegments && userMeta.userSegments.length > 0) userExtra.userSegments = userMeta.userSegments;
     if (this.effort) userExtra.effort = this.effort;
+
+    // Cowork：轮开始时对本轮附件做原稿快照。失败不阻塞任务（快照是保障能力，
+    // 不是前置条件）；重开会话后 sessionId 不变，历史登记里的 snapshotDir 仍有效。
+    if (this.coworkSnapshotter && userMeta?.attachedFiles && userMeta.attachedFiles.length > 0) {
+      const turnId = `turn-${Date.now()}`;
+      const paths = userMeta.attachedFiles.map((f) => (f as { path?: string }).path).filter((p): p is string => !!p);
+      if (paths.length > 0) {
+        try {
+          const result = await this.coworkSnapshotter.snapshot(turnId, paths);
+          this.currentCoworkSnapshotDir = result.snapshotDir;
+          this.snapshotPaths = result.snapshotPaths;
+        } catch {
+          this.currentCoworkSnapshotDir = "";
+          this.snapshotPaths = [];
+        }
+      }
+    }
 
     // 构建用户消息（支持多模态：文字 + 图片）
     if (images && images.length > 0) {
@@ -2293,7 +2565,15 @@ export class AgentSession {
       // 无工具调用 → 候选最终回复。交由专门方法处理（截断续写 / 内心 OS 重试 / 空回复兜底 /
       // 自动诊断 / 正常收尾），返回 "continue"=进入下一轮，"done"=本轮结束。
       if (toolCalls.length === 0) {
-        const outcome = await this.handleNoToolCallTurn(contentBuffer, finishReason, guard, ts, mutatedFiles, turnStartTime, streamedContentThisRound, rounds, commitPendingText, turn.anthropicThinkingBlocks);
+        // ⚠️ 必须先判取消，再进收尾决策：用户取消会 abort 流，上游来不及给 finish_reason，
+        // 归一化层把"未知结束原因"保守判成 error，收尾决策据此走 abort_error 分支，
+        // 界面上就变成"❌ 上游返回 error，未产生任何内容"——用户明明是自己点的取消。
+        // 与下面"有工具调用"分支（工具执行前查 cancelled）保持同一口径。
+        if (this.cancelled) {
+          this.stampCancelledTurnStats(turnStartTime, streamedContentThisRound);
+          return;
+        }
+        const outcome = await this.handleNoToolCallTurn(contentBuffer, finishReason, guard, ts, mutatedFiles, turnStartTime, streamedContentThisRound, rounds, commitPendingText, turn.anthropicThinkingBlocks, turn.reasoningContent);
         if (outcome === "done") return;
         continue;
       }

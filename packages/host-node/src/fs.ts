@@ -23,6 +23,19 @@ export class NodeFileSystem implements HostFileSystem {
     await writeFile(absPath, content, "utf-8");
   }
 
+  async readBinary(absPath: string): Promise<Uint8Array | null> {
+    try {
+      return await readFile(absPath);
+    } catch {
+      return null;
+    }
+  }
+
+  async writeBinary(absPath: string, bytes: Uint8Array): Promise<void> {
+    await mkdir(dirname(absPath), { recursive: true });
+    await writeFile(absPath, bytes);
+  }
+
   async append(absPath: string, content: string): Promise<void> {
     await mkdir(dirname(absPath), { recursive: true });
     await appendFile(absPath, content, "utf-8");

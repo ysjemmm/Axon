@@ -88,13 +88,29 @@ describe("尾部注入在一轮内保持稳定", () => {
   });
 
   it("同一轮中上下文使用率上涨，提醒里的百分比不变", () => {
-    const s = makeSession({ lastTotalTokens: 610_000 });
+    const s = makeSession({ lastTotalTokens: 800_000 });
     s.promptBuilder.beginTurn();
     const first = systemPrefix(s);
-    expect(first).toContain("61%");
+    expect(first).toContain("80%");
 
-    s.lastTotalTokens = 640_000;
+    s.lastTotalTokens = 840_000;
     expect(systemPrefix(s)).toBe(first);
+  });
+
+  it("占用未到提醒线（75%）时不出现提醒", () => {
+    const s = makeSession({ lastTotalTokens: 610_000 });
+    s.promptBuilder.beginTurn();
+    expect(systemPrefix(s)).not.toContain("上下文使用率已达");
+  });
+
+  it("本轮中途占用回落（压缩）后，冻结的提醒立即作废", () => {
+    const s = makeSession({ lastTotalTokens: 800_000 });
+    s.promptBuilder.beginTurn();
+    expect(systemPrefix(s)).toContain("上下文使用率已达 80%");
+
+    // 模拟本轮中途自动压缩：占用从 80% 掉到 10%
+    s.lastTotalTokens = 100_000;
+    expect(systemPrefix(s)).not.toContain("上下文使用率已达");
   });
 
   it("chat 链路（非缓存友好模型）注入紧跟系统提示词：一轮内整条请求的前缀不变", () => {
@@ -106,5 +122,20 @@ describe("尾部注入在一轮内保持稳定", () => {
     const after = JSON.stringify(s.promptBuilder.buildRequestMessages());
     // 新请求 = 旧请求 + 追加的消息（去掉旧请求末尾的 "]" 后应是新请求的前缀）
     expect(after.startsWith(before.slice(0, -1))).toBe(true);
+  });
+
+  it("会话记忆作为尾部注入发出；清空后不再注入", () => {
+    // 用缓存友好模型：只有这条链路才把注入放在历史【之后】
+    const s = makeSession({ model: "gpt-5.6-sol", memory: "# 记忆\n- 结论 A" });
+    s.promptBuilder.beginTurn();
+    const request = s.promptBuilder.buildRequestMessages();
+
+    expect(systemPrefix(s)).toContain("【会话记忆】");
+    expect(systemPrefix(s)).toContain("结论 A");
+    // 必须是尾部注入：排在历史之后，不夹在系统提示与历史之间
+    expect(request.at(-1)?.content).toContain("【会话记忆】");
+
+    s.memory = "";
+    expect(systemPrefix(s)).not.toContain("【会话记忆】");
   });
 });

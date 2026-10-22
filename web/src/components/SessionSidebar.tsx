@@ -3,7 +3,7 @@
  */
 
 import { useState, useEffect } from "react";
-import { Plus, MessageSquare, Trash2, PanelLeft, Search, Loader2 } from "lucide-react";
+import { Plus, MessageSquare, Trash2, PanelLeft, Search, Loader2, GitFork } from "lucide-react";
 import { listSessions, deleteSession } from "@/lib/apiClient";
 
 interface SessionMeta {
@@ -23,11 +23,15 @@ interface SessionSidebarProps {
   filterMode?: "agent" | "quest";
   onSelectSession: (id: string) => void;
   onNewSession: () => void;
+  /** 分叉会话（只继承记忆，不复制对话历史） */
+  onForkSession?: (id: string) => void;
   /** 会话被删除后通知上层（用于同步关闭对应 tab） */
   onSessionDeleted?: (id: string) => void;
+  /** 变化时立即重新拉取会话列表（如分叉完成后），无需等下一次轮询 */
+  refreshToken?: number;
 }
 
-export function SessionSidebar({ currentSessionId, connected: _connected, filterMode, onSelectSession, onNewSession, onSessionDeleted }: SessionSidebarProps) {
+export function SessionSidebar({ currentSessionId, connected: _connected, filterMode, onSelectSession, onNewSession, onForkSession, onSessionDeleted, refreshToken }: SessionSidebarProps) {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -55,7 +59,14 @@ export function SessionSidebar({ currentSessionId, connected: _connected, filter
     // 定时刷新（简单方案，以后可改 WS 推送）
     const timer = setInterval(loadSessions, 5000);
     return () => clearInterval(timer);
-  }, []);
+    // refreshToken 变化（如分叉完成）时立刻重拉一次，并重置轮询计时
+  }, [refreshToken]);
+
+  // 分叉会话：从该会话派生一个新会话，只继承记忆（不复制对话历史）
+  const handleFork = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    onForkSession?.(id);
+  };
 
   // 删除会话
   const handleDelete = async (id: string, e: React.MouseEvent) => {
@@ -143,6 +154,14 @@ export function SessionSidebar({ currentSessionId, connected: _connected, filter
               <div className="text-sm truncate">{s.title}</div>
               <div className="text-[11px] text-muted-foreground/70">{formatTime(s.updatedAt)}</div>
             </div>
+            <button
+              onClick={(e) => handleFork(s.id, e)}
+              className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-primary/10 hover:text-primary transition-all cursor-pointer"
+              title="分叉会话（只继承记忆，不复制对话历史）"
+              aria-label="分叉会话"
+            >
+              <GitFork className="w-3.5 h-3.5" />
+            </button>
             <button
               onClick={(e) => handleDelete(s.id, e)}
               disabled={deletingId !== null}

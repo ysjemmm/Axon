@@ -646,6 +646,12 @@ export function activate(context: vscode.ExtensionContext): void {
         await vscode.commands.executeCommand("vscode.open", vscode.Uri.file(filePath));
       }
     }),
+    // Cowork 改动对比浮层的「恢复原稿」：overlay 在 workbench 侧不碰文件系统，
+    // 回到这里用快照覆盖现文件（viewProvider 内部会再开预览确认 + 通知 webview）
+    vscode.commands.registerCommand("axon.restoreCoworkSnapshot", async (filePath?: string, snapshotDir?: string) => {
+      if (!filePath || !snapshotDir) return;
+      await provider.restoreCoworkSnapshotFromOverlay(filePath, snapshotDir);
+    }),
     vscode.commands.registerCommand("axon.focusChat", () => {
       // 先确保辅助侧栏可见，再聚焦 Axon chat view
       vscode.commands.executeCommand("workbench.action.focusAuxiliaryBar");

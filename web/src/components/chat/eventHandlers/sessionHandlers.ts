@@ -42,6 +42,9 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
   if ((msg as any).workspace) ctx.setWorkspace((msg as any).workspace);
   if ((msg as any).workspaces) ctx.setWorkspaces((msg as any).workspaces);
   ctx.setCurrentGroupId((msg as any).workspaceGroupId || null);
+  // 随会话一起恢复记忆（后端在 session_loaded 里附带）：分叉出的会话只带记忆、
+  // 不带历史，若不在加载时回填，记忆面板会显示为空、与后端实际注入的内容对不上。
+  if (typeof (msg as any).memory === "string") ctx.setMemory((msg as any).memory);
   const activePendingPaths: string[] = (msg as any).pendingPaths || [];
   const activePendingEditIds: Set<string> = new Set((msg as any).pendingEditIds || []);
   const restored: ChatMessage[] = [];
@@ -228,6 +231,8 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
             if ((m as any).searchResults) seg.searchResults = (m as any).searchResults;
             if ((m as any).fetchResult) seg.fetchResult = (m as any).fetchResult;
             if ((m as any).powerActivated) seg.powerActivated = (m as any).powerActivated;
+            // 产物卡片靠它还原：落盘的工具消息带着 artifact，重开会话才不会丢卡片
+            if ((m as any).artifact) seg.artifact = (m as any).artifact;
             break;
           }
         }

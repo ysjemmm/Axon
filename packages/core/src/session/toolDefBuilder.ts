@@ -20,7 +20,12 @@ export class ToolDefBuilder {
     // Quest 模式：不给读写/命令等「动仓库」的工具；但 ask_user（选项问答）是纯交互、不碰仓库，
     // 问答场景同样需要它（让 AI 抛选项、用户点选作答），故始终放行；联网工具按开关放行。
     if (this.s.mode === "quest") {
+      // Quest 是纯问答，只保留 ask_user 这个「抛选项让用户点选」的交互能力。
+      // ask_form（让用户填一套参数/表格）属于"开工前收集输入"，是 Agent 形态的诉求，
+      // 纯问答里没有使用场景，故不注入。
       const tools: ToolDef[] = [this.getAskUserToolDef()];
+      // 产物不碰仓库（后端直接写到产物目录），问答模式同样可以交付 HTML 页面、SVG、文档。
+      tools.push(this.getCreateArtifactToolDef());
       if (this.s.questWebSearch) {
         const base = getToolDefinitions() as unknown as ToolDef[];
         tools.push(
@@ -33,11 +38,88 @@ export class ToolDefBuilder {
       return tools;
     }
     const base = getToolDefinitions() as unknown as ToolDef[];
-    const tools = [...base, this.getDelegateToolDef(), this.getAskUserToolDef(), ...this.getRelayToolDefs(), ...this.s.mcpToolDefsCache];
+    const tools = [...base, this.getDelegateToolDef(), this.getAskUserToolDef(), this.getAskFormToolDef(), ...this.getRelayToolDefs(), ...this.s.mcpToolDefsCache];
+    tools.push(this.getUpdateMemoryToolDef());
+    tools.push(this.getCreateArtifactToolDef());
     // Cowork：额外给一个「交付产出」工具，让 Agent 自己说清做出了什么文件。
     // 只在办公面板注入 —— Chat/Code 那侧有工具卡片和 diff，不需要再多一个上报动作。
     if (this.s.humanizedStatus) tools.push(this.getDeliverToolDef());
     return tools;
+  }
+
+  /**
+   * update_memory 工具定义：把本次会话的精华浓缩成一份 Markdown 写回会话。
+   *
+   * 主 Agent 专属：记忆是会话级的，子 Agent 独立跑完就丢，给它写记忆没有意义
+   *（还可能把主会话攒下的记忆覆盖掉）。
+   */
+  private getUpdateMemoryToolDef(): ToolDef {
+    return {
+      type: "function",
+      function: {
+        name: "update_memory",
+        description:
+          "把本次会话里【值得跨会话带走】的内容浓缩成一份 Markdown，写进会话记忆。\n\n" +
+          "【什么时候写】用户交代了长期有效的偏好或约束（技术栈、命名、流程、禁用项）、" +
+          "敲定了一个重要决策及其理由、或给出了下次继续要用的背景时，写完再接着干活。\n" +
+          "不要为了“记录一下”而调用：闲聊、一次性的中间过程、能直接从代码里读出来的事实都不必记。\n\n" +
+          "【写什么】只留精华——结论、约束、理由、待办。用短句和小标题组织，一屏以内读完；" +
+          "不要抄对话原文，不要写过程流水账。\n\n" +
+          "【整份替换】每次传入的都是记忆的【完整内容】，不是增量。" +
+          "先想清楚这一版应该长什么样再写，已经过时的条目要主动删掉。\n\n" +
+          "【不要复述】写完不要在回复里再把记忆念一遍，用户能在记忆面板里直接看到它。",
+        parameters: {
+          type: "object",
+          properties: {
+            content: { type: "string", description: "会话记忆的完整 Markdown 内容（整份替换）" },
+          },
+          required: ["content"],
+        },
+      },
+    };
+  }
+
+  /**
+   * create_artifact 工具定义（Chat 产物）。
+   *
+   * 描述里把「什么算产物、什么不算」写得很具体，是因为这个工具的失败模式是被滥用：
+   * 模型一旦觉得「生成文件 = 产物」，就会把每一次改源码、每一段几行的代码片段都做成卡片，
+   * 聊天界面会被刷满。所以边界要在描述里卡死：独立、完整、用户会想单独打开/保存/复用的东西才算。
+   */
+  private getCreateArtifactToolDef(): ToolDef {
+    return {
+      type: "function",
+      function: {
+        name: "create_artifact",
+        description:
+          "把你为用户做出来的【一份独立成品】交付出去，界面会把它显示成可点击预览的卡片，并保存到产物目录。\n\n" +
+          "【适合做成产物】用户会想单独打开、保存、复用或分享的完整内容：\n" +
+          "- 可运行的网页 / 交互原型 / 小工具（type=html，写成完整的单文件，样式和脚本内联）\n" +
+          "- 图标 / 插画 / 示意图（type=svg）\n" +
+          "- 成篇的文档：报告、方案、README、文章（type=markdown）\n" +
+          "- 独立完整的脚本或代码文件（type=code，同时传 language）\n" +
+          "- 其他纯文本成品，如配置、清单、模板（type=text）\n\n" +
+          "【不要做成产物】\n" +
+          "- 对项目源码的修改（那是 Agent 模式下 create_file / str_replace 的事，有专门的改动审阅）\n" +
+          "- 几行的代码片段、命令、示例——直接在回复里用代码块给出\n" +
+          "- 对话式的解释、分析、列表\n" +
+          "- 流程图 / 时序图——用 ```mermaid axon-render 直接画在回复里\n\n" +
+          "【使用要求】content 必须是完整内容，不能用“省略其余部分”之类的占位；" +
+          "一次调用只交付一份产物，需要多份就分别调用。" +
+          "调用成功后回复里不必再贴一遍全文，简短说明它是什么、怎么用即可。\n\n" +
+          "【修改已有产物】重新调用本工具、传入修改后的完整内容；同名标题会自动保存为新版本，旧版本不会被覆盖。",
+        parameters: {
+          type: "object",
+          properties: {
+            title: { type: "string", description: "产物标题，简短、能看出是什么（如“登录页原型”）。会用作文件名，不要带路径或扩展名。" },
+            type: { type: "string", enum: ["html", "svg", "markdown", "code", "text"], description: "产物类型，决定保存的扩展名和预览方式" },
+            content: { type: "string", description: "产物的完整内容" },
+            language: { type: "string", description: "仅 type=code 时填写：编程语言，如 python / typescript / bash。决定保存的扩展名。" },
+          },
+          required: ["title", "type", "content"],
+        },
+      },
+    };
   }
 
   /**
@@ -65,6 +147,8 @@ export class ToolDefBuilder {
           "这些对用户没有意义，登记进去反而会让他以为那就是成果。\n\n" +
           "【路径要求】必须是绝对路径，且文件确实已经写到磁盘上了。" +
           "拿不准完整路径时先用 list_dir 确认，不要凭记忆拼一个。\n\n" +
+          "【产出类型】为每个文件自行判断并填写 kind：created 表示本轮新创建的文件，edited 表示本轮修改了已有文件。" +
+          "另存为新文件属于 created；原文件原地修改属于 edited。不要根据文件扩展名判断。\n\n" +
           "【没有产出就不要调用】纯问答、只是读文件分析、或任务失败没产出任何文件时，跳过这个工具。",
         parameters: {
           type: "object",
@@ -76,9 +160,10 @@ export class ToolDefBuilder {
                 type: "object",
                 properties: {
                   path: { type: "string", description: "文件的绝对路径" },
+                  kind: { type: "string", enum: ["created", "edited"], description: "本轮对该文件的操作：created=新建，edited=修改已有文件" },
                   note: { type: "string", description: "可选：一句话说明这个文件是什么（如\"按部门汇总的总表\"）" },
                 },
-                required: ["path"],
+                required: ["path", "kind"],
               },
             },
           },
@@ -141,6 +226,145 @@ export class ToolDefBuilder {
             },
           },
           required: ["questions"],
+        },
+      },
+    };
+  }
+
+  /**
+   * ask_form 工具定义：主 Agent 专用，把「需要用户填一套参数」交付成一张声明式表单。
+   *
+   * 与 ask_user 的分工：在几个方案里挑一个 → ask_user（更轻，点一下就好）；需要用户给具体值
+   * （路径、数量、端口、名称清单）或要一份带多列的清单/表格 → ask_form。
+   * 两者都需要用户在场，同样不给子 Agent（会死等）。
+   */
+  private getAskFormToolDef(): ToolDef {
+    return {
+      type: "function",
+      function: {
+        name: "ask_form",
+        description:
+          "当你需要用户【填一套参数】或【在表格里逐项确认】时调用：把要收集的内容声明成一张表单，" +
+          "用户在界面上填写（文本、数字、下拉、单选、多选、开关、滑块、日期，甚至可编辑的表格），" +
+          "提交结果会作为本工具的返回值给你。\n\n" +
+          "【和 ask_user 怎么选】只在几个方案里挑一个 → ask_user，用户点一下就好；" +
+          "需要用户给具体值（路径、数量、端口、名称清单），或要一份带多列的清单/表格 → ask_form。\n\n" +
+          "【只描述控件，不要写界面代码】form.fields 是字段数组，每个取值字段给 type + name（+ label）；" +
+          "不要在 label / help 里写 HTML 或脚本。支持的 type：text / textarea / number / select / radio / " +
+          "checkbox / switch / slider / date / time / tags / table；另有两种排版用的：section（分组标题）、note（说明文字）。\n\n" +
+          "【默认值很重要】能从上下文推断的就用 default 预填（例如你刚读到的实际配置值），" +
+          "让用户多数情况下只需确认或微调，而不是从零填写。\n\n" +
+          "【表格】type=table 必须给 columns（key/label/type）和 data（初始行）；" +
+          "selectable=true 允许勾选行、addable=true 允许加行、rowActions 给行内操作按钮（如 删除）。" +
+          "用户点行内按钮时，会把「当前全部值 + 该按钮」一起回传给你。\n\n" +
+          "【一次只抛一张】拿到提交结果后再决定下一步；不要连续抛多张表单，也不要在同一轮里既抛表单又问选项。",
+        parameters: {
+          type: "object",
+          properties: {
+            form: {
+              type: "object",
+              description: "表单声明",
+              properties: {
+                title: { type: "string", description: "表单标题（简短，如「配置部署参数」）" },
+                description: { type: "string", description: "可选：一句话说明为什么要填这些" },
+                submitLabel: { type: "string", description: "提交按钮文案，默认「提交」" },
+                buttons: {
+                  type: "array",
+                  description: "可选：次级动作按钮（如「取消」）。点击同样回传当前值与按钮 id",
+                  items: {
+                    type: "object",
+                    properties: { id: { type: "string" }, label: { type: "string" } },
+                    required: ["id", "label"],
+                  },
+                },
+                fields: {
+                  type: "array",
+                  description: "字段列表（按顺序渲染）。每项必须有 type；取值字段还要有 name。",
+                  items: {
+                    type: "object",
+                    properties: {
+                      type: {
+                        type: "string",
+                        enum: [
+                          "text", "textarea", "number", "select", "radio", "checkbox", "switch",
+                          "slider", "date", "time", "tags", "table", "section", "note",
+                        ],
+                        description: "控件类型",
+                      },
+                      name: { type: "string", description: "提交时的键（英文短标识，如 env、replicas）；section / note 不需要" },
+                      label: { type: "string", description: "展示给用户的标签" },
+                      help: { type: "string", description: "可选：控件下方的说明文字" },
+                      placeholder: { type: "string", description: "输入框占位提示" },
+                      required: { type: "boolean", description: "是否必填" },
+                      default: { description: "默认值（字符串 / 数字 / 布尔 / 数组）" },
+                      options: {
+                        type: "array",
+                        description: "select / radio / checkbox 的选项",
+                        items: {
+                          type: "object",
+                          properties: {
+                            value: { type: "string", description: "回传值；省略时用 label" },
+                            label: { type: "string", description: "展示文案" },
+                            description: { type: "string", description: "可选：选项补充说明" },
+                          },
+                          required: ["label"],
+                        },
+                      },
+                      min: { type: "number", description: "number / slider 的最小值" },
+                      max: { type: "number", description: "number / slider 的最大值" },
+                      step: { type: "number", description: "number / slider 的步长" },
+                      rows: { type: "number", description: "textarea 显示的行数" },
+                      title: { type: "string", description: "section 的分组标题" },
+                      text: { type: "string", description: "note 的说明正文" },
+                      columns: {
+                        type: "array",
+                        description: "table 的列定义",
+                        items: {
+                          type: "object",
+                          properties: {
+                            key: { type: "string", description: "对应行对象里的键" },
+                            label: { type: "string", description: "列标题" },
+                            type: { type: "string", enum: ["text", "number", "select"], description: "单元格类型" },
+                            editable: { type: "boolean", description: "默认 true；false = 只读列" },
+                            options: {
+                              type: "array",
+                              description: "type=select 时的选项",
+                              items: {
+                                type: "object",
+                                properties: { value: { type: "string" }, label: { type: "string" } },
+                                required: ["label"],
+                              },
+                            },
+                          },
+                          required: ["key", "label"],
+                        },
+                      },
+                      data: { type: "array", description: "table 的初始行（对象数组，键对应 columns 的 key）", items: { type: "object" } },
+                      selectable: { type: "boolean", description: "table：是否允许勾选行" },
+                      addable: { type: "boolean", description: "table：是否允许用户新增行" },
+                      removable: { type: "boolean", description: "table：是否允许删除行，默认 true" },
+                      rowActions: {
+                        type: "array",
+                        description: "table：行内操作按钮",
+                        items: {
+                          type: "object",
+                          properties: {
+                            id: { type: "string" },
+                            label: { type: "string" },
+                            danger: { type: "boolean", description: "true = 危险操作（红色）" },
+                          },
+                          required: ["id", "label"],
+                        },
+                      },
+                    },
+                    required: ["type"],
+                  },
+                },
+              },
+              required: ["fields"],
+            },
+          },
+          required: ["form"],
         },
       },
     };

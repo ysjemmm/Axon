@@ -23,7 +23,7 @@ export interface FileTagData {
   /** hover 预览内容 */
   content?: string;
   /** 类型（决定图标样式） */
-  kind?: "file" | "folder" | "terminal" | "editor" | "diagnostics";
+  kind?: "file" | "folder" | "terminal" | "editor" | "diagnostics" | "paste";
   /** 可选行号（跳转 + 展示用） */
   startLine?: number;
   endLine?: number;

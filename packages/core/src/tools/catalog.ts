@@ -73,6 +73,17 @@ export enum ToolName {
   // 产出登记（Cowork 专用）：Agent 自己把最终交付的文件告诉前端，渲染成可预览卡片。
   // 只在办公面板注入 —— 比我们去扫目录猜哪些文件是产出可靠得多。
   ReportOutputs = "report_outputs",
+  // 声明式表单：主 Agent 把「需要用户填一套参数」交付成一张可填写的表单/控件面板。
+  // 与 ask_user 同源（都需要用户在场），子 Agent 拿不到，故只在 ToolDefBuilder 里注入。
+  AskForm = "ask_form",
+  // 会话记忆：主 Agent 把本次会话值得跨会话带走的结论浓缩成一份 md 写回会话。
+  // 记忆是会话级的，子 Agent 独立跑完就丢，故同样只在 ToolDefBuilder 里注入。
+  UpdateMemory = "update_memory",
+  // Chat 产物：模型把一份独立成品（HTML 页面 / SVG / 文档 / 代码）交付给用户。
+  // 与 create_file 的区别：create_file 是「改项目源码」，产物是「交付物」，统一落到产物目录、
+  // 渲染成可预览的卡片。后端直接写盘，所以不带文件工具的问答模式也能用。
+  // 面向用户交互，子 Agent 不需要，故只在 ToolDefBuilder 里注入给主 Agent。
+  CreateArtifact = "create_artifact",
 }
 
 /**
@@ -294,9 +305,18 @@ export const TOOL_CATALOG: Record<ToolName, ToolSpec> = {
   [ToolName.RelayReviewTask]: { requiresArgs: true },
   // 选项问答：结果（用户的选择）要留在历史里供后续轮次参考，故不标 transient。
   [ToolName.AskUser]: { status: S("正在等待你的选择...", "thinking"), requiresArgs: true, contentLimit: NO_CONTENT_LIMIT },
+  // 声明式表单：用户填的内容是后续轮次的依据，同样要留在历史里，故不标 transient。
+  [ToolName.AskForm]: { status: S("正在等待你填写...", "thinking"), requiresArgs: true, contentLimit: NO_CONTENT_LIMIT },
   // 产出登记：结果只是"登记成功/哪些路径不存在"的短回执。
   // 标 transient —— 这条回执对后续轮次没有参考价值，留在历史里纯占上下文。
   [ToolName.ReportOutputs]: { status: S("正在整理产出文件...", "editing"), requiresArgs: true, transient: true },
+  // 会话记忆：入参是整份 md（可能不短），标 transient 让工具的【结果】跨轮被裁掉。
+  // 调用本身仍留在历史的 assistant 消息里，故只在值得记的时候调用。
+  // 记忆的正式落点是 SessionData.memory，随后由 PromptBuilder 作为尾部注入。
+  [ToolName.UpdateMemory]: { status: S("正在更新会话记忆...", "thinking"), requiresArgs: true, transient: true },
+  // 产物：入参 content 就是整份成品（可能很大），调用本身会留在 assistant 消息里；
+  // 标 transient 让工具【结果】那条短回执跨轮被裁掉，不占上下文。
+  [ToolName.CreateArtifact]: { status: S("正在生成产物...", "editing"), requiresArgs: true, transient: true },
 };
 
 const DEFAULT_CONTENT_LIMIT = 3_000;

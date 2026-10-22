@@ -7,6 +7,23 @@
 
 import type { ToolStatus } from "@/components/ToolCallItem";
 
+/** 产物类型：与后端 artifactFile.ts 的 ArtifactType 一致（两侧字符串值必须同步） */
+export type ArtifactType = "html" | "svg" | "markdown" | "code" | "text";
+
+/** 一份已落盘的产物（后端 create_artifact 成功后的描述） */
+export interface ArtifactInfo {
+  /** 产物文件的绝对路径 */
+  path: string;
+  title: string;
+  type: ArtifactType;
+  /** 仅 type=code：编程语言 */
+  language?: string;
+  /** 字节数 */
+  size: number;
+  /** 同名产物的版本号，首版为 1 */
+  version: number;
+}
+
 /** 一个 segment 可以是文本、工具调用或子 Agent 委托 */
 export interface TextSegment {
   type: "text";
@@ -50,6 +67,8 @@ export interface ToolSegment {
   hidden?: boolean;
   /** read_file 专用：后端 resolve 后的绝对路径（点击打开文件用） */
   resolvedPath?: string;
+  /** create_artifact 专用：落盘后的产物描述。有它就渲染成产物卡片，而不是普通工具卡片。 */
+  artifact?: ArtifactInfo;
   /** MCP 工具专用：真实 server 名 / 工具名（后端透传，卡片展示用） */
   mcpServer?: string;
   mcpTool?: string;
@@ -178,8 +197,9 @@ export interface AttachedFile {
    * 来源类型：
    * - file=文件（用户上传 / 斜杠命令选中），terminal=终端选区，editor=编辑器代码选区
    * - folder=文件夹引用（斜杠命令选中），diagnostics=当前文件的问题/诊断
+   * - paste=输入区粘贴进来的长文本（折叠成标签，按纯文本发送，不是代码）
    */
-  kind?: "file" | "terminal" | "editor" | "folder" | "diagnostics";
+  kind?: "file" | "terminal" | "editor" | "folder" | "diagnostics" | "paste";
 }
 
 /**
@@ -202,5 +222,7 @@ export interface ChatPanelProps {
   onSessionCreated: (id: string) => void;
   /** 压缩迁移：旧会话已冻结，新会话已创建，父组件应打开新会话 tab */
   onCompactionMigrated?: (newSessionId: string) => void;
+  /** 会话分叉完成：新会话只带记忆、不带历史，父组件应刷新列表并切到新会话 */
+  onSessionForked?: (newSessionId: string, sourceId?: string) => void;
   onStreamingChange?: (streaming: boolean) => void;
 }

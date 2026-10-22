@@ -19,6 +19,10 @@ import {
 } from "@/lib/htmlPreviewResize";
 import { useThemeVersion } from "@/lib/theme";
 import { beginSpan, endSpan, recordIncident } from "@/lib/diagnostics";
+import { createRoot, type Root } from "react-dom/client";
+import { FormPanel } from "./chat/FormPanel";
+import { useInlineForm } from "./chat/inlineFormContext";
+import type { FormSpecData } from "./chat/formTypes";
 
 /**
  * 匹配文件/目录路径——只认【绝对路径】（Windows `C:\...`、Unix `/...`）或【显式相对路径】（`./`、`../` 开头）。
@@ -417,6 +421,50 @@ function htmlToElement(html: string): HTMLElement {
  */
 const CHUNK_FADE_MS = 240;
 
+/**
+ * 图片加载失败 → 换成一行可点击的文件名胶囊。
+ *
+ * 正文里的图片地址多半是本地绝对路径（AI 引用本机截图 / 产物文件）或已失效的外链，
+ * 在 webview 里必然加载失败。原样渲染会露出破图图标 + alt 文字，看起来像页面坏了。
+ * 换成胶囊后至少能看出"这是哪个文件"，点一下还能打开它。
+ */
+function degradeBrokenImage(img: HTMLImageElement): void {
+  if (!img.isConnected) return;
+  const rawSrc = img.dataset.axonSrc || img.getAttribute("src") || "";
+  // markdown 渲染会把这个地址做 URL 编码（%5C 之类），点击时要交回宿主真实路径，
+  // 所以在这里解回来；解不开（含非法转义）就保留原值，不能因此丢掉地址。
+  let src = rawSrc;
+  try {
+    src = decodeURIComponent(rawSrc);
+  } catch {
+    // 保留原值
+  }
+  // alt 优先：模型写的 alt 通常就是这张图是什么（如产物标题），比裸路径好读
+  const label = (img.getAttribute("alt") || "").trim() || src;
+  const pill = document.createElement("span");
+  pill.className = "axon-image-fallback";
+  if (src) pill.dataset.src = src;
+  pill.textContent = label;
+  pill.title = src ? `图片未能显示：${src}（点击打开）` : "图片未能显示";
+  img.replaceWith(pill);
+}
+
+/**
+ * 扫描并挂钩尚未处理过的图片。
+ *
+ * 增量 patch 会在流式过程中不断插入新 <img>，所以每次写 DOM 后都要过一遍；
+ * dataset 标记保证同一张图只挂一次监听。已经失败过的图（error 在挂监听前就触发完了）
+ * 靠 complete + naturalWidth 补一次判断，否则它会一直停在破图状态。
+ */
+function watchBrokenImages(root: HTMLElement): void {
+  root.querySelectorAll<HTMLImageElement>("img").forEach((img) => {
+    if (img.dataset.axonImgBound === "1") return;
+    img.dataset.axonImgBound = "1";
+    img.addEventListener("error", () => degradeBrokenImage(img), { once: true });
+    if (img.complete && img.naturalWidth === 0) degradeBrokenImage(img);
+  });
+}
+
 /** 解开一个淡入包裹：把文字放回原位、合并相邻文本节点 */
 function unwrapChunk(s: Element): void {
   const parent = s.parentNode;
@@ -665,6 +713,7 @@ interface MarkdownRendererProps {
 
 export const MarkdownRenderer = memo(function MarkdownRenderer({ content, streaming = false }: MarkdownRendererProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const inlineForm = useInlineForm();
   /**
    * 上一次真正写进 DOM 的 html 串。
    *
@@ -772,6 +821,21 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, stream
   // 事件委托（React 合成事件）
   const handleContentClick = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
+    // 加载失败的图片已降级成这段文字，点它按原始地址分流：外链走浏览器，其余交给宿主打开
+    const brokenImage = target.closest<HTMLElement>(".axon-image-fallback");
+    if (brokenImage) {
+      e.preventDefault();
+      const src = brokenImage.dataset.src || "";
+      if (!src) return;
+      const vscode = (window as any).__axonVSCode;
+      if (/^https?:\/\//i.test(src)) {
+        if (vscode) vscode.postMessage({ type: "open_external", url: src });
+        else window.open(src, "_blank", "noopener,noreferrer");
+      } else if (vscode) {
+        vscode.postMessage({ type: "open_file", path: src });
+      }
+      return;
+    }
     const trigger = target.closest<HTMLElement>("[data-axon-menu-trigger]");
     if (trigger) { e.preventDefault(); const dropdown = trigger.parentElement?.querySelector<HTMLElement>("[data-axon-menu-dropdown]"); if (dropdown) { const willOpen = dropdown.classList.contains("hidden"); closeAllEnhancedMenus(); if (willOpen) dropdown.classList.remove("hidden"); } return; }
     const actionEl = target.closest<HTMLElement>("[data-axon-action]");
@@ -801,6 +865,8 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, stream
     const prevTextLen = el.textContent?.length ?? 0;
     appliedHtmlRef.current = html;
     const { appended, inserted } = patchChildren(el, html);
+    // 图片降级必须在 patch 之后：新插入的 <img> 才在 DOM 里
+    watchBrokenImages(el);
     // ── 流式吐字：只给"这一批新到的字"挂淡入 ──
     // 增量取【渲染后纯文本】的长度差，而不是 markdown 源文的长度差：
     // 源文里的 **、#、- 等语法在渲染后不占文本，用源文长度会错位。
@@ -873,6 +939,67 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, stream
     const t = window.setTimeout(() => unwrapChunks(el, false), CHUNK_FADE_MS + 20);
     return () => window.clearTimeout(t);
   }, [streaming, html]);
+
+  /**
+   * 内联表单：把 ```form axon-render 块挂载成可交互面板。
+   *
+   * 与 svg/mermaid/html 的 hydrate 分开管理 root 生命周期：那几个是一次性生产静态节点，
+   * 这个是长期存活的 React 组件（用户要在里面打字、拖滑块），DOM 被 patch 掉之后必须卸载，
+   * 否则 root 会挂在已脱离文档的节点上，状态与事件一起泄漏。
+   *
+   * 与增强渲染同一判断：流式期间不挂载。流式时这段 JSON 还没写完、解析必然失败，
+   * 更要紧的是本渲染器每 32ms 重解析一次，中途挂载出来的面板会被下一批 DOM 换掉。
+   */
+  const inlineFormRoots = useRef(new Map<HTMLElement, Root>());
+  const inlineFormValueRef = useRef(inlineForm);
+  inlineFormValueRef.current = inlineForm;
+
+  useEffect(() => {
+    if (streaming) return;
+    const el = ref.current;
+    if (!el) return;
+
+    // 回收已脱离文档的 root（重渲染/虚拟列表回收都可能把节点换掉）
+    for (const [node, root] of inlineFormRoots.current) {
+      if (!node.isConnected) {
+        root.unmount();
+        inlineFormRoots.current.delete(node);
+      }
+    }
+
+    el.querySelectorAll<HTMLElement>("[data-inline-form]").forEach((block) => {
+      if (inlineFormRoots.current.has(block)) return;
+      const raw = (block.querySelector("code")?.textContent || "").trim();
+      if (!raw) return;
+      let spec: FormSpecData;
+      try {
+        spec = JSON.parse(raw) as FormSpecData;
+      } catch {
+        return; // JSON 没写完或写错 → 保持源码可见，等下一次重解析再试
+      }
+      if (!spec || !Array.isArray(spec.fields) || spec.fields.length === 0) return;
+
+      const mount = document.createElement("div");
+      block.appendChild(mount);
+      const pre = block.querySelector("pre");
+      if (pre) pre.style.display = "none";
+
+      const root = createRoot(mount);
+      root.render(
+        <FormPanel spec={spec} onSubmit={(payload) => inlineFormValueRef.current.submit(spec, payload)} />,
+      );
+      inlineFormRoots.current.set(block, root);
+    });
+  }, [html, streaming]);
+
+  // 组件卸载（消息被删除 / 面板重挂）时统一回收，避免 root 泄漏
+  useEffect(() => {
+    const roots = inlineFormRoots.current;
+    return () => {
+      for (const root of roots.values()) root.unmount();
+      roots.clear();
+    };
+  }, []);
 
   // ── 增强渲染 hydration ──
   // useLayoutEffect: 缓存命中恢复 + SVG/HTML 同步首次渲染（paint 前完成，无跳动）
@@ -954,11 +1081,15 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, stream
     return () => clearTimeout(timer);
   }, [html, themeTick, streaming]);
 
+  // ⚠️ 正文里的行内代码 / 引用块 / 表格一律用 em，不要用 px。这个根节点的字号会被外层整体覆盖
+  // （思考块把 .prose 压到 text-xs、工具卡片另有自己的字号），字号一旦用 px 写死，就会在这些
+  // 更小的上下文里保持原尺寸、看起来比正文还大 —— 「思考过程里代码字体特别大」就是这么来的。
+  // em 让它们永远跟着所在容器缩。数值按 14px 正文反算，主对话外观保持不变。
   return (
     <div
       ref={ref}
       onClick={handleContentClick}
-      className="axon-chat-prose text-[14px] leading-relaxed prose prose-sm dark:prose-invert prose-neutral max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-1 [&_h1]:mt-4 [&_h1]:mb-1.5 [&_h2]:mt-3 [&_h2]:mb-1 [&_h3]:mt-2.5 [&_h3]:mb-1 [&_h4]:mt-2 [&_h4]:mb-0.5 [&_h5]:mt-1.5 [&_h5]:mb-0.5 [&_h6]:mt-1.5 [&_h6]:mb-0.5 [&_ul]:my-0.5 [&_ol]:my-0.5 [&_li]:my-0 [&_li]:py-[1px] [&_li>p]:my-0 [&_ul_ul]:my-0 [&_ol_ol]:my-0 [&_blockquote]:my-2 [&_blockquote]:border-l-[3px] [&_blockquote]:border-blue-400/60 [&_blockquote]:dark:border-blue-500/40 [&_blockquote]:bg-blue-50/50 [&_blockquote]:dark:bg-blue-950/20 [&_blockquote]:rounded-r-md [&_blockquote]:pl-3.5 [&_blockquote]:pr-3 [&_blockquote]:py-2 [&_blockquote]:not-italic [&_blockquote]:text-foreground/85 [&_blockquote]:text-[13.5px] [&_blockquote_p]:my-0.5 [&_pre]:!my-2 [&_hr]:!my-3 [&_:not(pre)>code:not(.axon-path-link)]:bg-[rgba(0,0,0,0.04)] [&_:not(pre)>code:not(.axon-path-link)]:dark:bg-[rgba(255,255,255,0.04)] [&_:not(pre)>code:not(.axon-path-link)]:text-inherit [&_:not(pre)>code:not(.axon-path-link)]:px-1 [&_:not(pre)>code:not(.axon-path-link)]:py-[0.1em] [&_:not(pre)>code:not(.axon-path-link)]:rounded [&_:not(pre)>code:not(.axon-path-link)]:text-[14px] [&_code]:before:content-none [&_code]:after:content-none [&_.axon-path-link]:text-[var(--vscode-textLink-foreground,#3794ff)] [&_.axon-path-link]:cursor-pointer [&_.axon-path-link]:hover:underline [&_.axon-path-link]:bg-transparent"
+      className="axon-chat-prose text-[14px] leading-relaxed prose prose-sm dark:prose-invert prose-neutral max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-1 [&_h1]:mt-4 [&_h1]:mb-1.5 [&_h2]:mt-3 [&_h2]:mb-1 [&_h3]:mt-2.5 [&_h3]:mb-1 [&_h4]:mt-2 [&_h4]:mb-0.5 [&_h5]:mt-1.5 [&_h5]:mb-0.5 [&_h6]:mt-1.5 [&_h6]:mb-0.5 [&_ul]:my-0.5 [&_ol]:my-0.5 [&_li]:my-0 [&_li]:py-[1px] [&_li>p]:my-0 [&_ul_ul]:my-0 [&_ol_ol]:my-0 [&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3.5 [&_blockquote]:not-italic [&_blockquote]:text-foreground/75 [&_blockquote]:text-[1em] [&_blockquote_p]:my-0.5 [&_blockquote_p:last-child]:mb-0 [&_pre]:!my-2 [&_hr]:!my-3 [&_:not(pre)>code:not(.axon-path-link)]:bg-[rgba(0,0,0,0.04)] [&_:not(pre)>code:not(.axon-path-link)]:dark:bg-[rgba(255,255,255,0.04)] [&_:not(pre)>code:not(.axon-path-link)]:text-inherit [&_:not(pre)>code:not(.axon-path-link)]:px-1 [&_:not(pre)>code:not(.axon-path-link)]:py-[0.1em] [&_:not(pre)>code:not(.axon-path-link)]:rounded [&_:not(pre)>code:not(.axon-path-link)]:text-[0.9em] [&_code]:before:content-none [&_code]:after:content-none [&_.axon-path-link]:text-[var(--vscode-textLink-foreground,#3794ff)] [&_.axon-path-link]:cursor-pointer [&_.axon-path-link]:hover:underline [&_.axon-path-link]:bg-transparent"
     />
   );
 });
@@ -977,6 +1108,9 @@ function hydrateSvg(block: HTMLElement, content: string, onRendered?: (el: HTMLE
   const wrapper = document.createElement("div");
   wrapper.className = "group/enhanced relative my-2 rounded-md overflow-hidden min-w-0";
   wrapper.style.color = "var(--foreground, currentColor)";
+  // SVG 是展示内容，不是可编辑文本；屏蔽宿主 WebView 的 Cut/Copy/Paste 右键菜单，
+  // 避免用户点了无效的原生菜单。复制源码/下载图片统一走右上角 Axon 菜单。
+  wrapper.oncontextmenu = (event) => event.preventDefault();
   wrapper.dataset.axonKind = "svg";
   wrapper.dataset.axonSource = encodeURIComponent(content);
   // 横向滚动槽：图表按固有尺寸显示，只有装不下且已到缩放下限时才滚动
@@ -1020,6 +1154,8 @@ function hydrateHtml(block: HTMLElement, content: string, onRendered?: (el: HTML
   block.dataset.hydrated = "1";
   const wrapper = document.createElement("div");
   wrapper.className = "group/enhanced relative my-2 rounded-md axon-html-preview overflow-hidden min-w-0";
+  // HTML 预览同样是只读视觉内容，操作入口使用 Axon 三点菜单。
+  wrapper.oncontextmenu = (event) => event.preventDefault();
   wrapper.dataset.axonKind = "html";
   wrapper.dataset.axonSource = encodeURIComponent(content);
   const iframe = document.createElement("iframe");
@@ -1105,6 +1241,8 @@ async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: 
     wrapper.className = "group/enhanced relative my-2 w-full rounded-md overflow-hidden";
     wrapper.style.background = "transparent";
     wrapper.style.lineHeight = "0";  // 消除 wrapper 内残余行盒间隙（pre.mermaid 的 line-height 撑高 3-5px）
+    // Mermaid 已经渲染成 SVG，只读展示不应出现宿主的文本编辑菜单。
+    wrapper.oncontextmenu = (event) => event.preventDefault();
     // 横向滚动槽：图表按固有尺寸显示，只有装不下且已到缩放下限时才滚动
     const slot = document.createElement("div");
     slot.className = "axon-diagram-scroll p-2";
