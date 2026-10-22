@@ -28,6 +28,8 @@ const TYPE_LABEL: Record<ArtifactType, string> = {
   markdown: "文档",
   code: "代码",
   text: "文本",
+  gif: "GIF",
+  mp4: "视频",
 };
 
 export function artifactTypeLabel(type: ArtifactType, language?: string): string {
@@ -55,4 +57,9 @@ export function artifactSubtitle(artifact: Pick<ArtifactInfo, "size" | "version"
 export function pendingArtifactTitle(args: Record<string, unknown> | undefined): string {
   const title = typeof args?.title === "string" ? args.title.trim() : "";
   return title || "产物";
+}
+
+/** 生成中的提示语：渲染动画要几十秒，要和"写文档"的提示区分开，否则用户以为卡住了 */
+export function pendingArtifactHint(toolName: string): string {
+  return toolName === "render_media" ? "正在渲染动画，可能需要一会儿…" : "正在生成产物…";
 }

@@ -4,9 +4,12 @@ import {
   MAX_ARTIFACT_CHARS,
   artifactExtension,
   parseArtifactArgs,
+  parseRenderMediaArgs,
+  isArtifactType,
   pickVersionedPath,
   sanitizeStem,
 } from "./artifactFile.js";
+import { MEDIA_LIMITS } from "../host/mediaRenderer.js";
 
 describe("sanitizeStem 文件名清洗", () => {
   it("普通标题保留（含中文和空格）", () => {
@@ -144,5 +147,92 @@ describe("parseArtifactArgs 入参校验", () => {
     const r = parseArtifactArgs({ ...valid, type: "code", language: "  " });
     expect(r).toMatchObject({ ok: true });
     if (r.ok) expect(r.language).toBeUndefined();
+  });
+});
+
+describe("媒体产物类型", () => {
+  it("gif / mp4 有对应扩展名", () => {
+    expect(artifactExtension("gif")).toBe(".gif");
+    expect(artifactExtension("mp4")).toBe(".mp4");
+  });
+
+  it("create_artifact 不接受 gif / mp4——模型给不出合法的二进制内容，放进来只会诱导它塞 base64", () => {
+    expect(isArtifactType("gif")).toBe(false);
+    expect(isArtifactType("mp4")).toBe(false);
+    const r = parseArtifactArgs({ title: "x", type: "mp4", content: "AAAA" });
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("parseRenderMediaArgs 入参校验", () => {
+  const valid = { title: "冒泡排序", html: "<html></html>", format: "mp4" };
+
+  it("合法入参通过，缺省值按格式取默认", () => {
+    const r = parseRenderMediaArgs(valid);
+    expect(r).toMatchObject({ ok: true, format: "mp4", width: 1280, height: 720, fps: 24, durationSec: 5 });
+    const g = parseRenderMediaArgs({ ...valid, format: "gif" });
+    expect(g).toMatchObject({ ok: true, format: "gif", width: 640, height: 360, fps: 12, durationSec: 3 });
+  });
+
+  it("缺 title / html / 非法 format 都报错，且错误信息点明怎么改", () => {
+    expect(parseRenderMediaArgs({ ...valid, title: " " })).toMatchObject({ ok: false });
+    expect(parseRenderMediaArgs({ ...valid, html: "  \n" })).toMatchObject({ ok: false });
+    const bad = parseRenderMediaArgs({ ...valid, format: "avi" });
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.error).toMatch(/gif|mp4/);
+  });
+
+  it("GIF 带旁白直接报错，而不是悄悄丢掉旁白（用户会拿到哑片还以为是我们坏了）", () => {
+    const r = parseRenderMediaArgs({ ...valid, format: "gif", narration: "你好" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/mp4/);
+  });
+
+  it("mp4 带旁白保留旁白，空白旁白视为没有", () => {
+    const a = parseRenderMediaArgs({ ...valid, narration: "  大家好  " });
+    expect(a).toMatchObject({ ok: true, narration: "大家好" });
+    const b = parseRenderMediaArgs({ ...valid, narration: "   " });
+    expect(b.ok && b.narration).toBeFalsy();
+  });
+
+  it("旁白过长被拒", () => {
+    const r = parseRenderMediaArgs({ ...valid, narration: "字".repeat(MEDIA_LIMITS.maxNarrationChars + 1) });
+    expect(r.ok).toBe(false);
+  });
+
+  it("时长越界被钳制并记入 notes，而不是报错", () => {
+    const r = parseRenderMediaArgs({ ...valid, durationSec: 9999 });
+    expect(r).toMatchObject({ ok: true, durationSec: MEDIA_LIMITS.maxDurationSec });
+    if (r.ok) expect(r.notes.join("")).toMatch(/时长/);
+    const g = parseRenderMediaArgs({ ...valid, format: "gif", durationSec: 60 });
+    expect(g).toMatchObject({ ok: true, durationSec: MEDIA_LIMITS.maxGifDurationSec });
+  });
+
+  it("宽高被钳制到上限并取偶数（yuv420p 要求偶数）", () => {
+    const r = parseRenderMediaArgs({ ...valid, width: 1281, height: 721 });
+    expect(r).toMatchObject({ ok: true, width: 1280, height: 720 });
+    const big = parseRenderMediaArgs({ ...valid, width: 99999, height: 99999 });
+    expect(big).toMatchObject({ ok: true, width: MEDIA_LIMITS.maxWidth, height: MEDIA_LIMITS.maxHeight });
+    const tiny = parseRenderMediaArgs({ ...valid, width: 3, height: 3 });
+    expect(tiny).toMatchObject({ ok: true, width: MEDIA_LIMITS.minSize, height: MEDIA_LIMITS.minSize });
+  });
+
+  it("时长 × 帧率超过总帧数上限时降帧率，保证渲染时间可控", () => {
+    const r = parseRenderMediaArgs({ ...valid, durationSec: 60, fps: 30 });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.durationSec * r.fps).toBeLessThanOrEqual(MEDIA_LIMITS.maxFrames);
+      expect(r.notes.join("")).toMatch(/帧/);
+    }
+  });
+
+  it("模型把数字写成字符串也能识别；无法解析的值走默认", () => {
+    const r = parseRenderMediaArgs({ ...valid, durationSec: "8", fps: "abc" });
+    expect(r).toMatchObject({ ok: true, durationSec: 8, fps: 24 });
+  });
+
+  it("html 超长被拒", () => {
+    const r = parseRenderMediaArgs({ ...valid, html: "x".repeat(MAX_ARTIFACT_CHARS + 1) });
+    expect(r.ok).toBe(false);
   });
 });

@@ -26,6 +26,11 @@ export class ToolDefBuilder {
       const tools: ToolDef[] = [this.getAskUserToolDef()];
       // 产物不碰仓库（后端直接写到产物目录），问答模式同样可以交付 HTML 页面、SVG、文档。
       tools.push(this.getCreateArtifactToolDef());
+      // 动画渲染：只在宿主真能渲染时才给，否则模型会调一个必然失败的工具。
+      // 它不碰仓库、不给模型命令权限（渲染流程固定封在宿主里），所以问答模式也可以用。
+      // 动画渲染：既要宿主有这个能力，也要用户在设置里明确开启。
+      // 默认不开启时不注入工具——模型看不到就不会反复尝试，也不会触发组件下载。
+      if (this.s.mediaEnabled && this.s.host?.mediaRenderer) tools.push(this.getRenderMediaToolDef());
       if (this.s.questWebSearch) {
         const base = getToolDefinitions() as unknown as ToolDef[];
         tools.push(
@@ -117,6 +122,61 @@ export class ToolDefBuilder {
             language: { type: "string", description: "仅 type=code 时填写：编程语言，如 python / typescript / bash。决定保存的扩展名。" },
           },
           required: ["title", "type", "content"],
+        },
+      },
+    };
+  }
+
+  /**
+   * render_media 工具定义：把 HTML 动画渲染成 GIF / MP4。
+   *
+   * 描述里把「渲染契约」写死，因为渲染是确定性逐帧截图，不是录屏：
+   * 页面里靠真实时间、用户交互、外部网络的写法，到了这里就是一张静止的图或一块空白。
+   * 模型不知道这些约束就会反复交出"看起来没动"的片子，白烧几十秒渲染时间。
+   */
+  private getRenderMediaToolDef(): ToolDef {
+    return {
+      type: "function",
+      function: {
+        name: "render_media",
+        description:
+          "把你写的一段 HTML 动画渲染成 GIF 或 MP4 文件，界面会显示成可播放的卡片。\n\n" +
+          "【什么时候用】用户明确要「动画 / 视频 / GIF / 会动的演示」，并且希望拿到文件。" +
+          "讲解算法、产品演示、数据可视化动画、带字幕的解说短片都适合。\n" +
+          "【不要用】静态图（用 svg 产物）、流程图 / 时序图（用 mermaid）、需要用户交互的页面（用 create_artifact 的 html）。\n" +
+          "【做不到的】实拍或写实镜头、人物口型、背景音乐、音效、克隆声音——不要承诺这些。声音只有「旁白」一种。\n\n" +
+          "【声音规则】GIF 没有音轨。用户要声音 → format 必须是 mp4 并填 narration；" +
+          "只要无声循环动画 → format=gif，不填 narration。旁白由本机语音合成，音色是系统自带的，不要夸大效果。\n\n" +
+          "【HTML 渲染契约（必须遵守，否则成片是静止的或空白的）】\n" +
+          "1. 完整的单文件 HTML，样式和脚本全部内联。**所有网络请求会被拦截**：不能用 CDN、外链字体、外链图片，需要的东西自己内联（SVG / CSS / data URI）。\n" +
+          "2. 页面按 width x height 的固定画布设计：body 设 margin:0、overflow:hidden，主体撑满画布；不要依赖滚动或响应式断点。\n" +
+          "3. 动画从 t=0 开始、到 durationSec 结束，不依赖点击 / 悬停 / 键盘等交互，也不要等用户操作后才开始。\n" +
+          "4. 时间是**确定性逐帧推进**的，不是录屏。可靠的写法有两种：\n" +
+          "   a) CSS animation / transition / Web Animations API：渲染器会逐帧定位到对应时刻，推荐优先用，设 animation-fill-mode: both。\n" +
+          "   b) Canvas / JS 驱动：定义 window.renderFrame = function(t){ ... }，t 为当前秒数（浮点），在里面按 t 绘制整个画面。" +
+          "     不要在 renderFrame 里累加状态，要做成 t 的纯函数，这样每帧结果才稳定。\n" +
+          "   requestAnimationFrame / setTimeout / Date.now() 也会被接管成同一条时间线，但优先用 a) 或 b)。\n" +
+          "5. 不要用 <video> / <audio> 标签，也不要依赖随机数（Math.random 会让每帧不一致，需要随机就用固定种子）。\n" +
+          "6. GIF 想循环自然，让最后一帧接近第一帧。\n\n" +
+          "【旁白】narration 写成口语化的完整句子，系统语音偏慢，按每秒约 3 个汉字估算（实测 14 字约 4 秒、46 字约 13 秒）；时长以旁白为准会自动延长，" +
+          "所以让画面节奏和旁白长度大致对得上，别写 200 字旁白配 3 秒动画。\n\n" +
+          "【渲染很慢】每秒约几十帧要逐帧截图，30 秒以上的 MP4 会等较久；先做短版本让用户确认，再按需加长。" +
+          "一次调用只出一个文件，需要 GIF 和 MP4 两份就分别调用。\n\n" +
+          "【修改已有成片】重新调用本工具、传入修改后的完整 HTML；同名标题会自动保存为新版本。" +
+          "调用成功后不必再贴 HTML，简短说明成片内容即可。",
+        parameters: {
+          type: "object",
+          properties: {
+            title: { type: "string", description: "成片标题，简短（如“冒泡排序演示”）。会用作文件名，不要带路径或扩展名。" },
+            html: { type: "string", description: "完整的单文件 HTML 动画，遵守上面的渲染契约" },
+            format: { type: "string", enum: ["gif", "mp4"], description: "gif=无声循环动画；mp4=可带旁白。要声音必须选 mp4" },
+            durationSec: { type: "number", description: "成片时长（秒）。mp4 默认 5、最长 60；gif 默认 3、最长 15。有旁白且旁白更长时会自动延长" },
+            width: { type: "number", description: "画面宽（像素）。mp4 默认 1280，gif 默认 640" },
+            height: { type: "number", description: "画面高（像素）。mp4 默认 720，gif 默认 360" },
+            fps: { type: "number", description: "帧率。mp4 默认 24（最高 30），gif 默认 12（最高 15）。越高渲染越慢" },
+            narration: { type: "string", description: "旁白文本（本机语音合成）。仅 mp4 有效；不填则成片无声" },
+          },
+          required: ["title", "html", "format"],
         },
       },
     };

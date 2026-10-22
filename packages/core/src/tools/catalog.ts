@@ -84,6 +84,10 @@ export enum ToolName {
   // 渲染成可预览的卡片。后端直接写盘，所以不带文件工具的问答模式也能用。
   // 面向用户交互，子 Agent 不需要，故只在 ToolDefBuilder 里注入给主 Agent。
   CreateArtifact = "create_artifact",
+  // 媒体渲染：把模型写的 HTML 动画在后端离屏渲染成 GIF / MP4（可选本机语音旁白）。
+  // 与 create_artifact 的区别：产物是后端渲染出的二进制文件，模型只给 HTML 和参数。
+  // 不碰仓库、不给模型任何命令权限，所以 Quest 模式也可以用；仅在宿主提供 mediaRenderer 时注入。
+  RenderMedia = "render_media",
 }
 
 /**
@@ -317,6 +321,9 @@ export const TOOL_CATALOG: Record<ToolName, ToolSpec> = {
   // 产物：入参 content 就是整份成品（可能很大），调用本身会留在 assistant 消息里；
   // 标 transient 让工具【结果】那条短回执跨轮被裁掉，不占上下文。
   [ToolName.CreateArtifact]: { status: S("正在生成产物...", "editing"), requiresArgs: true, transient: true },
+  // 媒体渲染：入参 html 可能很大，调用本身会留在 assistant 消息里；
+  // 标 transient 让工具【结果】那条回执跨轮被裁掉。渲染耗时较长，进度由执行过程中的 status 事件细化。
+  [ToolName.RenderMedia]: { status: S("正在渲染动画...", "running"), requiresArgs: true, transient: true },
 };
 
 const DEFAULT_CONTENT_LIMIT = 3_000;

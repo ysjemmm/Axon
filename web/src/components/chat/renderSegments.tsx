@@ -687,9 +687,10 @@ export function renderSegments(
       continue;
     }
 
-    // create_artifact 段：渲染成产物卡片，不走普通工具卡片。
+    // create_artifact / render_media 段：渲染成产物卡片，不走普通工具卡片。
+    // render_media 的成片同样走 artifact 协议，卡片、历史恢复都是同一套。
     // 每次调用就是一份独立产物（同名会存成新版本），所以不做合并/去重，一次调用一张卡。
-    if (seg.type === "tool" && seg.name === "create_artifact") {
+    if (seg.type === "tool" && (seg.name === "create_artifact" || seg.name === "render_media")) {
       nodes.push(<ArtifactCard key={seg.id} seg={seg} />);
       i++;
       continue;

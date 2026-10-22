@@ -195,6 +195,10 @@ export class ToolCallExecutor {
       const out = await this.s.createArtifact(toolArgs, meta);
       result = out.result;
       status = out.status;
+    } else if (route === "render_media") {
+      const out = await this.s.renderMedia(toolArgs, meta);
+      result = out.result;
+      status = out.status;
     } else if (route === "command") {
       const out = await this.s.commandToolExecutor.execute({
         toolName,

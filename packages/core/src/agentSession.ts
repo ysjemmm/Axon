@@ -37,7 +37,7 @@ import {
 } from "./session/humanizedStatus.js";
 import { CoworkSnapshotter } from "./cowork/snapshotter.js";
 import { resolveArtifactDir } from "./session/artifactDir.js";
-import { artifactExtension, parseArtifactArgs, pickVersionedPath, sanitizeStem } from "./session/artifactFile.js";
+import { artifactExtension, parseArtifactArgs, parseRenderMediaArgs, pickVersionedPath, sanitizeStem } from "./session/artifactFile.js";
 /**
  * 单轮最多登记的产出文件数。
  * 防止某个批量生成脚本让模型报上来几百个文件把界面刷爆。
@@ -285,6 +285,16 @@ export class AgentSession {
    */
   /** @internal */ think = true;
   /** @internal */ questWebSearch = false;
+  /**
+   * 是否允许 AI 生成动画 / 视频（render_media）。
+   *
+   * 默认关闭：这个能力要在本机下载一份 ffmpeg（约 160MB）并驱动无头浏览器渲染，
+   * 属于"重资产"能力，不该在用户没表态时占用磁盘和带宽。
+   * 由设置项 axon.media.enabled 控制，开启时宿主会立即开始下载组件。
+   *
+   * 关闭时工具根本不注入 —— 模型看不到它，就不会反复尝试一个不可用的能力。
+   */
+  /** @internal */ mediaEnabled = false;
 
   /**
    * 办公化状态文案（Cowork 面板）。
@@ -644,6 +654,110 @@ export class AgentSession {
     } catch (err) {
       if (meta) meta.userMessage = "保存产物失败，请检查产物目录是否可写";
       return { result: `保存产物失败：${(err as Error).message}`, status: "error" };
+    }
+  }
+
+  /**
+   * render_media 工具实现：把模型写的 HTML 动画在后端离屏渲染成 GIF / MP4，落到产物目录。
+   *
+   * ── 与 createArtifact 的分工 ──
+   * createArtifact 收的是模型给出的文本；这里收的是 HTML + 参数，成片由 host.mediaRenderer
+   * （无头浏览器截帧 + ffmpeg 编码 + 本机语音旁白）生成。模型全程拿不到 shell。
+   *
+   * 成功后沿用同一套产物协议（meta.artifact + artifact_created），前端卡片、历史恢复无需另起一套。
+   * 失败时 result 给模型看（说清原因和出路），meta.userMessage 给用户看（不含内部字段名与本机路径）。
+   */
+  /** @internal */ async renderMedia(
+    toolArgs: Record<string, unknown>,
+    meta?: ToolMeta,
+  ): Promise<{ result: string; status: "success" | "error" }> {
+    const renderer = this.host.mediaRenderer;
+    if (!renderer) {
+      if (meta) meta.userMessage = "当前环境暂不支持渲染动画";
+      return {
+        result: "当前运行环境不支持媒体渲染。请改用 create_artifact 交付 type=html 的动画页面，让用户在预览里观看。",
+        status: "error",
+      };
+    }
+
+    const parsed = parseRenderMediaArgs(toolArgs);
+    if (!parsed.ok) {
+      if (meta) meta.userMessage = "动画参数不完整或格式有误，未能渲染";
+      return { result: parsed.error, status: "error" };
+    }
+
+    const env = await renderer.checkEnv();
+    if (!env.ok) {
+      if (meta) meta.userMessage = "缺少渲染动画所需的组件";
+      return { result: env.problem || "渲染环境不可用", status: "error" };
+    }
+
+    const dir = this.getArtifactDir();
+    if (!dir) {
+      if (meta) meta.userMessage = "暂时无法确定成片保存位置";
+      return { result: "当前无法确定产物保存位置（会话尚未建立），请稍后再试。", status: "error" };
+    }
+
+    try {
+      await this.host.fs.mkdirp(dir);
+      const stem = sanitizeStem(parsed.title);
+      const ext = artifactExtension(parsed.format);
+      const absPath = await pickVersionedPath(dir, stem, ext, async (p) => !!(await this.host.fs.stat(p)));
+
+      // 进度：渲染要几十秒，没有反馈用户会以为卡死。节流到 500ms 一条，别刷爆事件通道。
+      let lastSentAt = 0;
+      const phaseText = {
+        provision: "正在准备渲染组件（首次使用需自动下载，请稍候）",
+        narration: "正在合成旁白",
+        frames: "正在渲染画面",
+        encoding: "正在编码成片",
+      } as const;
+      const out = await renderer.render({
+        html: parsed.html,
+        format: parsed.format,
+        durationSec: parsed.durationSec,
+        fps: parsed.fps,
+        width: parsed.width,
+        height: parsed.height,
+        narration: parsed.narration,
+        outputPath: absPath,
+        signal: this.abortSignal,
+        onProgress: ({ phase, done, total }) => {
+          const now = Date.now();
+          if (now - lastSentAt < 500 && done < total) return;
+          lastSentAt = now;
+          const suffix =
+            phase === "frames" && total > 0
+              ? `（${done}/${total} 帧）`
+              : phase === "provision" && total > 0
+                ? ` ${Math.floor((done / total) * 100)}%`
+                : "";
+          this.send("status", { content: `${phaseText[phase]}${suffix}...`, phase: "running" });
+        },
+      });
+
+      const versionMatch = /-v(\d+)\.[^.]+$/.exec(absPath);
+      const version = versionMatch ? Number(versionMatch[1]) : 1;
+      const artifact = { path: absPath, title: parsed.title, type: parsed.format, size: out.size, version };
+      if (meta) meta.artifact = artifact;
+      this.send("artifact_created", artifact);
+
+      const lines = [
+        `成片已保存：${absPath}（${parsed.format.toUpperCase()}，${out.durationSec.toFixed(1)} 秒，${out.frameCount} 帧，` +
+          `${parsed.width}x${parsed.height}，${out.size} 字节${version > 1 ? `，同名已存在，保存为第 ${version} 版` : ""}）。`,
+        out.hasAudio ? "成片带旁白音轨。" : parsed.format === "mp4" ? "成片没有音轨（无声）。" : "GIF 无声。",
+      ];
+      if (parsed.notes.length) lines.push(`参数调整：${parsed.notes.join("；")}。`);
+      if (out.warnings.length) lines.push(`注意：${out.warnings.join("；")}。请如实告诉用户，不要假装成片是完整的。`);
+      lines.push("界面已显示为可播放的卡片，回复里不必再贴 HTML，简短说明成片内容即可。");
+      return { result: lines.join("\n"), status: "success" };
+    } catch (err) {
+      if (this.abortSignal?.aborted) {
+        if (meta) meta.userMessage = "已取消渲染";
+        return { result: "渲染已被用户取消。", status: "error" };
+      }
+      if (meta) meta.userMessage = "动画渲染失败，可换种写法重试";
+      return { result: `渲染失败：${(err as Error).message}`, status: "error" };
     }
   }
 
@@ -1288,6 +1402,11 @@ export class AgentSession {
   /** 设置 Quest 模式选项（每轮用户输入前由 SessionHub 注入） */
   setQuestOptions(opts: { webSearch?: boolean }): void {
     if (typeof opts.webSearch === "boolean") this.questWebSearch = opts.webSearch;
+  }
+
+  /** 设置动画生成能力开关（建会话时注入 + 设置变更时热更新） */
+  setMediaEnabled(enabled: boolean): void {
+    this.mediaEnabled = enabled === true;
   }
 
   /**

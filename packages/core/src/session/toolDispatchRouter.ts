@@ -15,6 +15,7 @@ export type ToolDispatchRoute =
   | "report_outputs"
   | "update_memory"
   | "create_artifact"
+  | "render_media"
   | "command"
   | "mcp"
   | "generic";
@@ -36,6 +37,7 @@ export function resolveToolDispatchRoute(toolName: string): ToolDispatchRoute {
   if (toolName === ToolName.ReportOutputs) return "report_outputs";
   if (toolName === ToolName.UpdateMemory) return "update_memory";
   if (toolName === ToolName.CreateArtifact) return "create_artifact";
+  if (toolName === ToolName.RenderMedia) return "render_media";
   if (toolName === ToolName.ExecuteCommand || toolName === ToolName.StartProcess) return "command";
   if (toolName.startsWith(MCP_TOOL_PREFIX)) return "mcp";
   return "generic";

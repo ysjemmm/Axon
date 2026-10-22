@@ -252,6 +252,24 @@ export class SessionHub {
     }
   }
 
+  /**
+   * 热更新动画生成开关到所有活跃会话。
+   *
+   * 开启后下一轮工具集里就会出现 render_media；关闭后立刻消失。
+   * 正在跑的那一轮不受影响（工具集是每轮组装时读取的）。
+   */
+  reloadMediaEnabled(): void {
+    if (!this.deps.getMediaEnabled) return;
+    try {
+      const enabled = this.deps.getMediaEnabled();
+      for (const session of this.activeSessions.values()) {
+        session.setMediaEnabled(enabled);
+      }
+    } catch (err) {
+      console.warn("[media] 同步动画开关失败:", (err as Error).message);
+    }
+  }
+
   /** 获取或创建一个 session 的代理 channel。【纯查找/创建，不改归属】 */
   private getOrCreateSessionChannel(sessionId: string): SessionChannel {
     let ch = this.sessionChannels.get(sessionId);
@@ -332,6 +350,10 @@ export class SessionHub {
     // 注入 trace 记录配置（等级 / 上限 / 保留份数）
     if (this.deps.getTraceConfig) {
       session.setTraceConfig(this.deps.getTraceConfig());
+    }
+    // 注入动画生成开关（默认关闭；关闭时不注入 render_media 工具、不下载组件）
+    if (this.deps.getMediaEnabled) {
+      session.setMediaEnabled(this.deps.getMediaEnabled());
     }
     return session;
   }

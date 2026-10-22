@@ -24,6 +24,10 @@ describe("resolveToolDispatchRoute", () => {
     expect(resolveToolDispatchRoute("mcp__server__tool")).toBe("mcp");
   });
 
+  it("识别媒体渲染工具", () => {
+    expect(resolveToolDispatchRoute(ToolName.RenderMedia)).toBe("render_media");
+  });
+
   it("其他工具归为 generic", () => {
     expect(resolveToolDispatchRoute("read_file")).toBe("generic");
     expect(resolveToolDispatchRoute("search")).toBe("generic");

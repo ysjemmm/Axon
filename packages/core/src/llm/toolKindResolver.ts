@@ -80,6 +80,9 @@ const TOOL_KIND_MAP: Record<ToolName, ToolKind> = {
   // 产物：本质是写文件（落到产物目录），归 edit。与 wiki_save_page 同理——
   // 它不产生 fileDiff，所以不会进「代码改动」那套审阅呈现；渲染成产物卡片由前端单独接管。
   [ToolName.CreateArtifact]: "edit",
+  // 媒体渲染：同样是往产物目录写一个文件（只是内容由后端渲染得到），不产生 fileDiff，归 edit，
+  // 卡片同样由前端的产物卡片接管。
+  [ToolName.RenderMedia]: "edit",
   // 会话记忆：不读不写磁盘，只改会话自己的一个字段，同样归 other
   [ToolName.UpdateMemory]: "other",
 };

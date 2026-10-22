@@ -17,13 +17,14 @@
  *   缺失   → 成功却没有产物数据（旧数据 / 异常），如实说明，不画假卡片
  */
 
-import { AlertCircle, FileCode2, FileText, Globe, Image as ImageIcon, Loader2, FileType2 } from "lucide-react";
+import { AlertCircle, FileCode2, FileText, Film, Globe, Image as ImageIcon, Loader2, FileType2 } from "lucide-react";
 import type { ToolSegment, ArtifactType } from "./types";
 import { canPreviewFiles, requestFilePreview } from "./filePreview";
 import { formatFileSize } from "./format";
 import {
   artifactSubtitle,
   artifactTypeLabel,
+  pendingArtifactHint,
   pendingArtifactTitle,
   resolveArtifactCardState,
 } from "./artifactMeta";
@@ -35,6 +36,8 @@ function TypeIcon({ type, className }: { type: ArtifactType; className?: string 
     case "svg": return <ImageIcon className={className} />;
     case "markdown": return <FileText className={className} />;
     case "code": return <FileCode2 className={className} />;
+    case "gif":
+    case "mp4": return <Film className={className} />;
     default: return <FileType2 className={className} />;
   }
 }
@@ -56,7 +59,7 @@ export function ArtifactCard({ seg }: { seg: ToolSegment }) {
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-[14px] font-medium text-foreground">{pendingArtifactTitle(seg.args)}</div>
-          <div className="mt-0.5 text-[12px] text-muted-foreground">正在生成产物…</div>
+          <div className="mt-0.5 text-[12px] text-muted-foreground">{pendingArtifactHint(seg.name)}</div>
         </div>
       </div>
     );

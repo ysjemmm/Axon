@@ -567,6 +567,12 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
       ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
       ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp", ".ico": "image/x-icon",
     };
+    const videoMime: Record<string, string> = { ".mp4": "video/mp4", ".webm": "video/webm" };
+    /**
+     * 视频预览的体积上限。视频要以 base64 经命令通道整段送进 workbench，再内嵌进预览页，
+     * 比图片更吃内存：1080p 十几秒的 mp4 通常在 10MB 量级，超过这个上限的请改用系统播放器。
+     */
+    const MAX_VIDEO_BYTES = 32 * 1024 * 1024;
     const textExts = new Set([
       ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".json5", ".yaml", ".yml", ".xml",
       ".css", ".scss", ".less", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".vue", ".svelte",
@@ -604,6 +610,16 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
 
       if ([".xls", ".doc", ".ppt"].includes(ext)) {
         await render({ kind: "unsupported", message: "旧版 Office 格式暂不支持预览，请另存为 xlsx、docx 或 pptx" });
+        return;
+      }
+
+      if (videoMime[ext]) {
+        if (stat.size > MAX_VIDEO_BYTES) {
+          await render({ kind: "unsupported", message: "视频文件过大，暂不支持在此预览，请用系统播放器打开" });
+          return;
+        }
+        const buf = await fs.readFile(filePath);
+        await render({ kind: "video", mime: videoMime[ext], content: buf.toString("base64") });
         return;
       }
 

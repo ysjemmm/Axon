@@ -287,6 +287,9 @@ wss.on("connection", (ws: WebSocket, req) => {
     mcp: createNodeMcpCapability(),
     commandTrust: new FileCommandTrustStore(),
     getCompactionConfig: readCompactionConfig,
+    // 动画 / 视频生成开关：Web 形态没有设置面板，用环境变量显式开启（默认关闭）。
+    // 开启后首次渲染会自动下载 ffmpeg 到用户缓存。
+    getMediaEnabled: () => process.env.AXON_MEDIA_ENABLED === "1",
   });
 
   ws.on("message", async (data) => {

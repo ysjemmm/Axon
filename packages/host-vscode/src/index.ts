@@ -11,7 +11,7 @@
  */
 
 import type { AgentHost } from "@axon/core";
-import { PlaywrightBrowser } from "@axon/host-node";
+import { PlaywrightBrowser, NodeMediaRenderer } from "@axon/host-node";
 import { VSCodeFileSystem } from "./fs.js";
 import { VSCodeCommandRunner } from "./commands.js";
 import { VSCodeProcessManager } from "./processes.js";
@@ -43,6 +43,8 @@ export function createVSCodeAgentHost(): AgentHost {
     commands: new VSCodeCommandRunner(),
     processes: new VSCodeProcessManager(),
     webBrowser: new PlaywrightBrowser(),
+    // 渲染器是纯 Node 能力（无头浏览器 + ffmpeg + 子进程），与 vscode API 无关，直接复用
+    mediaRenderer: new NodeMediaRenderer(),
     diagnostics: new VSCodeDiagnostics(),
     browser: new VSCodeDirectoryBrowser(),
     search: new VSCodeRipgrepSearch(),

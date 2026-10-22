@@ -13,6 +13,7 @@ export * from "./fs.js";
 export * from "./commands.js";
 export * from "./processes.js";
 export * from "./webBrowser.js";
+export * from "./mediaRenderer.js";
 export * from "./diagnostics.js";
 export * from "./edits.js";
 export * from "./browser.js";
@@ -24,6 +25,7 @@ import type { HostFileSystem } from "./fs.js";
 import type { HostCommandRunner } from "./commands.js";
 import type { HostProcessManager } from "./processes.js";
 import type { HostWebBrowser } from "./webBrowser.js";
+import type { HostMediaRenderer } from "./mediaRenderer.js";
 import type { HostDiagnostics } from "./diagnostics.js";
 import type { EditPresenter } from "./edits.js";
 import type { DirectoryBrowser } from "./browser.js";
@@ -45,6 +47,8 @@ export interface AgentHost {
   readonly processes?: HostProcessManager;
   /** 网页浏览器（CDP/Playwright）：读控制台/报错/网络 + 截图；不支持的形态为 undefined */
   readonly webBrowser?: HostWebBrowser;
+  /** 媒体渲染（HTML 动画 → GIF / MP4，离屏无头浏览器 + ffmpeg）；不支持的形态为 undefined */
+  readonly mediaRenderer?: HostMediaRenderer;
   /** 类型/编译诊断 */
   readonly diagnostics: HostDiagnostics;
   /** 目录浏览（目录选择器逐层下钻） */

@@ -78,4 +78,11 @@ export interface SessionHubDeps {
    * 不注入则使用 DEFAULT_CREDIT_BUDGET_CONFIG（默认启用）。
    */
   getCreditBudgetConfig?: () => CreditBudgetUserConfig;
+  /**
+   * 可选：动画 / 视频生成能力开关（设置项 axon.media.enabled）。
+   *
+   * 默认关闭。开启后才会给会话注入 render_media 工具，并触发渲染组件（ffmpeg）的下载。
+   * 关闭时不注入工具、不下载——这是"重资产能力必须用户明确同意"的边界。
+   */
+  getMediaEnabled?: () => boolean;
 }

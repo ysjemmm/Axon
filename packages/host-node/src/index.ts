@@ -17,6 +17,7 @@ import { NodeFileSystem } from "./fs.js";
 import { NodeCommandRunner } from "./commands.js";
 import { NodeProcessManager } from "./processes.js";
 import { PlaywrightBrowser } from "./webBrowser.js";
+import { NodeMediaRenderer } from "./mediaRenderer.js";
 import { NodeDiagnostics } from "./diagnostics.js";
 import { NodeDirectoryBrowser } from "./browser.js";
 import { NodeEditPresenter } from "./edits.js";
@@ -25,6 +26,8 @@ export { NodeFileSystem } from "./fs.js";
 export { NodeCommandRunner } from "./commands.js";
 export { NodeProcessManager } from "./processes.js";
 export { PlaywrightBrowser } from "./webBrowser.js";
+export { NodeMediaRenderer } from "./mediaRenderer.js";
+export { warmupFfmpeg, ensureFfmpeg, findFfmpeg } from "./ffmpegProvision.js";
 export { NodeDiagnostics } from "./diagnostics.js";
 export { NodeDirectoryBrowser } from "./browser.js";
 export { NodeEditPresenter } from "./edits.js";
@@ -42,6 +45,7 @@ export function createNodeAgentHost(): AgentHost {
     commands: new NodeCommandRunner(),
     processes: new NodeProcessManager(),
     webBrowser: new PlaywrightBrowser(),
+    mediaRenderer: new NodeMediaRenderer(),
     diagnostics: new NodeDiagnostics(),
     browser: new NodeDirectoryBrowser(),
     edits: new NodeEditPresenter(),

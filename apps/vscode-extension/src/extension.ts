@@ -17,7 +17,7 @@ import { join, basename } from "node:path";
 import { SessionHub, type ControlCommand, type WorkspaceGroup, type CompactionUserConfig, type CreditBudgetUserConfig, webSearch, webFetch, setBuiltinPowersDir } from "@axon/core";
 import { DEFAULT_COMPACTION_CONFIG, DEFAULT_CREDIT_BUDGET_CONFIG, DEFAULT_TRACE_CONFIG, type TraceConfig } from "@axon/core";
 import { createVSCodeAgentHost, VSCodeCommandTrustStore } from "@axon/host-vscode";
-import { JsonFileStorage, createNodeMcpCapability } from "@axon/host-node";
+import { JsonFileStorage, createNodeMcpCapability, ensureFfmpeg } from "@axon/host-node";
 import { loadProviderEnv } from "./loadEnv.js";
 import { VSCodeChannel } from "./vscodeChannel.js";
 import { AxonViewProvider } from "./viewProvider.js";
@@ -108,6 +108,51 @@ function readWikiConfig(): { provider: string; model: string; maxPages: number }
     model: cfg.get<string>("model", "") || "",
     maxPages: cfg.get<number>("maxPages", 15),
   };
+}
+
+/**
+ * 读取动画 / 视频生成开关（axon.media.enabled）。
+ *
+ * 默认关闭：这个能力要在本机备一份 ffmpeg（约 160MB）并驱动无头浏览器渲染，
+ * 属于重资产能力，不该在用户没表态时占磁盘和带宽。
+ */
+function readMediaEnabled(): boolean {
+  return vscode.workspace.getConfiguration("axon.media").get<boolean>("enabled", false) === true;
+}
+
+/**
+ * 准备动画渲染组件：用户一旦开启开关就立即执行，不等到第一次生成时才下载。
+ *
+ * 用带进度的通知而不是静默后台下载：160MB 的下载如果没有任何反馈，
+ * 用户会以为开关坏了。失败也只提示一次，不阻塞其它功能。
+ */
+async function prepareMediaComponents(): Promise<void> {
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: "Axon：准备动画渲染组件",
+      cancellable: false,
+    },
+    async (progress) => {
+      try {
+        await ensureFfmpeg({
+          onProgress: ({ phase, doneBytes, totalBytes }) => {
+            if (phase === "download" && totalBytes > 0) {
+              const pct = Math.min(100, Math.floor((doneBytes / totalBytes) * 100));
+              progress.report({ message: `下载中 ${pct}%（约 ${Math.round(totalBytes / 1048576)}MB，仅需一次）` });
+            } else if (phase === "extract") {
+              progress.report({ message: "正在解压…" });
+            } else if (phase === "verify") {
+              progress.report({ message: "正在校验…" });
+            }
+          },
+        });
+        void vscode.window.showInformationMessage("动画渲染组件已就绪，现在可以让 AI 生成 GIF / MP4 了。");
+      } catch (err) {
+        void vscode.window.showErrorMessage(`动画渲染组件准备失败：${(err as Error).message}`);
+      }
+    },
+  );
 }
 
 /**
@@ -512,6 +557,8 @@ export function activate(context: vscode.ExtensionContext): void {
     getCreditBudgetConfig: () => readCreditBudgetConfig(),
     // trace 记录配置：读取 VS Code 设置（axon.trace.*），默认 normal
     getTraceConfig: () => readTraceConfig(),
+    // 动画 / 视频生成开关：读取 VS Code 设置（axon.media.enabled），默认关闭
+    getMediaEnabled: () => readMediaEnabled(),
   });
 
   // REST 请求路由（webview 形态下替代 Express）
@@ -581,8 +628,16 @@ export function activate(context: vscode.ExtensionContext): void {
       if (e.affectsConfiguration("axon.trace")) {
         hub.reloadTraceConfig();
       }
+      if (e.affectsConfiguration("axon.media.enabled")) {
+        hub.reloadMediaEnabled();
+        // 用户刚打开开关：立刻开始准备组件，不要等到第一次生成时才发现要下载 160MB
+        if (readMediaEnabled()) void prepareMediaComponents();
+      }
     })
   );
+
+  // 动画能力已在设置里开启时，启动即后台准备组件（已缓存则瞬间返回，不联网）
+  if (readMediaEnabled()) void prepareMediaComponents();
 
   // ── 编辑器选区一键操作 helper ───────────────────────────────────────────
   const quickAction = async (

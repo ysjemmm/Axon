@@ -7,11 +7,22 @@
  */
 
 import { basename, extname, join } from "node:path";
+import { MEDIA_DEFAULTS, MEDIA_LIMITS, type MediaFormat } from "../host/mediaRenderer.js";
+
+/** 文本类产物：由模型把完整内容作为字符串交付（create_artifact） */
+export type TextArtifactType = "html" | "svg" | "markdown" | "code" | "text";
+
+/** 媒体类产物：由后端渲染得到的二进制文件（render_media），模型给不出这类内容 */
+export type MediaArtifactType = MediaFormat;
 
 /** 产物类型：决定落盘扩展名，也是前端选择预览方式的依据 */
-export type ArtifactType = "html" | "svg" | "markdown" | "code" | "text";
+export type ArtifactType = TextArtifactType | MediaArtifactType;
 
-export const ARTIFACT_TYPES: readonly ArtifactType[] = ["html", "svg", "markdown", "code", "text"];
+/**
+ * create_artifact 接受的类型——只含文本类。
+ * 刻意不含 gif / mp4：模型无法用字符串给出合法的二进制内容，放进来只会诱导它塞 base64。
+ */
+export const ARTIFACT_TYPES: readonly TextArtifactType[] = ["html", "svg", "markdown", "code", "text"];
 
 /** 单个产物内容上限（字符）。超出多半是模型把整个项目塞进来了，应拆成多个文件 */
 export const MAX_ARTIFACT_CHARS = 500_000;
@@ -29,6 +40,8 @@ const DEFAULT_EXT: Record<ArtifactType, string> = {
   markdown: ".md",
   code: ".txt",
   text: ".txt",
+  gif: ".gif",
+  mp4: ".mp4",
 };
 
 /** code 类型常见语言 → 扩展名。不在表里的退回 .txt，而不是把 language 原样拼进扩展名 */
@@ -40,7 +53,8 @@ const CODE_EXT: Record<string, string> = {
   css: ".css", json: ".json", yaml: ".yml", yml: ".yml", xml: ".xml", toml: ".toml",
 };
 
-export function isArtifactType(value: unknown): value is ArtifactType {
+/** 是否为 create_artifact 可接受的（文本类）产物类型 */
+export function isArtifactType(value: unknown): value is TextArtifactType {
   return typeof value === "string" && (ARTIFACT_TYPES as readonly string[]).includes(value);
 }
 
@@ -105,7 +119,7 @@ export async function pickVersionedPath(
 
 /** 工具入参校验结果 */
 export type ArtifactArgsResult =
-  | { ok: true; title: string; type: ArtifactType; content: string; language?: string }
+  | { ok: true; title: string; type: TextArtifactType; content: string; language?: string }
   | { ok: false; error: string };
 
 /**
@@ -136,6 +150,127 @@ export function parseArtifactArgs(args: Record<string, unknown>): ArtifactArgsRe
 /** 从路径取展示用的文件名 */
 export function artifactFileName(absPath: string): string {
   return basename(absPath);
+}
+
+/** render_media 入参校验结果（数值已按限额钳制，notes 记录被调整过的地方） */
+export type RenderMediaArgsResult =
+  | {
+      ok: true;
+      title: string;
+      html: string;
+      format: MediaFormat;
+      durationSec: number;
+      fps: number;
+      width: number;
+      height: number;
+      narration?: string;
+      /** 被自动调整的参数说明，随结果回给模型，由它如实告诉用户 */
+      notes: string[];
+    }
+  | { ok: false; error: string };
+
+/** 接受数字或数字字符串（模型偶尔把数字写成字符串），其余视为未提供 */
+function toNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
+
+function clamp(n: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, n));
+}
+
+/** 向下取偶：yuv420p 编码要求宽高为偶数 */
+function toEven(n: number): number {
+  const v = Math.floor(n);
+  return v % 2 === 0 ? v : v - 1;
+}
+
+/**
+ * 校验 render_media 的入参。
+ *
+ * 原则：越界的数值一律钳制并记入 notes（模型多半只是估错了范围，没必要为此多烧一轮）；
+ * 只有"缺必填项"和"自相矛盾"才报错。
+ * 自相矛盾的典型就是 gif + 旁白：GIF 容器没有音轨，悄悄丢掉旁白会让用户拿到一个哑片
+ * 还以为是我们坏了，所以直接报错、点明出路。
+ */
+export function parseRenderMediaArgs(args: Record<string, unknown>): RenderMediaArgsResult {
+  const title = typeof args.title === "string" ? args.title.trim() : "";
+  if (!title) return { ok: false, error: "缺少 title。请给成片起一个简短的标题，例如“冒泡排序演示”。" };
+
+  const html = typeof args.html === "string" ? args.html : "";
+  if (!html.trim()) return { ok: false, error: "html 为空。请传入完整的单文件 HTML（样式与脚本内联）。" };
+  if (html.length > MAX_ARTIFACT_CHARS) {
+    return {
+      ok: false,
+      error: `html 过长（${html.length} 字符，上限 ${MAX_ARTIFACT_CHARS}）。请精简，动画不需要内嵌大块数据。`,
+    };
+  }
+
+  const format = args.format;
+  if (format !== "gif" && format !== "mp4") {
+    return { ok: false, error: `format 必须是 gif 或 mp4，收到：${String(format)}。需要声音必须选 mp4。` };
+  }
+
+  const narrationRaw = typeof args.narration === "string" ? args.narration.trim() : "";
+  if (narrationRaw && format === "gif") {
+    return {
+      ok: false,
+      error:
+        "GIF 没有音轨，无法带旁白。用户要声音就把 format 改成 mp4；只要无声循环动画就去掉 narration。" +
+        "两种都要的话，分两次调用。",
+    };
+  }
+  if (narrationRaw.length > MEDIA_LIMITS.maxNarrationChars) {
+    return {
+      ok: false,
+      error: `narration 过长（${narrationRaw.length} 字，上限 ${MEDIA_LIMITS.maxNarrationChars}）。请精简旁白，或拆成多段分别渲染。`,
+    };
+  }
+
+  const notes: string[] = [];
+  const isGif = format === "gif";
+  const def = MEDIA_DEFAULTS[format];
+  const maxDuration = isGif ? MEDIA_LIMITS.maxGifDurationSec : MEDIA_LIMITS.maxDurationSec;
+  const maxFps = isGif ? MEDIA_LIMITS.maxGifFps : MEDIA_LIMITS.maxFps;
+  const maxWidth = isGif ? MEDIA_LIMITS.maxGifWidth : MEDIA_LIMITS.maxWidth;
+  const maxHeight = isGif ? MEDIA_LIMITS.maxGifHeight : MEDIA_LIMITS.maxHeight;
+
+  const rawDuration = toNumber(args.durationSec) ?? def.durationSec;
+  const durationSec = clamp(rawDuration, 1, maxDuration);
+  if (durationSec !== rawDuration) notes.push(`时长已调整为 ${durationSec} 秒（${format} 允许 1~${maxDuration} 秒）`);
+
+  const rawFps = toNumber(args.fps) ?? def.fps;
+  let fps = Math.round(clamp(rawFps, 1, maxFps));
+  if (fps !== rawFps) notes.push(`帧率已调整为 ${fps}（${format} 允许 1~${maxFps}）`);
+  if (durationSec * fps > MEDIA_LIMITS.maxFrames) {
+    fps = Math.max(1, Math.floor(MEDIA_LIMITS.maxFrames / durationSec));
+    notes.push(`总帧数超过上限 ${MEDIA_LIMITS.maxFrames}，帧率降为 ${fps}`);
+  }
+
+  const rawWidth = toNumber(args.width) ?? def.width;
+  const rawHeight = toNumber(args.height) ?? def.height;
+  const width = toEven(clamp(rawWidth, MEDIA_LIMITS.minSize, maxWidth));
+  const height = toEven(clamp(rawHeight, MEDIA_LIMITS.minSize, maxHeight));
+  if (width !== rawWidth || height !== rawHeight) {
+    notes.push(`画面尺寸已调整为 ${width}x${height}（${format} 允许 ${MEDIA_LIMITS.minSize}~${maxWidth} x ${MEDIA_LIMITS.minSize}~${maxHeight}，且为偶数）`);
+  }
+
+  return {
+    ok: true,
+    title,
+    html,
+    format,
+    durationSec,
+    fps,
+    width,
+    height,
+    ...(narrationRaw ? { narration: narrationRaw } : {}),
+    notes,
+  };
 }
 
 /** 扩展名（含点，小写） */

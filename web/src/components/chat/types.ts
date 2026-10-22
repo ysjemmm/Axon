@@ -7,8 +7,8 @@
 
 import type { ToolStatus } from "@/components/ToolCallItem";
 
-/** 产物类型：与后端 artifactFile.ts 的 ArtifactType 一致（两侧字符串值必须同步） */
-export type ArtifactType = "html" | "svg" | "markdown" | "code" | "text";
+/** 产物类型：与后端 artifactFile.ts 的 ArtifactType 一致（两侧字符串值必须同步）。gif / mp4 来自 render_media。 */
+export type ArtifactType = "html" | "svg" | "markdown" | "code" | "text" | "gif" | "mp4";
 
 /** 一份已落盘的产物（后端 create_artifact 成功后的描述） */
 export interface ArtifactInfo {
