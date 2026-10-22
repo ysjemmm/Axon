@@ -112,7 +112,19 @@ jobs:
             echo "::error::冒烟渲染失败：VideoToolbox 编码不可用（含软件回退）"
             exit 1
           }
-          ./ffmpeg -hide_banner -i smoke.mp4 2>&1 | grep -E 'Video: h264|Audio: aac'
+          # 检查成片内容。注意不能用 `ffmpeg -i ... | grep` 的写法：
+          # ffmpeg 只给输入文件、不给输出文件时退出码是 1，配合上面的 pipefail
+          # 会让这一步直接判失败（哪怕 grep 已经匹配到了）。
+          # 所以先把输出收进变量、用 || true 吸收退出码，再按内容判断。
+          INFO="$(./ffmpeg -hide_banner -i smoke.mp4 2>&1 || true)"
+          if echo "$INFO" | grep -q "Video: h264" && echo "$INFO" | grep -q "Audio: aac"; then
+            echo "成片自检通过：含 H.264 视频轨与 AAC 音频轨"
+            echo "$INFO" | grep -E "Video:|Audio:" || true
+          else
+            echo "::error::成片缺少视频轨或音频轨"
+            printf '%s\n' "$INFO" | tail -25
+            exit 1
+          fi
 
       - name: 打包
         run: |
