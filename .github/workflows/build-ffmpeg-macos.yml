@@ -102,9 +102,16 @@ jobs:
             exit 1
           }
           echo "── 冒烟渲染（2 秒测试片）──"
+          # GitHub 的 macOS runner 是虚拟机，没有硬件编码器：不加 -allow_sw 1 会直接报
+          # "Cannot create compression session: -12903"。真实 Mac 上会优先走硬件，
+          # 这里验证的是软件回退路径也能出片——这条路径同样服务于无独显 / 远程桌面的用户。
           ./ffmpeg -hide_banner -loglevel error -f lavfi -i "testsrc2=size=640x360:rate=12:duration=2" \
             -f lavfi -i "sine=frequency=440:duration=2" \
-            -c:v h264_videotoolbox -pix_fmt yuv420p -b:v 2M -c:a aac -shortest -y smoke.mp4
+            -c:v h264_videotoolbox -pix_fmt yuv420p -b:v 2M -allow_sw 1 \
+            -c:a aac -shortest -y smoke.mp4 || {
+            echo "::error::冒烟渲染失败：VideoToolbox 编码不可用（含软件回退）"
+            exit 1
+          }
           ./ffmpeg -hide_banner -i smoke.mp4 2>&1 | grep -E 'Video: h264|Audio: aac'
 
       - name: 打包

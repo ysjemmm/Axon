@@ -52,7 +52,7 @@ const RELEASE_BASE = `https://github.com/BtbN/FFmpeg-Builds/releases/download/${
  */
 const MACOS_RELEASE_BASE =
   (process.env.AXON_FFMPEG_MACOS_BASE || "").trim() ||
-  "https://github.com/axon-ide/ffmpeg-builds/releases/download/macos-v1";
+  "https://github.com/ysjemmm/Axon/releases/download/macos-v1";
 
 /** 一次下载的可选资产（按平台/架构挑选） */
 export interface FfmpegAsset {
