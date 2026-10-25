@@ -270,6 +270,24 @@ export class SessionHub {
     }
   }
 
+  /**
+   * 热更新文生图开关到所有活跃会话。
+   *
+   * 与动画开关同理：开启后下一轮工具集里就会出现 generate_image，关闭后立刻消失。
+   * 但真正能不能出图还取决于宿主是否配置了生图服务（imageGenerator.checkEnv）。
+   */
+  reloadImageEnabled(): void {
+    if (!this.deps.getImageEnabled) return;
+    try {
+      const enabled = this.deps.getImageEnabled();
+      for (const session of this.activeSessions.values()) {
+        session.setImageEnabled(enabled);
+      }
+    } catch (err) {
+      console.warn("[image] 同步生图开关失败:", (err as Error).message);
+    }
+  }
+
   /** 获取或创建一个 session 的代理 channel。【纯查找/创建，不改归属】 */
   private getOrCreateSessionChannel(sessionId: string): SessionChannel {
     let ch = this.sessionChannels.get(sessionId);
@@ -354,6 +372,10 @@ export class SessionHub {
     // 注入动画生成开关（默认关闭；关闭时不注入 render_media 工具、不下载组件）
     if (this.deps.getMediaEnabled) {
       session.setMediaEnabled(this.deps.getMediaEnabled());
+    }
+    // 注入文生图开关（同上：关闭时不注入 generate_image 工具）
+    if (this.deps.getImageEnabled) {
+      session.setImageEnabled(this.deps.getImageEnabled());
     }
     return session;
   }

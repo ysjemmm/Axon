@@ -19,23 +19,31 @@ export type MediaFormat = "gif" | "mp4";
 /**
  * 渲染限额。参数校验（core）与渲染实现（host）共用同一份，避免两边口径漂移。
  *
- * maxFrames 是时间预算：每帧要截一次图（实测约 80~150ms），1200 帧约 2~3 分钟，
- * 再长就该让用户拆成多段，而不是让一次工具调用挂着不动。
+ * 单条片子的硬上限：**时长 60 秒、帧率 60fps、分辨率 1080P（总像素 1920×1080）**。
+ * 三者的乘积就是 maxFrames（60 × 60 = 3600），也是耗时天花板：每帧截一次图
+ * （实测约 80~150ms），3600 帧约 6~9 分钟，渲染实现里的看门狗因此放到 15 分钟。
+ *
+ * 尺寸用「单边不超过 1920 + 总像素不超过 1920×1080」双重约束：
+ * 横屏 1920×1080 和竖屏 1080×1920 都能出，而 1920×1920 这种方形会被等比缩小。
+ *
+ * 再长就不该由一次工具调用扛着，该让用户拆成多段——所以这里不跟着时长继续放大。
  */
 export const MEDIA_LIMITS = {
   /** mp4 最长时长（秒） */
   maxDurationSec: 60,
   /** gif 最长时长（秒）：GIF 体积随帧数线性膨胀，超过这个长度基本发不出去 */
   maxGifDurationSec: 15,
-  maxFps: 30,
+  maxFps: 60,
   maxGifFps: 15,
-  maxFrames: 1200,
+  maxFrames: 3600,
   minSize: 160,
   maxWidth: 1920,
   maxHeight: 1080,
   maxGifWidth: 960,
   maxGifHeight: 540,
   maxNarrationChars: 2000,
+  /** 页面音效渲染的采样率：44100 是 CD 标准，ffmpeg 转 aac 时不用再重采样 */
+  audioSampleRate: 44100,
 } as const;
 
 /** 各格式的默认参数 */
@@ -52,7 +60,15 @@ export type MediaRenderPhase =
   | "frames"
   | "encoding";
 
-/** 一次渲染请求 */
+/**
+ * 一次渲染请求。
+ *
+ * 声音有两个来源，都不需要额外字段、由渲染器自动处理：
+ * · narration：本机 TTS 合成的旁白；
+ * · 页面内音效：HTML 里定义 `window.renderAudio = async (ctx) => { ... }`，
+ *   渲染器自动检测并调用（ctx 为已按成片时长与采样率创建的 OfflineAudioContext）。
+ * 两者可同时存在，会混流进同一音轨。仅 mp4 生效；GIF 容器没有音轨，即使定义了也会忽略。
+ */
 export interface MediaRenderRequest {
   /** 完整的单文件 HTML（样式与脚本内联，不得依赖网络资源） */
   html: string;
@@ -80,6 +96,8 @@ export interface MediaRenderResult {
   durationSec: number;
   /** 成片是否带音轨 */
   hasAudio: boolean;
+  /** 音轨里是否包含页面内合成的音效（区别于只有 TTS 旁白） */
+  hasSoundtrack?: boolean;
   frameCount: number;
   /** 文件字节数 */
   size: number;

@@ -134,7 +134,7 @@ export function handleReasoningDelta(msg: WsMessage, ctx: EventHandlerCtx): void
       updated.push({
         id: `assistant-${Date.now()}`,
         role: "assistant",
-        segments: [{ type: "reasoning", key, content, streaming: true } as ReasoningSegment],
+        segments: [{ type: "reasoning", key, content, streaming: true, startedAt: Date.now() } as ReasoningSegment],
         streaming: true,
         turnStatus: "running",
         turnGen: ctx.turnGeneration.current,
@@ -149,13 +149,13 @@ export function handleReasoningDelta(msg: WsMessage, ctx: EventHandlerCtx): void
     if (target.kind === "append") {
       const seg = segs[target.index] as ReasoningSegment;
       // 重新置 streaming：本块还在继续吐，若之前被提前折叠过则重新展开
-      segs[target.index] = { ...seg, content: seg.content + content, streaming: true };
+      segs[target.index] = { ...seg, content: seg.content + content, streaming: true, startedAt: seg.startedAt ?? Date.now() };
     } else {
       // 新块一律落到消息末尾：思考是在正文之后恢复的，新块就该显示在最下面。
       // （早先会把新块插到末尾的空 text 占位段之前，那是为了让思考显示在正文上方；
       //  但「正文已经出现之后才到达的思考」按定义属于正文之后，插到前面正是那个
       //  「正文停了、上面的思考还在长」观感的来源。）
-      segs.push({ type: "reasoning", key: target.key, content, streaming: true } as ReasoningSegment);
+      segs.push({ type: "reasoning", key: target.key, content, streaming: true, startedAt: Date.now() } as ReasoningSegment);
     }
     updated[updated.length - 1] = { ...last, segments: segs };
     return updated;

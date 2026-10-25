@@ -211,19 +211,34 @@ describe("parseRenderMediaArgs 入参校验", () => {
   it("宽高被钳制到上限并取偶数（yuv420p 要求偶数）", () => {
     const r = parseRenderMediaArgs({ ...valid, width: 1281, height: 721 });
     expect(r).toMatchObject({ ok: true, width: 1280, height: 720 });
+    // 单边先收到 1920，再按总像素上限（1920×1080）等比缩到 1440×1440
     const big = parseRenderMediaArgs({ ...valid, width: 99999, height: 99999 });
-    expect(big).toMatchObject({ ok: true, width: MEDIA_LIMITS.maxWidth, height: MEDIA_LIMITS.maxHeight });
+    expect(big).toMatchObject({ ok: true, width: 1440, height: 1440 });
     const tiny = parseRenderMediaArgs({ ...valid, width: 3, height: 3 });
     expect(tiny).toMatchObject({ ok: true, width: MEDIA_LIMITS.minSize, height: MEDIA_LIMITS.minSize });
   });
 
-  it("时长 × 帧率超过总帧数上限时降帧率，保证渲染时间可控", () => {
-    const r = parseRenderMediaArgs({ ...valid, durationSec: 60, fps: 30 });
+  it("竖屏 1080P（1080x1920）被完整保留，不会压成方形", () => {
+    const r = parseRenderMediaArgs({ ...valid, width: 1080, height: 1920 });
+    expect(r).toMatchObject({ ok: true, width: 1080, height: 1920 });
+    const g = parseRenderMediaArgs({ ...valid, format: "gif", width: 540, height: 960 });
+    expect(g).toMatchObject({ ok: true, width: 540, height: 960 });
+  });
+
+  it("60fps 跑满 60 秒正好等于总帧数上限，不会被降帧", () => {
+    const r = parseRenderMediaArgs({ ...valid, durationSec: 60, fps: 60 });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(r.durationSec * r.fps).toBeLessThanOrEqual(MEDIA_LIMITS.maxFrames);
-      expect(r.notes.join("")).toMatch(/帧/);
+      expect(r.durationSec * r.fps).toBe(MEDIA_LIMITS.maxFrames);
+      expect(r.fps).toBe(60);
+      expect(r.notes.join("")).not.toMatch(/帧率/);
     }
+  });
+
+  it("60fps 在帧预算内被原样接受，不会被降帧", () => {
+    const r = parseRenderMediaArgs({ ...valid, durationSec: 10, fps: 60 });
+    expect(r).toMatchObject({ ok: true, fps: 60, durationSec: 10 });
+    if (r.ok) expect(r.notes.join("")).not.toMatch(/帧率/);
   });
 
   it("模型把数字写成字符串也能识别；无法解析的值走默认", () => {

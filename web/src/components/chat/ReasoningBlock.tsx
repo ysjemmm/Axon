@@ -4,10 +4,30 @@
  */
 
 import { useState, useRef, useEffect, useMemo } from "react";
-import { Brain } from "lucide-react";
+import { Brain, Loader2 } from "lucide-react";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 
-export function ReasoningBlock({ content, streaming }: { content: string; streaming?: boolean }) {
+/**
+ * 思考耗时文案。与命令卡片的 formatCommandElapsed 同源，但单位落到"秒"：
+ * 思考通常持续数秒到数十秒，精确到毫秒没有意义反而显得吵。
+ * 不足 1 秒按"1 秒"取整（少显示比显示 0.2 秒更符合直觉）。
+ */
+function formatThinkSeconds(ms: number): string {
+  const totalSec = Math.max(1, Math.round(ms / 1000));
+  if (totalSec < 60) return `${totalSec} 秒`;
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return s > 0 ? `${m} 分 ${s} 秒` : `${m} 分`;
+}
+
+export function ReasoningBlock({
+  content, streaming, durationMs,
+}: {
+  content: string;
+  streaming?: boolean;
+  /** 已确定的思考耗时。多条块合并时由渲染层累加后传入；历史回放无此值 → 不展示 */
+  durationMs?: number;
+}) {
   // streaming=true 时展开（正在进行），streaming=false/undefined 时默认折叠（已完结）
   const [expanded, setExpanded] = useState(!!streaming);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -70,6 +90,15 @@ export function ReasoningBlock({ content, streaming }: { content: string; stream
       >
         <Brain className="w-3.5 h-3.5 shrink-0" />
         <span>思考过程</span>
+        {/* 进行中给转圈，结束后给耗时——两者互斥，避免"思考中却又报了个定死的秒数" */}
+        {streaming ? (
+          <Loader2 className="w-3 h-3 shrink-0 animate-spin opacity-60" />
+        ) : durationMs !== undefined ? (
+          <>
+            <span className="shrink-0 opacity-40">·</span>
+            <span className="shrink-0 tabular-nums opacity-60">{formatThinkSeconds(durationMs)}</span>
+          </>
+        ) : null}
       </button>
       <div
         className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"

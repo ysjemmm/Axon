@@ -36,7 +36,7 @@ export function PendingFileRow({ path, displayName, diff, onAccept, onReject }: 
       )}
       <button
         onClick={() => onAccept(path)}
-        className="px-2 py-0.5 rounded text-green-600 hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors shrink-0"
+        className="px-2 py-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors shrink-0"
         title="接受此文件"
       >
         接受

@@ -31,6 +31,8 @@ export class ToolDefBuilder {
       // 动画渲染：既要宿主有这个能力，也要用户在设置里明确开启。
       // 默认不开启时不注入工具——模型看不到就不会反复尝试，也不会触发组件下载。
       if (this.s.mediaEnabled && this.s.host?.mediaRenderer) tools.push(this.getRenderMediaToolDef());
+      // 文生图：和动画渲染一样，能力来自宿主（需配置生图服务），未配置时不注入。
+      if (this.s.imageEnabled && this.s.host?.imageGenerator) tools.push(this.getGenerateImageToolDef());
       if (this.s.questWebSearch) {
         const base = getToolDefinitions() as unknown as ToolDef[];
         tools.push(
@@ -46,6 +48,7 @@ export class ToolDefBuilder {
     const tools = [...base, this.getDelegateToolDef(), this.getAskUserToolDef(), this.getAskFormToolDef(), ...this.getRelayToolDefs(), ...this.s.mcpToolDefsCache];
     tools.push(this.getUpdateMemoryToolDef());
     tools.push(this.getCreateArtifactToolDef());
+    if (this.s.imageEnabled && this.s.host?.imageGenerator) tools.push(this.getGenerateImageToolDef());
     // Cowork：额外给一个「交付产出」工具，让 Agent 自己说清做出了什么文件。
     // 只在办公面板注入 —— Chat/Code 那侧有工具卡片和 diff，不需要再多一个上报动作。
     if (this.s.humanizedStatus) tools.push(this.getDeliverToolDef());
@@ -128,6 +131,47 @@ export class ToolDefBuilder {
   }
 
   /**
+   * generate_image 工具定义（文生图）。
+   *
+   * 与 render_media 的分工必须在描述里说死，否则模型会用代码去"画"写实画面、
+   * 或用生图模型去"画"图表——两种都是它做不到的事，结果必然很糟。
+   */
+  private getGenerateImageToolDef(): ToolDef {
+    return {
+      type: "function",
+      function: {
+        name: "generate_image",
+        description:
+          "根据一段文字描述生成图片（PNG），界面会显示成可点开预览的卡片。\n\n" +
+          "【什么时候用】用户要「一张图」：插画、海报、封面、写实照片感画面、风格化渲染、美术版的示意图。" +
+          "判断标准是「需要好看」而不是「需要精确」。\n\n" +
+          "【不要用】图表、流程图、架构图、数据可视化（这些要精确，用 svg 产物或 render_media）；" +
+          "可运行 / 可交互的页面（用 html 产物）；动画或视频（用 render_media）。" +
+          "**不要指望图上出现准确文字**——生图模型写字经常是错的、糊的。标题与文字请用 html / svg 排版后叠加，" +
+          "或在回复里说明文字无法可靠生成。\n\n" +
+          "【怎么写 prompt】按「主体 + 风格 + 构图 + 光线 + 色调」组织，具体名词远比形容词有用：" +
+          "「一只橘猫坐在窗台，柔和侧逆光，浅景深，胶片颗粒，暖色调，中景特写」远好于「一只好看的猫」。\n\n" +
+          "【negativePrompt】写不想出现的东西（水印、文字、多余肢体、畸形手指）。部分服务商支持，不支持时会被忽略并提示。\n\n" +
+          "【参数】width / height 单边 256~2048，默认 1024x1024；count 是**同一提示词出几张**供挑选，" +
+          "不是分别画不同内容——要不同画面请分别调用。\n\n" +
+          "【产出】每张图都是独立产物，已直接落盘到产物目录。回复里不要粘贴图片数据，简短说明画了什么即可。",
+        parameters: {
+          type: "object",
+          properties: {
+            prompt: { type: "string", description: "画面描述：主体、风格、构图、光线、色调" },
+            negativePrompt: { type: "string", description: "可选：不想出现的内容（水印、文字、多余肢体等）" },
+            width: { type: "number", description: "画面宽（像素），默认 1024，范围 256~2048" },
+            height: { type: "number", description: "画面高（像素），默认 1024，范围 256~2048" },
+            count: { type: "number", description: "同一提示词生成几张，默认 1，最多 4" },
+            title: { type: "string", description: "可选：文件标题（简短），不填则取提示词前 20 字" },
+          },
+          required: ["prompt"],
+        },
+      },
+    };
+  }
+
+  /**
    * render_media 工具定义：把 HTML 动画渲染成 GIF / MP4。
    *
    * 描述里把「渲染契约」写死，因为渲染是确定性逐帧截图，不是录屏：
@@ -144,9 +188,31 @@ export class ToolDefBuilder {
           "【什么时候用】用户明确要「动画 / 视频 / GIF / 会动的演示」，并且希望拿到文件。" +
           "讲解算法、产品演示、数据可视化动画、带字幕的解说短片都适合。\n" +
           "【不要用】静态图（用 svg 产物）、流程图 / 时序图（用 mermaid）、需要用户交互的页面（用 create_artifact 的 html）。\n" +
-          "【做不到的】实拍或写实镜头、人物口型、背景音乐、音效、克隆声音——不要承诺这些。声音只有「旁白」一种。\n\n" +
-          "【声音规则】GIF 没有音轨。用户要声音 → format 必须是 mp4 并填 narration；" +
-          "只要无声循环动画 → format=gif，不填 narration。旁白由本机语音合成，音色是系统自带的，不要夸大效果。\n\n" +
+          "【做不到的】实拍或写实镜头、人物口型、克隆声音、外部素材（音乐文件 / 录音）——不要承诺这些。声音只有两种来源：本机合成的旁白、以及你用代码合成的音效 / 背景音乐。\n\n" +
+          "【声音规则】GIF 没有音轨（要声音必须选 mp4）。两种来源可以同时用：\n" +
+          "  a) 旁白 narration 参数：本机语音合成，音色是系统自带的，不要夸大效果。\n" +
+          "  b) 音效 / 背景音乐：在 HTML 里定义 `window.renderAudio = async (ctx) => { ... }`，ctx 是已按成片时长、44100Hz、双声道创建好的 OfflineAudioContext。" +
+          "在里面用 OscillatorNode / GainNode / BiquadFilter / AudioBufferSource 搭出声音并连到 ctx.destination，**不要自己调用 startRendering**，渲染器会接管并把它与旁白混流。" +
+          "要循环背景乐就按成片时长铺满，要提示音就在指定时刻用 gain 包络断点插入。\n\n" +
+          "【画面品质（目标：影视级动效，不是 SVG 色块堆叠）】\n" +
+          "先定设计系统再写页面，不要边写边加样式：\n" +
+          "1. 配色：主色 + 强调色 + 中性灰阶，总共不超过 5 色。深底用 #0b0b0f~#14141a 的近黑，不要纯黑；正文不要纯白，用 #e6e6ea 这类微暖白；强调色只落在关键的一两个元素上。\n" +
+          "2. 字体：标题 / 副标题 / 正文 / 数字各定一档字号字重，全程只用这 4 档。数字与英文用 ui-monospace 做对比。\n" +
+          "3. 间距：一律用 8 的倍数，画面四周至少留 64px；宁可大留白，不要把画面塞满。\n" +
+          "4. 景深与空间：容器加 perspective，内容用 translateZ 分出 3~4 层；背景层加 filter: blur(6px) 虚化、前景保持清晰，画面立刻有纵深。禁止所有元素挤在同一平面。\n" +
+          "5. 光影：用 radial-gradient 在画面角落铺光源；关键元素用 box-shadow 做柔和辉光；光效层用 mix-blend-mode: screen 叠加。不要纯色平涂。\n" +
+          "6. 镜头：整个场景容器做缓慢推拉（transform: scale(1→1.06) 或轻微 translate），时长覆盖全片，模拟 dolly 运动；同一时刻只让一个主要元素在动。\n" +
+          "7. 材质：叠一层极淡的噪点或网格纹理（opacity ≤ 0.06）；要玻璃感用 backdrop-filter: blur()。\n" +
+          "8. 禁止：所有元素同一平面、纯色大色块、无光影的扁平排布、emoji 当图标、文字贴边、生硬 translate 位移、PPT 式排版。\n\n" +
+          "【运镜与 3D（让画面像镜头拍的，不是平面排版）】\n" +
+          "9. 运镜：不要只让元素动，要让镜头动。把整个场景包进一个容器（父层 perspective: 1200px、transform-style: preserve-3d），" +
+          "对容器做 transform 动画：推镜 translateZ(-200px → 80px)、摇镜 rotateY(±8deg)、横移 translateX、升降 translateY。" +
+          "一条片子用 1~2 个运镜就够，起幅和落幅要稳，不要全程晃。\n" +
+          "10. 3D 空间：优先用 CSS 3D——子元素用 translateZ 分层（背景 -120px、主体 0、前景 60px），转动容器就有真实视差。" +
+          "需要真三维（光照、材质、自由相机）时用内置的 Three.js：<script src=\"/vendor/three.min.js\"></script>（这是本地内置库，**不要换成 CDN**），" +
+          "用 PerspectiveCamera + MeshStandardMaterial + 环境光 / 方向光，让相机绕物体做轨道运动。\n" +
+          "11. Three.js 必须确定性：不要用 requestAnimationFrame 的真实时间驱动，" +
+          "改为定义 window.renderFrame = (t) => { 按 t 设置相机位置和物体姿态; renderer.render(scene, camera); }。\n\n" +
           "【HTML 渲染契约（必须遵守，否则成片是静止的或空白的）】\n" +
           "1. 完整的单文件 HTML，样式和脚本全部内联。**所有网络请求会被拦截**：不能用 CDN、外链字体、外链图片，需要的东西自己内联（SVG / CSS / data URI）。\n" +
           "2. 页面按 width x height 的固定画布设计：body 设 margin:0、overflow:hidden，主体撑满画布；不要依赖滚动或响应式断点。\n" +
@@ -160,10 +226,13 @@ export class ToolDefBuilder {
           "6. GIF 想循环自然，让最后一帧接近第一帧。\n\n" +
           "【旁白】narration 写成口语化的完整句子，系统语音偏慢，按每秒约 3 个汉字估算（实测 14 字约 4 秒、46 字约 13 秒）；时长以旁白为准会自动延长，" +
           "所以让画面节奏和旁白长度大致对得上，别写 200 字旁白配 3 秒动画。\n\n" +
-          "【渲染很慢】每秒约几十帧要逐帧截图，30 秒以上的 MP4 会等较久；先做短版本让用户确认，再按需加长。" +
+          "【渲染很慢】每秒约几十帧要逐帧截图：30 秒的 MP4 要等一两分钟，60fps × 60 秒（3600 帧）需要 6~9 分钟。" +
+          "先做短版本让用户确认，再按需加长；超长片建议拆成几段分别渲染。" +
           "一次调用只出一个文件，需要 GIF 和 MP4 两份就分别调用。\n\n" +
           "【修改已有成片】重新调用本工具、传入修改后的完整 HTML；同名标题会自动保存为新版本。" +
-          "调用成功后不必再贴 HTML，简短说明成片内容即可。",
+          "调用成功后不必再贴 HTML，简短说明成片内容即可。\n\n" +
+          "【对外表述】上面这些实现方式（renderAudio、Web Audio、OfflineAudioContext、采样率、混流等）是内部约定，" +
+          "只用于你写内容。回复用户时只说结果和能力边界（能出什么、做不到什么），**不要复述这些技术名词，也不要说\"我通过 xxx 合成\"**。",
         parameters: {
           type: "object",
           properties: {
@@ -171,9 +240,9 @@ export class ToolDefBuilder {
             html: { type: "string", description: "完整的单文件 HTML 动画，遵守上面的渲染契约" },
             format: { type: "string", enum: ["gif", "mp4"], description: "gif=无声循环动画；mp4=可带旁白。要声音必须选 mp4" },
             durationSec: { type: "number", description: "成片时长（秒）。mp4 默认 5、最长 60；gif 默认 3、最长 15。有旁白且旁白更长时会自动延长" },
-            width: { type: "number", description: "画面宽（像素）。mp4 默认 1280，gif 默认 640" },
-            height: { type: "number", description: "画面高（像素）。mp4 默认 720，gif 默认 360" },
-            fps: { type: "number", description: "帧率。mp4 默认 24（最高 30），gif 默认 12（最高 15）。越高渲染越慢" },
+            width: { type: "number", description: "画面宽（像素）。mp4 默认 1280，gif 默认 640；单边最高 1920（gif 960）" },
+            height: { type: "number", description: "画面高（像素）。mp4 默认 720，gif 默认 360；单边最高 1920（gif 960），且总像素不超过 1920x1080（gif 960x540）。横屏 1920x1080、竖屏 1080x1920 都支持" },
+            fps: { type: "number", description: "帧率。mp4 默认 24（最高 60），gif 默认 12（最高 15）。越高渲染越慢，60fps 只建议用于短视频和高速运动画面" },
             narration: { type: "string", description: "旁白文本（本机语音合成）。仅 mp4 有效；不填则成片无声" },
           },
           required: ["title", "html", "format"],

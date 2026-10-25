@@ -50,3 +50,23 @@ export function locateReasoning(
   if (idx >= 0 && idx === segments.length - 1) return { kind: "append", index: idx };
   return { kind: "new", key: nextReasoningKey(segments, baseKey) };
 }
+
+/**
+ * 封口：把仍在流式的思考段标记为结束，并写下结束时间（用于折叠行展示"思考了 N 秒"）。
+ *
+ * 收尾路径不止一条（正文开始、工具卡片出现、整轮结束、用户取消、断线），任何一条漏掉
+ * 都会让思考块永远转圈、永远不显示耗时，所以统一成这个纯函数，各处只调用它。
+ *
+ * 幂等：已结束的段原样保留；endedAt 已有值时**不覆盖**——结束时刻应取"最早判定它已说完"
+ * 的那一刻，而不是被后续收尾事件反复刷新成一个更大的数。
+ * 无改动时返回 null，调用方据此跳过无意义的重渲染。
+ */
+export function sealReasoning(segments: Segment[], at: number = Date.now()): Segment[] | null {
+  let changed = false;
+  const next = segments.map((s) => {
+    if (s.type !== "reasoning" || !s.streaming) return s;
+    changed = true;
+    return { ...s, streaming: false, endedAt: s.endedAt ?? at };
+  });
+  return changed ? next : null;
+}

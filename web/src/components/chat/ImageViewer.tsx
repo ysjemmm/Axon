@@ -178,7 +178,7 @@ export function ImageViewer({ open, images, index, onIndexChange, onClose }: Ima
   };
 
   const btn =
-    "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-muted hover:bg-muted/80 text-foreground transition-colors data-[status=ok]:bg-green-500/15 data-[status=ok]:text-green-600 dark:data-[status=ok]:text-green-400 data-[status=err]:bg-red-500/15 data-[status=err]:text-red-600 dark:data-[status=err]:text-red-400";
+    "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-muted hover:bg-muted/80 text-foreground transition-colors data-[status=ok]:bg-foreground/10 data-[status=ok]:text-foreground data-[status=err]:bg-red-500/15 data-[status=err]:text-red-600 dark:data-[status=err]:text-red-400";
   const iconBtn =
     "flex items-center justify-center px-2.5 py-1.5 rounded-md text-xs bg-muted hover:bg-muted/80 text-foreground transition-colors";
 

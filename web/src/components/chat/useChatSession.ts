@@ -14,6 +14,7 @@ import { STORAGE, TIMEOUT, CONTROL_CMD } from "@/lib/constants";
 // 鎷嗗垎鍚庣殑妯″潡
 import { createEventHandler } from "./eventHandlers";
 import type { EventHandlerCtx } from "./eventHandlers/types";
+import { sealReasoning } from "./reasoningPlacement";
 import { useTypewriter } from "./useTypewriter";
 import { useToolCallQueue } from "./useToolCallQueue";
 import { markTurnEnd } from "@/lib/turnEndProbe";
@@ -366,7 +367,9 @@ export function useChatSession(opts: UseChatSessionOptions) {
         const updated = [...prev];
         const last = updated[updated.length - 1];
         if (last?.role === "assistant" && last.streaming) {
-          updated[updated.length - 1] = { ...last, streaming: false };
+          // 断线收尾：思考段一并封口，否则重连后思考块仍显示转圈、拿不到耗时
+          const sealed = sealReasoning(last.segments || []);
+          updated[updated.length - 1] = { ...last, streaming: false, ...(sealed ? { segments: sealed } : {}) };
         }
         return updated;
       });
@@ -601,7 +604,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
         });
         updated[updated.length - 1] = {
           ...last,
-          segments,
+          // 取消收尾：思考段一并封口（否则取消后思考块仍转圈、不显示耗时）
+          segments: sealReasoning(segments) ?? segments,
           streaming: false,
           turnStatus: "cancelled",
           turnStats: { elapsed, tokens, credits: cancelCredits, model: currentModel, creditDetail: cancelCreditDetail },

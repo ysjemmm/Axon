@@ -51,6 +51,30 @@
           "scope": "window",
           "markdownDescription": "允许 AI 生成动画 / 视频（GIF、MP4，可带旁白）。\n\n关闭时该能力完全不可见：AI 拿不到对应工具，也不会占用磁盘或网络。\n\n开启后 Axon 会**自动下载渲染组件**（ffmpeg，约 160MB，仅一次），之后成片在本机离线生成，不调用任何第三方服务。\n\n做不到实拍镜头、人物口型、配乐与音效；声音只有系统语音合成的旁白。"
         },
+        "axon.image.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "window",
+          "markdownDescription": "允许 AI 生成图片（PNG 文生图）。\n\n关闭时该能力完全不可见：AI 拿不到对应工具。\n\n开启后还需要填写下面的服务地址、API Key 与模型名才能真正出图。\n\n注意：画面由**外部生图服务**生成，会消耗该服务的额度；这与上面的「生成动画 / 视频」是两种不同能力——后者在本机离线渲染，不调用任何第三方服务。"
+        },
+        "axon.image.baseUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "window",
+          "markdownDescription": "生图服务接口地址（OpenAI 兼容协议），例如 `https://api.openai.com/v1`。留空表示未配置。"
+        },
+        "axon.image.apiKey": {
+          "type": "string",
+          "default": "",
+          "scope": "window",
+          "markdownDescription": "生图服务的 API Key。"
+        },
+        "axon.image.model": {
+          "type": "string",
+          "default": "gpt-image-1",
+          "scope": "window",
+          "markdownDescription": "生图模型名，例如 `gpt-image-1`、`dall-e-3`；具体支持哪些取决于服务商。"
+        },
         "axon.proactiveAwareness.terminalErrors": {
           "type": "boolean",
           "default": true,
@@ -784,6 +808,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.95.0",
+    "esbuild": "0.24.2",
     "typescript": "^5.7.0"
   }
 }

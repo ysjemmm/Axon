@@ -9,8 +9,8 @@
  * execute_command 特殊样式：显示命令内容
  */
 
-import { useState, useContext } from "react";
-import { CheckCircle2, Loader2, Terminal, Eye, EyeOff, FileX, Search, GitCompare, Bug, ChevronRight, Check, X, Globe, ShieldCheck, Pencil, Plug, Undo2, Server, ScrollText, Power, ExternalLink, FolderTree, Clock } from "lucide-react";
+import { useState, useContext, useRef, useEffect } from "react";
+import { CheckCircle2, Loader2, SquareTerminal, Eye, EyeOff, FileX, Search, GitCompare, Bug, ChevronRight, Check, X, Globe, ShieldCheck, Pencil, Plug, Undo2, Server, ScrollText, Power, ExternalLink, FolderTree, Clock } from "lucide-react";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCommandApproval, CommandApprovalContext, type CommandTrustOption, type CommandDecision } from "@/components/chat/commandApprovalContext";
@@ -468,6 +468,46 @@ function InlineCommandApproval({ options, onApprove }: { options: CommandTrustOp
   );
 }
 
+/** 命令耗时：850ms / 1.8s / 1m 5s。保留一位小数——"1.8s" 比 "1s" 更能反映快慢 */
+function formatCommandElapsed(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${Math.round(s % 60)}s`;
+}
+
+/**
+ * 折叠行里的状态文案（中文）。
+ * 用"已执行命令"而不是"used"：这一行回答的是"刚才做了什么"，中文直读。
+ */
+function commandStatusLabel(status: ToolStatus): string {
+  switch (status) {
+    case "queued": return "准备执行";
+    case "pending": return "正在执行";
+    case "success": return "已执行命令";
+    case "error": return "执行失败";
+    case "cancelled": return "已取消";
+  }
+}
+
+/**
+ * 折叠行显示的终端名。
+ *
+ * ⚠️ 不能写死：execute_command 是在**用户自己的终端**里跑的（走 Shell Integration），
+ * shell 类型取决于用户环境——Windows 默认 PowerShell、macOS 默认 zsh、Linux 常见 bash。
+ * 统一写成 Bash 更不对：Windows 上根本没有 Bash。
+ *
+ * 这里按平台做近似推断：比写死一个准确，但仍是推断——Windows 用户改用 cmd / WSL、
+ * 或 macOS 用户换 fish 时，显示会不准。真要精确需要宿主把终端类型透传上来。
+ */
+function shellLabel(): string {
+  const p = `${navigator.platform || ""} ${navigator.userAgent || ""}`;
+  if (/win/i.test(p)) return "PowerShell";
+  if (/mac/i.test(p)) return "zsh";
+  return "bash";
+}
+
 /**
  * execute_command 卡片（含编辑能力）：
  * - 标题栏右侧有编辑按钮（铅笔图标），点击后命令区变成可编辑 textarea
@@ -481,6 +521,25 @@ function CommandCardItem({ tool, approval }: { tool: ToolCallData; approval: Ret
   const { waitingInputIds } = useContext(CommandApprovalContext);
   const isWaitingInput = waitingInputIds.has(tool.id);
 
+  // 折叠成一行：终端卡片默认收起，点开才展开完整内容（命令 + 输出动辄几十行，很吃版面）。
+  // 有待审批 / 等待用户输入 / 编辑中时强制展开——这些交互藏在折叠态里用户就没法操作了。
+  const [expanded, setExpanded] = useState(false);
+  const forceExpanded = !!approval || isWaitingInput || editing;
+  const showDetail = forceExpanded || expanded;
+
+  // 耗时：从「宿主开始执行」到终态的墙钟时间。
+  // 只有真的见过 pending 才有数——历史会话恢复的卡片没有计时，就不显示，绝不编一个数字。
+  const startedAtRef = useRef<number | null>(null);
+  const [elapsedMs, setElapsedMs] = useState<number | null>(null);
+  useEffect(() => {
+    if (tool.status === "pending" && startedAtRef.current === null) {
+      startedAtRef.current = performance.now();
+    }
+    if (!isToolInFlight(tool.status) && startedAtRef.current !== null && elapsedMs === null) {
+      setElapsedMs(performance.now() - startedAtRef.current);
+    }
+  }, [tool.status, elapsedMs]);
+
   const startEditing = () => { setEditedCmd(tool.command || ""); setEditing(true); };
 
   // 包装 approval.approve：如果用户编辑了命令，附带 editedCommand
@@ -492,43 +551,60 @@ function CommandCardItem({ tool, approval }: { tool: ToolCallData; approval: Ret
   // 是否处于可编辑态：必须有待审批 + 用户主动点了编辑
   const isEditing = !!approval && editing;
 
+  // 折叠行 + 缩进详情：这一行**始终显示**，展开时详情缩进在它下面（交互对齐「思考过程」），
+  // 而不是把这一行替换成一块大卡片。命令和输出动辄几十行，收起时只占一行。
+  //
+  // hover 只变文字颜色、不加整行背景：整行灰底在长对话里会显得很吵。
   return (
-    <div className={`my-2 rounded-lg border bg-popover overflow-hidden tool-card-enter ${approval?.danger ? "border-red-500/80 animate-danger-pulse" : approval ? "border-amber-400/70" : (isWaitingInput && tool.status === "pending") ? "border-primary/50 animate-pulse" : tool.status === "queued" ? "border-border/50 opacity-60" : "border-border"}`}>
-      {/* 标题栏 */}
-      <div className="flex items-center gap-2 py-1.5 px-2.5 text-[13px] border-b border-border/60 bg-foreground/[0.04]">
-        {/* 待执行用静态时钟；只有宿主实际开始执行后才显示转圈。 */}
-        {tool.status === "queued" && <Clock className="w-3.5 h-3.5 shrink-0 text-muted-foreground/50" />}
-        {tool.status === "pending" && isWaitingInput && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-primary" />}
-        {tool.status === "pending" && !isWaitingInput && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-muted-foreground" />}
-        {tool.status === "success" && <Terminal className="w-3.5 h-3.5 text-green-600 shrink-0" />}
-        {tool.status === "error" && <Terminal className="w-3.5 h-3.5 text-red-500 shrink-0" />}
-        <span className="text-muted-foreground flex-1">Command</span>
-        {tool.status === "queued" && <QueuedBadge waiting={tool.queuedWaiting} />}
-        {isWaitingInput && tool.status === "pending" && (
-          <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary/10 text-primary border border-primary/30 animate-pulse">
-            等待用户输入
-          </span>
+    <div className="my-0.5">
+      <div
+        onClick={() => { if (!forceExpanded) setExpanded((v) => !v); }}
+        className={`flex items-center gap-1.5 py-0.5 text-[11px] transition-colors ${
+          showDetail ? "text-muted-foreground/70" : "text-muted-foreground/60"
+        } ${forceExpanded ? "" : "cursor-pointer hover:text-muted-foreground"}`}
+      >
+        <SquareTerminal className="w-3.5 h-3.5 shrink-0" />
+        <span className="shrink-0">
+          {isWaitingInput && tool.status === "pending" ? "等待输入" : commandStatusLabel(tool.status)}
+        </span>
+        <span className="shrink-0 opacity-40">·</span>
+        <span className="shrink-0">{shellLabel()}</span>
+        {tool.status === "queued" && <Clock className="w-3.5 h-3.5 shrink-0 opacity-60" />}
+        {tool.status === "pending" && <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />}
+        {tool.status === "success" && <Check className="w-3.5 h-3.5 shrink-0" />}
+        {tool.status === "error" && <X className="w-3.5 h-3.5 shrink-0 text-red-500" />}
+        {elapsedMs !== null && (
+          <span className="shrink-0 tabular-nums opacity-60">{formatCommandElapsed(elapsedMs)}</span>
         )}
-        {tool.cwd && <span className="text-xs text-muted-foreground/70 font-mono">{tool.cwd}</span>}
-        {/* 聚焦终端按钮 */}
-        <button
-          onClick={(e) => { e.stopPropagation(); const vscode = (window as any).__axonVSCode; if (vscode) vscode.postMessage({ type: "focus_terminal" }); }}
-          title="在终端中查看"
-          className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-        >
-          <ExternalLink className="w-3.5 h-3.5" />
-        </button>
-        {/* 编辑按钮：仅在待审批时显示 */}
-        {approval && (
+        <span className="ml-auto flex items-center gap-1">
+          {tool.cwd && (
+            <span className="max-w-[220px] truncate font-mono text-[10px] leading-4 opacity-40">{tool.cwd}</span>
+          )}
           <button
-            onClick={() => isEditing ? setEditing(false) : startEditing()}
-            title={isEditing ? "取消编辑" : "编辑命令"}
-            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+            onClick={(e) => { e.stopPropagation(); const vscode = (window as any).__axonVSCode; if (vscode) vscode.postMessage({ type: "focus_terminal" }); }}
+            title="在终端中查看"
+            className="p-0.5 rounded opacity-40 transition-opacity hover:opacity-100"
           >
-            <Pencil className="w-3.5 h-3.5" />
+            <ExternalLink className="w-3 h-3" />
           </button>
-        )}
+          {approval && (
+            <button
+              onClick={(e) => { e.stopPropagation(); if (isEditing) setEditing(false); else startEditing(); }}
+              title={isEditing ? "取消编辑" : "编辑命令"}
+              className="p-0.5 rounded opacity-40 transition-opacity hover:opacity-100"
+            >
+              <Pencil className="w-3 h-3" />
+            </button>
+          )}
+        </span>
       </div>
+      <div
+        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
+        style={{ gridTemplateRows: showDetail ? "1fr" : "0fr", opacity: showDetail ? 1 : 0 }}
+        aria-hidden={!showDetail}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className={`ml-5 mt-1 rounded-lg border bg-popover overflow-hidden ${approval?.danger ? "border-red-500/80 animate-danger-pulse" : approval ? "border-amber-400/70" : (isWaitingInput && tool.status === "pending") ? "border-primary/50 animate-pulse" : tool.status === "queued" ? "border-border/50 opacity-60" : "border-border"}`}>
       {tool.status === "queued" && tool.waitingFor && tool.waitingFor.length > 0 && (
         <div className="flex items-center gap-1.5 border-b border-border/50 bg-muted/20 px-2.5 py-1.5 text-[10px] text-muted-foreground">
           <Clock className="size-3 shrink-0" />
@@ -566,6 +642,9 @@ function CommandCardItem({ tool, approval }: { tool: ToolCallData; approval: Ret
       {approval && <InlineCommandApproval options={approval.options} onApprove={handleApprove} />}
       {/* 执行结果 */}
       {tool.output && <OutputBlock output={tool.output} />}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -611,7 +690,7 @@ export function BrowserSessionGroup({ group }: { group: BrowserSessionData }) {
         {group.pending
           ? <GroupInFlightIcon queuedOnly={group.queuedOnly} />
           : group.closed
-            ? <CheckCircle2 className="w-3.5 h-3.5 text-green-600 shrink-0" />
+            ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
             : <Globe className="w-3.5 h-3.5 text-blue-500 shrink-0" />}
         <span className="font-medium text-foreground">Browser Session</span>
         {group.url && <span className="text-[10px] text-muted-foreground font-mono truncate max-w-[180px]">{group.url}</span>}
@@ -642,7 +721,7 @@ function BrowserStepRow({ step }: { step: ToolCallData }) {
     ? <Loader2 className="w-3 h-3 animate-spin text-muted-foreground shrink-0" />
     : step.status === "error"
       ? <X className="w-3 h-3 text-red-500 shrink-0" />
-      : <Check className="w-3 h-3 text-green-600 shrink-0" />;
+      : <Check className="w-3 h-3 shrink-0" />;
 
   const label = browserStepLabel(step);
   const hasOutput = !!step.output && step.output.length > 0;
@@ -696,7 +775,7 @@ function CardStatusIcon({ status, Icon }: { status: ToolStatus; Icon: typeof Ser
   if (status === "queued") return <Clock className="w-3.5 h-3.5 shrink-0 text-muted-foreground/50" />;
   if (status === "pending") return <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-muted-foreground" />;
   if (status === "error") return <Icon className="w-3.5 h-3.5 text-red-500 shrink-0" />;
-  return <Icon className="w-3.5 h-3.5 text-green-600 shrink-0" />;
+  return <Icon className="w-3.5 h-3.5 shrink-0" />;
 }
 
 /**
@@ -940,10 +1019,12 @@ export function ToolCallItem({ tool, onAcceptEdit, onRejectEdit, onUndoEdit }: T
     if (tool.name.startsWith("mcp__")) {
       return <Plug className="w-3.5 h-3.5 text-blue-500 shrink-0" />;
     }
+    // 读取类图标保持中性灰：绿色 ✓ 是"动作完成"的信号，不该被读文件这类安全操作占用
     if (tool.name === "read_file") {
-      return <Eye className="w-3.5 h-3.5 text-green-600 shrink-0" />;
+      return <Eye className="w-3.5 h-3.5 shrink-0" />;
     }
-    return <CheckCircle2 className="w-3.5 h-3.5 text-green-600 shrink-0" />;
+    // 成功态不再上绿色：状态已由文案（已编辑/已执行…）说清，折叠行左侧只需一个中性标记
+    return <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />;
   };
 
   // 有 diff 时用可展开卡片，否则用单行（displayName 优先：同名文件补了路径）
@@ -1019,29 +1100,35 @@ function FileEditItem({
     void openDiff(clientId, { ...(diff as DiffRef), path: diff.absPath || diff.path });
   };
 
-  // 样式：pending=琥珀色; rejected=红色浅底+删除线; reverted=灰色浅底+删除线; 正常=灰色
+  // 折叠行版式：与「执行命令」同一套（11px 单行、无边框、hover 只变文字色）。
+  // 状态靠文字色区分而不是整卡底色：待确认=琥珀（要人看一眼），已拒绝/已撤销=删除线+压暗，
+  // 正常完成=灰。底色卡片在长对话里连成一片会很吵，这里只留文字层级。
   const struck = isRejected || isReverted;
-  const borderClass = isRejected
-    ? "border-red-300/60 bg-red-50 dark:bg-red-950/20"
-    : isReverted
-      ? "border-border bg-muted/30"
-      : isPending
-        ? "border-amber-300/60 bg-amber-50 dark:bg-amber-950/20"
-        : "border-border bg-muted/20";
 
   return (
     <>
-      <div className={`flex items-center gap-2 py-1.5 px-2.5 my-2 rounded-lg border text-[13px] ${borderClass}`}>
+      <div
+        className={`flex items-center gap-1.5 py-0.5 text-[11px] min-w-0 transition-colors ${
+          struck
+            ? "text-muted-foreground/45 line-through"
+            : isPending
+              ? "text-amber-600 dark:text-amber-400"
+              : "text-muted-foreground/60 hover:text-muted-foreground"
+        }`}
+      >
         {icon}
-        <span className={`text-muted-foreground ${struck ? "line-through" : ""}`}>{isReverted ? "已撤销" : action}</span>
+        <span className="shrink-0">{isReverted ? "已撤销" : action}</span>
         {fileName && (
-          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded bg-muted/40 text-xs font-mono ${struck ? "text-muted-foreground line-through" : "text-foreground"}`} title={diff.absPath || editPath}>
-            <FileTypeIcon fileName={fileName} />
-            <ClickableFileName fileName={fileName} absPath={diff.absPath || editPath} className={struck ? "text-muted-foreground line-through" : ""} />
-          </span>
+          <>
+            <span className="shrink-0 opacity-40">·</span>
+            <span className="inline-flex items-center gap-1 min-w-0 font-mono" title={diff.absPath || editPath}>
+              <FileTypeIcon fileName={fileName} />
+              <ClickableFileName fileName={fileName} absPath={diff.absPath || editPath} className="truncate" />
+            </span>
+          </>
         )}
         {/* 右侧操作区 */}
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-0.5 shrink-0">
           <button
             onClick={openNativeDiff}
             title="查看本次修改"
@@ -1053,7 +1140,7 @@ function FileEditItem({
             <button
               onClick={() => onAcceptEdit(actionTarget)}
               title="接受此改动"
-              className="p-1 rounded text-green-600 hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors"
+              className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
             >
               <Check className="w-3.5 h-3.5" />
             </button>
@@ -1088,48 +1175,98 @@ function FileEditItem({
  * tag 颜色区分：无错误=普通灰，有错误=红色描边。文件多时自动换行。
  */
 function DiagnosticsItem({ tool }: { tool: ToolCallData }) {
+  const [expanded, setExpanded] = useState(false);
   const files = tool.diagnostics || [];
   const pending = isToolInFlight(tool.status);
   const hasErrors = files.some((f) => !f.ok);
   // 消歧展示：同名文件补最短区分路径
   const displayNames = disambiguatePaths(files.map((f) => f.path));
 
+  const errorFiles = files.filter((f) => !f.ok).length;
+  const first = files[0];
+  // 折叠行只留一行：单文件直接说文件名（诊断本来就是逐文件给的），
+  // 多文件说数量 + 前两个名字预览。原来把文件名 tag 全平铺并允许换行，
+  // 检查十几个文件时卡片自己就撑成三四行高，等于没折叠。
+  const preview = files.slice(0, 2).map((f, i) => (f.scope === "project" ? "整个项目" : displayNames[i]));
+  const rest = files.length - preview.length;
+
   return (
-    <div className="flex items-center gap-2 py-1.5 px-2.5 my-2 rounded-lg border border-border bg-muted/20 text-[13px] flex-wrap">
-      {pending
-        ? <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-muted-foreground" />
-        : <Bug className={`w-3.5 h-3.5 shrink-0 ${hasErrors ? "text-red-500" : "text-green-600"}`} />}
-      <span className="text-muted-foreground shrink-0">语法诊断</span>
-      {/* 右边：文件名 tag */}
-      {files.map((f, i) => {
-        // 整个项目的汇总结果：用 scope 字段判断（结构化标记）。
-        if (f.scope === "project") {
-          return (
-            <span
-              key={i}
-              title="对整个项目做了类型检查"
-              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs ${f.ok ? "bg-muted text-foreground" : "bg-red-100 dark:bg-red-950/40 text-red-600 dark:text-red-400"}`}
-            >
-              <FolderTree className="w-3.5 h-3.5 shrink-0" />
-              <span>整个项目</span>
+    <div className="my-0.5">
+      <div
+        onClick={() => setExpanded((v) => !v)}
+        className={`flex items-center gap-1.5 py-0.5 text-[11px] min-w-0 cursor-pointer transition-colors ${
+          expanded ? "text-muted-foreground/70" : "text-muted-foreground/60"
+        } hover:text-muted-foreground`}
+      >
+        {pending
+          ? <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
+          : <Bug className={`w-3.5 h-3.5 shrink-0 ${hasErrors ? "text-red-500" : ""}`} />}
+        <span className="shrink-0">语法诊断</span>
+        <span className="shrink-0 opacity-40">·</span>
+        {files.length > 1 ? (
+          <>
+            <span className="shrink-0">{files.length} 个文件</span>
+            <span className="shrink-0 opacity-40">·</span>
+            <span className="min-w-0 truncate font-mono opacity-45">
+              {preview.join("、")}{rest > 0 ? ` 等 +${rest}` : ""}
             </span>
-          );
-        }
-        return (
-          <span
-            key={i}
-            onClick={() => {
-              const vscode = (window as any).__axonVSCode;
-              if (vscode) vscode.postMessage({ type: "open_file", path: f.path });
-            }}
-            title={f.path}
-            className={`inline-flex items-start gap-1 px-2 py-0.5 rounded text-xs font-mono cursor-pointer hover:underline break-all min-w-0 max-w-full ${f.ok ? "bg-muted text-foreground" : "bg-red-100 dark:bg-red-950/40 text-red-600 dark:text-red-400"}`}
-          >
-            <FileTypeIcon fileName={f.path} />
-            <span className="break-all">{displayNames[i]}</span>
-          </span>
-        );
-      })}
+          </>
+        ) : first ? (
+          first.scope === "project" ? (
+            <span className="shrink-0">整个项目</span>
+          ) : (
+            <span className="inline-flex items-center gap-1 min-w-0 font-mono" title={first.path}>
+              <FileTypeIcon fileName={first.path} />
+              <span className="truncate">{displayNames[0]}</span>
+            </span>
+          )
+        ) : null}
+        {/* 有错才占位：没错误时不写"0 个错误"，那只是噪音 */}
+        {hasErrors && (
+          <>
+            <span className="shrink-0 opacity-40">·</span>
+            <span className="shrink-0 text-red-500">
+              {files.length > 1 ? `${errorFiles}/${files.length} 有错` : `${first?.errorCount ?? 0} 个错误`}
+            </span>
+          </>
+        )}
+      </div>
+      <div
+        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
+        style={{ gridTemplateRows: expanded ? "1fr" : "0fr", opacity: expanded ? 1 : 0 }}
+        aria-hidden={!expanded}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className="ml-5 mt-1 rounded-lg border border-border bg-popover overflow-hidden">
+            {files.map((f, i) => {
+              // 整个项目的汇总结果：用 scope 字段判断（结构化标记），点不开具体文件
+              const isProject = f.scope === "project";
+              return (
+                <div
+                  key={i}
+                  onClick={() => {
+                    if (isProject) return;
+                    const vscode = (window as any).__axonVSCode;
+                    if (vscode) vscode.postMessage({ type: "open_file", path: f.path });
+                  }}
+                  title={isProject ? "对整个项目做了类型检查" : f.path}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] min-w-0 ${i > 0 ? "border-t border-border/50" : ""} ${isProject ? "" : "cursor-pointer hover:bg-muted/40 transition-colors"}`}
+                >
+                  {isProject
+                    ? <FolderTree className="w-3.5 h-3.5 shrink-0" />
+                    : <FileTypeIcon fileName={f.path} />}
+                  <span className="min-w-0 truncate font-mono">{isProject ? "整个项目" : displayNames[i]}</span>
+                  <span className="ml-auto shrink-0">
+                    {f.ok
+                      ? <Check className="w-3 h-3 opacity-50" />
+                      : <span className="tabular-nums text-[10px] text-red-500">{f.errorCount} 个错误</span>}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1142,6 +1279,12 @@ export interface EditGroupData {
   edits: ToolCallData[]; // 组内各次编辑的完整数据（多文件时每项 displayName 为各自文件名）
   /** true=一次调用改了多个不同文件（如 apply_patch）；false/缺省=同一文件的多次编辑 */
   multiFile?: boolean;
+  /**
+   * 动作语义：apply_patch 是"打补丁"，与 str_replace 的"编辑"不是一回事，标题要分开说。
+   * 缺省按 edit 处理。它与 multiFile 是正交的两个维度——补丁也可能只动一个文件，
+   * 所以文案要同时看这两个字段，不能只用其中任一决定。
+   */
+  kind?: "edit" | "patch";
   /** 组内是否已被接受、可撤销（右侧显示撤销图标） */
   undoable?: boolean;
   /** 组内是否已被撤销 */
@@ -1185,30 +1328,71 @@ export function EditGroupItem({
   const isUndoable = !!group.undoable && !group.pending;
   const isReverted = !!group.reverted;
 
+  // 折叠行版式与「执行命令 / 查看文件」统一：一行说清"改了谁、几次"，明细缩进内嵌。
+  // 单文件分组说文件名（多文件分组文件名是回退值，没有意义，改说数量 + 前两个名字），
+  // 多文件同理给预览，避免 apply_patch 一次改十几个文件时折叠行自己撑成标签墙。
+  const filePreview = group.multiFile
+    ? group.edits.slice(0, 2).map((e) => e.displayName || group.fileName)
+    : [];
+  const fileRest = group.multiFile ? group.edits.length - filePreview.length : 0;
+
   return (
-    <div className={`my-2 rounded-lg border overflow-hidden ${group.pending ? "border-amber-300/60 bg-amber-50 dark:bg-amber-950/20" : "border-border bg-muted/20"} ${isReverted ? "opacity-60" : ""}`}>
-      {/* 标题行 */}
-      <div className="flex items-center gap-2 py-1.5 px-2.5 text-[13px]">
-        {isReverted && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">已撤销</span>}        <button
+    <div className="my-0.5">
+      <div
+        className={`flex items-center gap-1.5 py-0.5 text-[11px] min-w-0 ${isReverted ? "opacity-50" : ""}`}
+      >
+        <div
           onClick={() => setExpanded((v) => !v)}
-          className="flex items-center gap-2 flex-1 text-left min-w-0"
+          className={`flex items-center gap-1.5 min-w-0 cursor-pointer transition-colors ${
+            expanded ? "text-muted-foreground/70" : "text-muted-foreground/60"
+          } hover:text-muted-foreground`}
         >
-          <ChevronRight className={`w-3.5 h-3.5 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`} />
+          {hasExecuting
+            ? <GroupInFlightIcon queuedOnly={!group.edits.some((e) => e.status === "pending")} />
+            : isReverted
+              ? <Undo2 className="w-3.5 h-3.5 shrink-0" />
+              : <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />}
+          <span className={`shrink-0 ${group.pending ? "text-amber-600 dark:text-amber-400" : ""}`}>
+            {isReverted
+              ? "已撤销"
+              : group.pending
+                ? "待确认"
+                : group.kind === "patch"
+                  ? "已应用补丁"
+                  : group.multiFile
+                    ? "已修改"
+                    : "已编辑"}
+          </span>
+          <span className="shrink-0 opacity-40">·</span>
           {group.multiFile ? (
-            <span className="text-muted-foreground">已修改 <span className="text-foreground font-medium">{group.edits.length}</span> 个文件</span>
+            <>
+              <span className="shrink-0">{group.edits.length} 个文件</span>
+              {filePreview.length > 0 && (
+                <>
+                  <span className="shrink-0 opacity-40">·</span>
+                  <span className="min-w-0 truncate font-mono opacity-45">
+                    {filePreview.join("、")}{fileRest > 0 ? ` 等 +${fileRest}` : ""}
+                  </span>
+                </>
+              )}
+            </>
           ) : (
             <>
-              <span className="text-muted-foreground">已编辑</span>
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-muted/40 text-xs font-mono text-foreground min-w-0">
+              <span className="inline-flex items-center gap-1 min-w-0 font-mono">
                 <FileTypeIcon fileName={group.fileName} />
                 <ClickableFileName fileName={group.fileName} absPath={group.edits[0]?.diff?.absPath || group.edits[0]?.diff?.path || ""} className="truncate" />
               </span>
-              {group.edits.length > 1 && <span className="text-muted-foreground/70 shrink-0">· {group.edits.length} 次</span>}
+              {group.edits.length > 1 && (
+                <>
+                  <span className="shrink-0 opacity-40">·</span>
+                  <span className="shrink-0 opacity-60">{group.edits.length} 次</span>
+                </>
+              )}
             </>
           )}
-        </button>
+        </div>
         {/* 右侧操作按钮 */}
-        <div className="ml-auto flex items-center gap-1 shrink-0">
+        <div className="ml-auto flex items-center gap-0.5 shrink-0">
           {!group.multiFile && (
             <button
               onClick={() => {
@@ -1226,7 +1410,7 @@ export function EditGroupItem({
             <button
               onClick={() => (group.multiFile ? doAcceptAll() : onAcceptEdit(editPath))}
               title={group.multiFile ? "接受全部文件改动" : "接受此文件的所有改动"}
-              className="p-1 rounded text-green-600 hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors"
+              className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
             >
               <Check className="w-3.5 h-3.5" />
             </button>
@@ -1251,23 +1435,36 @@ export function EditGroupItem({
           )}
         </div>
       </div>
-      {/* 展开区：逐个文件/编辑 */}
-      {expanded && (
-        <div className="border-t border-border/50 px-2 py-1.5 space-y-1">
-          {group.edits.map((edit) => (
-            <FileEditItem
-              key={edit.id}
-              tool={edit}
-              action={edit.name === "create_file" ? (edit.diff && (edit.diff.oldContent || edit.diff.hadOldContent) ? "已覆盖" : "已创建") : "已编辑"}
-              fileName={edit.displayName || group.fileName}
-              icon={<CheckCircle2 className="w-3.5 h-3.5 text-green-600 shrink-0" />}
-              onAcceptEdit={onAcceptEdit}
-              onRejectEdit={onRejectEdit}
-              onUndoEdit={onUndoEdit}
-            />
-          ))}
+      {/* 展开区：逐个文件/编辑，缩进内嵌（明细行本身也是折叠行，靠分隔线区隔） */}
+      <div
+        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
+        style={{ gridTemplateRows: expanded ? "1fr" : "0fr", opacity: expanded ? 1 : 0 }}
+        aria-hidden={!expanded}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className="ml-5 mt-1 rounded-lg border border-border bg-popover overflow-hidden">
+            {group.edits.map((edit, i) => (
+              <div key={edit.id} className={i > 0 ? "border-t border-border/50" : ""}>
+                <FileEditItem
+                  tool={edit}
+                  action={
+                    edit.name === "create_file"
+                      ? (edit.diff && (edit.diff.oldContent || edit.diff.hadOldContent) ? "已覆盖" : "已创建")
+                      : edit.name === "apply_patch"
+                        ? "已应用补丁"
+                        : "已编辑"
+                  }
+                  fileName={edit.displayName || group.fileName}
+                  icon={<CheckCircle2 className="w-3.5 h-3.5 shrink-0" />}
+                  onAcceptEdit={onAcceptEdit}
+                  onRejectEdit={onRejectEdit}
+                  onUndoEdit={onUndoEdit}
+                />
+              </div>
+            ))}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -1286,6 +1483,7 @@ export interface SearchGroupData {
  * - 多条连续：第二层用 · 列表逐条展示
  */
 export function SearchGroupItem({ group }: { group: SearchGroupData }) {
+  const [expanded, setExpanded] = useState(false);
   const labels = group.queries.map((item) => {
     if (typeof item === "string") return item;
     return exploreDisplayText(item.name, item.args, item.label);
@@ -1304,28 +1502,48 @@ export function SearchGroupItem({ group }: { group: SearchGroupData }) {
   const fmt = (label: string, count: number) => (count > 1 ? `${label}（共 ${count} 处）` : label);
   const isMulti = aggregated.length > 1;
   return (
-    <div className="my-2 rounded-lg border border-border bg-popover overflow-hidden">
-      {/* 第一层：图标 + 标题（前景色叠加 + 底分隔线，跨主题与下层分明） */}
-      <div className="flex items-center gap-2 py-1.5 px-3 text-[13px] border-b border-border/60 bg-foreground/[0.04]">
+    <div className="my-0.5">
+      <div
+        onClick={() => setExpanded((v) => !v)}
+        className={`flex items-center gap-1.5 py-0.5 text-[11px] min-w-0 cursor-pointer transition-colors ${
+          expanded ? "text-muted-foreground/70" : "text-muted-foreground/60"
+        } hover:text-muted-foreground`}
+      >
         {group.pending
           ? <GroupInFlightIcon queuedOnly={group.queuedOnly} />
-          : <Search className="w-3.5 h-3.5 text-green-600 shrink-0" />}
-        <span className="text-muted-foreground">搜索工作区</span>
-      </div>
-      {/* 第二层：意图文案（卡片底面） */}
-      <div className="px-3 py-1.5">
+          : <Search className="w-3.5 h-3.5 shrink-0" />}
+        <span className="shrink-0">搜索工作区</span>
+        <span className="shrink-0 opacity-40">·</span>
         {isMulti ? (
-          <ul className="space-y-1">
-            {aggregated.map((item, i) => (
-              <li key={i} className="flex items-start gap-2 text-xs font-mono text-foreground/80">
-                <span className="text-muted-foreground/60 select-none">·</span>
-                <span className="break-all">{fmt(item.label, item.count)}</span>
-              </li>
-            ))}
-          </ul>
+          <>
+            <span className="shrink-0">{group.queries.length} 处</span>
+            <span className="shrink-0 opacity-40">·</span>
+            <span className="min-w-0 truncate font-mono opacity-45">
+              {aggregated[0]?.label}{aggregated.length > 1 ? " 等" : ""}
+            </span>
+          </>
         ) : (
-          <code className="text-xs font-mono text-foreground/80 break-all">{fmt(aggregated[0]?.label ?? "", aggregated[0]?.count ?? 1)}</code>
+          <span className="min-w-0 truncate font-mono">{fmt(aggregated[0]?.label ?? "", aggregated[0]?.count ?? 1)}</span>
         )}
+      </div>
+      <div
+        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
+        style={{ gridTemplateRows: expanded ? "1fr" : "0fr", opacity: expanded ? 1 : 0 }}
+        aria-hidden={!expanded}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className="ml-5 mt-1 rounded-lg border border-border bg-popover overflow-hidden">
+            {aggregated.map((item, i) => (
+              <div
+                key={i}
+                className={`flex items-start gap-1.5 px-2.5 py-1 text-[11px] font-mono text-foreground/80 ${i > 0 ? "border-t border-border/50" : ""}`}
+              >
+                <span className="shrink-0 select-none text-muted-foreground/40">·</span>
+                <span className="break-all">{fmt(item.label, item.count)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -1342,39 +1560,91 @@ export interface ReadFileGroupData {
 }
 
 /**
- * 连续 read_file 合并展示（对齐 Kiro 的 "Read file(s)" 紧凑卡片）
- * 两层结构：第一层 [图标] 已读取，第二层标签列表自动换行
- * 标签内：文件名 + 灰色小字行号（如有）
+ * 连续 read_file 合并展示（折叠行 + 缩进清单，与「执行命令」同一套视觉语言）
+ *
+ * 折叠行只有一行，按「读了一个」还是「读了一批」决定怎么描述：
+ *  - 单文件：直接说对象本身（`已读取 · ChatPanel.tsx 1-10`），文件名可点击跳转，
+ *    不显示「1 个文件」这种废话，也不塞文件名标签的背景块；
+ *  - 多文件：说清数量 + 前两个名字做预览（`已读取 · 5 个文件 · a.tsx、b.tsx 等 +3`）。
+ *    连续读十几个文件时如果沿用整排标签自动换行，折叠行本身就会撑成一大块，
+ *    等于没折叠，所以这里必须压成单行并截断。
+ *
+ * 展开区统一为文件清单，每行：类型图标 + 文件名 + 行号 + 右侧淡灰完整路径，点击打开。
+ * 单文件也允许展开（长路径在折叠行里看不全），只是清单里就只有一行。
  */
 export function ReadFileGroupItem({ group }: { group: ReadFileGroupData }) {
+  const [expanded, setExpanded] = useState(false);
+  const count = group.files.length;
+  const isMulti = count > 1;
+  const first = group.files[0];
+
+  const openFile = (f: ReadFileGroupData["files"][number]) => {
+    if (!f.path) return;
+    const vscode = (window as any).__axonVSCode;
+    if (vscode) vscode.postMessage({ type: "open_file", path: f.path, startLine: f.startLine, endLine: f.endLine });
+  };
+
+  const statusLabel = group.pending ? (group.queuedOnly ? "待读取" : "读取中") : "已读取";
+  const preview = group.files.slice(0, 2).map((f) => f.name);
+  const rest = count - preview.length;
+
   return (
-    <div className="my-2 rounded-lg border border-border bg-muted/20 overflow-hidden min-w-0 w-full">
-      {/* 单行：状态图标 + 标题 + 文件名标签（同一行，文件多时自动换行） */}
-      <div className="flex items-center gap-2 py-1.5 px-2.5 text-[13px] flex-wrap">
+    <div className="my-0.5">
+      <div
+        onClick={() => setExpanded((v) => !v)}
+        className={`flex items-center gap-1.5 py-0.5 text-[11px] min-w-0 cursor-pointer transition-colors ${
+          expanded ? "text-muted-foreground/70" : "text-muted-foreground/60"
+        } hover:text-muted-foreground`}
+      >
         {group.pending
           ? <GroupInFlightIcon queuedOnly={group.queuedOnly} />
           : group.hasError
-            ? <EyeOff className="w-3.5 h-3.5 text-red-500 shrink-0" />
-            : <Eye className="w-3.5 h-3.5 text-green-600 shrink-0" />}
-        <span className="text-muted-foreground shrink-0">
-          {group.pending ? (group.queuedOnly ? "待读取" : "读取中") : "已读取"}
-        </span>
-        {group.files.map((f, i) => (
+            ? <EyeOff className="w-3.5 h-3.5 shrink-0 text-red-500" />
+            : <Eye className="w-3.5 h-3.5 shrink-0" />}
+        <span className="shrink-0">{statusLabel}</span>
+        <span className="shrink-0 opacity-40">·</span>
+        {isMulti ? (
+          <>
+            <span className="shrink-0">{count} 个文件</span>
+            <span className="shrink-0 opacity-40">·</span>
+            <span className="min-w-0 truncate font-mono opacity-45">
+              {preview.join("、")}{rest > 0 ? ` 等 +${rest}` : ""}
+            </span>
+          </>
+        ) : first ? (
           <span
-            key={i}
-            onClick={() => {
-              if (!f.path) return;
-              const vscode = (window as any).__axonVSCode;
-              if (vscode) vscode.postMessage({ type: "open_file", path: f.path, startLine: f.startLine, endLine: f.endLine });
-            }}
-            className={`inline-flex items-start gap-1 px-2 py-0.5 rounded bg-muted/40 text-xs font-mono break-all min-w-0 max-w-full ${f.path ? "cursor-pointer hover:bg-muted/60 transition-colors" : ""}`}
-            title={f.path || f.name}
+            onClick={(e) => { e.stopPropagation(); openFile(first); }}
+            className={`inline-flex items-center gap-1 min-w-0 ${first.path ? "cursor-pointer hover:text-muted-foreground" : ""}`}
+            title={first.path || first.name}
           >
-            <FileTypeIcon fileName={f.name} />
-            <span className={`text-foreground break-all ${f.isAbsolute ? "underline underline-offset-2" : ""}`}>{f.name}</span>
-            {f.range && <span className="text-muted-foreground/70 whitespace-nowrap shrink-0">{f.range}</span>}
+            <FileTypeIcon fileName={first.name} />
+            <span className={`font-mono truncate ${first.isAbsolute ? "underline underline-offset-2" : ""}`}>{first.name}</span>
+            {first.range && <span className="shrink-0 whitespace-nowrap opacity-50">{first.range}</span>}
           </span>
-        ))}
+        ) : null}
+      </div>
+      <div
+        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
+        style={{ gridTemplateRows: expanded ? "1fr" : "0fr", opacity: expanded ? 1 : 0 }}
+        aria-hidden={!expanded}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className="ml-5 mt-1 rounded-lg border border-border bg-popover overflow-hidden">
+            {group.files.map((f, i) => (
+              <div
+                key={i}
+                onClick={() => openFile(f)}
+                title={f.path || f.name}
+                className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] min-w-0 ${i > 0 ? "border-t border-border/50" : ""} ${f.path ? "cursor-pointer hover:bg-muted/40 transition-colors" : ""}`}
+              >
+                <FileTypeIcon fileName={f.name} />
+                <span className={`shrink-0 font-mono ${f.isAbsolute ? "underline underline-offset-2" : ""}`}>{f.name}</span>
+                {f.range && <span className="shrink-0 whitespace-nowrap text-muted-foreground/60">{f.range}</span>}
+                <span className="ml-auto min-w-0 max-w-[50%] truncate font-mono text-[10px] text-muted-foreground/35">{f.path}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -1417,47 +1687,61 @@ function WebSearchItem({ tool }: { tool: ToolCallData }) {
   const [expanded, setExpanded] = useState(false);
   const sr = tool.searchResults;
   const pending = isToolInFlight(tool.status);
-  const resultCount = sr?.results?.length || 0;
+  const results = sr?.results || [];
+  // query 一般由后端随结果下发；流式早期还没结果时退回描述里去掉动词的部分，
+  // 否则折叠行会空着"搜索网络 · "后面没内容
+  const query = sr?.query || (tool.description || "").replace(/^(?:搜索|web search[:：]?)\s*/i, "");
 
   return (
-    <div className="my-2 rounded-lg border border-border bg-muted/20 overflow-hidden">
-      {/* 标题行 */}
-      <button
+    <div className="my-0.5">
+      <div
         onClick={() => setExpanded((v) => !v)}
-        className="flex items-center gap-2 w-full py-1.5 px-2.5 text-[13px] text-left hover:bg-muted/30 transition-colors"
+        className={`flex items-center gap-1.5 py-0.5 text-[11px] min-w-0 cursor-pointer transition-colors ${
+          expanded ? "text-muted-foreground/70" : "text-muted-foreground/60"
+        } hover:text-muted-foreground`}
       >
-        <ChevronRight className={`w-3.5 h-3.5 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`} />
         {pending
-          ? <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-muted-foreground" />
-          : <Globe className="w-3.5 h-3.5 shrink-0 text-blue-500" />}
-        <span className="text-muted-foreground">Web search:</span>
-        <span className="text-foreground font-medium truncate flex-1">{sr?.query || tool.description}</span>
-        {!pending && (
-          <span className="text-xs text-muted-foreground shrink-0">{resultCount} results</span>
+          ? <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
+          : <Search className="w-3.5 h-3.5 shrink-0" />}
+        <span className="shrink-0">搜索网络</span>
+        <span className="shrink-0 opacity-40">·</span>
+        <span className="min-w-0 truncate font-mono">{query}</span>
+        {!pending && results.length > 0 && (
+          <>
+            <span className="shrink-0 opacity-40">·</span>
+            <span className="shrink-0 tabular-nums opacity-60">{results.length} 条结果</span>
+          </>
         )}
-      </button>
-      {/* 展开区：搜索结果列表 */}
-      {expanded && sr && sr.results.length > 0 && (
-        <div className="border-t border-border/50 px-4 py-2 space-y-2">
-          {sr.results.map((r, i) => (
-            <div key={i} className="space-y-0.5">
-              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                <SiteFavicon domain={r.domain} />
-                <span>{r.domain}</span>
-                {r.date && <span>{r.date}</span>}
+      </div>
+      {/* 展开区：缩进内嵌的结果列表，每条一行站点 + 标题链接 */}
+      <div
+        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
+        style={{ gridTemplateRows: expanded ? "1fr" : "0fr", opacity: expanded ? 1 : 0 }}
+        aria-hidden={!expanded}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className="ml-5 mt-1 rounded-lg border border-border bg-popover overflow-hidden">
+            {results.map((r, i) => (
+              <div key={i} className={`px-2.5 py-1.5 min-w-0 ${i > 0 ? "border-t border-border/50" : ""}`}>
+                <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground/60 min-w-0">
+                  <SiteFavicon domain={r.domain} />
+                  <span className="min-w-0 truncate">{r.domain}</span>
+                  {r.date && <span className="shrink-0 opacity-70">{r.date}</span>}
+                </div>
+                <a
+                  href={r.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block truncate text-[11px] text-blue-600 dark:text-blue-400 hover:underline"
+                  title={r.title}
+                >
+                  {r.title}
+                </a>
               </div>
-              <a
-                href={r.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline block truncate"
-              >
-                {r.title}
-              </a>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -1471,43 +1755,45 @@ function WebFetchItem({ tool }: { tool: ToolCallData }) {
   const fr = tool.fetchResult;
   const pending = isToolInFlight(tool.status);
   const failed = tool.status === "error" || (fr && !fr.success);
+  const displayUrl = fr?.url || (tool.description || "").replace(/^抓取\s*/, "").split(" ")[0] || "";
 
   if (failed && fr?.error) {
     return (
-      <div className="my-2 rounded-lg border border-red-200 dark:border-red-900/50 bg-red-50/50 dark:bg-red-950/20 overflow-hidden">
-        <div className="flex items-center gap-2 py-1.5 px-2.5 text-[13px]">
-          <span className="text-amber-500 shrink-0">⚠</span>
-          <span className="text-foreground font-medium">Web fetch failed</span>
-        </div>
-        <div className="px-4 pb-2.5">
-          <code className="text-xs font-mono text-red-600 dark:text-red-400">{fr.error}</code>
-        </div>
+      <div className="my-0.5 flex items-center gap-1.5 py-0.5 text-[11px] min-w-0 text-red-500/90">
+        <span className="shrink-0">⚠</span>
+        <span className="shrink-0">抓取失败</span>
+        <span className="shrink-0 opacity-40">·</span>
+        <span className="min-w-0 truncate font-mono text-muted-foreground/60" title={displayUrl}>{displayUrl}</span>
+        <span className="min-w-0 truncate opacity-70" title={fr.error}>{fr.error}</span>
       </div>
     );
   }
 
-  const displayUrl = fr?.url || (tool.description || "").replace(/^抓取\s*/, "").split(" ")[0] || "";
   const byteLabel = fr ? formatBytes(fr.byteSize) : "";
 
   return (
-    <div className="my-2 rounded-lg border border-border bg-muted/20 overflow-hidden">
-      <div className="flex items-center gap-2 py-1.5 px-2.5 text-[13px]">
-        {pending
-          ? <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-muted-foreground" />
-          : <Globe className="w-3.5 h-3.5 shrink-0 text-blue-500" />}
-        <span className="text-muted-foreground shrink-0">Fetched:</span>
-        <a
-          href={displayUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-blue-600 dark:text-blue-400 hover:underline truncate flex-1 font-mono text-xs"
-        >
-          {displayUrl}
-        </a>
-        {byteLabel && (
-          <span className="text-xs text-muted-foreground shrink-0">{byteLabel}</span>
-        )}
-      </div>
+    <div className="my-0.5 flex items-center gap-1.5 py-0.5 text-[11px] min-w-0 text-muted-foreground/60">
+      {pending
+        ? <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
+        : <Globe className="w-3.5 h-3.5 shrink-0" />}
+      <span className="shrink-0">已抓取</span>
+      <span className="shrink-0 opacity-40">·</span>
+      {/* 链接本身是折叠行里唯一可点的对象，蓝色是它的"可点"信号，不随图标一起转灰 */}
+      <a
+        href={displayUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="min-w-0 truncate font-mono text-blue-600 dark:text-blue-400 hover:underline"
+        title={displayUrl}
+      >
+        {displayUrl}
+      </a>
+      {byteLabel && (
+        <>
+          <span className="shrink-0 opacity-40">·</span>
+          <span className="shrink-0 tabular-nums opacity-50">{byteLabel}</span>
+        </>
+      )}
     </div>
   );
 }

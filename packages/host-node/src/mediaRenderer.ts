@@ -19,7 +19,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Browser } from "playwright-core";
@@ -27,8 +27,13 @@ import { MEDIA_LIMITS } from "@axon/core";
 import type { HostMediaRenderer, MediaRenderEnv, MediaRenderRequest, MediaRenderResult } from "@axon/core";
 import { ensureFfmpeg, findFfmpeg, pickAsset } from "./ffmpegProvision.js";
 
-/** 整次渲染的时间上限：兜住页面里死循环、浏览器卡死这类不会自己结束的情况 */
-const RENDER_WATCHDOG_MS = 10 * 60 * 1000;
+/**
+ * 整次渲染的时间上限：兜住页面里死循环、浏览器卡死这类不会自己结束的情况。
+ *
+ * 15 分钟是给「60fps × 60 秒 = 3600 帧」留的余量：按每帧 150ms 的最坏情况算要 9 分钟，
+ * 加上启动浏览器、音频合成、编码，仍有余地。再小就会把正常的长片误杀。
+ */
+const RENDER_WATCHDOG_MS = 15 * 60 * 1000;
 /** 单次截图 / 页面操作的超时 */
 const PAGE_OP_TIMEOUT_MS = 20_000;
 /** 旁白合成超时 */
@@ -37,6 +42,18 @@ const TTS_TIMEOUT_MS = 60_000;
 const RAF_PRIME_MS = 16;
 /** 旁白比画面多留的尾巴（秒），避免最后一个字被切掉 */
 const NARRATION_TAIL_SEC = 0.5;
+
+/**
+ * 内置前端库目录（扩展的 media/vendor），由宿主在启动时注册。
+ *
+ * 渲染环境默认拦截一切外网请求（模型生成的页面按不可信代码对待）。但三维场景需要
+ * Three.js 这类大库，让模型内联几百 KB 的库代码既不现实也不可靠，所以开这一个口子：
+ * 页面用 `/vendor/<文件名>` 引用，路由直接读本地文件返回，仍然不出网。
+ */
+let mediaVendorDir: string | undefined;
+export function setMediaVendorDir(dir: string | undefined): void {
+  mediaVendorDir = dir;
+}
 
 // ── 子进程 ────────────────────────────────────────────────────────────────
 
@@ -136,16 +153,52 @@ async function detectVideoEncoder(ffmpeg: string): Promise<VideoEncoder> {
 }
 
 /**
+ * 成片后处理：把「网页截图」往「影像」推一档。
+ *
+ * 四步，从「成像」到「镜头」：
+ * 1. 高光溢出（bloom）：把画面拆成两路，一路压掉暗部只留高光、高斯模糊后以 screen 模式
+ *    叠回去。这是「数字画面」和「有镜头感的画面」最大的一处分水岭——光源和亮部边缘
+ *    会有自然的光晕扩散，而不是硬边。只让高光参与叠加（0.35→0.05 的阈值曲线），
+ *    暗部保持干净、不发灰。
+ * 2. 电影调色：colorbalance 让暗部偏青、高光偏暖（teal & orange，商业片最通用的配色逻辑），
+ *    再用 S 曲线压暗部提中间调，画面立刻「沉」下来、有胶片味。
+ * 3. 暗角：把视线收到画面中心。
+ * 4. 颗粒：极细噪点，消掉纯数字的塑料感。
+ *
+ * 只用于 mp4。GIF 帧数少、调色板只有 256 色，加光晕和颗粒会把体积和噪点一起放大。
+ *
+ * ⚠️ 不要换成 eq：Axon 自动获取的 ffmpeg 是精简构建，实测没有 eq 滤镜
+ * （`No such filter: 'eq'`），写上会让所有渲染直接失败。eq 的能力 curves + colorbalance
+ * 已完全覆盖且更专业。这条链已在真实 ffmpeg 上验证过能正常出片。
+ *
+ * 标签统一用 fx 前缀，避免和音频混流的 [a] 撞名。整段是一个自包含的 filtergraph 片段：
+ * 可直接作为 -vf，也可拼进 filter_complex 后接输出标签。
+ */
+const POST_FX_FILTER = [
+  "split[fxBase][fxGlow]",
+  "[fxGlow]curves=all='0/0 0.35/0.05 1/1',gblur=sigma=18[fxBlur]",
+  "[fxBase][fxBlur]blend=all_mode=screen:all_opacity=0.45[fxLit]",
+  "[fxLit]colorbalance=rs=-0.05:bs=0.05:rh=0.04:bh=-0.04," +
+    "curves=all='0/0 0.5/0.46 1/1',vignette=angle=PI/6,noise=alls=4:allf=t+u",
+].join(",");
+
+/**
  * 视频编码参数。
  *
- * openh264 没有 CRF 这类恒定量化参数，只能按目标码率走；码率按「像素 × 帧率」估，
- * 实测 0.1 bit/px 在 720p 上约 2 Mbps，文字和色块都清晰。
+ * openh264 没有 CRF 这类恒定量化参数，只能按目标码率走。
  */
 function videoEncodeArgs(encoder: VideoEncoder, width: number, height: number, fps: number): string[] {
   if (encoder === "libx264") {
-    return ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "20"];
+    // medium 比 veryfast 编码慢 2~3 倍，但对短视频（编码只占整体耗时的零头）换来的
+    // 码率分配和边缘细节明显更好：文字边缘、细线、渐变过渡都不容易糊。
+    return ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "medium", "-crf", "20"];
   }
-  const bitrate = Math.min(12_000_000, Math.max(500_000, Math.round(width * height * fps * 0.1)));
+  // ⚠️ Axon 自动获取的 ffmpeg 不带 libx264（--disable-libx264），实际走的是 openh264
+  // 的码率模式：画质完全由这里的 bitrate 决定，preset / crf 对它无效。
+  // 0.15 bit/px 比原来的 0.1 高一档：720p30 约 4Mbps、1080p30 约 9Mbps，
+  // 渐变过渡和细线不再出现色带。上限放到 20Mbps，宁可文件大一点（预览超限时
+  // 用户可以在文件系统里用播放器打开），也不要在画质上妥协。
+  const bitrate = Math.min(20_000_000, Math.max(1_000_000, Math.round(width * height * fps * 0.15)));
   if (encoder === "h264_videotoolbox") {
     return [
       "-c:v", "h264_videotoolbox", "-pix_fmt", "yuv420p",
@@ -265,6 +318,64 @@ const PAGE_INIT_SCRIPT = String.raw`
 })();
 `;
 
+/**
+ * 页面音效渲染脚本（每个文档最早执行）。
+ *
+ * 模型只需在 HTML 里定义 `window.renderAudio(ctx)`，ctx 是这里创建好的 OfflineAudioContext；
+ * 它往 ctx.destination 上接振荡器/噪声/包络即可，不用自己 startRendering。
+ *
+ * 为什么用 OfflineAudioContext 而不是实时播放再录音：后者要真扬声器、时长按实时走、
+ * 结果随机器忙闲漂移；前者按样本精确合成，几秒就能算完 60 秒音频，与「确定性逐帧」同一套思路。
+ * 它也不受本页面假时钟影响（假时钟只接管 setTimeout / rAF，管不到音频图的采样渲染）。
+ *
+ * 返回 16bit PCM WAV 的 base64；页面没定义 renderAudio 时返回 null。
+ */
+const PAGE_AUDIO_SCRIPT = String.raw`
+(() => {
+  window.__axonHasAudio = () => typeof window.renderAudio === "function";
+  window.__axonRenderAudio = async (sampleRate, durationSec) => {
+    if (typeof window.renderAudio !== "function") return null;
+    const frames = Math.max(1, Math.ceil(durationSec * sampleRate));
+    const ctx = new OfflineAudioContext(2, frames, sampleRate);
+    await window.renderAudio(ctx);
+    const buffer = await ctx.startRendering();
+    const channels = Math.min(2, buffer.numberOfChannels);
+    const length = buffer.length;
+    const bytes = new Uint8Array(44 + length * channels * 2);
+    const view = new DataView(bytes.buffer);
+    const putStr = (offset, s) => { for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i)); };
+    putStr(0, "RIFF");
+    view.setUint32(4, 36 + length * channels * 2, true);
+    putStr(8, "WAVE");
+    putStr(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, channels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * channels * 2, true);
+    view.setUint16(32, channels * 2, true);
+    view.setUint16(34, 16, true);
+    putStr(36, "data");
+    view.setUint32(40, length * channels * 2, true);
+    const data = [];
+    for (let c = 0; c < channels; c++) data.push(buffer.getChannelData(c));
+    let offset = 44;
+    for (let i = 0; i < length; i++) {
+      for (let c = 0; c < channels; c++) {
+        const v = Math.max(-1, Math.min(1, data[c][i]));
+        view.setInt16(offset, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+        offset += 2;
+      }
+    }
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(binary);
+  };
+})();
+`;
+
 /** 启动离屏浏览器：优先系统 Chrome → Edge → Playwright 自带 Chromium（与 PlaywrightBrowser 同一套回退） */
 async function launchHeadless(): Promise<Browser> {
   const { chromium } = await import("playwright-core");
@@ -303,6 +414,11 @@ export interface CaptureOptions {
   frameCount: number;
   /** 帧输出目录，文件名从 frame_000001.png 起 */
   dir: string;
+  /**
+   * 页面音效：提供了就尝试调用页面的 window.renderAudio，把结果写成 WAV。
+   * 页面没定义这个函数时静默跳过（不是错误，多数片子本来就无声）。
+   */
+  audio?: { sampleRate: number; outPath: string; durationSec: number };
   signal?: AbortSignal;
   onProgress?: (done: number, total: number) => void;
 }
@@ -335,12 +451,25 @@ export async function captureFrames(opts: CaptureOptions): Promise<string[]> {
       acceptDownloads: false,
     });
     const blocked: string[] = [];
-    await context.route("**/*", (route) => {
+    await context.route("**/*", async (route) => {
       const url = route.request().url();
       if (url === PAGE_URL) {
         return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: opts.html });
       }
       if (/^(data|blob|about):/i.test(url)) return route.continue();
+      // 内置库（如 Three.js）：页面用 /vendor/<文件名> 引用，这里直接读本地文件返回，仍然不出网。
+      // 只允许单层文件名 —— 挡掉 ../ 和任何带路径分隔符的写法，避免拼出扩展目录之外的任意文件。
+      if (mediaVendorDir) {
+        try {
+          const name = new URL(url).pathname.replace(/^\/vendor\//, "");
+          if (name && !/[\\/]/.test(name) && !name.includes("..")) {
+            const body = await readFile(join(mediaVendorDir, name));
+            return route.fulfill({ status: 200, contentType: "application/javascript; charset=utf-8", body });
+          }
+        } catch {
+          // 文件不存在 → 落回下面的外链拦截，让模型在 warnings 里看到原因
+        }
+      }
       blocked.push(url);
       return route.abort();
     });
@@ -351,6 +480,7 @@ export async function captureFrames(opts: CaptureOptions): Promise<string[]> {
     page.on("pageerror", (err) => { if (pageErrors.length < 3) pageErrors.push(err.message); });
 
     await page.addInitScript(PAGE_INIT_SCRIPT);
+    await page.addInitScript(PAGE_AUDIO_SCRIPT);
     // 假时钟必须在页面脚本运行前装好，并立刻暂停：
     // 否则 setContent 到第一帧之间真实时间在流逝，动画会在第 0 帧之前就已经走了一截。
     // 暂停点只能是 1ms 而不是更大的值：页面的 performance.now() / Date.now() 在第 0 帧读到的就是
@@ -376,6 +506,22 @@ export async function captureFrames(opts: CaptureOptions): Promise<string[]> {
       await page.evaluate(`window.__axonSeek(${targetMs})`);
       await page.screenshot({ path: join(opts.dir, frameName(i + 1)), type: "png", caret: "hide" });
       opts.onProgress?.(i + 1, opts.frameCount);
+    }
+
+    // 页面音效：截完帧再单独跑一次离线音频渲染。
+    // 放在画面之后，是因为音频合成失败也不该影响已经截好的画面（降级成只有画面/旁白）。
+    if (opts.audio) {
+      throwIfAborted();
+      try {
+        const base64 = await page.evaluate(
+          `window.__axonRenderAudio(${opts.audio.sampleRate}, ${opts.audio.durationSec})`,
+        );
+        if (typeof base64 === "string" && base64.length > 0) {
+          await writeFile(opts.audio.outPath, Buffer.from(base64, "base64"));
+        }
+      } catch (err) {
+        warnings.push(`音效合成失败（${(err as Error).message}），这段声音在成片里没有`);
+      }
     }
 
     if (blocked.length) {
@@ -471,6 +617,8 @@ export class NodeMediaRenderer implements HostMediaRenderer {
       const frameCount = Math.max(1, Math.round(durationSec * fps));
 
       // 3) 逐帧截图（浏览器生命周期、取消、兜底超时都在 captureFrames 里）
+      // 音效与画面共用同一次浏览器会话：页面里的 OfflineAudioContext 不依赖假时钟，截完帧再算音频即可。
+      const sfxPath = req.format === "mp4" ? join(tmp, "soundtrack.wav") : undefined;
       const captureWarnings = await captureFrames({
         html: req.html,
         width: req.width,
@@ -478,6 +626,9 @@ export class NodeMediaRenderer implements HostMediaRenderer {
         fps,
         frameCount,
         dir: tmp,
+        audio: sfxPath
+          ? { sampleRate: MEDIA_LIMITS.audioSampleRate, outPath: sfxPath, durationSec: frameCount / fps }
+          : undefined,
         signal: req.signal,
         onProgress: (done, total) => req.onProgress?.({ phase: "frames", done, total }),
       });
@@ -487,6 +638,9 @@ export class NodeMediaRenderer implements HostMediaRenderer {
       req.onProgress?.({ phase: "encoding", done: 0, total: 1 });
       const encoded = join(tmp, req.format === "gif" ? "out.gif" : "out.mp4");
       const input = ["-framerate", String(fps), "-i", join(tmp, "frame_%06d.png")];
+      // 音效只有页面真的定义了 window.renderAudio 才会写出文件，没写出就代表这条片子只有旁白/无声
+      const hasSfx = sfxPath ? !!(await stat(sfxPath).catch(() => null)) : false;
+      let hasNarration = false;
 
       if (req.format === "gif") {
         await runFfmpeg(
@@ -503,15 +657,32 @@ export class NodeMediaRenderer implements HostMediaRenderer {
         // 只有 mp4 才需要 H.264 编码器。探测放在这个分支里而不是开头：
         // 否则一份没有 H.264 的 ffmpeg 会让本来能出的 GIF 也一起失败。
         const encoder = await detectVideoEncoder(ffmpeg);
-        const audioArgs = audioPath
-          // apad 把音频补成无限长、-shortest 再按画面截断：旁白比画面短时尾部补静音，而不是把画面截短
-          ? ["-i", audioPath, "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-af", "apad", "-shortest"]
-          : [];
+        const audioInputs = [audioPath, hasSfx ? sfxPath : undefined].filter((p): p is string => !!p);
+        hasNarration = !!audioPath;
+        // 视频后处理要拆两路做 bloom，和音频混流一起走 filter_complex：
+        // 保证视频/音频各自只有一个输出映射，避免 -vf 与 -filter_complex 抢同一个输出流。
+        const extraInputs = audioInputs.flatMap((p) => ["-i", p]);
+        let graph: string;
+        let streamMaps: string[];
+        if (audioInputs.length === 2) {
+          // 旁白 + 音效：normalize=0 保持各自音量，否则 amix 默认把两路各压一半，旁白会变得很小声
+          graph = `[0:v]${POST_FX_FILTER}[v];[1:a][2:a]amix=inputs=2:duration=longest:normalize=0,apad[a]`;
+          streamMaps = ["-map", "[v]", "-map", "[a]", "-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-shortest"];
+        } else if (audioInputs.length === 1) {
+          // apad 把音频补成无限长、-shortest 再按画面截断：声音比画面短时尾部补静音，而不是把画面截短
+          graph = `[0:v]${POST_FX_FILTER}[v];[1:a]apad[a]`;
+          streamMaps = ["-map", "[v]", "-map", "[a]", "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-shortest"];
+        } else {
+          graph = `[0:v]${POST_FX_FILTER}[v]`;
+          streamMaps = ["-map", "[v]"];
+        }
         await runFfmpeg(
           ffmpeg,
           [
             ...input,
-            ...audioArgs,
+            ...extraInputs,
+            "-filter_complex", graph,
+            ...streamMaps,
             ...videoEncodeArgs(encoder, req.width, req.height, fps),
             "-movflags", "+faststart",
             encoded,
@@ -529,7 +700,8 @@ export class NodeMediaRenderer implements HostMediaRenderer {
       return {
         outputPath: req.outputPath,
         durationSec: frameCount / fps,
-        hasAudio: !!audioPath,
+        hasAudio: hasNarration || hasSfx,
+        hasSoundtrack: hasSfx,
         frameCount,
         size,
         warnings,

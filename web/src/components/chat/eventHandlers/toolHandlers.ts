@@ -13,6 +13,7 @@ import { isToolInFlight, type ToolStatus } from "@/components/ToolCallItem";
 import type { ToolSegment } from "../types";
 import type { EventHandlerCtx, WsMessage } from "./types";
 import { clearPendingRetry } from "./stateHandlers";
+import { sealReasoning } from "../reasoningPlacement";
 import { TOOL, TIMEOUT } from "@/lib/constants";
 
 export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
@@ -31,15 +32,8 @@ export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
   ctx.setChatHistory((prev) => {
     const last = prev[prev.length - 1];
     if (!last || last.role !== "assistant" || !last.segments) return prev;
-    let changed = false;
-    const segs = last.segments.map((s) => {
-      if (s.type === "reasoning" && s.streaming) {
-        changed = true;
-        return { ...s, streaming: false };
-      }
-      return s;
-    });
-    if (!changed) return prev;
+    const segs = sealReasoning(last.segments);
+    if (!segs) return prev;
     const updated = [...prev];
     updated[updated.length - 1] = { ...last, segments: segs };
     return updated;

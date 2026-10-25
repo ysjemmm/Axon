@@ -8,6 +8,7 @@
 
 import { basename, extname, join } from "node:path";
 import { MEDIA_DEFAULTS, MEDIA_LIMITS, type MediaFormat } from "../host/mediaRenderer.js";
+import { IMAGE_LIMITS } from "../host/imageGenerator.js";
 
 /** 文本类产物：由模型把完整内容作为字符串交付（create_artifact） */
 export type TextArtifactType = "html" | "svg" | "markdown" | "code" | "text";
@@ -15,8 +16,11 @@ export type TextArtifactType = "html" | "svg" | "markdown" | "code" | "text";
 /** 媒体类产物：由后端渲染得到的二进制文件（render_media），模型给不出这类内容 */
 export type MediaArtifactType = MediaFormat;
 
+/** 图片类产物：由文生图得到（generate_image），模型同样给不出这类内容 */
+export type ImageArtifactType = "png";
+
 /** 产物类型：决定落盘扩展名，也是前端选择预览方式的依据 */
-export type ArtifactType = TextArtifactType | MediaArtifactType;
+export type ArtifactType = TextArtifactType | MediaArtifactType | ImageArtifactType;
 
 /**
  * create_artifact 接受的类型——只含文本类。
@@ -42,6 +46,7 @@ const DEFAULT_EXT: Record<ArtifactType, string> = {
   text: ".txt",
   gif: ".gif",
   mp4: ".mp4",
+  png: ".png",
 };
 
 /** code 类型常见语言 → 扩展名。不在表里的退回 .txt，而不是把 language 原样拼进扩展名 */
@@ -236,8 +241,14 @@ export function parseRenderMediaArgs(args: Record<string, unknown>): RenderMedia
   const def = MEDIA_DEFAULTS[format];
   const maxDuration = isGif ? MEDIA_LIMITS.maxGifDurationSec : MEDIA_LIMITS.maxDurationSec;
   const maxFps = isGif ? MEDIA_LIMITS.maxGifFps : MEDIA_LIMITS.maxFps;
-  const maxWidth = isGif ? MEDIA_LIMITS.maxGifWidth : MEDIA_LIMITS.maxWidth;
-  const maxHeight = isGif ? MEDIA_LIMITS.maxGifHeight : MEDIA_LIMITS.maxHeight;
+  // 单边放宽到长边上限（1920），再靠总像素兜住整体规模：
+  // 只按宽高分别卡死的话，竖屏 1080×1920 会被压成 1080×1080 的方形。
+  const maxEdge = isGif
+    ? Math.max(MEDIA_LIMITS.maxGifWidth, MEDIA_LIMITS.maxGifHeight)
+    : Math.max(MEDIA_LIMITS.maxWidth, MEDIA_LIMITS.maxHeight);
+  const maxPixels = isGif
+    ? MEDIA_LIMITS.maxGifWidth * MEDIA_LIMITS.maxGifHeight
+    : MEDIA_LIMITS.maxWidth * MEDIA_LIMITS.maxHeight;
 
   const rawDuration = toNumber(args.durationSec) ?? def.durationSec;
   const durationSec = clamp(rawDuration, 1, maxDuration);
@@ -253,10 +264,15 @@ export function parseRenderMediaArgs(args: Record<string, unknown>): RenderMedia
 
   const rawWidth = toNumber(args.width) ?? def.width;
   const rawHeight = toNumber(args.height) ?? def.height;
-  const width = toEven(clamp(rawWidth, MEDIA_LIMITS.minSize, maxWidth));
-  const height = toEven(clamp(rawHeight, MEDIA_LIMITS.minSize, maxHeight));
+  let width = toEven(clamp(rawWidth, MEDIA_LIMITS.minSize, maxEdge));
+  let height = toEven(clamp(rawHeight, MEDIA_LIMITS.minSize, maxEdge));
+  if (width * height > maxPixels) {
+    const scale = Math.sqrt(maxPixels / (width * height));
+    width = Math.max(MEDIA_LIMITS.minSize, toEven(Math.floor(width * scale)));
+    height = Math.max(MEDIA_LIMITS.minSize, toEven(Math.floor(height * scale)));
+  }
   if (width !== rawWidth || height !== rawHeight) {
-    notes.push(`画面尺寸已调整为 ${width}x${height}（${format} 允许 ${MEDIA_LIMITS.minSize}~${maxWidth} x ${MEDIA_LIMITS.minSize}~${maxHeight}，且为偶数）`);
+    notes.push(`画面尺寸已调整为 ${width}x${height}（单边 ${MEDIA_LIMITS.minSize}~${maxEdge}，总像素不超过 ${maxPixels}，且为偶数）`);
   }
 
   return {
@@ -269,6 +285,75 @@ export function parseRenderMediaArgs(args: Record<string, unknown>): RenderMedia
     width,
     height,
     ...(narrationRaw ? { narration: narrationRaw } : {}),
+    notes,
+  };
+}
+
+/** generate_image 入参校验结果（数值已钳制，notes 记录被调整过的地方） */
+export type GenerateImageArgsResult =
+  | {
+      ok: true;
+      title: string;
+      prompt: string;
+      negativePrompt?: string;
+      width: number;
+      height: number;
+      count: number;
+      notes: string[];
+    }
+  | { ok: false; error: string };
+
+/**
+ * 校验 generate_image 的入参。
+ *
+ * 原则与 render_media 一致：越界数值钳制并记入 notes，只有「缺必填项」才报错。
+ * 尺寸不取偶数 —— PNG 是逐像素位图，没有 yuv420p 那种偶数约束。
+ */
+export function parseGenerateImageArgs(args: Record<string, unknown>): GenerateImageArgsResult {
+  const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
+  if (!prompt) {
+    return { ok: false, error: "缺少 prompt。请描述画面：主体、风格、构图、光线、色调。" };
+  }
+  if (prompt.length > IMAGE_LIMITS.maxPromptChars) {
+    return {
+      ok: false,
+      error: `prompt 过长（${prompt.length} 字符，上限 ${IMAGE_LIMITS.maxPromptChars}）。请精简描述。`,
+    };
+  }
+
+  const negativeRaw = typeof args.negativePrompt === "string" ? args.negativePrompt.trim() : "";
+  if (negativeRaw.length > IMAGE_LIMITS.maxNegativeChars) {
+    return {
+      ok: false,
+      error: `negativePrompt 过长（${negativeRaw.length} 字符，上限 ${IMAGE_LIMITS.maxNegativeChars}）。`,
+    };
+  }
+
+  const notes: string[] = [];
+  const rawCount = toNumber(args.count) ?? 1;
+  const count = Math.round(clamp(rawCount, 1, IMAGE_LIMITS.maxCount));
+  if (count !== rawCount) notes.push(`张数已调整为 ${count}（允许 1~${IMAGE_LIMITS.maxCount}）`);
+
+  const rawWidth = toNumber(args.width) ?? 1024;
+  const rawHeight = toNumber(args.height) ?? 1024;
+  const width = Math.round(clamp(rawWidth, IMAGE_LIMITS.minSize, IMAGE_LIMITS.maxSize));
+  const height = Math.round(clamp(rawHeight, IMAGE_LIMITS.minSize, IMAGE_LIMITS.maxSize));
+  if (width !== rawWidth || height !== rawHeight) {
+    notes.push(`画面尺寸已调整为 ${width}x${height}（单边 ${IMAGE_LIMITS.minSize}~${IMAGE_LIMITS.maxSize}）`);
+  }
+
+  const titleRaw = typeof args.title === "string" ? args.title.trim() : "";
+  // 没给标题就用提示词前 20 字做文件名主干，避免产物目录里出现一堆 image.png
+  const title = titleRaw || prompt.slice(0, 20).replace(/[\r\n]+/g, " ");
+
+  return {
+    ok: true,
+    title,
+    prompt,
+    ...(negativeRaw ? { negativePrompt: negativeRaw } : {}),
+    width,
+    height,
+    count,
     notes,
   };
 }

@@ -4,6 +4,7 @@
 
 import type { TurnStats } from "../useTypewriter";
 import { stripPendingRetry } from "../retryLifecycle";
+import { sealReasoning } from "../reasoningPlacement";
 import { clearPendingRetry } from "./stateHandlers";
 import { isStaleCancelledTurnEnd } from "./turnHandlers";
 import type { EventHandlerCtx, WsMessage } from "./types";
@@ -29,9 +30,8 @@ export function handleStreamStart(_msg: WsMessage, ctx: EventHandlerCtx): void {
       // 这只改 UI 折叠状态，不影响 reasoning 段的归属（归属看 segment.key，见 handleReasoningDelta）。
       // 全部标记而非只标最后一个：一轮内可以有多个思考块（Anthropic 的
       // thinking → tool_use → thinking），漏标的那些会一直挂着展开态。
-      const segs = (last.segments || []).map((s) =>
-        s.type === "reasoning" && s.streaming ? { ...s, streaming: false } : s,
-      );
+      const baseSegs = last.segments || [];
+      const segs = sealReasoning(baseSegs) ?? baseSegs;
       // 重试成功：移除「正在重试」段（重连已成功，不再需要展示）。
       // 只清 retrying、保留 failed：「重试次数已用尽」是终态记录，要留给人看。
       const cleaned = stripPendingRetry(segs) ?? segs;
@@ -106,15 +106,8 @@ export function handleStreamEnd(msg: WsMessage, ctx: EventHandlerCtx): void {
   ctx.setChatHistory((prev) => {
     const last = prev[prev.length - 1];
     if (!last || last.role !== "assistant" || !last.segments) return prev;
-    let changed = false;
-    const segs = last.segments.map((s) => {
-      if (s.type === "reasoning" && s.streaming) {
-        changed = true;
-        return { ...s, streaming: false };
-      }
-      return s;
-    });
-    if (!changed) return prev;
+    const segs = sealReasoning(last.segments);
+    if (!segs) return prev;
     const updated = [...prev];
     updated[updated.length - 1] = { ...last, segments: segs };
     return updated;

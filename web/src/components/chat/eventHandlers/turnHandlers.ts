@@ -3,6 +3,7 @@
  */
 
 import type { CreditDetail } from "../types";
+import { sealReasoning } from "../reasoningPlacement";
 import type { EventHandlerCtx, WsMessage } from "./types";
 
 /**
@@ -71,7 +72,9 @@ export function finalizeStreamingTurnAsError(ctx: EventHandlerCtx): void {
       if (m.role !== "assistant") continue;
       if (!m.streaming) return prev;
       const updated = [...prev];
-      updated[i] = { ...m, streaming: false, turnStatus: "error" };
+      // 出错收尾同样要给思考段封口，否则思考块会永久转圈、不显示耗时
+      const sealed = sealReasoning(m.segments || []);
+      updated[i] = { ...m, streaming: false, turnStatus: "error", ...(sealed ? { segments: sealed } : {}) };
       return updated;
     }
     return prev;
@@ -124,11 +127,13 @@ export function handleTurnCancelled(msg: WsMessage, ctx: EventHandlerCtx): void 
     for (let i = updated.length - 1; i >= 0; i--) {
       if (updated[i].role === "assistant") {
         if (targetMsgId && updated[i].id !== targetMsgId) continue;
+        const sealedSegments = sealReasoning(updated[i].segments || []);
         updated[i] = {
           ...updated[i],
           streaming: false,
           turnStatus: reason,
           turnStats: stats,
+          ...(sealedSegments ? { segments: sealedSegments } : {}),
         };
         found = true;
         break;

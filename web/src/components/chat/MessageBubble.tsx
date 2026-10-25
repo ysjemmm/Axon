@@ -108,7 +108,7 @@ function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRej
                   btn.setAttribute("data-copied", "true");
                   setTimeout(() => btn.removeAttribute("data-copied"), 1500);
                 }}
-                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/80 data-[copied]:text-green-500"
+                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/80 data-[copied]:text-foreground"
                 title="复制"
               >
                 <Copy className="w-3.5 h-3.5" />

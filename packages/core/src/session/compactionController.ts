@@ -12,7 +12,7 @@
 
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { getStrategy } from "../providers.js";
-import { needsCompaction, compactMessages, rollingCompact } from "../compactor.js";
+import { needsCompaction, compactMessages, rollingCompact, generateSessionMemory } from "../compactor.js";
 import type { LLMStrategy } from "../llm/types.js";
 import type { AgentSession } from "../agentSession.js";
 
@@ -48,10 +48,37 @@ export class CompactionController {
     await this.doCompact("上下文已压缩（因超出模型窗口限制）");
   }
 
+  /**
+   * 压缩时顺带做一次会话记忆的大更新。
+   *
+   * ── 为什么必须传「压缩前的快照」──
+   * 摘要生成后，被压掉的原文就没了。而记忆要的恰恰是摘要保不住的那些细节
+   * （具体路径、命令、报错原文、用户偏好），所以只能用压缩前的历史来生成。
+   *
+   * ── 为什么失败只告警 ──
+   * 记忆没更新是可惜，但不该让一次已经成功的压缩因此失败、让用户重复操作。
+   */
+  private async refreshMemory(snapshot: ChatCompletionMessageParam[], strategy: LLMStrategy): Promise<void> {
+    try {
+      // 太少的历史没什么可记的，省一次调用
+      if (snapshot.length < 3) return;
+      const prev = this.s.getMemory();
+      const next = await generateSessionMemory(prev, snapshot, strategy, this.s.model);
+      if (next && next !== prev) {
+        this.s.setMemory(next);
+        console.debug(`[memory] 压缩时已同步更新会话记忆（${next.length} 字符）`);
+      }
+    } catch (err) {
+      console.warn("[memory] 压缩时更新会话记忆失败（忽略）:", (err as Error).message);
+    }
+  }
+
   /** 实际执行压缩的内部方法 */
   private async doCompact(successMessage: string): Promise<void> {
     this.s.isCompacting = true;
     this.s.send("compacting_start", {});
+    // 压缩前留一份原文快照：记忆要用它生成，摘要替代后就再也拿不到这些细节了
+    const snapshot = this.s.messages;
     try {
       const strategy = getStrategy(this.s.provider, this.s.model);
       this.s.send("status", { content: "整理上下文..." });
@@ -64,6 +91,7 @@ export class CompactionController {
       // hydrateTokenUsage 把它回填，界面从 4% 跳回 61%，要等用户发下一句话重算才降下来。
       this.s.updateAndSendTokenUsage();
       this.s.persistMessages();
+      await this.refreshMemory(snapshot, strategy);
     } catch (err) {
       this.s.isCompacting = false;
       this.s.send("compacting_end", { success: false, message: `压缩失败：${(err as Error).message}` });
@@ -88,6 +116,8 @@ export class CompactionController {
 
     try {
       const strategy = getStrategy(this.s.provider, this.s.model);
+      // 压缩前留原文快照，供记忆更新使用（滚动摘要同样会丢细节）
+      const snapshot = this.s.messages;
       const [newMessages, didCompact] = await rollingCompact(this.s.messages, strategy, this.s.model, this.s.compactionConfig.keepRecentMessages);
       if (didCompact) {
         // 安全区替换：用压缩后的消息替换当前 messages
@@ -100,6 +130,7 @@ export class CompactionController {
         console.debug("[rolling] 滚动摘要完成，上下文体积已缩减");
         // 静默通知前端（状态栏可显示但不弹窗）
         this.s.send("rolling_summary_done", { success: true });
+        await this.refreshMemory(snapshot, strategy);
       }
     } catch (err) {
       // 压缩失败不阻塞：保留原 messages，下次再试
@@ -125,11 +156,14 @@ export class CompactionController {
     try {
       const strategy = getStrategy(this.s.provider, this.s.model);
       this.s.send("status", { content: "整理上下文..." });
+      // 压缩前留快照（含本轮用户消息），供记忆更新使用
+      const snapshot = [...this.s.messages];
       // 压缩前移除本轮刚推送的用户消息（它会在新会话中重新发送）
       const userMsg = this.s.messages.pop();
       this.s.compactionMigrationMessages = await compactMessages(this.s.messages, strategy, this.s.model);
       // 恢复用户消息到原会话（保持历史完整，仅压缩版本不包含它）
       if (userMsg) this.s.messages.push(userMsg);
+      await this.refreshMemory(snapshot, strategy);
     } catch (err) {
       this.s.compactionMigrationMessages = null;
       this.s.compactionChoiceResolve?.("continue"); // 压缩失败回退到继续
@@ -183,6 +217,8 @@ export class CompactionController {
     const overflowing = this.s.lastTotalTokens > ctxWindow;
     if (overflowing) {
       // 模型切换溢出：强制无感压缩
+      // 压缩前留原文快照，供记忆更新使用
+      const snapshot = this.s.messages;
       this.s.isCompacting = true;
       this.s.send("compacting_start", {});
       try {
@@ -194,6 +230,7 @@ export class CompactionController {
         // 先重算再落盘（同 doCompact）：这条路径原先完全不落盘，磁盘会一直停在压缩前的占用
         this.s.updateAndSendTokenUsage();
         this.s.persistMessages();
+        await this.refreshMemory(snapshot, strategy);
       } catch (err) {
         this.s.isCompacting = false;
         this.s.send("compacting_end", { success: false, message: `压缩失败：${(err as Error).message}` });
@@ -205,6 +242,8 @@ export class CompactionController {
       const choice = await this.waitForCompactionChoice(this.s.lastTotalTokens, ctxWindow);
       if (choice === "continue") {
         // 用户选择继续：压缩当前会话
+        // 压缩前留原文快照，供记忆更新使用
+        const snapshot = this.s.messages;
         this.s.isCompacting = true;
         this.s.send("compacting_start", {});
         try {
@@ -216,6 +255,7 @@ export class CompactionController {
           // 先重算再落盘（同 doCompact），否则磁盘留着压缩前旧占用
           this.s.updateAndSendTokenUsage();
           this.s.persistMessages();
+          await this.refreshMemory(snapshot, strategy);
         } catch (err) {
           this.s.isCompacting = false;
           this.s.send("compacting_end", { success: false, message: `压缩失败：${(err as Error).message}` });

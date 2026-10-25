@@ -47,7 +47,7 @@ export function SkillBadgeCard({ skills, pending, queuedOnly }: { skills: string
         ? (queuedOnly
             ? <Clock className="w-3.5 h-3.5 shrink-0 text-muted-foreground/50" />
             : <Loader2 className="w-3.5 h-3.5 shrink-0 text-primary animate-spin" />)
-        : <Boxes className="w-3.5 h-3.5 shrink-0 text-green-600" />}
+        : <Boxes className="w-3.5 h-3.5 shrink-0" />}
       <span className="text-xs text-muted-foreground shrink-0">{queuedOnly ? "待加载 Skill" : pending ? "加载 Skill" : "使用 Skill"}</span>
       {names.map((n) => (
         <span key={n} className="px-1.5 py-0.5 rounded bg-primary/10 text-xs font-mono font-medium text-primary">{n}</span>
@@ -151,7 +151,7 @@ export function RelayProgressCard({ steps, pending, queuedOnly }: { steps: { nam
                   ? <Clock className="w-3 h-3 shrink-0 text-muted-foreground/50" />
                   : s.status === "pending"
                     ? <Loader2 className="w-3 h-3 shrink-0 animate-spin text-muted-foreground" />
-                    : <Check className="w-3 h-3 shrink-0 text-green-600" />}
+                    : <Check className="w-3 h-3 shrink-0" />}
               <span className="text-muted-foreground/80 truncate">{s.description}</span>
             </div>
           ))}
@@ -214,7 +214,7 @@ export function SubAgentCard({ seg }: { seg: SubAgentSegment }) {
         <ChevronDown className={`w-3.5 h-3.5 shrink-0 text-muted-foreground transition-transform ${expanded ? "" : "-rotate-90"}`} />
         {running
           ? <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-amber-500" />
-          : <Bot className="w-3.5 h-3.5 shrink-0 text-green-600" />}
+          : <Bot className="w-3.5 h-3.5 shrink-0" />}
         <span className="font-medium text-foreground shrink-0">{verb} Sub-Agent</span>
         {seg.skill && (
           <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-primary/10 text-[10px] font-mono text-primary shrink-0">
@@ -412,12 +412,18 @@ export function renderSegments(
       const groupStart = i;
       const parts: string[] = [];
       let anyStreaming = false;
+      // 合并块的实际思考时长 = 各段 (endedAt - startedAt) 之和。累加而不是取首尾差：
+      // 块与块之间可能夹着不展示的工具调用/正文，首尾差会把那些等待时间也算成"思考"。
+      let durationMs = 0;
       while (i < segments.length) {
         const s = segments[i];
         if (s.type !== "reasoning") break;
         if (s.content.trim()) parts.push(s.content);
         // 任一块仍在流式 → 整个合并块算"进行中"（保持展开，末块结束后才折叠）
         if (s.streaming) anyStreaming = true;
+        if (s.startedAt !== undefined && s.endedAt !== undefined) {
+          durationMs += Math.max(0, s.endedAt - s.startedAt);
+        }
         i++;
       }
       if (parts.length > 0) {
@@ -425,7 +431,7 @@ export function renderSegments(
         const content = parts.length === 1
           ? parts[0]
           : parts.map((p) => p.replace(/\s+$/, "")).join("\n\n");
-        nodes.push(<ReasoningBlock key={`reasoning-${groupStart}`} content={content} streaming={anyStreaming} />);
+        nodes.push(<ReasoningBlock key={`reasoning-${groupStart}`} content={content} streaming={anyStreaming} durationMs={durationMs > 0 ? durationMs : undefined} />);
       }
       continue;
     }
@@ -599,7 +605,7 @@ export function renderSegments(
         nodes.push(
           <ToolCallItem
             key={e.id}
-            tool={{ id: e.id, name: e.name, status: e.status, description: e.name === "apply_patch" ? "已编辑" : e.description, command: e.command, cwd: e.cwd, output: e.output, query: e.query, diff, diagnostics: e.diagnostics, pending: e.pending, rejected: e.rejected, undoable: e.undoable, reverted: e.reverted, editId: diff.editId, displayName: editDisplay(diff.path) }}
+            tool={{ id: e.id, name: e.name, status: e.status, description: e.name === "apply_patch" ? "已应用补丁" : e.description, command: e.command, cwd: e.cwd, output: e.output, query: e.query, diff, diagnostics: e.diagnostics, pending: e.pending, rejected: e.rejected, undoable: e.undoable, reverted: e.reverted, editId: diff.editId, displayName: editDisplay(diff.path) }}
             onAcceptEdit={onAcceptEdit}
             onRejectEdit={onRejectEdit}
             onUndoEdit={onUndoEdit}
@@ -613,6 +619,9 @@ export function renderSegments(
       const group: EditGroupData = {
         id: firstSeg.id,
         fileName: shortName,
+        // 同文件多次编辑里全是打补丁时，标题说"已应用补丁"而不是"已编辑"；
+        // 混编（先 str_replace 再 apply_patch 同一文件）按"编辑"讲——那确实是多次编辑
+        kind: collected.every((c) => c.seg.name === "apply_patch") ? "patch" : "edit",
         pending: collected.some((c) => c.seg.pending),
         undoable: collected.some((c) => c.seg.undoable),
         reverted: collected.length > 0 && collected.every((c) => c.seg.reverted),
@@ -641,6 +650,7 @@ export function renderSegments(
           id: seg.id,
           fileName: `${diffs.length} 个文件`,
           multiFile: true,
+          kind: "patch",
           pending: !!seg.pending,
           undoable: !!seg.undoable,
           reverted: !!seg.reverted,

@@ -85,4 +85,12 @@ export interface SessionHubDeps {
    * 关闭时不注入工具、不下载——这是"重资产能力必须用户明确同意"的边界。
    */
   getMediaEnabled?: () => boolean;
+
+  /**
+   * 可选：文生图能力开关（设置项 axon.image.enabled）。
+   *
+   * 与 getMediaEnabled 的区别：文生图不下载任何本机组件，但必须有外部生图服务；
+   * 开启且宿主提供 imageGenerator 时，才会给会话注入 generate_image 工具。
+   */
+  getImageEnabled?: () => boolean;
 }

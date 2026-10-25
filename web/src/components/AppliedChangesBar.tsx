@@ -209,7 +209,7 @@ export function AppliedChangesBar({
             <span className="text-[10px] text-amber-600 bg-amber-100 dark:bg-amber-900/30 rounded-full px-1 py-px">{pendingFiles.length} 待确认</span>
           )}
           {tab === "changes" && appliedFiles.length > 0 && (
-            <span className="text-[10px] text-green-600 bg-green-100 dark:bg-green-900/30 rounded-full px-1 py-px">{appliedFiles.length} 已应用</span>
+            <span className="text-[10px] text-muted-foreground bg-muted rounded-full px-1 py-px">{appliedFiles.length} 已应用</span>
           )}
           {tab === "rollback" && snapshots.length > 0 && (
             <span className="text-[10px] text-primary/70 bg-primary/10 rounded-full px-1 py-px">{snapshots.length}</span>
@@ -217,7 +217,7 @@ export function AppliedChangesBar({
         </button>
         {tab === "changes" && pendingFiles.length > 0 && (
           <div className="flex items-center gap-1">
-            <button onClick={onAcceptAll} className="px-1.5 py-px rounded bg-green-600 text-white text-[11px] hover:bg-green-700 transition-colors">全部接受</button>
+            <button onClick={onAcceptAll} className="px-1.5 py-px rounded bg-foreground text-background text-[11px] hover:bg-foreground/90 transition-colors">全部接受</button>
             <button onClick={onRejectAll} className="px-1.5 py-px rounded border border-border text-[11px] text-muted-foreground hover:bg-muted/50 transition-colors">全部拒绝</button>
           </div>
         )}
@@ -256,7 +256,7 @@ export function AppliedChangesBar({
                 <>
                   {filteredPending.map((f) => (
                     <FileRow key={`p-${f.path}`} file={f} onOpenDiff={() => openDiff(f.path, f.oldContent, f.newContent)} onOpenFile={() => openFile(f.path)}>
-                      <button onClick={onAcceptAll} className="flex items-center px-1.5 py-px rounded text-green-600 hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors shrink-0" title="接受"><Check className="w-3 h-3" /></button>
+                      <button onClick={onAcceptAll} className="flex items-center px-1.5 py-px rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors shrink-0" title="接受"><Check className="w-3 h-3" /></button>
                       <button onClick={onRejectAll} className="flex items-center px-1.5 py-px rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors shrink-0" title="拒绝"><X className="w-3 h-3" /></button>
                     </FileRow>
                   ))}
@@ -333,7 +333,8 @@ function FileRow({ file, onOpenDiff, onOpenFile, children }: { file: ChangeFile;
   const isPending = file.status === "pending";
   return (
     <div className={`flex items-center gap-2 text-xs py-0.5 ${file.reverted ? "opacity-50" : ""}`}>
-      <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isPending ? "bg-amber-400" : file.reverted ? "bg-muted-foreground/30" : "bg-green-500"}`} />
+      {/* 圆点只表达"待确认 vs 已落定"，不表达好坏：已应用是正常态，不需要绿色来强调 */}
+      <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isPending ? "bg-amber-400" : file.reverted ? "bg-muted-foreground/30" : "bg-foreground/40"}`} />
       <span className="flex-1 min-w-0 inline-flex items-center gap-1 font-mono cursor-pointer" onClick={onOpenFile}>
         <FileTypeIcon fileName={shortName} />
         <ClickableFileName fileName={shortName} absPath={file.path} className="text-foreground/80 truncate" />

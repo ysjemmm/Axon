@@ -37,7 +37,7 @@ import {
 } from "./session/humanizedStatus.js";
 import { CoworkSnapshotter } from "./cowork/snapshotter.js";
 import { resolveArtifactDir } from "./session/artifactDir.js";
-import { artifactExtension, parseArtifactArgs, parseRenderMediaArgs, pickVersionedPath, sanitizeStem } from "./session/artifactFile.js";
+import { artifactExtension, parseArtifactArgs, parseGenerateImageArgs, parseRenderMediaArgs, pickVersionedPath, sanitizeStem } from "./session/artifactFile.js";
 /**
  * 单轮最多登记的产出文件数。
  * 防止某个批量生成脚本让模型报上来几百个文件把界面刷爆。
@@ -295,6 +295,16 @@ export class AgentSession {
    * 关闭时工具根本不注入 —— 模型看不到它，就不会反复尝试一个不可用的能力。
    */
   /** @internal */ mediaEnabled = false;
+
+  /**
+   * 是否允许 AI 生成图片（generate_image，文生图）。
+   *
+   * 与 mediaEnabled 不同：这个能力不下载任何本机组件，但它必须有外部生图服务
+   * （需要用户配置服务地址、密钥、模型）。用户没配置时宿主不提供 imageGenerator，
+   * 工具同样不注入 —— 模型看不到就不会反复尝试一个必然失败的能力。
+   * 由设置项 axon.image.enabled 控制。
+   */
+  /** @internal */ imageEnabled = false;
 
   /**
    * 办公化状态文案（Cowork 面板）。
@@ -745,7 +755,13 @@ export class AgentSession {
       const lines = [
         `成片已保存：${absPath}（${parsed.format.toUpperCase()}，${out.durationSec.toFixed(1)} 秒，${out.frameCount} 帧，` +
           `${parsed.width}x${parsed.height}，${out.size} 字节${version > 1 ? `，同名已存在，保存为第 ${version} 版` : ""}）。`,
-        out.hasAudio ? "成片带旁白音轨。" : parsed.format === "mp4" ? "成片没有音轨（无声）。" : "GIF 无声。",
+        out.hasAudio
+          ? out.hasSoundtrack && parsed.narration
+            ? "成片带旁白与音效音轨。"
+            : out.hasSoundtrack
+              ? "成片带音效音轨（无旁白）。"
+              : "成片带旁白音轨。"
+          : parsed.format === "mp4" ? "成片没有音轨（无声）。" : "GIF 无声。",
       ];
       if (parsed.notes.length) lines.push(`参数调整：${parsed.notes.join("；")}。`);
       if (out.warnings.length) lines.push(`注意：${out.warnings.join("；")}。请如实告诉用户，不要假装成片是完整的。`);
@@ -758,6 +774,103 @@ export class AgentSession {
       }
       if (meta) meta.userMessage = "动画渲染失败，可换种写法重试";
       return { result: `渲染失败：${(err as Error).message}`, status: "error" };
+    }
+  }
+
+  /**
+   * generate_image 工具实现：提示词 → 外部生图服务 → PNG 落盘。
+   *
+   * 与 renderMedia 的分界：那边画面由模型写的 HTML 决定（本机渲染、可复现、免费）；
+   * 这边画面由服务商决定（写实感更强，但不可精确控制、要花额度）。
+   * 所以这里只做「校验 → 调宿主 → 上报产物」，不碰任何生成细节。
+   */
+  /** @internal */ async generateImage(
+    toolArgs: Record<string, unknown>,
+    meta?: ToolMeta,
+  ): Promise<{ result: string; status: "success" | "error" }> {
+    const generator = this.host.imageGenerator;
+    if (!generator) {
+      if (meta) meta.userMessage = "当前环境暂不支持生成图片";
+      return {
+        result: "当前运行环境没有生图能力。需要图形时改用 svg 产物，或提示用户去设置里开启并配置图片生成服务。",
+        status: "error",
+      };
+    }
+
+    const parsed = parseGenerateImageArgs(toolArgs);
+    if (!parsed.ok) {
+      if (meta) meta.userMessage = "生图参数不完整或格式有误";
+      return { result: parsed.error, status: "error" };
+    }
+
+    const env = await generator.checkEnv();
+    if (!env.ok) {
+      if (meta) meta.userMessage = "生图服务还没配置好";
+      return {
+        result:
+          `生图服务不可用：${env.problem ?? "未配置"}。` +
+          "请提示用户到「设置 → Axon → 图片生成」里填写服务地址、密钥与模型后再试；当前不要反复重试。",
+        status: "error",
+      };
+    }
+
+    const dir = this.getArtifactDir();
+    if (!dir) {
+      if (meta) meta.userMessage = "暂时无法确定图片保存位置";
+      return { result: "当前无法确定产物保存位置（会话尚未建立），请稍后再试。", status: "error" };
+    }
+
+    try {
+      await this.host.fs.mkdirp(dir);
+      const stem = sanitizeStem(parsed.title);
+
+      // 生图通常几秒到十几秒，没有反馈用户会以为卡死；节流到 500ms 一条。
+      let lastSentAt = 0;
+      const out = await generator.generate({
+        prompt: parsed.prompt,
+        negativePrompt: parsed.negativePrompt,
+        width: parsed.width,
+        height: parsed.height,
+        count: parsed.count,
+        outputDir: dir,
+        stem,
+        signal: this.abortSignal,
+        onProgress: ({ phase, done, total }) => {
+          const now = Date.now();
+          if (now - lastSentAt < 500 && done < total) return;
+          lastSentAt = now;
+          const text = phase === "requesting" ? "正在生成图片" : `正在保存图片（${done}/${total}）`;
+          this.send("status", { content: `${text}...`, phase: "running" });
+        },
+      });
+
+      // 每张图单独上报一条产物，界面按卡片逐个展示（和连续渲染多条成片的行为一致）
+      out.files.forEach((f, i) => {
+        const versionMatch = /-v(\d+)\.png$/i.exec(f.path);
+        const artifact = {
+          path: f.path,
+          title: out.files.length > 1 ? `${parsed.title} ${i + 1}` : parsed.title,
+          type: "png" as const,
+          size: f.size,
+          version: versionMatch ? Number(versionMatch[1]) : 1,
+        };
+        if (meta && i === 0) meta.artifact = artifact;
+        this.send("artifact_created", artifact);
+      });
+
+      const lines = [`已生成 ${out.files.length} 张图片：`];
+      for (const f of out.files) lines.push(`- ${f.path}（${f.size} 字节）`);
+      if (parsed.notes.length) lines.push(`参数调整：${parsed.notes.join("；")}。`);
+      if (out.warnings.length) lines.push(`注意：${out.warnings.join("；")}。请如实告诉用户，不要假装全部成功。`);
+      lines.push("图片已作为产物显示在界面里，回复里不必粘贴图片数据，简短说明画了什么即可。");
+      return { result: lines.join("\n"), status: "success" };
+    } catch (err) {
+      if (this.abortSignal?.aborted) {
+        if (meta) meta.userMessage = "已取消生图";
+        return { result: "生图已被用户取消。", status: "error" };
+      }
+      if (meta) meta.userMessage = "生成图片失败，可调整描述后重试";
+      return { result: `生成失败：${(err as Error).message}`, status: "error" };
     }
   }
 
@@ -1407,6 +1520,11 @@ export class AgentSession {
   /** 设置动画生成能力开关（建会话时注入 + 设置变更时热更新） */
   setMediaEnabled(enabled: boolean): void {
     this.mediaEnabled = enabled === true;
+  }
+
+  /** 设置文生图能力开关（建会话时注入 + 设置变更时热更新） */
+  setImageEnabled(enabled: boolean): void {
+    this.imageEnabled = enabled === true;
   }
 
   /**

@@ -13,11 +13,12 @@
 
 import * as vscode from "vscode";
 import { homedir } from "node:os";
-import { join, basename } from "node:path";
+import { join, basename, dirname } from "node:path";
 import { SessionHub, type ControlCommand, type WorkspaceGroup, type CompactionUserConfig, type CreditBudgetUserConfig, webSearch, webFetch, setBuiltinPowersDir } from "@axon/core";
 import { DEFAULT_COMPACTION_CONFIG, DEFAULT_CREDIT_BUDGET_CONFIG, DEFAULT_TRACE_CONFIG, type TraceConfig } from "@axon/core";
 import { createVSCodeAgentHost, VSCodeCommandTrustStore } from "@axon/host-vscode";
-import { JsonFileStorage, createNodeMcpCapability, ensureFfmpeg } from "@axon/host-node";
+import { JsonFileStorage, createNodeMcpCapability, ensureFfmpeg, setMediaVendorDir, setImageProviderConfig } from "@axon/host-node";
+import type { ImageProviderConfig } from "@axon/host-node";
 import { loadProviderEnv } from "./loadEnv.js";
 import { VSCodeChannel } from "./vscodeChannel.js";
 import { AxonViewProvider } from "./viewProvider.js";
@@ -118,6 +119,27 @@ function readWikiConfig(): { provider: string; model: string; maxPages: number }
  */
 function readMediaEnabled(): boolean {
   return vscode.workspace.getConfiguration("axon.media").get<boolean>("enabled", false) === true;
+}
+
+/** 读取文生图开关（axon.image.enabled）。 */
+function readImageEnabled(): boolean {
+  return vscode.workspace.getConfiguration("axon.image").get<boolean>("enabled", false) === true;
+}
+
+/**
+ * 读取文生图服务配置（axon.image.*）。
+ *
+ * 与 readMediaEnabled 的区别：那边只需要一个布尔开关（组件本地下载即可）；
+ * 这边必须有可用的服务凭据。baseUrl 或 apiKey 缺失时返回 undefined ——
+ * host 侧的 checkEnv 会据此给出「去设置里配置」的引导，而不是抛一个看不懂的网络错误。
+ */
+function readImageConfig(): ImageProviderConfig | undefined {
+  const cfg = vscode.workspace.getConfiguration("axon.image");
+  const baseUrl = (cfg.get<string>("baseUrl", "") || "").trim();
+  const apiKey = (cfg.get<string>("apiKey", "") || "").trim();
+  const model = (cfg.get<string>("model", "gpt-image-1") || "").trim();
+  if (!baseUrl || !apiKey) return undefined;
+  return { baseUrl, apiKey, model: model || "gpt-image-1" };
 }
 
 /**
@@ -374,6 +396,13 @@ export function activate(context: vscode.ExtensionContext): void {
   // 内置 Power 的启用状态不写这个目录——它只读、且升级覆盖后会丢；启用状态写用户级配置。
   setBuiltinPowersDir(vscode.Uri.joinPath(context.extensionUri, "media", "powers").fsPath);
 
+  // 渲染器可用的内置前端库目录：页面里 /vendor/<文件名> 会被映射到这里。
+  // 目前只放 Three.js（真三维场景），与内置 Power 同属随扩展分发的只读资源。
+  setMediaVendorDir(vscode.Uri.joinPath(context.extensionUri, "media", "vendor").fsPath);
+
+  // 生图服务配置：激活时读一次，配置变更时再刷新（见下面的 onDidChangeConfiguration）
+  setImageProviderConfig(readImageConfig());
+
   const storage = new JsonFileStorage();
   const channel = new VSCodeChannel();
 
@@ -559,6 +588,8 @@ export function activate(context: vscode.ExtensionContext): void {
     getTraceConfig: () => readTraceConfig(),
     // 动画 / 视频生成开关：读取 VS Code 设置（axon.media.enabled），默认关闭
     getMediaEnabled: () => readMediaEnabled(),
+    // 文生图开关：读取 VS Code 设置（axon.image.enabled），默认关闭
+    getImageEnabled: () => readImageEnabled(),
   });
 
   // REST 请求路由（webview 形态下替代 Express）
@@ -633,6 +664,11 @@ export function activate(context: vscode.ExtensionContext): void {
         // 用户刚打开开关：立刻开始准备组件，不要等到第一次生成时才发现要下载 160MB
         if (readMediaEnabled()) void prepareMediaComponents();
       }
+      if (e.affectsConfiguration("axon.image")) {
+        // 配置项变了要重新读一遍：改 baseUrl / apiKey / model 后不必重启 IDE
+        setImageProviderConfig(readImageConfig());
+        hub.reloadImageEnabled();
+      }
     })
   );
 
@@ -699,6 +735,16 @@ export function activate(context: vscode.ExtensionContext): void {
       } catch {
         // 二进制等无法以文本打开的文件：交给系统默认程序
         await vscode.commands.executeCommand("vscode.open", vscode.Uri.file(filePath));
+      }
+    }),
+    // 预览浮层的「在文件系统中打开」：revealFileInOS 是 VS Code 内置命令，
+    // 会在系统文件管理器里定位并选中该文件。个别环境没有注册它时退化为打开所在文件夹。
+    vscode.commands.registerCommand("axon.revealFileInOs", async (filePath?: string) => {
+      if (!filePath) return;
+      try {
+        await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(filePath));
+      } catch {
+        await vscode.env.openExternal(vscode.Uri.file(dirname(filePath)));
       }
     }),
     // Cowork 改动对比浮层的「恢复原稿」：overlay 在 workbench 侧不碰文件系统，

@@ -108,7 +108,7 @@ export function UnifiedStatusBar({
           >
             <FileText className="w-3 h-3 text-primary" />
             <span>
-              {appliedCount > 0 && <span className="text-green-600">{appliedCount} 已应用</span>}
+              {appliedCount > 0 && <span className="text-muted-foreground">{appliedCount} 已应用</span>}
               {appliedCount > 0 && pendingCount > 0 && <span className="mx-1">·</span>}
               {pendingCount > 0 && <span className="text-amber-600">{pendingCount} 待确认</span>}
             </span>

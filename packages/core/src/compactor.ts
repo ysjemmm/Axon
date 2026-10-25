@@ -187,6 +187,72 @@ function serializeHistory(messages: ChatCompletionMessageParam[]): string {
     .join("\n");
 }
 
+/**
+ * 记忆生成专用的历史序列化：单条截断比摘要宽得多。
+ *
+ * 摘要只需要知道「聊了什么」；记忆还要记住「具体改了哪个文件、执行了什么命令、报错原文是什么」。
+ * 500 字符经常正好把关键路径或错误信息切掉，所以这里放到 2000。
+ */
+function serializeHistoryForMemory(messages: ChatCompletionMessageParam[]): string {
+  const MAX_CHARS = 2000;
+  return messages
+    .map((msg) => {
+      if (!msg) return "";
+      const role = msg.role === "user" ? "用户" : msg.role === "assistant" ? "助手" : msg.role === "system" ? "系统" : "工具";
+      const content = typeof msg.content === "string" ? msg.content : "(工具调用)";
+      const truncated = content.length > MAX_CHARS ? content.slice(0, MAX_CHARS) + "…（已截断）" : content;
+      return `[${role}] ${truncated}`;
+    })
+    .join("\n");
+}
+
+/**
+ * 生成 / 更新会话记忆：把「现有记忆 + 这批历史」收敛成一份新的完整记忆。
+ *
+ * ── 与 generateRollingSummary 的分工（别合并成一个调用）──
+ * 摘要是给模型看的上下文压缩，允许丢细节、控制在 1000 字内；
+ * 记忆是给人跨会话看的结论，必须尽量完整：决策、约束、文件路径、数据、待办、踩过的坑都不能丢。
+ * 目标不同，所以 prompt 和输出上限都不同。
+ *
+ * ⚠️ 必须用【压缩前】的历史调用：摘要一旦生成，被压掉的原文就没了，
+ * 而记忆恰恰要保住摘要保不住的那些细节。
+ */
+export async function generateSessionMemory(
+  prevMemory: string,
+  messages: ChatCompletionMessageParam[],
+  strategy: LLMStrategy,
+  model: string,
+): Promise<string> {
+  const historyText = serializeHistoryForMemory(messages);
+  const systemPrompt = `你是会话记忆维护助手。把「已有记忆」与「本次会话记录」合并成一份完整的新记忆。
+
+${prevMemory ? `【已有记忆】\n${prevMemory}\n` : "【已有记忆】（目前为空）\n"}
+【本次会话记录】
+${historyText}
+
+要求：
+1. 输出是【整份替换】的完整记忆，不是增量 diff；不要出现「本次新增」「相较上次」这类字样。
+2. **尽可能完整，宁可多写也不要漏**。必须保留：用户交代的偏好与约束、敲定的决策及其理由、
+   改过或生成的关键文件绝对路径、重要结论与数据、未完成的待办、踩过的坑与规避方式。
+3. 已有记忆里仍然有效的要保留；被后续对话推翻或更新的，直接改成最新结论，不要新旧并存。
+4. 丢弃：寒暄、重复确认、工具调用的过程细节、失败重试的中间态。
+5. 用 Markdown 小标题 + 短句，按主题分组，不要写成流水账。
+6. 只输出记忆正文本身，不要解释你在做什么。`;
+
+  const turn = await strategy.runTurn({
+    model,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: "请输出合并后的完整会话记忆。" },
+    ],
+    tools: [],
+    callbacks: SILENT_CALLBACKS,
+    maxOutputTokens: 2000,
+  });
+
+  return (turn.content || "").trim();
+}
+
 /** 生成摘要用的空回调（不需要流式上报给前端，只取最终 content） */
 const SILENT_CALLBACKS = {
   onReasoningDelta: () => {},
