@@ -490,6 +490,17 @@ export function openMcpConfigInEditor(level: McpLevel, workspace?: string): Prom
   return post("/api/open-mcp-config", { level, workspace });
 }
 
+/**
+ * 打开某条会话的记忆文件并在编辑器中定位到记忆那一段。
+ *
+ * 记忆不是单独的文件——它和对话一起存在 `~/.axon/sessions/<id>.json` 的 `memory` 字段里。
+ * 前端拼不出 homedir，所以由宿主解析真实路径，并把光标跳到 `"memory":` 那一行，
+ * 否则用户打开的是一个大 json，还得自己在里面找。
+ */
+export function openSessionMemoryInEditor(sessionId: string): Promise<{ ok: boolean; path: string; hasMemory: boolean }> {
+  return post("/api/open-session-memory", { sessionId });
+}
+
 
 // ── Provider 配置（.axon/settings/providers.json，用户级/工作区级）──────────
 

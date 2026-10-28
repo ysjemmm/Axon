@@ -3,8 +3,9 @@
  */
 
 import { useState, useEffect } from "react";
-import { Plus, MessageSquare, Trash2, PanelLeft, Search, Loader2, GitFork } from "lucide-react";
-import { listSessions, deleteSession } from "@/lib/apiClient";
+import { Plus, MessageSquare, Trash2, PanelLeft, Search, Loader2, GitFork, NotebookPen } from "lucide-react";
+import { listSessions, deleteSession, openSessionMemoryInEditor } from "@/lib/apiClient";
+import { isVSCode } from "@/lib/transport";
 
 interface SessionMeta {
   id: string;
@@ -14,6 +15,8 @@ interface SessionMeta {
   updatedAt: string;
   messageCount: number;
   mode?: "agent" | "quest";
+  /** 该会话是否已沉淀记忆（决定记忆按钮的提示文案） */
+  hasMemory?: boolean;
 }
 
 interface SessionSidebarProps {
@@ -37,6 +40,10 @@ export function SessionSidebar({ currentSessionId, connected: _connected, filter
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [search, setSearch] = useState("");
+  /** 正在打开记忆文件的会话 id（防连点 + 按钮转圈） */
+  const [openingMemoryId, setOpeningMemoryId] = useState<string | null>(null);
+  /** 打开失败时的行内提示（不弹窗：这里只是个次要入口，出错说一句就够） */
+  const [openError, setOpenError] = useState("");
 
   // 加载会话列表
   const loadSessions = async () => {
@@ -62,10 +69,37 @@ export function SessionSidebar({ currentSessionId, connected: _connected, filter
     // refreshToken 变化（如分叉完成）时立刻重拉一次，并重置轮询计时
   }, [refreshToken]);
 
+  // 出错提示只是顺手一句，留太久会像常驻状态，4 秒后自己消失
+  useEffect(() => {
+    if (!openError) return;
+    const timer = setTimeout(() => setOpenError(""), 4000);
+    return () => clearTimeout(timer);
+  }, [openError]);
+
   // 分叉会话：从该会话派生一个新会话，只继承记忆（不复制对话历史）
   const handleFork = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     onForkSession?.(id);
+  };
+
+  /**
+   * 在编辑器中打开这条会话的记忆文件。
+   *
+   * 记忆没有独立文件，它就在会话档 ~/.axon/sessions/<id>.json 的 memory 字段里；
+   * 真实路径与字段定位都由宿主完成，这里只管发起请求。
+   */
+  const handleOpenMemory = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (openingMemoryId) return;
+    setOpeningMemoryId(id);
+    setOpenError("");
+    try {
+      await openSessionMemoryInEditor(id);
+    } catch (err) {
+      setOpenError((err as Error).message || "打开记忆文件失败");
+    } finally {
+      setOpeningMemoryId(null);
+    }
   };
 
   // 删除会话
@@ -131,6 +165,11 @@ export function SessionSidebar({ currentSessionId, connected: _connected, filter
           />
         </div>
       </div>
+      {openError && (
+        <div className="mx-2 mb-1 px-2 py-1 rounded text-[11px] text-destructive bg-destructive/10 leading-snug break-all">
+          {openError}
+        </div>
+      )}
       {/* 会话列表 */}
       <div className="flex-1 overflow-y-auto py-1">
         {loading ? (
@@ -146,7 +185,11 @@ export function SessionSidebar({ currentSessionId, connected: _connected, filter
             key={s.id}
             onClick={() => onSelectSession(s.id)}
             className={`group flex items-center gap-2 mx-2 px-2 py-2 rounded-md cursor-pointer transition-colors border ${
-              s.id === currentSessionId ? "bg-primary/10 border-primary/30" : "border-transparent hover:bg-muted/50"
+              s.id === currentSessionId
+                ? "bg-primary/10 border-primary/30"
+                : // hover 用前景色 7% 而不是 muted：muted 在多数主题里与列表底色几乎同色（早期用 muted/50 更是看不出来），
+                  // 按前景色取一点灰/白，深浅主题下都有稳定对比，也不会和选中态的 primary 色相撞。
+                  "border-transparent hover:bg-foreground/[0.07]"
             }`}
           >
             <MessageSquare className="w-4 h-4 text-muted-foreground shrink-0" />
@@ -154,6 +197,22 @@ export function SessionSidebar({ currentSessionId, connected: _connected, filter
               <div className="text-sm truncate">{s.title}</div>
               <div className="text-[11px] text-muted-foreground/70">{formatTime(s.updatedAt)}</div>
             </div>
+            {/* 记忆文件入口：只在 IDE 形态下有意义（浏览器形态没有"用编辑器打开"这回事） */}
+            {isVSCode && (
+              <button
+                onClick={(e) => handleOpenMemory(s.id, e)}
+                disabled={openingMemoryId !== null}
+                className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-primary/10 hover:text-primary transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                title={s.hasMemory ? "在编辑器中打开这条会话的记忆文件" : "这条会话还没有记忆，打开它的会话文件查看"}
+                aria-label="打开记忆文件"
+              >
+                {openingMemoryId === s.id ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <NotebookPen className="w-3.5 h-3.5" />
+                )}
+              </button>
+            )}
             <button
               onClick={(e) => handleFork(s.id, e)}
               className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-primary/10 hover:text-primary transition-all cursor-pointer"

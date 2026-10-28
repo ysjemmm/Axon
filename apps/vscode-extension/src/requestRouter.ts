@@ -607,6 +607,38 @@ export class RequestRouter {
       return { ok: true };
     }
 
+    // ── 打开会话的记忆文件（~/.axon/sessions/<id>.json）──
+    //
+    // 记忆与会话同存一个 json 的 `memory` 字段，没有独立文件。所以这里做两件事：
+    // ① 由宿主拼出真实路径（前端拿不到 homedir）；
+    // ② 打开后把光标定位到 `"memory":` 那一行——否则用户面对的是一份几千行的会话档，
+    //    得自己在里面翻。
+    if (path === "/api/open-session-memory" && method === "POST") {
+      const sessionId = (body as { sessionId?: string } | undefined)?.sessionId;
+      if (!sessionId) throw new Error("sessionId 必填");
+      // 会话 id 只会是 uuid / 时间戳这类字符；拦掉路径分隔符与 ..，
+      // 免得 %2F..%2F 之类的输入把打开目标带到别处
+      if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) throw new Error("sessionId 非法");
+      const { join } = await import("node:path");
+      const { existsSync } = await import("node:fs");
+      const filePath = join(homedir(), ".axon", "sessions", `${sessionId}.json`);
+      if (!existsSync(filePath)) throw new Error(`会话文件不存在：${filePath}`);
+
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+      const editor = await vscode.window.showTextDocument(doc, { preview: false });
+      // 找 `"memory":` 这一行（缩进后的顶层字段）。找不到说明这条会话还没沉淀过记忆。
+      const lines = doc.getText().split("\n");
+      const memoryLine = lines.findIndex((l) => /^\s*"memory"\s*:/.test(l));
+      if (memoryLine >= 0) {
+        const pos = new vscode.Position(memoryLine, 0);
+        editor.selection = new vscode.Selection(pos, pos);
+        editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+      } else {
+        void vscode.window.showInformationMessage("这条会话还没有记忆内容，已打开它的会话文件。");
+      }
+      return { ok: true, path: filePath, hasMemory: memoryLine >= 0 };
+    }
+
     // ── 打开 MCP 配置文件（由后端解析真实路径，免去前端拼 homedir）──
     if (path === "/api/open-mcp-config" && method === "POST") {
       const { level: lv, workspace: ws } = (body || {}) as { level?: string; workspace?: string };
