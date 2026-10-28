@@ -124,6 +124,8 @@ export class ToolDefBuilder {
         name: "create_artifact",
         description:
           "把你为用户做出来的【一份独立成品】交付出去，界面会把它显示成可点击预览的卡片，并保存到产物目录。\n\n" +
+          "⚠️ 两种模式都用它：问答模式和 Agent / Code 模式一样，交付成品的入口只有这一个。" +
+          "在 Agent 模式里也**不要**用 create_file 把成品新建到仓库中——那是改项目源码的方式，成品不是项目文件。\n\n" +
           "【适合做成产物】用户会想单独打开、保存、复用或分享的完整内容：\n" +
           "- 可运行的网页 / 交互原型 / 小工具（type=html，写成完整的单文件，样式和脚本内联）\n" +
           "- 图标 / 插画 / 示意图（type=svg）\n" +
@@ -131,7 +133,7 @@ export class ToolDefBuilder {
           "- 独立完整的脚本或代码文件（type=code，同时传 language）\n" +
           "- 其他纯文本成品，如配置、清单、模板（type=text）\n\n" +
           "【不要做成产物】\n" +
-          "- 对项目源码的修改（那是 Agent 模式下 create_file / str_replace 的事，有专门的改动审阅）\n" +
+          "- 对项目源码的修改（那是 create_file / str_replace 的事，有专门的改动审阅）\n" +
           "- 几行的代码片段、命令、示例——直接在回复里用代码块给出\n" +
           "- 对话式的解释、分析、列表\n" +
           "- 流程图 / 时序图——用 ```mermaid axon-render 直接画在回复里\n\n" +

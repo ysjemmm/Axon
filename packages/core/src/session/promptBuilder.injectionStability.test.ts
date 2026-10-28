@@ -27,6 +27,8 @@ function makeSession(overrides: Record<string, unknown> = {}) {
     wikiPromptCache: null,
     lastTotalTokens: 0,
     getContextWindow: () => 1_000_000,
+    // 产物目录注入会读它；默认空串表示「还没定下来」，需要它的用例自己覆盖
+    getArtifactDir: () => "",
     ...overrides,
   };
   s.promptBuilder = new PromptBuilder(s);

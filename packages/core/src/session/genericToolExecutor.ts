@@ -37,6 +37,13 @@ export interface GenericToolExecutorDeps {
   cwd: string;
   host: AgentHost;
   workspaces?: string[];
+  /**
+   * 用户显式授权、允许写入的工作区外目录（产物目录 / 产出目录）。
+   *
+   * 用函数而不是值：这两个目录都是**每轮**注入、用户中途可能改的，
+   * 构造时取一次会一直用旧值。
+   */
+  writeRoots?: () => Array<string | undefined>;
   web?: WebCapability;
   skillLoader?: SkillLoaderFn;
   powerLoader?: PowerLoaderFn;
@@ -103,6 +110,8 @@ export class GenericToolExecutor {
         this.deps.web,
         this.deps.powerLoader,
         req.runtime.signal,
+        undefined,
+        (this.deps.writeRoots?.() ?? []).filter((p): p is string => typeof p === "string" && p.trim() !== ""),
       );
       this.deps.trackTerminalCwd(toolName, toolArgs, meta);
       if (toolName === "read_file" && typeof toolArgs.path === "string") {

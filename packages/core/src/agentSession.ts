@@ -457,6 +457,9 @@ export class AgentSession {
       cwd: this.cwd,
       host: this.host,
       workspaces: this.workspaces,
+      // 用户自己挑的产物目录 / 产出目录也是「允许写」的地方：他明确指定了 AI 的成品放哪，
+      // 写进去却撞工作区边界是不合理的。取函数而非快照值——两者都是每轮注入的。
+      writeRoots: () => [this.getArtifactDir(), this.outputDir],
       web: this.web,
       skillLoader: this.loadSkillForTool,
       powerLoader: this.loadPowerForTool,

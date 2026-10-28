@@ -435,6 +435,31 @@ export class PromptBuilder {
   }
 
   /**
+   * 产物目录与「成品怎么交付」的提示。
+   *
+   * 只在 Agent（Code）模式注入：问答模式没有写文件工具，本来也只能走 create_artifact，
+   * 多说一句反而占位置。
+   *
+   * 三个信息缺一不可：
+   * ① 成品走 create_artifact，不要用 create_file 往仓库里塞一个"产物文件"；
+   * ② 目录由后端定，不要自己拼绝对路径（自己拼的路径一旦落在工作区外会被拒）；
+   * ③ 目录具体在哪——用户想知道文件存哪了，模型回答时得说得出来。
+   */
+  private buildArtifactNotice(): string | null {
+    if (this.s.mode === "quest") return null;
+    const dir = this.s.getArtifactDir();
+    if (!dir) return null;
+    return (
+      "【产物目录】用户会想单独打开 / 保存 / 复用的成品（HTML 原型、SVG、报告文档、独立脚本、清单模板等）" +
+      `一律用 create_artifact 交付，它会自动存进产物目录：${dir}\n` +
+      "- 不要用 create_file / str_replace 往这个目录写成品：路径由后端拼，你不需要、也不应该自己传路径\n" +
+      "- 也不要因为「这是 Agent 模式」就把成品当成项目源码新建到仓库里——两者是不同性质的文件：" +
+      "改仓库用 create_file / str_replace（有改动审阅），交出成品用 create_artifact（有预览卡片）\n" +
+      "- 用户问「文件存哪了」时，按上面的目录回答"
+    );
+  }
+
+  /**
    * 本轮上下文注入的快照（每项带 key，用于跨轮比较只发变化项）。
    * AgentSession 在 beginTurn() 之后把它挂到本轮用户消息上，本轮之内不再变化。
    */
@@ -458,6 +483,16 @@ export class PromptBuilder {
 
     // 运行环境（操作系统 / shell / 日期）：同一天之内不变，按轮快照只在跨天时补发一次
     add("env", buildEnvironmentNotice({ commands: this.s.mode !== "quest" }));
+
+    // 产物目录：把「成品该往哪交」说清楚。
+    //
+    // 为什么必须显式说：Agent 模式下模型的默认动作是 create_file 往仓库里写文件，
+    // 于是「交付一份独立成品」被当成「新建一个源码文件」，落到工作区里——用户在 + 菜单里
+    // 设置的产物目录完全没被用上。更糟的是它若按用户给的绝对路径去 create_file，
+    // 又会撞工作区边界报错，看起来像"外部路径被拦截"。
+    // 这里连同目录一起给出，模型就不必自己拼路径、也不该自己拼。
+    const artifactNotice = this.buildArtifactNotice();
+    if (artifactNotice) add("artifact", artifactNotice);
 
     // 动画 / 图片生成没开时告诉模型怎么开；开着时用法与对外保密要求都在各自的工具描述里
     const capabilityHint = this.buildCapabilityHint();
@@ -547,7 +582,7 @@ export class PromptBuilder {
 }
 
 type InjectionKey =
-  | "env" | "capabilities" | "verbosity" | "workspaces" | "focus" | "terminal"
+  | "env" | "artifact" | "capabilities" | "verbosity" | "workspaces" | "focus" | "terminal"
   | "ide" | "skills" | "powers" | "wiki" | "workspaceAxon" | "memory" | "usage";
 
 /** 一项上下文注入的快照（挂在用户消息的 _contextInjections 上，随历史持久化） */
@@ -560,6 +595,7 @@ export interface ContextInjection {
 const RETIRED_NOTICE: Record<string, string> = {
   // 旧会话的快照里可能还有 render：渲染规则已并入系统提示，不能说成「不再适用」
   render: "图表渲染规则以系统提示中的「图表渲染」为准。",
+  artifact: "此前的【产物目录】提示已不再适用：成品仍用 create_artifact 交付，保存位置由后端决定。",
   capabilities: "此前关于「如何开启动画 / 图片生成」的提示已不再适用：对应能力现已开启，用法见工具说明。",
   verbosity: "此前的「输出长度校准」已不再适用。",
   workspaces: "此前的「多工作区规则」已不再适用：当前会话只绑定了一个工作区。",

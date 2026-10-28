@@ -125,14 +125,22 @@ async function presentEdit(
 /**
  * 工作区边界校验：目标路径必须落在 cwd 或某个绑定工作区之内。
  * 越界（如 ../ 穿越到工作区外）直接 Fail-Fast 抛错，防止越权读写。
+ *
+ * extraRoots 是**用户显式授权**的额外可写目录（产物目录 / 产出目录）：
+ * 用户自己在界面里挑了一个目录来放 AI 的成品，那这个目录当然要可写。
+ * 早前没有这一项，于是模型只要用 create_file 往产物目录写就撞「越出工作区边界」，
+ * 转而把成品塞进工作区里——用户设的产物路径等于白设。
  */
 function assertWithinWorkspaces(
   absPath: string,
   cwd: string,
   workspaces: string[] | undefined,
   op: string,
+  extraRoots?: readonly string[],
 ): void {
-  const roots = workspaces && workspaces.length > 0 ? workspaces : [cwd];
+  const base = workspaces && workspaces.length > 0 ? workspaces : [cwd];
+  const extra = (extraRoots ?? []).filter((p) => typeof p === "string" && p.trim() !== "");
+  const roots = extra.length > 0 ? [...base, ...extra] : base;
   if (!isWithinWorkspaces(absPath, roots)) {
     throw new Error(
       `${op} 被安全策略拒绝：目标路径越出工作区边界。` +
@@ -157,6 +165,11 @@ export async function executeToolCall(
   // 生成 Wiki 时注入的能力（规划 / 撰写，分阶段）。缺省时两个 wiki 工具都不可用。
   // 收成对象而非再加一个位置参数：这个参数列表已经很长，继续追加会让每个调用点都要数位置。
   wiki?: WikiTools,
+  /**
+   * 用户显式授权、允许写入的工作区外目录（产物目录 / 产出目录，绝对路径）。
+   * 只放宽写操作，不放宽读：读本来就不受边界限制。
+   */
+  writeRoots?: readonly string[],
 ): Promise<string> {
   switch (name) {
     case "read_file": {
@@ -205,7 +218,7 @@ export async function executeToolCall(
         throw new Error("create_file 失败：缺少必填参数 content。请提供文件内容（字符串，可为空串）。");
       }
       const filePath = await resolveInWorkspaces(args.path, cwd, host, workspaces);
-      assertWithinWorkspaces(filePath, cwd, workspaces, "create_file");
+      assertWithinWorkspaces(filePath, cwd, workspaces, "create_file", writeRoots);
       // 本次编辑前的有效内容（手动模式下可能已有暂存版本），作为 diff 基准
       const eff = await host.edits.readEffective(filePath);
       const preEditContent = eff.content;
@@ -252,7 +265,7 @@ export async function executeToolCall(
         throw new Error("str_replace 失败：缺少必填参数 newStr。请提供替换后的文本（字符串，可为空串表示删除）。");
       }
       const filePath = await resolveInWorkspaces(args.path, cwd, host, workspaces);
-      assertWithinWorkspaces(filePath, cwd, workspaces, "str_replace");
+      assertWithinWorkspaces(filePath, cwd, workspaces, "str_replace", writeRoots);
       // 基于"有效内容"做替换（手动模式下基于暂存的最新版本）
       const eff = await host.edits.readEffective(filePath);
       if (!eff.existsOnDisk && !eff.fromPending) {
@@ -352,7 +365,7 @@ export async function executeToolCall(
       for (const op of ops) {
         try {
           const filePath = await resolveInWorkspaces(op.path, cwd, host, workspaces);
-          assertWithinWorkspaces(filePath, cwd, workspaces, "apply_patch");
+          assertWithinWorkspaces(filePath, cwd, workspaces, "apply_patch", writeRoots);
           const eff = await host.edits.readEffective(filePath);
           const diskContent = await host.fs.read(filePath);
 
