@@ -585,7 +585,9 @@ function diffInjections(emitted: Map<string, string>, snapshot: ContextInjection
 /** 用户真正发出的消息（排除截图回填、续写引导这类系统代发的 user 消息） */
 export function isRealUserMessage(m: ChatCompletionMessageParam): boolean {
   const anyMsg = m as any;
-  return anyMsg?.role === "user" && !anyMsg._screenshotInjection && !anyMsg._tailInjected && !anyMsg._ephemeralInjected;
+  return anyMsg?.role === "user" && !anyMsg._screenshotInjection && !anyMsg._tailInjected && !anyMsg._ephemeralInjected
+    // 压缩留下的摘要不是用户发的（判定同 compactor.isSummaryMessage，这里内联以免循环依赖）
+    && !(typeof anyMsg.content === "string" && anyMsg.content.startsWith("[对话历史摘要]"));
 }
 
 /** 一轮之内定格不变的易变注入 */

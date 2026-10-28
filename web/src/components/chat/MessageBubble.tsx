@@ -73,8 +73,25 @@ function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRej
   const [draftImages, setDraftImages] = useState<string[]>([]);
   const [draftFiles, setDraftFiles] = useState<AttachedFile[]>([]);
 
-  // 系统消息（压缩提示等）：居中浅色文本行
+  // 系统消息（压缩提示等）：居中浅色文本行；带压缩摘要的可以点开查看
   if ((message as any).role === "system") {
+    if (message.summary) {
+      return (
+        <div className="flex flex-col items-center py-1">
+          <button
+            onClick={() => setUserExpanded((v) => !v)}
+            className="text-[11px] text-muted-foreground/60 bg-muted/30 hover:bg-muted/50 hover:text-muted-foreground px-3 py-0.5 rounded-full transition-colors"
+          >
+            {message.content} · {userExpanded ? "收起摘要" : "查看摘要"}
+          </button>
+          {userExpanded && (
+            <div className="mt-2 w-full max-w-[640px] rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground whitespace-pre-wrap leading-relaxed">
+              {message.summary}
+            </div>
+          )}
+        </div>
+      );
+    }
     return (
       <div className="flex justify-center py-1">
         <span className="text-[11px] text-muted-foreground/60 bg-muted/30 px-3 py-0.5 rounded-full">

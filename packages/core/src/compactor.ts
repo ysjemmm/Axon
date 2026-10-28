@@ -140,6 +140,7 @@ export async function compactMessages(
   strategy: LLMStrategy,
   model: string,
   config = DEFAULT_CONFIG,
+  opts: SummaryOptions = {},
 ): Promise<ChatCompletionMessageParam[]> {
   // 分离：system prompt + 历史
   const systemMsg = messages[0]; // system prompt 始终保留
@@ -166,7 +167,7 @@ export async function compactMessages(
   // 现在把它原文作为「已有摘要」传入，与新消息合并成新摘要。
   const prevSummary = oldMessages.find(isSummaryMessage);
   const prevSummaryText = typeof prevSummary?.content === "string" ? prevSummary.content.replace("[对话历史摘要]\n", "") : "";
-  const summary = await generateMergedSummary(prevSummaryText, oldMessages, strategy, model);
+  const summary = await generateMergedSummary(prevSummaryText, oldMessages, strategy, model, opts);
 
   // 构建压缩后的消息列表
   return [
@@ -191,8 +192,12 @@ function describeToolCallsBrief(msg: ChatCompletionMessageParam): string {
   }).join("；");
 }
 
-/** 已有摘要消息：压缩时要原样带上，不能当普通消息截断 */
-function isSummaryMessage(msg: ChatCompletionMessageParam): boolean {
+/**
+ * 压缩留下的摘要消息（role=user，内容以「[对话历史摘要]」开头）。它不是用户发的：
+ * 压缩时要原样带上而不是截断，前端显示成「早期对话已压缩」分隔，
+ * 按用户消息序号定位（编辑 / 分叉）时也要跳过它，前后端口径才一致。
+ */
+export function isSummaryMessage(msg: ChatCompletionMessageParam): boolean {
   return msg?.role === "user" && typeof msg.content === "string" && msg.content.startsWith("[对话历史摘要]");
 }
 
@@ -346,9 +351,11 @@ async function generateMergedSummary(
   messages: ChatCompletionMessageParam[],
   strategy: LLMStrategy,
   model: string,
+  opts: SummaryOptions = {},
 ): Promise<string> {
-  const historyText = serializeHistory(messages);
-  const systemPrompt = `你是对话摘要助手。这份摘要会替代被压缩掉的早期对话，之后模型只能通过它了解前面发生过什么，所以要让模型读完就能无缝接着干活。
+  const ask = async (history: ChatCompletionMessageParam[]): Promise<string> => {
+    const historyText = serializeHistory(history);
+    const systemPrompt = `你是对话摘要助手。这份摘要会替代被压缩掉的早期对话，之后模型只能通过它了解前面发生过什么，所以要让模型读完就能无缝接着干活。
 
 ${prevSummary ? `【已有摘要】（更早的对话，必须合并保留其中仍然有效的信息）\n${prevSummary}\n` : ""}
 【需要合并的新对话】
@@ -365,18 +372,71 @@ ${historyText}
 
 输出：按主题分组的简洁要点列表，控制在 1500 字以内；已有摘要里仍然有效的内容要保留，不要因为新内容多就把旧的挤掉。`;
 
-  const turn = await strategy.runTurn({
-    model,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: "请输出合并后的完整摘要。" },
-    ],
-    tools: [],
-    callbacks: SILENT_CALLBACKS,
-    maxOutputTokens: 2000,
-  });
+    const turn = await strategy.runTurn({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: "请输出合并后的完整摘要。" },
+      ],
+      tools: [],
+      callbacks: SILENT_CALLBACKS,
+      maxOutputTokens: 3000,
+      // 必须关思考：思考型模型（deepseek-v4-pro 等）会把输出额度全花在推理上、正文为空。
+      // 早先就是这样拿到空摘要，再用一句「（无法生成摘要）」把整段早期对话换掉了。
+      think: false,
+      modelSupportsThinking: opts.modelSupportsThinking,
+    });
+    return (turn.content || "").trim();
+  };
 
-  return turn.content || "（无法生成摘要）";
+  // 第一次失败（空 / 异常）时用后半段消息再试一次：输入太长是另一个常见原因
+  try {
+    const first = await ask(messages);
+    if (first) return first;
+  } catch (err) {
+    console.warn("[compact] 摘要生成失败，缩短输入重试:", (err as Error).message);
+  }
+  try {
+    const second = await ask(messages.slice(Math.floor(messages.length / 2)));
+    if (second) return second;
+  } catch (err) {
+    console.warn("[compact] 摘要重试仍失败，改用原文摘录:", (err as Error).message);
+  }
+  // 两次都失败：绝不能用一句「无法生成摘要」替换掉整段早期对话，从原文里摘录要点兜底
+  return buildFallbackSummary(prevSummary, messages);
+}
+
+/** 摘要生成选项 */
+export interface SummaryOptions {
+  /** 声明的思考能力：think:false 据此决定是否显式下发「关闭思考」参数 */
+  modelSupportsThinking?: boolean;
+}
+
+/**
+ * 模型摘要两次都失败时的兜底：不调模型，直接从原文摘录。
+ * 保留已有摘要全文、用户每一条消息的开头、涉及的文件与命令——信息密度不如模型摘要，
+ * 但不会把早期对话整个丢掉。
+ */
+export function buildFallbackSummary(prevSummary: string, messages: ChatCompletionMessageParam[]): string {
+  const asks: string[] = [];
+  const touched: string[] = [];
+  for (const msg of messages) {
+    if (!msg || isSummaryMessage(msg)) continue;
+    if (msg.role === "user") {
+      const text = typeof msg.content === "string"
+        ? msg.content
+        : Array.isArray(msg.content) ? msg.content.map((p: any) => (p?.type === "text" ? p.text : "")).join(" ") : "";
+      const oneLine = text.replace(/\s+/g, " ").trim();
+      if (oneLine) asks.push(`- ${oneLine.slice(0, 200)}${oneLine.length > 200 ? "…" : ""}`);
+    }
+    const calls = describeToolCallsBrief(msg);
+    if (calls) for (const c of calls.split("；")) if (!touched.includes(c)) touched.push(c);
+  }
+  const parts = ["（自动摘要生成失败，以下是从早期对话原文摘录的要点）"];
+  if (prevSummary.trim()) parts.push(`更早的摘要：\n${prevSummary.trim()}`);
+  if (asks.length) parts.push(`用户提过的问题与要求：\n${asks.slice(-30).join("\n")}`);
+  if (touched.length) parts.push(`涉及的文件与命令：\n${touched.slice(-40).map((t) => `- ${t}`).join("\n")}`);
+  return parts.join("\n\n");
 }
 
 // reflectiveCompact / generateFailureSummary 已移除。
@@ -429,6 +489,7 @@ export async function rollingCompact(
   strategy: LLMStrategy,
   model: string,
   keepRecentCount = 8,
+  opts: SummaryOptions = {},
 ): Promise<[ChatCompletionMessageParam[], boolean]> {
   const systemMsg = messages[0];
   const history = messages.slice(1);
@@ -453,7 +514,7 @@ export async function rollingCompact(
     : "";
 
   // 生成新摘要（合并旧摘要 + 新旧消息）
-  const summary = await generateMergedSummary(prevSummaryText, oldMessages, strategy, model);
+  const summary = await generateMergedSummary(prevSummaryText, oldMessages, strategy, model, opts);
 
   return [
     [

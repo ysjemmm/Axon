@@ -80,3 +80,20 @@ describe("会话记忆：历史版本与防覆盖", () => {
     expect(s.getMemoryHistory()[0].content).toBe("v10");
   });
 });
+
+describe("压缩摘要不算用户消息", () => {
+  it("按用户消息序号编辑时跳过摘要，与前端口径一致", () => {
+    const events: any[] = [];
+    const s = new AgentSession("/work", { emit: (e: any) => events.push(e) }, minimalHost(), [
+      { role: "system", content: "你是 Axon，" },
+      { role: "user", content: "[对话历史摘要]\n- 早期要点" },
+      { role: "assistant", content: "明白，我已了解之前的对话内容。" },
+      { role: "user", content: "删掉全部跳过按钮" },
+      { role: "assistant", content: "好的" },
+    ] as any);
+    // 前端只看得到一条用户消息（摘要显示成分隔行），它的序号是 0
+    expect(s.editUserMessage("", "删掉全部跳过按钮和对应方法", 0)).toBe(true);
+    expect((s.messages[1] as any).content).toContain("早期要点");
+    expect((s.messages[3] as any).content).toBe("删掉全部跳过按钮和对应方法");
+  });
+});

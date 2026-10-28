@@ -54,6 +54,23 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
   for (const m of messages) {
     if (m.role === "system") continue;
 
+    // 压缩留下的「摘要 + 确认」两条是给模型的上下文，不是对话：摘要显示成一条可展开的
+    // 「早期对话已压缩」分隔，确认那句不显示。早先它们原样显示成用户气泡和一句 AI 回复。
+    if (m.role === "user" && typeof m.content === "string" && m.content.startsWith("[对话历史摘要]")) {
+      if (currentAssistant) {
+        restored.push(currentAssistant);
+        currentAssistant = null;
+      }
+      restored.push({
+        id: `hist-summary-${seq++}`,
+        role: "system" as any,
+        content: "[早期对话已压缩]",
+        summary: m.content.replace(/^\[对话历史摘要\]\n?/, ""),
+      });
+      continue;
+    }
+    if (m.role === "assistant" && typeof m.content === "string" && m.content.startsWith("明白，我已了解之前的对话内容")) continue;
+
     if (m.role === "user") {
       if ((m as any)._screenshotInjection) continue;
       if (currentAssistant) {

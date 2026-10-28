@@ -162,6 +162,8 @@ export interface ChatMessage {
   attachedFiles?: AttachedFile[]; // user 上传的文本文件
   // assistant 用
   segments?: Segment[];
+  /** system 分隔行用：压缩摘要原文，分隔行可展开查看 */
+  summary?: string;
   /** user 用：内联片段（文本 + tag），用于富文本渲染用户气泡 */
   userSegments?: UserSegment[];
   /** 本轮实际发给模型的思考强度值（如 high / xhigh）；未选则缺省 */

@@ -46,6 +46,11 @@ export class CompactionController {
 
   constructor(private readonly s: AgentSession) {}
 
+  /** 摘要生成选项：按当前模型声明的思考能力关闭思考 */
+  private summaryOptions(): { modelSupportsThinking?: boolean } {
+    return { modelSupportsThinking: declaredThinkingFor(this.s.model, this.s.provider) };
+  }
+
   /** 游标之后、尚未整理过的消息（不含系统消息和单轮临时注入） */
   private takeUnprocessed(): { messages: ChatCompletionMessageParam[]; cursor: ChatCompletionMessageParam | null } {
     const all = this.s.messages;
@@ -180,7 +185,7 @@ export class CompactionController {
     try {
       const strategy = getStrategy(this.s.provider, this.s.model);
       this.s.send("status", { content: "整理上下文..." });
-      this.s.messages = await compactMessages(this.s.messages, strategy, this.s.model);
+      this.s.messages = await compactMessages(this.s.messages, strategy, this.s.model, undefined, this.summaryOptions());
       this.s.isCompacting = false;
       this.s.lastPromptTokens = 0;
       this.s.send("compacting_end", { success: true, message: successMessage });
@@ -217,7 +222,7 @@ export class CompactionController {
       const strategy = getStrategy(this.s.provider, this.s.model);
       // 压缩前取出尚未整理进记忆的原文（滚动摘要同样会丢细节）
       const pending = this.takeUnprocessed().messages;
-      const [newMessages, didCompact] = await rollingCompact(this.s.messages, strategy, this.s.model, this.s.compactionConfig.keepRecentMessages);
+      const [newMessages, didCompact] = await rollingCompact(this.s.messages, strategy, this.s.model, this.s.compactionConfig.keepRecentMessages, this.summaryOptions());
       if (didCompact) {
         // 安全区替换：用压缩后的消息替换当前 messages
         this.s.messages = newMessages;
@@ -263,7 +268,7 @@ export class CompactionController {
       const snapshot = this.takeForCompaction();
       // 压缩前移除本轮刚推送的用户消息（它会在新会话中重新发送）
       const userMsg = this.s.messages.pop();
-      this.s.compactionMigrationMessages = await compactMessages(this.s.messages, strategy, this.s.model);
+      this.s.compactionMigrationMessages = await compactMessages(this.s.messages, strategy, this.s.model, undefined, this.summaryOptions());
       // 恢复用户消息到原会话（保持历史完整，仅压缩版本不包含它）
       if (userMsg) this.s.messages.push(userMsg);
       await this.refreshMemory(snapshot, strategy);
@@ -326,7 +331,7 @@ export class CompactionController {
       this.s.send("compacting_start", {});
       try {
         this.s.send("status", { content: "整理上下文..." });
-        this.s.messages = await compactMessages(this.s.messages, strategy, this.s.model);
+        this.s.messages = await compactMessages(this.s.messages, strategy, this.s.model, undefined, this.summaryOptions());
         this.s.isCompacting = false;
         this.s.lastPromptTokens = 0;
         this.s.send("compacting_end", { success: true, message: "切换模型后上下文已自动压缩" });
@@ -351,7 +356,7 @@ export class CompactionController {
         this.s.send("compacting_start", {});
         try {
           this.s.send("status", { content: "整理上下文..." });
-          this.s.messages = await compactMessages(this.s.messages, strategy, this.s.model);
+          this.s.messages = await compactMessages(this.s.messages, strategy, this.s.model, undefined, this.summaryOptions());
           this.s.isCompacting = false;
           this.s.lastPromptTokens = 0;
           this.s.send("compacting_end", { success: true, message: "上下文已压缩" });

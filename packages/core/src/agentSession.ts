@@ -10,7 +10,7 @@ import { ToolCallStatus, type ToolMeta, type WebCapability, type ApprovalDecisio
 import { calculateCredits, buildCreditDetail } from "./credits.js";
 import type { AgentHost } from "./host/index.js";
 import type { AgentChannel, AgentEvent } from "./channel/index.js";
-import { DEFAULT_COMPACTION_CONFIG, setPruneKeepChars } from "./compactor.js";
+import { isSummaryMessage, DEFAULT_COMPACTION_CONFIG, setPruneKeepChars } from "./compactor.js";
 import type { CompactionUserConfig } from "./compactor.js";
 import type { CreditBudgetUserConfig } from "./credits.js";
 import type { SerializedPendingEdit } from "./storage/types.js";
@@ -527,11 +527,12 @@ export class AgentSession {
     let seen = -1;
     let totalUserMsgs = 0;
     for (const m of this.messages as any[]) {
-      if (m.role === "user" && !m._screenshotInjection) totalUserMsgs++;
+      if (m.role === "user" && !m._screenshotInjection && !isSummaryMessage(m)) totalUserMsgs++;
     }
     console.log(`[edit_user_message] messageId=${messageId} userIndex=${userIndex} totalUserMsgs=${totalUserMsgs} images=${images?.length ?? 0} files=${attachedFiles?.length ?? 0}`);
     for (const m of this.messages as any[]) {
-      if (m.role !== "user" || m._screenshotInjection) continue;
+      // 跳过压缩摘要：前端把它显示成分隔行、不计入用户消息序号
+      if (m.role !== "user" || m._screenshotInjection || isSummaryMessage(m)) continue;
       seen++;
       const hitById = messageId && m.clientMessageId === messageId;
       const hitByIndex = typeof userIndex === "number" && seen === userIndex;

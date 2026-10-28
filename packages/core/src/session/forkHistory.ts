@@ -41,8 +41,10 @@ export type ForkHistoryResult =
  * 判定它才算「一轮的起点」，否则序号与前端对不上，截断点会漂到半轮上。
  */
 function isRealUserMessage(m: unknown): boolean {
-  const msg = m as { role?: string; _screenshotInjection?: boolean } | null;
-  return !!msg && msg.role === "user" && !msg._screenshotInjection;
+  const msg = m as { role?: string; content?: unknown; _screenshotInjection?: boolean } | null;
+  // 压缩摘要同理：前端显示成「早期对话已压缩」分隔行，不算用户消息
+  return !!msg && msg.role === "user" && !msg._screenshotInjection
+    && !(typeof msg.content === "string" && msg.content.startsWith("[对话历史摘要]"));
 }
 
 /** 按锚点定位「第几个下标是这一轮的起点用户消息」；定位不到返回 -1 */
