@@ -310,6 +310,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   const [questionListOpen, setQuestionListOpen] = useState(false);
   // 顶部 sticky：当前视图所属 AI 回答对应的用户提问
   const [stickyQuestion, setStickyQuestion] = useState<{ id: string; text: string } | null>(null);
+  // 条上显示的提问：隐藏时保留最后一条，淡出动画期间文字不会先消失
+  const [shownStickyQuestion, setShownStickyQuestion] = useState<{ id: string; text: string } | null>(null);
   const lastStickyIdRef = useRef<string | null>(null);
   const pendingStickyQuestionRef = useRef<{ id: string; text: string } | null>(null);
   const stickyUpdateFrameRef = useRef<number | null>(null);
@@ -587,6 +589,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
       if (pendingId === lastStickyIdRef.current) return;
       lastStickyIdRef.current = pendingId;
       setStickyQuestion(next);
+      if (next) setShownStickyQuestion(next);
     });
   }, []);
 
@@ -1586,27 +1589,41 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             于是"往上翻历史时突然刷白一下、滚动条跳走"。向上滚动正好会反复跨越
             "顶部是 user 消息 / 是 assistant 消息"的边界，所以滚着滚着就触发。
             改成覆盖在列表顶部后，视口高度与它是否出现无关。 */}
-        {stickyQuestion && (
-          <div className="absolute top-0 inset-x-0 z-10 border-b border-border/60 bg-background/90 backdrop-blur-sm">
-            <TooltipProvider delayDuration={400}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={() => scrollToQuestion(stickyQuestion.id)}
-                    aria-label="跳转到该提问"
-                    className="w-full min-w-0 flex items-center gap-1.5 px-3 py-1.5 text-[11.5px] text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <ChevronDown className="w-3 h-3 shrink-0 text-muted-foreground/70 rotate-180" />
-                    <span className="truncate text-left">{stickyQuestion.text}</span>
-                  </button>
-                </TooltipTrigger>
-                {/* 提问较长时条里只露一行：悬停看全文 */}
-                <TooltipContent side="bottom" align="start" className="max-w-[min(480px,calc(100vw-32px))] whitespace-pre-wrap break-words line-clamp-[12]">
-                  {stickyQuestion.text}
-                  <div className="mt-1 opacity-70">点击跳回这条提问</div>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+        {/* 出现 / 消失走淡入淡出 + 轻微位移，而不是挂载卸载：滚动时它会反复切换，硬切显得一跳一跳的。
+            底边不画线，用渐隐过渡到下面的内容，免得与标题栏的分隔线叠成两条横杠。 */}
+        {shownStickyQuestion && (
+          <div
+            aria-hidden={!stickyQuestion}
+            className={`absolute top-0 inset-x-0 z-10 transition-[opacity,transform] duration-200 ease-out ${
+              stickyQuestion ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-1 pointer-events-none"
+            }`}
+          >
+            <div className="bg-background">
+              <TooltipProvider delayDuration={400}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => scrollToQuestion(shownStickyQuestion.id)}
+                      aria-label="跳转到该提问"
+                      tabIndex={stickyQuestion ? 0 : -1}
+                      className="w-full min-w-0 flex items-center gap-1.5 px-3 py-1.5 text-[11.5px] text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <ChevronDown className="w-3 h-3 shrink-0 text-muted-foreground/60 rotate-180" />
+                      {/* 换成另一条提问时文字淡入，而不是瞬间替换 */}
+                      <span key={shownStickyQuestion.id} className="truncate text-left animate-in fade-in-0 duration-200">
+                        {shownStickyQuestion.text}
+                      </span>
+                    </button>
+                  </TooltipTrigger>
+                  {/* 提问较长时条里只露一行：悬停看全文 */}
+                  <TooltipContent side="bottom" align="start" className="max-w-[min(480px,calc(100vw-32px))] whitespace-pre-wrap break-words line-clamp-[12]">
+                    {shownStickyQuestion.text}
+                    <div className="mt-1 opacity-70">点击跳回这条提问</div>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+            <div aria-hidden className="h-3 bg-gradient-to-b from-background to-transparent pointer-events-none" />
           </div>
         )}
         {/* 提问目录：放进标题栏（只有可见的面板渲染），顶部条只负责跳回当前提问 */}
