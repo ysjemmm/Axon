@@ -355,6 +355,12 @@ export function handleSessionMemory(msg: WsMessage, ctx: EventHandlerCtx): void 
   ctx.setMemory(memory);
 }
 
+/** 记忆的历史版本列表：记忆面板点开「历史版本」时请求 */
+export function handleMemoryHistory(msg: WsMessage, ctx: EventHandlerCtx): void {
+  const versions = (msg as any).versions;
+  ctx.setMemoryHistory(Array.isArray(versions) ? versions : []);
+}
+
 /**
  * 会话分叉完成：新会话已创建。交给上层刷新会话列表并切到新会话 ——
  * 分叉出的会话只带记忆、不带历史，用户通常马上就会接着往下做。

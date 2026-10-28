@@ -2307,7 +2307,10 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     {memoryOpen && (
       <MemoryPanel
         memory={session.memory}
-        onSave={(content) => session.saveMemory(content)}
+        history={session.memoryHistory}
+        onSave={(content, opts) => session.saveMemory(content, opts)}
+        onRequestHistory={session.requestMemoryHistory}
+        onRestore={session.restoreMemoryVersion}
         onClose={() => setMemoryOpen(false)}
       />
     )}

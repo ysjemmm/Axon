@@ -15,7 +15,7 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 import { DEFAULT_CONTEXT_WINDOW } from "./llm/modelContext.js";
 import type { LLMStrategy } from "./llm/types.js";
 import { NO_TRUNCATE_TOOLS } from "./tools/catalog.js";
-import { parseMemoryUpdates, type MemoryUpdate } from "./session/memoryStore.js";
+import { parseMemoryUpdates, renderMemoryForModel, type MemoryUpdate } from "./session/memoryStore.js";
 
 /** 压缩配置 */
 interface CompactConfig {
@@ -161,8 +161,12 @@ export async function compactMessages(
   const oldMessages = history.slice(0, splitIndex);
   const recentMessages = history.slice(splitIndex);
 
-  // 用 LLM 对旧消息生成摘要
-  const summary = await generateSummary(oldMessages, strategy, model);
+  // 用 LLM 对旧消息生成摘要。旧消息开头可能就是上一次压缩留下的摘要：
+  // 早先它被当成普通消息按 500 字截断后再摘要，压一次丢一截，多压几次前面的内容就没了。
+  // 现在把它原文作为「已有摘要」传入，与新消息合并成新摘要。
+  const prevSummary = oldMessages.find(isSummaryMessage);
+  const prevSummaryText = typeof prevSummary?.content === "string" ? prevSummary.content.replace("[对话历史摘要]\n", "") : "";
+  const summary = await generateMergedSummary(prevSummaryText, oldMessages, strategy, model);
 
   // 构建压缩后的消息列表
   return [
@@ -173,18 +177,46 @@ export async function compactMessages(
   ];
 }
 
+/** 工具调用 → 一行「工具名 + 关键参数」：摘要要知道改了哪个文件、跑了什么命令，而不只是「(工具调用)」 */
+function describeToolCallsBrief(msg: ChatCompletionMessageParam): string {
+  const calls = (msg as { tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> }).tool_calls;
+  if (!Array.isArray(calls) || calls.length === 0) return "";
+  return calls.map((call) => {
+    const name = call?.function?.name || "未知工具";
+    let args: Record<string, unknown> = {};
+    try { args = JSON.parse(call?.function?.arguments || "{}"); } catch { /* 参数不是合法 JSON 时只给工具名 */ }
+    const key = ["path", "command", "query", "url"].find((k) => typeof args[k] === "string" && args[k]);
+    const value = key ? String(args[key]).replace(/\s+/g, " ").slice(0, 160) : "";
+    return value ? `${name}(${value})` : name;
+  }).join("；");
+}
+
+/** 已有摘要消息：压缩时要原样带上，不能当普通消息截断 */
+function isSummaryMessage(msg: ChatCompletionMessageParam): boolean {
+  return msg?.role === "user" && typeof msg.content === "string" && msg.content.startsWith("[对话历史摘要]");
+}
+
 /**
- * 把消息列表序列化为可读文本（供摘要 LLM 消费）。两类摘要（无感压缩 / 反思式重启）共用。
+ * 把消息列表序列化为可读文本（供摘要 LLM 消费）。
+ * 工具轮的正文在 displayContent 里（content 恒为 null），工具调用只保留工具名 + 关键参数。
  */
 function serializeHistory(messages: ChatCompletionMessageParam[]): string {
+  const MAX_CHARS = 800;
   return messages
     .map((msg) => {
       if (!msg) return ""; // 防御：消息为 undefined/null 时跳过
+      if (isSummaryMessage(msg)) return ""; // 已有摘要由调用方单独传入
+      if (msg.role === "assistant" && typeof msg.content === "string" && msg.content.startsWith("明白，我已了解")) return "";
       const role = msg.role === "user" ? "用户" : msg.role === "assistant" ? "助手" : msg.role === "system" ? "系统" : "工具";
-      const content = typeof msg.content === "string" ? msg.content : "(工具调用)";
-      const truncated = content.length > 500 ? content.slice(0, 500) + "..." : content;
+      const text = typeof msg.content === "string" && msg.content.trim()
+        ? msg.content
+        : typeof (msg as any).displayContent === "string" ? (msg as any).displayContent as string : "";
+      const calls = describeToolCallsBrief(msg);
+      const content = [text, calls ? `调用：${calls}` : ""].filter(Boolean).join("\n") || "（无文本内容）";
+      const truncated = content.length > MAX_CHARS ? content.slice(0, MAX_CHARS) + "..." : content;
       return `[${role}] ${truncated}`;
     })
+    .filter(Boolean)
     .join("\n");
 }
 
@@ -201,8 +233,11 @@ export function serializeHistoryForMemory(messages: ChatCompletionMessageParam[]
     .map((msg) => {
       if (!msg) return "";
       const role = msg.role === "user" ? "用户" : msg.role === "assistant" ? "助手" : msg.role === "system" ? "系统" : "工具";
-      const rawContent = typeof msg.content === "string"
+      const rawContent = typeof msg.content === "string" && msg.content.trim()
         ? msg.content
+        : typeof (msg as any).displayContent === "string" && (msg as any).displayContent.trim()
+          // 工具轮的叙述在 displayContent 里（content 恒为 null）：「为什么改这里」常常就写在这几句里
+          ? (msg as any).displayContent as string
         : Array.isArray(msg.content)
           ? msg.content.map((part: any) => part?.type === "text" ? part.text : part?.type === "image_url" ? "（图片）" : "").filter(Boolean).join(" ")
           : typeof (msg as any).runtimeContent === "string"
@@ -242,38 +277,51 @@ export async function generateSessionMemory(
   messages: ChatCompletionMessageParam[],
   strategy: LLMStrategy,
   model: string,
+  opts: { modelSupportsThinking?: boolean } = {},
 ): Promise<MemoryUpdate[]> {
   const historyText = serializeHistoryForMemory(messages);
-  const systemPrompt = `你是会话记忆维护助手。你的任务是从「已有记忆」与「本次会话记录」中提取本次真正值得长期保留的增量知识。
+  const existing = prevMemory.trim() ? renderMemoryForModel(prevMemory) : "";
+  const systemPrompt = `你是会话记忆维护助手。会话记忆是这次会话「值得长期保留的结论」，会注入给之后的每一轮对话，也会被用户导出带到新会话里。你的任务：读「新增对话记录」，把其中值得保留的知识合并进「已有记忆」。
 
-${prevMemory ? `【已有记忆】\n${prevMemory}\n` : "【已有记忆】（目前为空）\n"}
-【本次会话记录】
+【已有记忆】（每个块后面的 〔key: …〕 是它的 key）
+${existing || "（目前为空）"}
+
+【新增对话记录】（上次整理记忆之后发生的对话）
 ${historyText}
 
-要求：
-1. 只输出 JSON，不要 Markdown，不要解释。格式必须是：
-   {"updates":[{"action":"upsert|append|delete","key":"稳定英文或拼音 key","section":"project|workspace|decisions|preferences|status|pitfalls|todos|other","title":"中文标题","content":"Markdown 内容"}]}
-2. 只返回本次对话新增、修正或删除的知识块，不要把没有变化的旧记忆重新输出。
-3. **尽可能完整，宁可多写也不要漏**。优先保留：用户交代的偏好与约束、敲定的决策及其理由、
-   改过或生成的关键文件绝对路径、重要结论与数据、未完成的待办、踩过的坑与规避方式。
-4. 已有记忆里仍然有效的内容不要重复返回；被后续对话推翻或更新的，用 upsert 替换原 key；
-   明确过时的内容才用 delete。
-5. 丢弃：寒暄、重复确认、工具调用的过程细节、失败重试的中间态；但不要丢掉工具调用揭示的关键文件路径、
-   工作区结构、搜索结论、实际改动和验证结果。
-6. **优先吸收最近几轮的新信息**：本轮形成的设计决策、界面/交互规范、用户偏好、对工作区的理解、
-   已完成与未完成事项，都要覆盖进记忆；不要因为已有记忆很长就只原样返回旧项目说明。
-7. 每个 key 只代表一个稳定知识块，尽量按主题合并，不要为每一句话创建一个块。
-8. 没有值得更新的内容时返回 {"updates":[]}。`;
+一、要保留什么（宁可多写也不要漏）
+- 用户交代的偏好、约束、规范（「以后都…」「不要…」「统一用…」），原话里的关键限定词不要丢。
+- 敲定的设计决策及其理由、被否决的方案及原因。
+- 工作区理解：项目结构、关键模块、构建 / 测试命令、关键文件的绝对路径。
+- 完成的关键改动（改了哪些文件、为什么改）、验证结果。
+- 未完成的待办、已知问题、踩过的坑与规避方式。
+- 具体的值：路径、命令、配置项、版本号、报错原文的关键片段——这些最容易丢，也最有用。
+
+二、不要保留什么
+- 寒暄、重复确认、工具调用的过程、失败重试的中间态、能直接从源码读到的普通事实。
+
+三、怎么输出
+只输出 JSON，不要 Markdown 包裹，不要解释：
+{"updates":[{"action":"append|upsert|delete","key":"…","section":"project|workspace|decisions|preferences|status|pitfalls|todos|other","title":"中文标题","content":"Markdown 内容"}]}
+- 更新已有块必须用它的原 key（〔key: …〕里的值），不要另起一个意思相同的新块。
+- 给已有块增加条目 → append，content 只写新增的条目。
+- 改写已有块 → upsert，content 必须是该块【改写后的完整内容】（保留仍然有效的旧条目），不是只写变化的部分。
+- 新主题 → 新 key + 新标题；每个块只讲一个主题，按主题归并，不要一句话一个块。
+- 明确过时、被推翻的整块才 delete；只是部分过时就 upsert 完整的新版本。
+- 只返回本次需要变化的块，没变化的旧块不要重复输出；没有值得更新的内容就返回 {"updates":[]}。`;
 
   const turn = await strategy.runTurn({
     model,
     messages: [
       { role: "system", content: systemPrompt },
-      { role: "user", content: "请只输出本次需要合并的 JSON 增量更新，不要输出完整旧记忆。" },
+      { role: "user", content: "请只输出本次需要合并的 JSON 增量更新。" },
     ],
     tools: [],
     callbacks: SILENT_CALLBACKS,
     maxOutputTokens: 4000,
+    // 整理记忆是抽取任务，不需要深度思考：关掉思考能快很多，也不会把输出预算花在推理上
+    think: false,
+    modelSupportsThinking: opts.modelSupportsThinking,
   });
 
   return parseMemoryUpdates(turn.content || "");
@@ -287,43 +335,45 @@ const SILENT_CALLBACKS = {
 };
 
 /**
- * 用 LLM 生成历史消息的摘要
+ * 生成摘要：把「已有摘要 + 本批旧消息」合并成一份新摘要。手动 / 溢出压缩与滚动压缩共用。
+ *
+ * 摘要是压缩后模型唯一能看到的早期上下文，比记忆更偏「过程」：做到哪一步、改了哪些文件、
+ * 用户纠正过什么。早先输出上限 500 token（约 700 字）还要求「1000 字以内」，长会话压一次
+ * 就截断一次；现在放宽到 2000 token，并要求保留路径、命令、用户原话里的约束。
  */
-async function generateSummary(
+async function generateMergedSummary(
+  prevSummary: string,
   messages: ChatCompletionMessageParam[],
   strategy: LLMStrategy,
   model: string,
 ): Promise<string> {
   const historyText = serializeHistory(messages);
+  const systemPrompt = `你是对话摘要助手。这份摘要会替代被压缩掉的早期对话，之后模型只能通过它了解前面发生过什么，所以要让模型读完就能无缝接着干活。
+
+${prevSummary ? `【已有摘要】（更早的对话，必须合并保留其中仍然有效的信息）\n${prevSummary}\n` : ""}
+【需要合并的新对话】
+${historyText}
+
+必须保留：
+1. 用户的目标、偏好与约束（保留原话里的关键限定词），以及用户纠正过你的地方。
+2. 敲定的决策及理由、否决过的方案。
+3. 已完成的操作：改了哪些文件（写路径）、执行过的关键命令、验证结果。
+4. 当前进度：做到哪一步、还剩什么、卡在哪里。
+5. 关键的具体值：路径、配置项、报错原文的关键片段。
+
+可以丢弃：寒暄与重复确认、工具输出的大段原文、失败重试的中间过程。
+
+输出：按主题分组的简洁要点列表，控制在 1500 字以内；已有摘要里仍然有效的内容要保留，不要因为新内容多就把旧的挤掉。`;
 
   const turn = await strategy.runTurn({
     model,
     messages: [
-      {
-        role: "system",
-        content: `你是一个对话摘要助手。请将以下对话历史压缩为简洁的摘要。
-
-必须保留：
-1. 用户提到的个人信息（名字、偏好、背景）
-2. 已完成的操作（创建/修改了哪些文件、执行了什么命令）
-3. 重要的决策和结论
-4. 当前任务的状态
-
-必须丢弃：
-- 工具调用的详细参数和完整输出
-- 重复的问候和确认
-- 中间过程的冗余信息
-
-输出格式：用简洁的要点列表，控制在 1000 字以内。`,
-      },
-      {
-        role: "user",
-        content: historyText,
-      },
+      { role: "system", content: systemPrompt },
+      { role: "user", content: "请输出合并后的完整摘要。" },
     ],
     tools: [],
     callbacks: SILENT_CALLBACKS,
-    maxOutputTokens: 500,
+    maxOutputTokens: 2000,
   });
 
   return turn.content || "（无法生成摘要）";
@@ -403,7 +453,7 @@ export async function rollingCompact(
     : "";
 
   // 生成新摘要（合并旧摘要 + 新旧消息）
-  const summary = await generateRollingSummary(prevSummaryText, oldMessages, strategy, model);
+  const summary = await generateMergedSummary(prevSummaryText, oldMessages, strategy, model);
 
   return [
     [
@@ -414,50 +464,6 @@ export async function rollingCompact(
     ],
     true,
   ];
-}
-
-/**
- * 生成滚动摘要：合并"上一段摘要 + 本批旧消息"为新摘要。
- */
-async function generateRollingSummary(
-  prevSummary: string,
-  newMessages: ChatCompletionMessageParam[],
-  strategy: LLMStrategy,
-  model: string,
-): Promise<string> {
-  const newHistoryText = serializeHistory(newMessages);
-
-  const systemPrompt = `你是一个对话摘要助手。请将以下信息压缩为一份更新的摘要。
-
-${prevSummary ? `已有上一段摘要（需合并保留有效信息）：\n${prevSummary}\n` : ""}
-需要合并的新对话内容：
-${newHistoryText}
-
-必须保留：
-1. 用户提到的个人信息（名字、偏好、背景）
-2. 已完成的操作（创建/修改了哪些文件、执行了什么命令）
-3. 重要的决策和结论
-4. 当前任务的状态
-
-必须丢弃：
-- 工具调用的详细参数和完整输出
-- 重复的问候和确认
-- 中间过程的冗余信息
-
-输出格式：用简洁的要点列表，控制在 1000 字以内。`;
-
-  const turn = await strategy.runTurn({
-    model,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: newHistoryText },
-    ],
-    tools: [],
-    callbacks: SILENT_CALLBACKS,
-    maxOutputTokens: 500,
-  });
-
-  return turn.content || "（无法生成摘要）";
 }
 //
 // 核心思路：Agent 一轮对话可能调 5-10 次工具，每次返回几百到几千 token。

@@ -46,6 +46,8 @@ export interface EventHandlerCtx {
   setFormRequest: (r: FormRequest | null) => void;
   /** 会话记忆的最新内容（模型写入或用户导入之后推送） */
   setMemory: (m: string) => void;
+  /** 记忆的历史版本（新的在前），响应 get_memory_history */
+  setMemoryHistory: (v: MemoryVersion[]) => void;
   setWaitingInputIds: (s: Set<string> | ((prev: Set<string>) => Set<string>)) => void;
   setCommandApprovals: (c: Record<string, CommandApproval> | ((prev: Record<string, CommandApproval>) => Record<string, CommandApproval>)) => void;
   setCommandRiskNotice: (c: { id?: string; command: string; reason: string } | null) => void;
@@ -119,3 +121,10 @@ export interface FormRequest {
 }
 
 export type { WsMessage };
+
+/** 记忆的一个历史版本：content 是它被 source 改写之前的完整内容 */
+export interface MemoryVersion {
+  at: number;
+  source: "model" | "auto" | "user" | "import" | "restore" | string;
+  content: string;
+}

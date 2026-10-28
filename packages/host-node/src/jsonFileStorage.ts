@@ -161,7 +161,7 @@ export class JsonFileStorage implements SessionStorage {
 
   async updateSession(
     id: string,
-    patch: Partial<Pick<SessionData, "title" | "model" | "provider" | "workspace" | "workspaces" | "workspaceGroupId" | "messages" | "totalTokens" | "pendingEdits" | "memory">>,
+    patch: Partial<Pick<SessionData, "title" | "model" | "provider" | "workspace" | "workspaces" | "workspaceGroupId" | "messages" | "totalTokens" | "pendingEdits" | "memory" | "memoryHistory">>,
   ): Promise<void> {
     const filePath = this.sessionPath(id);
     await this.withWriteLock(filePath, async () => {

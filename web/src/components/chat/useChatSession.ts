@@ -13,7 +13,7 @@ import { STORAGE, TIMEOUT, CONTROL_CMD } from "@/lib/constants";
 // 拆分后的模块
 // 鎷嗗垎鍚庣殑妯″潡
 import { createEventHandler } from "./eventHandlers";
-import type { EventHandlerCtx } from "./eventHandlers/types";
+import type { EventHandlerCtx, MemoryVersion } from "./eventHandlers/types";
 import { sealReasoning } from "./reasoningPlacement";
 import { useTypewriter } from "./useTypewriter";
 import { useToolCallQueue } from "./useToolCallQueue";
@@ -167,6 +167,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
   // 会话记忆（Markdown）：模型调 update_memory 或用户导入后，由 session_memory 事件推来。
   // 它不进消息历史（在 core 侧就是分开存的），这里只用于展示与导入/导出。
   const [memory, setMemory] = useState<string>("");
+  // 记忆的历史版本（新的在前）：记忆面板打开「历史版本」时才请求
+  const [memoryHistory, setMemoryHistory] = useState<MemoryVersion[]>([]);
   // ask_user 问答请求（Agent 抛问题 + 选项，等用户作答）。结构对齐 eventHandlers 的 AskUserRequest。
   const [askUser, setAskUser] = useState<{ toolCallId: string; questions: { question: string; options: { id: string; label: string; description?: string }[]; multi: boolean; allowOther: boolean }[] } | null>(null);
   const [commandApprovals, setCommandApprovals] = useState<Record<string, CommandApproval>>({});
@@ -236,11 +238,17 @@ export function useChatSession(opts: UseChatSessionOptions) {
     baseSend({ ...cmd, clientId });
   }, [baseSend, clientId]);
 
-  /** 写入/覆盖会话记忆（记忆面板保存、导入 .md 都走这条） */
-  const saveMemory = useCallback((content: string) => {
-    setMemory(content);
-    send({ type: "set_memory", memory: content });
+  /**
+   * 保存 / 导入会话记忆。
+   * · 编辑后保存：带上开始编辑时的 base，后台期间改过记忆时 core 做三方合并
+   * · 导入（mode=merge）：合并进当前记忆，不整份替换
+   * 不在本地乐观写入：合并结果以 core 回推的 session_memory 为准。
+   */
+  const saveMemory = useCallback((content: string, opts: { base?: string; mode?: "replace" | "merge" } = {}) => {
+    send({ type: "set_memory", memory: content, ...(opts.base !== undefined ? { base: opts.base } : {}), ...(opts.mode ? { mode: opts.mode } : {}) });
   }, [send]);
+  const requestMemoryHistory = useCallback(() => send({ type: "get_memory_history" }), [send]);
+  const restoreMemoryVersion = useCallback((at: number) => send({ type: "restore_memory_version", at }), [send]);
 
   // 面板首次连接或恢复时也同步当前选择，避免状态栏继续停留在上一个 Provider。
   useEffect(() => {
@@ -274,6 +282,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     setAskUser,
     setFormRequest,
     setMemory,
+    setMemoryHistory,
     setContextOverflow, setToolHistoryMismatch,
     cancelled, cancelledTurnMsgId, cancelledTurnGeneration, turnGeneration,
     turnStartTime,
@@ -795,6 +804,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     askUser,
     formRequest,
     memory,
+    memoryHistory,
     waitingInputIds,
     commandApprovals, commandRiskNotice, setCommandRiskNotice,
     contextOverflow, dismissContextOverflow, forceCompact,
@@ -814,6 +824,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
     answerUserQuestion,
     submitForm,
     saveMemory,
+    requestMemoryHistory,
+    restoreMemoryVersion,
     approveCommand, dismissCommandRiskNotice,
     setModel, selectWorkspace, selectGroup, groupUpdated,
     listSnapshots: () => send({ type: "list_snapshots" }),

@@ -68,6 +68,8 @@ export interface SessionData {
    * 来源有二：模型调用 update_memory 维护，或用户把一份 .md 导入到会话里。
    */
   memory?: string;
+  /** 记忆的历史版本（每次改写前的旧内容，最多 20 份），供记忆面板恢复 */
+  memoryHistory?: MemoryVersion[];
   /**
    * 会话模式：agent=智能体（默认），quest=纯问答（无工具/不绑工作区），
    * cowork=办公文档工作面（运行时同 agent，仅用于历史列表归类）
@@ -89,8 +91,21 @@ export interface SessionStorage {
   createSession(data: Omit<SessionData, "createdAt" | "updatedAt">): Promise<SessionData>;
 
   /** 更新会话（消息追加、标题修改等） */
-  updateSession(id: string, patch: Partial<Pick<SessionData, "title" | "model" | "provider" | "workspace" | "workspaces" | "workspaceGroupId" | "messages" | "totalTokens" | "pendingEdits" | "memory">>): Promise<void>;
+  updateSession(id: string, patch: Partial<Pick<SessionData, "title" | "model" | "provider" | "workspace" | "workspaces" | "workspaceGroupId" | "messages" | "totalTokens" | "pendingEdits" | "memory" | "memoryHistory">>): Promise<void>;
 
   /** 删除会话 */
   deleteSession(id: string): Promise<void>;
+}
+
+/** 是谁改写了记忆（记在被替换掉的那个旧版本上） */
+export type MemorySource = "model" | "auto" | "user" | "import" | "restore";
+
+/** 记忆的一个历史版本 */
+export interface MemoryVersion {
+  /** 被替换的时间（毫秒时间戳），同时作为版本 id */
+  at: number;
+  /** 替换它的那次改写来自哪里：model=模型主动写、auto=后台整理、user=用户保存、import=导入、restore=恢复历史版本 */
+  source: MemorySource;
+  /** 被替换前的完整内容 */
+  content: string;
 }

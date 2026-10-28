@@ -116,6 +116,8 @@ export const AGENT_EVENT = {
   ASK_USER_REQUEST: "ask_user_request",
   FORM_REQUEST: "form_request",
   SESSION_MEMORY: "session_memory",
+  /** 记忆的历史版本列表（响应 get_memory_history） */
+  MEMORY_HISTORY: "memory_history",
   CONFIRM_COMMAND_REQUEST: "confirm_command_request",
   COMMAND_RISK_NOTICE: "command_risk_notice",
   // ── Relay ──

@@ -79,7 +79,8 @@ import { resolveInWorkspaces } from "./tools/search.js";
 import { CommandGate } from "./tools/index.js";
 import { EditController } from "./session/editController.js";
 import { CompactionController } from "./session/compactionController.js";
-import { applyMemoryUpdates, parseMemoryUpdates, type MemoryUpdate } from "./session/memoryStore.js";
+import { applyMemoryUpdates, mergeMemoryMarkdown, parseMemoryMarkdown, parseMemoryUpdates, threeWayMergeMemory, type MemoryUpdate } from "./session/memoryStore.js";
+import type { MemorySource, MemoryVersion } from "./storage/types.js";
 import { initializeWorkspaceAxon, inspectWorkspacesAxon, loadWorkspaceAxonConfig, type WorkspaceAxonStatus } from "./session/workspaceConfig.js";
 import { CreditBudgetGate } from "./session/creditBudgetGate.js";
 import { RelayStore } from "./relay/relayStore.js";
@@ -134,6 +135,14 @@ export class AgentSession {
    * 落盘在 SessionData.memory，由 update_memory 工具或用户导入 .md 维护。
    */
   /** @internal */ memory = "";
+  /**
+   * 记忆的历史版本：每次记忆被改写前，把旧内容存一份（最多 MEMORY_HISTORY_LIMIT 份）。
+   * 后台整理、模型写入、用户保存、导入都可能改写记忆；有了历史，任何一次改坏都能在面板里恢复。
+   */
+  /** @internal */ memoryHistory: MemoryVersion[] = [];
+  /** 本次会话里记忆被改过（包括清空）：持久化时据此决定要不要写 memory 字段 */
+  private memoryTouched = false;
+  private static readonly MEMORY_HISTORY_LIMIT = 20;
   /** @internal */ lastPromptTokens = 0;
   /** @internal */ lastCompletionTokens = 0;
   /**
@@ -578,23 +587,80 @@ export class AgentSession {
     return this.memory;
   }
 
-  /** 从持久化快照回填会话记忆（会话从磁盘恢复时由宿主调用） */
-  hydrateMemory(memory?: string): void {
+  /** 从持久化快照回填会话记忆与历史版本（会话从磁盘恢复时由宿主调用） */
+  hydrateMemory(memory?: string, history?: MemoryVersion[]): void {
     if (typeof memory === "string" && memory.trim()) this.memory = memory;
+    if (Array.isArray(history)) {
+      this.memoryHistory = history
+        .filter((v) => v && typeof v.content === "string" && typeof v.at === "number")
+        .slice(-AgentSession.MEMORY_HISTORY_LIMIT);
+    }
   }
 
-  /** 写入/覆盖会话记忆（模型调 update_memory、用户导入 .md 都走这里），立即落盘并推给前端 */
-  setMemory(content: string): void {
-    this.memory = typeof content === "string" ? content : "";
+  /** 记忆的历史版本（新的在后） */
+  getMemoryHistory(): MemoryVersion[] {
+    return this.memoryHistory;
+  }
+
+  /** 记忆是否在本次会话里被改过（含清空）；没改过时持久化不碰 memory 字段 */
+  isMemoryTouched(): boolean {
+    return this.memoryTouched;
+  }
+
+  /**
+   * 写入会话记忆（所有改写入口最终都走这里），立即落盘并推给前端。
+   * @param source 这次改写的来源，记在被替换掉的旧版本上，面板据此显示「被谁改写前的版本」
+   */
+  setMemory(content: string, source: MemorySource = "user"): void {
+    const next = typeof content === "string" ? content : "";
+    if (next === this.memory) {
+      // 内容没变也回推一次：前端保存后在等这条事件确认
+      this.send("session_memory", { memory: this.memory, historyCount: this.memoryHistory.length });
+      return;
+    }
+    if (this.memory.trim()) {
+      this.memoryHistory.push({ at: Date.now(), source, content: this.memory });
+      if (this.memoryHistory.length > AgentSession.MEMORY_HISTORY_LIMIT) {
+        this.memoryHistory = this.memoryHistory.slice(-AgentSession.MEMORY_HISTORY_LIMIT);
+      }
+    }
+    this.memory = next;
+    this.memoryTouched = true;
     this.persistMessages();
-    this.send("session_memory", { memory: this.memory });
+    this.send("session_memory", { memory: this.memory, historyCount: this.memoryHistory.length });
   }
 
   /** 增量更新会话记忆：按 key 合并知识块，仍以完整 Markdown 对外持久化。 */
-  applyMemoryUpdates(updates: MemoryUpdate[]): void {
+  applyMemoryUpdates(updates: MemoryUpdate[], source: MemorySource = "auto"): void {
     const next = applyMemoryUpdates(this.memory, updates);
     if (!next || next === this.memory) return;
-    this.setMemory(next);
+    this.setMemory(next, source);
+  }
+
+  /**
+   * 用户在面板里保存 / 导入记忆。
+   *
+   * · mode=merge（导入 .md、从别的会话导入）：合并进当前记忆，不整份替换——早先导入会把
+   *   本会话已有的记忆整个冲掉。
+   * · mode=replace（编辑后保存）：带上开始编辑时的 base。编辑期间后台可能又整理过记忆，
+   *   base 与当前内容不一致时做三方合并，用户的改动和后台新写的块都保留。
+   */
+  saveMemoryFromUser(content: string, opts: { base?: string; mode?: "replace" | "merge" } = {}): void {
+    const incoming = typeof content === "string" ? content : "";
+    if (opts.mode === "merge") {
+      this.setMemory(mergeMemoryMarkdown(this.memory, incoming), "import");
+      return;
+    }
+    const merged = typeof opts.base === "string" ? threeWayMergeMemory(opts.base, this.memory, incoming) : incoming;
+    this.setMemory(merged, "user");
+  }
+
+  /** 恢复到某个历史版本（当前内容也会先存成一个版本，恢复本身可以再撤回） */
+  restoreMemoryVersion(at: number): boolean {
+    const version = this.memoryHistory.find((v) => v.at === at);
+    if (!version) return false;
+    this.setMemory(version.content, "restore");
+    return true;
   }
 
   /**
@@ -609,18 +675,28 @@ export class AgentSession {
     const updates: MemoryUpdate[] = Array.isArray(updatesValue)
       ? updatesValue.filter((item): item is MemoryUpdate => !!item && typeof item === "object" && typeof (item as any).key === "string")
       : typeof updatesValue === "string" ? parseMemoryUpdates(updatesValue) : [];
+    let note = "";
     if (updates.length > 0) {
-      this.applyMemoryUpdates(updates);
+      this.applyMemoryUpdates(updates, "model");
     } else if (content) {
-      // 兼容旧模型/旧提示：content 仍表示完整 Markdown 替换。
-      this.setMemory(content);
+      // 兼容旧模型/旧提示：content 表示完整 Markdown 替换。但模型常常只写了「这次的新内容」，
+      // 整份替换就把其余的块冲掉了：新内容明显比现有记忆短、又丢了已有的章节时，改为合并。
+      const currentTitles = parseMemoryMarkdown(this.memory).map((b) => b.title);
+      const nextTitles = new Set(parseMemoryMarkdown(content).map((b) => b.title));
+      const dropsSections = currentTitles.some((t) => !nextTitles.has(t));
+      if (dropsSections && content.length < this.memory.trim().length * 0.5) {
+        this.setMemory(mergeMemoryMarkdown(this.memory, content), "model");
+        note = "传入的内容比现有记忆短得多且缺少已有章节，已按合并处理以免丢失；要删除过时内容请用 updates 的 delete。";
+      } else {
+        this.setMemory(content, "model");
+      }
     } else {
       return { result: "updates/content 为空，没有任何内容被写入。请提供增量 updates，或传入完整 Markdown content。", status: "error" };
     }
     // 主动更新已经拿到了模型最新的完整记忆，清掉后台节流计数，避免紧接着重复生成一次。
     this.compactionController.markMemoryUpdated();
     return {
-      result: `会话记忆已更新（${this.memory.length} 字符，${updates.length > 0 ? `合并 ${updates.length} 个增量块` : "完整替换"}）。它会随后续每次请求自动注入，不必在回复里复述。`,
+      result: `会话记忆已更新（${this.memory.length} 字符，${updates.length > 0 ? `合并 ${updates.length} 个增量块` : note ? "合并" : "完整替换"}）。${note}它会随后续每次请求自动注入，不必在回复里复述。`,
       status: "success",
     };
   }

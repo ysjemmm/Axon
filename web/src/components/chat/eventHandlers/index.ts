@@ -24,6 +24,7 @@ import {
   handleAskUserRequest,
   handleFormRequest,
   handleSessionMemory,
+  handleMemoryHistory,
   handleSessionForked,
   handleConfirmCommandRequest, handleCommandRiskNotice, handleToolHistoryMismatch,
   handleFocusRelay, handleRelayUpdated, handleRelayDeleted,
@@ -150,6 +151,9 @@ export function createEventHandler(ctx: EventHandlerCtx): (msg: WsMessage) => vo
         return;
       case AGENT_EVENT.SESSION_MEMORY:
         handleSessionMemory(msg, ctx);
+        return;
+      case AGENT_EVENT.MEMORY_HISTORY:
+        handleMemoryHistory(msg, ctx);
         return;
       case AGENT_EVENT.TOOL_CONFIRM_TIMEOUT:
         handleToolConfirmTimeout(msg, ctx);

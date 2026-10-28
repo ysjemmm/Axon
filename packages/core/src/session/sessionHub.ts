@@ -429,8 +429,10 @@ export class SessionHub {
         messages: persistable,
         // 仅在有有效值时写入 totalTokens：避免尚未拿到真实 usage 时用 0 覆盖磁盘已有统计。
         ...(total > 0 ? { totalTokens: total } : {}),
-        // 会话记忆同样只在非空时写：一条空串不该把磁盘上已攒下的记忆抹掉
-        ...(s.getMemory().trim() ? { memory: s.getMemory() } : {}),
+        // 会话记忆：非空时写；本次会话里改过（包括用户清空）时也写——否则清空永远存不下来，
+        // 重开会话旧记忆又回来了。从没碰过记忆的会话不写，免得一条空串抹掉磁盘上已攒下的。
+        ...(s.getMemory().trim() || s.isMemoryTouched() ? { memory: s.getMemory() } : {}),
+        ...(s.getMemoryHistory().length > 0 ? { memoryHistory: s.getMemoryHistory() } : {}),
       }).catch(() => {});
     });
   }
@@ -463,7 +465,7 @@ export class SessionHub {
     // 回填上次落盘的 token 统计，避免新实例 getLastTotalTokens()=0 在首次真实 usage 前
     // 被持久化回写、覆盖磁盘上的有效值（刷新后上下文显示为 0 的根因）。
     session.hydrateTokenUsage(savedSession?.totalTokens);
-    session.hydrateMemory(savedSession?.memory);
+    session.hydrateMemory(savedSession?.memory, savedSession?.memoryHistory);
     this.registerPersistence(session, sid);
     this.activeSessions.set(sid, session);
 
@@ -666,6 +668,27 @@ export class SessionHub {
         }
         if (clientId) this.sendToClient(clientId, { type: "snapshots_listed", snapshots: snapshots || [] });
         else console.warn(`[hub] list_snapshots: no clientId!`);
+        return;
+      }
+      case "set_memory": {
+        // 早先这条命令没有任何分支处理：面板里保存、导入的内容既没落盘也没注入给模型，
+        // 下次后台整理推回来的记忆还会把面板上的内容盖掉。
+        const sid = this.resolveSessionId(cmd);
+        const s = sid ? this.getActiveSession(sid) : null;
+        s?.saveMemoryFromUser(cmd.memory, { base: cmd.base, mode: cmd.mode });
+        return;
+      }
+      case "get_memory_history": {
+        const sid = this.resolveSessionId(cmd);
+        const s = sid ? this.getActiveSession(sid) : null;
+        const versions = (s?.getMemoryHistory() ?? []).slice().reverse();
+        if (clientId) this.sendToClient(clientId, { type: "memory_history", versions });
+        return;
+      }
+      case "restore_memory_version": {
+        const sid = this.resolveSessionId(cmd);
+        const s = sid ? this.getActiveSession(sid) : null;
+        s?.restoreMemoryVersion(cmd.at);
         return;
       }
       case "restore_snapshot": {

@@ -5,23 +5,55 @@
  * 维护，也可以在这里手改，或把别处的一份 .md 导入进来。
  *
  * 与 .md 文件的关系：面板里编辑的是会话自己那份记忆；「导出」把它落成 .md，
- * 「导入」把一份 .md 覆盖进来。所以「换个会话接着用」= 导出 + 在新会话导入。
+ * 「导入」把一份 .md 合并进来（不覆盖已有内容）。所以「换个会话接着用」= 导出 + 在新会话导入。
+ *
+ * 防覆盖：编辑期间后台可能又整理了记忆。草稿不会被推来的新内容冲掉，保存时带上开始编辑时的
+ * base，由 core 做三方合并。每次改写前的旧内容都留有历史版本，可以在「历史版本」里恢复。
  */
 
 import { useEffect, useState } from "react";
 // 记忆用 NotebookPen（Brain 归「思考过程」独占，见 ToolCallItem 的 MemoryUpdatedRow 注释）
-import { NotebookPen, Download, History, Upload, X } from "lucide-react";
+import { NotebookPen, Download, History, Upload, X, RotateCcw } from "lucide-react";
 import { getSession, listSessions, type SessionMeta } from "@/lib/apiClient";
+import type { MemoryVersion } from "./eventHandlers/types";
 
 export interface MemoryPanelProps {
   memory: string;
-  /** 保存到会话（走 set_memory 命令，core 落盘后会回推最新内容） */
-  onSave: (content: string) => void;
+  /** 历史版本（新的在前），点开「历史版本」时通过 onRequestHistory 拉取 */
+  history: MemoryVersion[];
+  /**
+   * 保存到会话（走 set_memory 命令，core 合并、落盘后回推最新内容）。
+   * 编辑保存带 base（开始编辑时的记忆），导入用 mode=merge。
+   */
+  onSave: (content: string, opts?: { base?: string; mode?: "replace" | "merge" }) => void;
+  onRequestHistory: () => void;
+  onRestore: (at: number) => void;
   onClose: () => void;
 }
 
-export function MemoryPanel({ memory, onSave, onClose }: MemoryPanelProps) {
+/** 历史版本是「被谁改写之前」的内容 */
+const SOURCE_LABEL: Record<string, string> = {
+  auto: "后台整理前",
+  model: "AI 写入前",
+  user: "你保存前",
+  import: "导入前",
+  restore: "恢复前",
+};
+
+function formatTime(at: number): string {
+  const d = new Date(at);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getMonth() + 1}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+export function MemoryPanel({ memory, history, onSave, onRequestHistory, onRestore, onClose }: MemoryPanelProps) {
   const [draft, setDraft] = useState(memory);
+  /** 开始编辑时的记忆：保存时交给 core 做三方合并的基准 */
+  const [base, setBase] = useState(memory);
+  /** 编辑期间后台改过记忆（草稿没被冲掉，保存时会合并） */
+  const [remoteChanged, setRemoteChanged] = useState(false);
+  const [viewingHistory, setViewingHistory] = useState(false);
+  const [openVersion, setOpenVersion] = useState<number | null>(null);
   /** 空态下点「手动撰写」进入编辑；已有内容时默认就是编辑态 */
   const [editing, setEditing] = useState(false);
   // 「从会话导入」：列出已沉淀过记忆的会话，选中后把那份记忆取回来
@@ -30,10 +62,35 @@ export function MemoryPanel({ memory, onSave, onClose }: MemoryPanelProps) {
   const [pickingBusy, setPickingBusy] = useState(false);
   const [pickError, setPickError] = useState("");
 
-  // 面板开着的时候模型可能又写了一次记忆：同步进草稿，避免用户基于旧内容编辑
-  useEffect(() => setDraft(memory), [memory]);
+  const dirty = draft !== base;
 
-  const dirty = draft !== memory;
+  // 面板开着的时候后台可能又整理了一次记忆：没在编辑就直接同步；正在编辑就保留草稿，
+  // 只提示一下——早先这里无条件 setDraft，用户没保存的编辑会被整份冲掉。
+  useEffect(() => {
+    if (draft === base) {
+      setDraft(memory);
+      setBase(memory);
+      setRemoteChanged(false);
+    } else if (memory !== base) {
+      setRemoteChanged(true);
+    }
+    // 只在 core 推来新内容时触发；draft / base 是本次判断用的快照
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [memory]);
+
+  const save = () => {
+    onSave(draft, { base });
+    // 先把基准挪到草稿上：core 回推合并结果时（内容不同），上面的 effect 会把它同步进来
+    setBase(draft);
+    setRemoteChanged(false);
+  };
+
+  const openHistory = () => {
+    setViewingHistory(true);
+    setPicking(false);
+    setOpenVersion(null);
+    onRequestHistory();
+  };
   /** 什么时候显示正文编辑区：手点过「手动撰写」、已有记忆、或草稿被改过 */
   const showEditor = editing || !!memory.trim() || dirty;
 
@@ -48,13 +105,12 @@ export function MemoryPanel({ memory, onSave, onClose }: MemoryPanelProps) {
   };
 
   /**
-   * 导入即生效：不走「先填草稿、再点保存」两步。
-   * 导入本就是一次性的明确动作，多一步确认只让用户多点一次，
-   * 而内容随时还能在面板里改。
+   * 导入即生效，而且是合并：不走「先填草稿、再点保存」两步，也不整份覆盖已有记忆
+   * （早先导入会把本会话已经攒下的记忆整个冲掉）。合并结果由 core 回推。
    */
   const applyImported = (content: string) => {
-    setDraft(content);
-    onSave(content);
+    if (!content.trim()) return;
+    onSave(content, { mode: "merge" });
     setEditing(true);
   };
 
@@ -118,7 +174,48 @@ export function MemoryPanel({ memory, onSave, onClose }: MemoryPanelProps) {
           </button>
         </div>
 
-        {picking ? (
+        {remoteChanged && !viewingHistory && (
+          <div className="px-4 py-1.5 text-[11px] text-amber-600 dark:text-amber-400 bg-amber-500/10 border-b border-amber-500/20">
+            你编辑期间记忆在后台更新过。直接保存即可：你的改动和后台新写的内容会自动合并。
+          </div>
+        )}
+
+        {viewingHistory ? (
+          <div className="flex-1 min-h-[240px] overflow-y-auto px-2 py-2">
+            {history.length === 0 && (
+              <div className="px-2 py-3 text-[11px] text-muted-foreground/60">
+                还没有历史版本。记忆每被改写一次（后台整理、AI 写入、你保存或导入），改写前的内容都会留一份在这里。
+              </div>
+            )}
+            {history.map((v) => (
+              <div key={v.at} className="rounded hover:bg-muted/40 transition-colors">
+                <button
+                  onClick={() => setOpenVersion(openVersion === v.at ? null : v.at)}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 text-left"
+                >
+                  <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/70">{formatTime(v.at)}</span>
+                  <span className="shrink-0 text-[12px] text-foreground">{SOURCE_LABEL[v.source] || "改写前"}</span>
+                  <span className="flex-1 min-w-0 truncate text-[11px] text-muted-foreground/60">
+                    {v.content.split("\n").find((l) => l.trim() && !l.startsWith("#"))?.trim() || ""}
+                  </span>
+                  <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/60">{v.content.length} 字</span>
+                </button>
+                {openVersion === v.at && (
+                  <div className="px-2 pb-2">
+                    <pre className="max-h-56 overflow-y-auto whitespace-pre-wrap rounded border border-border bg-muted/30 px-3 py-2 text-[11.5px] leading-relaxed text-foreground/80">{v.content}</pre>
+                    <button
+                      onClick={() => { onRestore(v.at); setViewingHistory(false); }}
+                      className="mt-1.5 flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      恢复到这个版本
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : picking ? (
           <div className="flex-1 min-h-[240px] overflow-y-auto px-2 py-2">
             {pickingBusy && <div className="px-2 py-3 text-[11px] text-muted-foreground/60">读取中…</div>}
             {pickError && <div className="px-2 py-3 text-[11px] text-destructive">{pickError}</div>}
@@ -188,7 +285,7 @@ export function MemoryPanel({ memory, onSave, onClose }: MemoryPanelProps) {
           </div>
         )}
 
-        {(showEditor || picking) && (
+        {(showEditor || picking || viewingHistory) && (
         <div className="flex items-center gap-2 px-4 py-2.5 border-t border-border/60">
           <label className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 cursor-pointer transition-colors">
             <Upload className="w-3.5 h-3.5" />
@@ -206,7 +303,14 @@ export function MemoryPanel({ memory, onSave, onClose }: MemoryPanelProps) {
             />
           </label>
           <button
-            onClick={() => (picking ? setPicking(false) : void openPicker())}
+            onClick={() => (viewingHistory ? setViewingHistory(false) : openHistory())}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            {viewingHistory ? "返回" : "历史版本"}
+          </button>
+          <button
+            onClick={() => (picking ? setPicking(false) : (setViewingHistory(false), void openPicker()))}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
           >
             <History className="w-3.5 h-3.5" />
@@ -224,8 +328,8 @@ export function MemoryPanel({ memory, onSave, onClose }: MemoryPanelProps) {
             {draft.trim() ? `${draft.length} 字` : "空"}
           </span>
           <button
-            onClick={() => onSave(draft)}
-            disabled={!dirty}
+            onClick={save}
+            disabled={!dirty || viewingHistory}
             className="px-3 py-1 rounded text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 transition-colors"
           >
             保存

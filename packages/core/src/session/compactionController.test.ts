@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 // 压缩本身要调 LLM，这里只关心"压缩后如何落盘"，故把摘要生成替换成确定结果。
-vi.mock("../providers.js", () => ({ getStrategy: () => ({}) }));
+vi.mock("../providers.js", () => ({ getStrategy: () => ({}), declaredThinkingFor: () => undefined }));
 vi.mock("../compactor.js", () => ({
   needsCompaction: (total: number, max = 1_000_000, pct = 0.35) => total > max * pct,
   compactMessages: async (messages: any[]) => [messages[0], { role: "user", content: "摘要" }],
@@ -102,17 +102,18 @@ describe("压缩后的上下文占用落盘", () => {
   });
 });
 
-describe("混合会话记忆策略", () => {
-  it("累计三轮后后台生成一次记忆，且不阻塞收尾调用", async () => {
+describe("后台记忆整理的时机", () => {
+  const base = () => [
+    { role: "system", content: "system" },
+    { role: "user", content: "设计工作区" },
+    { role: "assistant", content: "完成" },
+  ];
+
+  it("累计两个用户回合后后台整理一次", async () => {
     vi.mocked(generateSessionMemory).mockClear();
-    const { s } = makeSession([
-      { role: "system", content: "system" },
-      { role: "user", content: "设计工作区" },
-      { role: "assistant", content: "完成" },
-    ]);
+    const { s } = makeSession(base());
     const controller = new CompactionController(s);
 
-    await controller.maybeRefreshMemoryAfterTurn(1000);
     await controller.maybeRefreshMemoryAfterTurn(1000);
     expect(generateSessionMemory).not.toHaveBeenCalled();
 
@@ -121,5 +122,51 @@ describe("混合会话记忆策略", () => {
     expect(s.applyMemoryUpdates).toHaveBeenCalledWith(expect.arrayContaining([
       expect.objectContaining({ key: "auto-memory", content: "自动合并后的记忆" }),
     ]));
+  });
+
+  it("用户交代长期约定（以后 / 记住 / 统一…）时当轮就整理", async () => {
+    vi.mocked(generateSessionMemory).mockClear();
+    const { s } = makeSession([
+      { role: "system", content: "system" },
+      { role: "user", content: "以后提交信息都用中文" },
+      { role: "assistant", content: "好的" },
+    ]);
+    await new CompactionController(s).maybeRefreshMemoryAfterTurn(500);
+    expect(generateSessionMemory).toHaveBeenCalledTimes(1);
+  });
+
+  it("每次只交给模型上次整理之后的新消息", async () => {
+    vi.mocked(generateSessionMemory).mockClear();
+    const { s } = makeSession(base());
+    const controller = new CompactionController(s);
+    await controller.maybeRefreshMemoryAfterTurn(1000);
+    await controller.maybeRefreshMemoryAfterTurn(1000);
+    const first = vi.mocked(generateSessionMemory).mock.calls[0][1] as any[];
+    expect(first.map((m) => m.content)).toEqual(["设计工作区", "完成"]);
+
+    s.messages.push({ role: "user", content: "再加个导出按钮" }, { role: "assistant", content: "加好了" });
+    s.messages.push({ role: "user", content: "颜色改成灰色" }, { role: "assistant", content: "改好了" });
+    await controller.maybeRefreshMemoryAfterTurn(1000);
+    await controller.maybeRefreshMemoryAfterTurn(1000);
+    const second = vi.mocked(generateSessionMemory).mock.calls[1][1] as any[];
+    expect(second.map((m) => m.content)).toEqual(["再加个导出按钮", "加好了", "颜色改成灰色", "改好了"]);
+  });
+
+  it("压缩时用压缩前尚未整理的原文整理记忆，之后游标落到压缩后的末尾", async () => {
+    vi.mocked(generateSessionMemory).mockClear();
+    const messages = bigHistory();
+    const { s } = makeSession(messages);
+    const controller = new CompactionController(s);
+    await controller.forceCompactSession();
+    const used = vi.mocked(generateSessionMemory).mock.calls[0][1] as any[];
+    expect(used).toHaveLength(10);
+    expect(used.every((m) => m.role === "user")).toBe(true);
+
+    // 压缩后只新增一轮：下一次整理只看这一轮
+    s.messages.push({ role: "user", content: "新问题" }, { role: "assistant", content: "新回答" });
+    await controller.maybeRefreshMemoryAfterTurn(1000);
+    await controller.maybeRefreshMemoryAfterTurn(1000);
+    const next = vi.mocked(generateSessionMemory).mock.calls[1][1] as any[];
+    expect(next.map((m) => m.content)).toEqual(["新问题", "新回答"]);
   });
 });

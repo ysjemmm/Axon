@@ -240,7 +240,9 @@ export type AgentEventPayload =
   // ── 闪电回滚 ──
   | { type: "snapshots_listed"; snapshots: Array<{ id: string; createdAt: number; label: string; files: string[] }> }
   /** 会话记忆的最新内容：模型调用 update_memory 或用户导入 .md 之后推送 */
-  | { type: "session_memory"; memory: string }
+  | { type: "session_memory"; memory: string; historyCount?: number }
+  /** 记忆的历史版本（新的在前）；content 为该版本被替换前的完整内容 */
+  | { type: "memory_history"; versions: Array<{ at: number; source: string; content: string }> }
   | { type: "snapshot_restored"; snapshotId: string; ok: boolean }
   // ── 模型历史格式不兼容（deepseek 输出 DSML 退化）──
   | { type: "tool_history_mismatch"; model: string }

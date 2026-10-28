@@ -152,8 +152,16 @@ export type ControlCommandPayload =
   | { type: "undo_edits"; path: string }
   // 闪电回滚
   | { type: "list_snapshots" }
-  /** 导入记忆：把一份 .md 的内容写进当前会话（前端导入文件后发这条） */
-  | { type: "set_memory"; memory: string }
+  /**
+   * 保存 / 导入会话记忆。
+   * mode=merge：导入（.md、别的会话），合并进当前记忆；mode=replace（默认）：编辑后保存，
+   * base 是开始编辑时的记忆，后台期间改过记忆时据此三方合并。
+   */
+  | { type: "set_memory"; memory: string; base?: string; mode?: "replace" | "merge" }
+  /** 取记忆的历史版本（回 memory_history 事件） */
+  | { type: "get_memory_history" }
+  /** 恢复记忆到某个历史版本（at 为版本时间戳） */
+  | { type: "restore_memory_version"; at: number }
   | { type: "restore_snapshot"; snapshotId: string }
   // 按需取某次改动的前后全文（会话快照里只下发路径与 editId，打开 diff 时再取正文）。
   // requestId 原样回带在 diff_content 事件上，前端据此配对请求。

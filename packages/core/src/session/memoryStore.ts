@@ -107,6 +107,45 @@ export function renderMemoryMarkdown(blocks: MemoryBlock[]): string {
     .trim();
 }
 
+/**
+ * 按 key 找已有块。
+ *
+ * 精确 key 优先；其次允许用 section 名（如 todos）指向【标准章节块】（标题就是「待办」这类
+ * 章节名的块）——旧 Markdown 的 key 是中文标题，模型常用稳定的 section key。
+ * 只认标准章节块，不认「section 恰好相同的任意块」：早先那样做，模型一个 upsert key=status
+ * 就会把第一个 status 类的块整块换掉，正是「记忆丢了」的来源之一。
+ */
+function findTarget(blocks: Map<string, MemoryBlock>, list: MemoryBlock[], key: string): MemoryBlock | undefined {
+  const exact = blocks.get(key);
+  if (exact) return exact;
+  if (!SECTION_KEYS.has(key as MemorySection)) return undefined;
+  return list.find((block) => blocks.has(block.key) && block.section === key && SECTION_BY_TITLE[block.title.trim()] === key);
+}
+
+function lineKey(line: string): string {
+  return line.trim().replace(/^[-*+]\s+|^\d+[.)]\s+/, "").replace(/\s+/g, " ");
+}
+
+/** 行级并集：先放 primary 的全部行，再补 secondary 里 primary 没有的行（按去掉列表符号后的文本比较） */
+function unionLines(primary: string, secondary: string): string {
+  const seen = new Set(primary.split("\n").map(lineKey).filter(Boolean));
+  const extra = secondary.split("\n").filter((line) => {
+    const k = lineKey(line);
+    if (!k || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  return [primary.trim(), extra.join("\n").trim()].filter(Boolean).join("\n");
+}
+
+/**
+ * upsert 防丢：新内容不到旧内容一半长时，不整块替换，而是保留旧块里新内容没提到的行。
+ *
+ * 模型做 upsert 时经常只写「这次的新信息」而不是完整的块，整块替换就把之前的细节全冲掉了。
+ * 宁可留几行可能过时的旧条目，也不要丢信息；真正过时的整块用 delete 清理。
+ */
+const UPSERT_SHRINK_RATIO = 0.5;
+
 /** 对同 key 的块做增量更新；删除不存在的 key 是幂等操作。 */
 export function applyMemoryUpdates(markdown: string, updates: MemoryUpdate[]): string {
   const blocks = parseMemoryMarkdown(markdown);
@@ -115,11 +154,11 @@ export function applyMemoryUpdates(markdown: string, updates: MemoryUpdate[]): s
 
   for (const update of updates) {
     const key = normalizeKey(update.key || update.title || "memory");
-    // 兼容旧 Markdown：旧标题 `## 待办` 的 key 是中文标题，但新协议常用稳定 section key `todos`。
-    // 优先精确 key，其次按 section 找已有块，避免 append 生成重复章节、delete 删不到旧章节。
-    const existing = byKey.get(key)
-      || (SECTION_KEYS.has(key as MemorySection) ? blocks.find((block) => block.section === key) : undefined);
-    const targetKey = existing?.key || key;
+    // key 对不上但标题相同 → 同一个块（模型常给已有块另起一个英文 key），不要生成重复章节
+    const existing = findTarget(byKey, blocks, key)
+      || (update.title ? byKey.get(normalizeKey(update.title)) : undefined);
+    // 落盘的 Markdown 只有标题，下次解析时 key 由标题推出；新块直接用标题推出的 key，前后才一致
+    const targetKey = existing?.key || (update.title ? normalizeKey(update.title) : key);
     if (update.action === "delete") {
       byKey.delete(targetKey);
       continue;
@@ -128,19 +167,79 @@ export function applyMemoryUpdates(markdown: string, updates: MemoryUpdate[]): s
     const section = update.section || existing?.section || "other";
     const content = String(update.content || "").trim();
     if (!content && !existing) continue;
-    const next: MemoryBlock = {
-      key: targetKey,
-      section,
-      title,
-      content: update.action === "append" && existing
-        ? [existing.content.trim(), content].filter(Boolean).join("\n")
-        : content || existing?.content || "",
-    };
-    byKey.set(targetKey, next);
+    let nextContent: string;
+    if (!existing) nextContent = content;
+    else if (!content) nextContent = existing.content;
+    else if (update.action === "append") nextContent = unionLines(existing.content, content);
+    else if (content.length < existing.content.trim().length * UPSERT_SHRINK_RATIO) nextContent = unionLines(content, existing.content);
+    else nextContent = content;
+    byKey.set(targetKey, { key: targetKey, section, title, content: nextContent });
     if (!order.includes(targetKey)) order.push(targetKey);
   }
 
   return renderMemoryMarkdown(order.map((key) => byKey.get(key)).filter((block): block is MemoryBlock => !!block));
+}
+
+/**
+ * 把一份外来记忆（导入的 .md、别的会话的记忆）合并进当前记忆，而不是整份替换。
+ * 同标题的块做行级并集，新标题的块追加在后面。
+ */
+export function mergeMemoryMarkdown(current: string, incoming: string): string {
+  const base = parseMemoryMarkdown(current);
+  if (base.length === 0) return renderMemoryMarkdown(parseMemoryMarkdown(incoming));
+  const byKey = new Map(base.map((block) => [block.key, block]));
+  const order = base.map((block) => block.key);
+  for (const block of parseMemoryMarkdown(incoming)) {
+    const existing = byKey.get(block.key);
+    if (existing) {
+      byKey.set(block.key, { ...existing, content: unionLines(existing.content, block.content) });
+    } else {
+      byKey.set(block.key, block);
+      order.push(block.key);
+    }
+  }
+  return renderMemoryMarkdown(order.map((key) => byKey.get(key)).filter((block): block is MemoryBlock => !!block));
+}
+
+/**
+ * 用户保存的三方合并：用户基于 base 编辑出 draft，期间后台可能已经把记忆改成了 current。
+ *
+ * 直接用 draft 覆盖会冲掉后台新写的块；直接丢弃 draft 又丢了用户的编辑。按块合并：
+ * · 用户改过 / 新增的块 → 用 draft 的；用户删掉的块 → 删除
+ * · 用户没动的块 → 用 current 的（保留后台的更新）
+ * · 后台新增的块 → 保留
+ */
+export function threeWayMergeMemory(base: string, current: string, draft: string): string {
+  if (base === current) return draft;
+  const baseBlocks = new Map(parseMemoryMarkdown(base).map((block) => [block.key, block]));
+  const currentBlocks = parseMemoryMarkdown(current);
+  const draftBlocks = parseMemoryMarkdown(draft);
+  const draftByKey = new Map(draftBlocks.map((block) => [block.key, block]));
+
+  const result: MemoryBlock[] = [];
+  const emitted = new Set<string>();
+  // 以用户的顺序为主：用户可能调整了块顺序
+  for (const block of draftBlocks) {
+    const before = baseBlocks.get(block.key);
+    const userChanged = !before || before.content !== block.content || before.title !== block.title;
+    const now = currentBlocks.find((b) => b.key === block.key);
+    result.push(userChanged || !now ? block : now);
+    emitted.add(block.key);
+  }
+  for (const block of currentBlocks) {
+    if (emitted.has(block.key)) continue;
+    const deletedByUser = baseBlocks.has(block.key) && !draftByKey.has(block.key);
+    if (deletedByUser) continue;
+    result.push(block);
+  }
+  return renderMemoryMarkdown(result);
+}
+
+/** 给记忆生成模型看的版本：每个块标出 key，模型据此精确更新已有块，而不是另起一个重复的块 */
+export function renderMemoryForModel(markdown: string): string {
+  return parseMemoryMarkdown(markdown)
+    .map((block) => `## ${block.title}  〔key: ${block.key}〕\n\n${block.content}`)
+    .join("\n\n");
 }
 
 /** 从模型 JSON 中提取更新数组，容忍 ```json 包裹和多余说明。 */
