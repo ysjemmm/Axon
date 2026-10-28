@@ -152,3 +152,23 @@ describe("缓存友好模型：上下文注入锚在本轮用户消息之前", (
     expect(req.at(-1)?._screenshotInjection).toBe(true);
   });
 });
+
+describe("工作区 .axon 注入", () => {
+  it("缓存友好模型：随本轮注入锚在用户消息之前", () => {
+    const s = makeSession({ workspaceAxonPromptCache: "AXON RULES" });
+    startTurn(s, "开始");
+    toolStep(s);
+    const req = s.promptBuilder.buildRequestMessages();
+    const userIdx = req.findIndex((m: any) => m.role === "user");
+    expect(req.slice(1, userIdx).map((m: any) => m.content)).toContain("AXON RULES");
+    expect(req.at(-1)).toMatchObject({ role: "tool" });
+  });
+
+  it("非缓存友好模型：buildInjections 里是完整的 system 消息（没有 undefined）", () => {
+    const s = makeSession({ model: "claude-opus-5.5", workspaceAxonPromptCache: "AXON RULES" });
+    const injections = s.promptBuilder.buildInjections();
+    expect(injections.every((m: any) => m && m.role === "system")).toBe(true);
+    expect(injections.map((m: any) => m.content)).toContain("AXON RULES");
+    expect(s.promptBuilder.buildRequestMessages().every((m: any) => m)).toBe(true);
+  });
+});
