@@ -2196,6 +2196,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                     overflow={session.contextOverflow}
                     replying={session.isLoading}
                     onCompact={() => session.compactSession()}
+                    breakdown={session.tokenUsage.breakdown}
                   />
 
                   <input

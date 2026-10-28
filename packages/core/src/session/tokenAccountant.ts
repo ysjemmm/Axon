@@ -21,6 +21,7 @@
  */
 
 import type { AgentSession } from "../agentSession.js";
+import { MCP_TOOL_PREFIX } from "../mcp/types.js";
 import { messageText } from "./promptBuilder.js";
 import {
   estimateTokensFromText,
@@ -75,11 +76,67 @@ export class TokenAccountant {
    */
   updateAndSendTokenUsage(): void {
     const total = this.recomputeTokenUsage();
+    let breakdown: ContextBreakdown | undefined;
+    try { breakdown = this.buildContextBreakdown(); } catch { /* 拆分失败只少一块明细，不影响总量 */ }
     this.s.send("token_usage", {
       used: total,
       max: this.s.getContextWindow(),
       cumulative: this.s.cumulativeTokens, // 本任务累计消耗（含子 Agent），与 used（当前上下文占用）区分
+      ...(breakdown ? { breakdown } : {}),
     });
+  }
+
+  /**
+   * 当前上下文占用按来源拆分（上下文面板的明细）。
+   *
+   * 各项用与总量同一套本地估算，再按「总量 ÷ 各项之和」统一缩放（总量带了端点校准系数），
+   * 保证各项加起来正好等于界面显示的「已使用」，不会出现明细加和对不上总数。
+   */
+  buildContextBreakdown(): ContextBreakdown {
+    const sum: Record<ContextCategoryKey, number> = {
+      messages: 0, systemTools: 0, mcpTools: 0, skills: 0, memory: 0, systemPrompt: 0, injections: 0,
+    };
+    if (this.s.messages[0]) sum.systemPrompt = estimateTokensFromText(messageText(this.s.messages[0]));
+    try {
+      for (const inj of this.s.promptBuilder.listInjections()) {
+        const tokens = estimateTokensFromText(inj.content);
+        if (inj.key === "skills" || inj.key === "powers") sum.skills += tokens;
+        else if (inj.key === "memory") sum.memory += tokens;
+        else sum.injections += tokens;
+      }
+    } catch { /* 注入构建失败不影响其余各项 */ }
+
+    const mcpTools: ContextBreakdown["mcpTools"] = [];
+    try {
+      const defs = this.s.getToolDefs() as Array<{ function?: { name?: string } }>;
+      const builtin: unknown[] = [];
+      for (const def of defs) {
+        const name = def?.function?.name || "";
+        if (name.startsWith(MCP_TOOL_PREFIX)) {
+          const tokens = estimateToolDefsTokens([def]);
+          const meta = this.s.mcpMetaFor(name);
+          mcpTools.push({ name, server: meta.mcpServer || "", tool: meta.mcpTool || name, tokens });
+          sum.mcpTools += tokens;
+        } else {
+          builtin.push(def);
+        }
+      }
+      sum.systemTools = estimateToolDefsTokens(builtin);
+    } catch { /* 同上 */ }
+
+    sum.messages = estimateChatMessagesTokens(this.s.messages.slice(1));
+
+    const raw = Object.values(sum).reduce((a, b) => a + b, 0);
+    const scale = raw > 0 && this.s.lastTotalTokens > 0 ? this.s.lastTotalTokens / raw : 1;
+    const window = this.s.getContextWindow();
+    return {
+      categories: CONTEXT_CATEGORY_ORDER.map((key) => ({ key, tokens: Math.round(sum[key] * scale) })),
+      mcpTools: mcpTools
+        .map((t) => ({ ...t, tokens: Math.round(t.tokens * scale) }))
+        .sort((a, b) => b.tokens - a.tokens),
+      autoCompactAt: Math.round(window * AUTO_COMPACT_RATIO),
+      manualCompactAt: Math.round(window * MANUAL_COMPACT_RATIO),
+    };
   }
 
   /**
@@ -248,4 +305,24 @@ export class TokenAccountant {
   private estimateContextTokens(): number {
     return this.estimateSystemTokens() + estimateChatMessagesTokens(this.s.messages.slice(1));
   }
+}
+
+/** 上下文面板里的来源分类（顺序即面板里的显示顺序） */
+export type ContextCategoryKey = "messages" | "systemTools" | "mcpTools" | "skills" | "memory" | "systemPrompt" | "injections";
+const CONTEXT_CATEGORY_ORDER: ContextCategoryKey[] = ["messages", "systemTools", "mcpTools", "skills", "memory", "systemPrompt", "injections"];
+
+/** 自动压缩（询问用户）的触发比例，与 compactionController.maybeAutoCompactBeforeTurn 一致 */
+const AUTO_COMPACT_RATIO = 0.75;
+/** 手动压缩的最低比例，与 compactionController.compactSession 一致 */
+const MANUAL_COMPACT_RATIO = 0.35;
+
+export interface ContextBreakdown {
+  /** 各来源占用（已按总量缩放，加和等于 used） */
+  categories: Array<{ key: ContextCategoryKey; tokens: number }>;
+  /** 每个 MCP 工具定义的占用（降序） */
+  mcpTools: Array<{ name: string; server: string; tool: string; tokens: number }>;
+  /** 达到这个占用时自动压缩（询问用户） */
+  autoCompactAt: number;
+  /** 达到这个占用才允许手动压缩 */
+  manualCompactAt: number;
 }

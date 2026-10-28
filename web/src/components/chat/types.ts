@@ -239,3 +239,22 @@ export interface ChatPanelProps {
   onSessionForked?: (newSessionId: string, sourceId?: string) => void;
   onStreamingChange?: (streaming: boolean) => void;
 }
+
+/** 上下文占用的来源分类（与后端 TokenAccountant 的 ContextCategoryKey 一致） */
+export type ContextCategoryKey = "messages" | "systemTools" | "mcpTools" | "skills" | "memory" | "systemPrompt" | "injections";
+
+/** 上下文占用按来源拆分（token_usage 事件的 breakdown） */
+export interface ContextBreakdown {
+  categories: Array<{ key: ContextCategoryKey; tokens: number }>;
+  mcpTools: Array<{ name: string; server: string; tool: string; tokens: number }>;
+  autoCompactAt: number;
+  manualCompactAt: number;
+}
+
+/** 上下文用量（圆环与明细面板） */
+export interface TokenUsageState {
+  used: number;
+  max: number;
+  cumulative: number;
+  breakdown?: ContextBreakdown;
+}

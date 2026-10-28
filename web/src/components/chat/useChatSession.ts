@@ -14,6 +14,7 @@ import { STORAGE, TIMEOUT, CONTROL_CMD } from "@/lib/constants";
 // 鎷嗗垎鍚庣殑妯″潡
 import { createEventHandler } from "./eventHandlers";
 import type { EventHandlerCtx, MemoryVersion } from "./eventHandlers/types";
+import type { TokenUsageState } from "./types";
 import { sealReasoning } from "./reasoningPlacement";
 import { useTypewriter } from "./useTypewriter";
 import { useToolCallQueue } from "./useToolCallQueue";
@@ -84,7 +85,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingSession, setIsLoadingSession] = useState(!!sessionId);
-  const [tokenUsage, setTokenUsage] = useState<{ used: number; max: number; cumulative: number }>(() => {
+  const [tokenUsage, setTokenUsage] = useState<TokenUsageState>(() => {
     const savedModel = readStoredModelId();
     const currentModel = findModel(savedModel);
     return { used: 0, max: currentModel?.contextWindow || TIMEOUT.DEFAULT_CONTEXT_WINDOW, cumulative: 0 };

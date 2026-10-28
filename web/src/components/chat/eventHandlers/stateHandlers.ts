@@ -115,6 +115,7 @@ export function handleTokenUsage(msg: WsMessage, ctx: EventHandlerCtx): void {
     used: msg.used as number,
     max: msg.max as number,
     cumulative: (msg as any).cumulative ?? 0,
+    breakdown: (msg as any).breakdown,
   });
 }
 

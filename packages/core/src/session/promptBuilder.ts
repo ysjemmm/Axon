@@ -472,6 +472,11 @@ export class PromptBuilder {
       .map(({ key, message }) => ({ key, content: messageText(message) }));
   }
 
+  /** 本轮全部注入（含使用率提醒）的 key 与文本，供上下文用量按来源拆分 */
+  listInjections(): ContextInjection[] {
+    return this.buildKeyedInjections().map(({ key, message }) => ({ key, content: messageText(message) }));
+  }
+
   /** 构建本轮要注入的 system 消息（长度校准/验证/多工作区/IDE/skill/power），供请求组装与 token 估算复用 */
   buildInjections(): ChatCompletionMessageParam[] {
     return this.buildKeyedInjections().map(({ message }) => message);

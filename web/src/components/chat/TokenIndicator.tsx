@@ -1,17 +1,17 @@
 /**
- * 上下文使用率圆环 —— 同时承担「手动压缩」入口。
+ * 上下文使用率圆环 + 悬停明细面板（ContextUsagePanel）。
  *
- * 早先工具栏里是两个相邻控件：只读的圆环 + 一个单独的压缩按钮（Minimize2）。
- * 两者说的是同一件事（上下文满了多少 / 要不要压），分开放既占宽度，
- * 又让用户去猜那个小箭头图标是什么意思。现在合成一个：
- *   · 常态：圆环显示用量，hover 看明细；可压缩时点击即压缩
- *   · 压缩中（手动 / 自动都算）：圆环播放流转动画，禁止点击
- *   · 不可压缩（用量不足 35% / 已超限走顶部横幅 / AI 正在回复中）：只读，tooltip 说明原因
+ *   · 圆环只负责显示用量；悬停弹出明细面板，手动压缩的唯一入口是面板里的「压缩会话」按钮
+ *     （早先点圆环就直接压缩，面板里有了按钮后两个入口并存，点一下圆环看明细却触发了压缩）
+ *   · 压缩中（手动 / 自动都算）：圆环播放流转动画，按钮禁用
+ *   · 不可压缩（用量不足 35% / 已超限走顶部横幅 / AI 正在回复中）：按钮禁用，面板里写明原因
  */
 
-import { Activity, Minimize2 } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatTokenCount } from "./format";
+import { Activity } from "lucide-react";
+import { Tooltip as TooltipPrimitive } from "radix-ui";
+import { Tooltip, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ContextUsagePanel } from "./ContextUsagePanel";
+import type { ContextBreakdown } from "./types";
 
 /** 手动压缩门槛：用量未达窗口的这个比例时没有可压的东西（与后端 compactionController 一致） */
 const MANUAL_COMPACT_MIN_RATIO = 0.35;
@@ -30,9 +30,11 @@ interface TokenIndicatorProps {
   replying?: boolean;
   /** 点击压缩。不传则圆环只读 */
   onCompact?: () => void;
+  /** 占用按来源拆分（悬停面板的明细） */
+  breakdown?: ContextBreakdown;
 }
 
-export function TokenIndicator({ used, max, compacting = false, compactingMessage, overflow = false, replying = false, onCompact }: TokenIndicatorProps) {
+export function TokenIndicator({ used, max, compacting = false, compactingMessage, overflow = false, replying = false, onCompact, breakdown }: TokenIndicatorProps) {
   const hasMax = max > 0;
   const ratio = hasMax ? Math.min(used / max, 1) : 0;
   const percent = ratio * 100;
@@ -63,22 +65,19 @@ export function TokenIndicator({ used, max, compacting = false, compactingMessag
         ? `用量未达 ${MANUAL_COMPACT_MIN_RATIO * 100}%，暂无需压缩`
         : replying
           ? "AI 正在回复中，回复结束后可压缩上下文"
-          : onCompact
-            ? "点击压缩上下文"
-            : null;
+          : null;
 
   return (
-    <TooltipProvider>
+    <TooltipProvider delayDuration={150}>
       <Tooltip>
         <TooltipTrigger asChild>
           <button
             type="button"
-            onClick={() => { if (canCompact) onCompact?.(); }}
-            // 用 aria-disabled 而不是 disabled：disabled 的按钮不触发 hover，tooltip（用量明细）就看不到了
-            aria-disabled={!canCompact}
             aria-busy={compacting}
-            aria-label={compacting ? "正在压缩上下文" : `上下文已用 ${Math.ceil(percent)}%${canCompact ? "，点击压缩" : ""}`}
-            className={`group relative inline-flex items-center justify-center h-7 w-7 shrink-0 rounded-md transition-colors ${canCompact ? "cursor-pointer hover:bg-muted/60" : "cursor-default"}`}
+            aria-label={compacting ? "正在压缩上下文" : `上下文已用 ${Math.ceil(percent)}%，悬停查看明细`}
+            // Radix tooltip 默认点一下触发器就收起：圆环不再承担点击动作，点它时保持面板打开
+            onClick={(e) => e.preventDefault()}
+            className="relative inline-flex items-center justify-center h-7 w-7 shrink-0 rounded-md cursor-default transition-colors hover:bg-muted/60"
           >
             <svg width={size} height={size} className="rotate-[-90deg]" aria-hidden>
               {/* 背景圆环 */}
@@ -121,30 +120,32 @@ export function TokenIndicator({ used, max, compacting = false, compactingMessag
                 />
               )}
             </svg>
-            {/* 中心图标：可压缩时 hover 换成压缩图标，提示"这里能点" */}
             {/* 中心图标 10px：圆环内径只有 16px，图标再大就顶到环上 */}
-            <Activity
-              className={`w-2.5 h-2.5 absolute transition-opacity ${compacting ? "text-blue-500 animate-pulse" : "text-muted-foreground"} ${canCompact ? "group-hover:opacity-0" : ""}`}
-            />
-            {canCompact && (
-              <Minimize2 className="w-2.5 h-2.5 absolute text-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-            )}
+            <Activity className={`w-2.5 h-2.5 absolute ${compacting ? "text-blue-500 animate-pulse" : "text-muted-foreground"}`} />
           </button>
         </TooltipTrigger>
-        <TooltipContent side="top" align="end" className="p-0 border-zinc-700 bg-zinc-900 text-white shadow-xl">
-          <div className="w-56 text-xs">
-            <div className="px-3 pt-2.5 pb-1.5 font-medium text-sm text-white">Context usage</div>
-            <div className="px-3 py-1.5 flex justify-between font-medium text-zinc-200">
-              <span>已用</span>
-              <span>{hasMax ? `${Math.ceil(percent)}%（${formatTokenCount(used)} / ${formatTokenCount(max)}）` : formatTokenCount(used)}</span>
-            </div>
-            {compactStatus && (
-              <div className={`px-3 pt-1.5 pb-2.5 border-t border-zinc-700/70 ${canCompact ? "text-white" : "text-zinc-400"}`}>
-                {compactStatus}
-              </div>
-            )}
-          </div>
-        </TooltipContent>
+        {/* 明细面板：悬停圆环弹出。不用封装好的 TooltipContent：它带深色底和小箭头，
+            这里要的是与正文同色系的卡片；面板里有可点的按钮和可展开的列表，Radix 的
+            tooltip 默认允许鼠标移进内容区，移进去不会关。 */}
+        <TooltipPrimitive.Portal>
+          <TooltipPrimitive.Content
+            side="top"
+            align="end"
+            sideOffset={8}
+            collisionPadding={8}
+            className="z-50 rounded-xl border border-border bg-popover px-4 py-3.5 text-popover-foreground shadow-lg data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
+          >
+            <ContextUsagePanel
+              used={used}
+              max={max}
+              breakdown={breakdown}
+              canCompact={canCompact}
+              compacting={compacting}
+              compactStatus={compactStatus}
+              onCompact={() => { if (canCompact) onCompact?.(); }}
+            />
+          </TooltipPrimitive.Content>
+        </TooltipPrimitive.Portal>
       </Tooltip>
     </TooltipProvider>
   );

@@ -7,7 +7,7 @@
 
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { WsMessage } from "@/hooks/useWebSocket";
-import type {
+import type { TokenUsageState,
   ChatMessage,
 } from "../types";
 import type { CommandApproval } from "../useChatSession";
@@ -22,7 +22,7 @@ export interface EventHandlerCtx {
   setStatusPhase: (p: string) => void;
   setIsLoading: (b: boolean) => void;
   setIsLoadingSession: (b: boolean) => void;
-  setTokenUsage: Dispatch<SetStateAction<{ used: number; max: number; cumulative: number }>>;
+  setTokenUsage: Dispatch<SetStateAction<TokenUsageState>>;
   setReasoning: (s: string | ((prev: string) => string)) => void;
   setWorkspace: (s: string) => void;
   setWorkspaces: (s: string[]) => void;

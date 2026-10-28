@@ -121,7 +121,14 @@ export type AgentEventPayload =
   | { type: "cowork_outputs"; paths: string[]; files?: { path: string; kind?: "created" | "edited"; snapshotDir?: string }[] }
 
   // ── token 用量 ──
-  | { type: "token_usage"; used: number; max: number; cumulative?: number }
+  | { type: "token_usage"; used: number; max: number; cumulative?: number;
+      /** 占用按来源拆分（上下文面板明细），见 TokenAccountant.buildContextBreakdown */
+      breakdown?: {
+        categories: Array<{ key: string; tokens: number }>;
+        mcpTools: Array<{ name: string; server: string; tool: string; tokens: number }>;
+        autoCompactAt: number;
+        manualCompactAt: number;
+      } }
 
   // ── 命令信任（execute_command 白名单 / 人工授权） ──
   | {
