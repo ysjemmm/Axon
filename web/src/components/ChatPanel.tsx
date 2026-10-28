@@ -8,6 +8,8 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
+import { SESSION_HEADER_SLOT_ID } from "./SessionSwitcher";
 import { Loader2, ImagePlus, X, Paperclip, Plus, Camera, ChevronDown, ListChecks, Globe, NotebookPen, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -507,6 +509,23 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     }
     return map;
   }, [session.chatHistory]);
+  /** 提问目录（标题栏按钮）的条目 */
+  const userQuestions = useMemo(() => session.chatHistory
+    .filter((m) => m.role === "user")
+    .map((m) => ({
+      id: m.id,
+      text: questionTextById.get(m.id) || "",
+      timestamp: m.timestamp,
+      hasImage: !!(m.images && m.images.length > 0),
+      files: m.attachedFiles?.map((f) => f.name),
+    })), [session.chatHistory, questionTextById]);
+  // 标题栏按钮位：标题栏随 Cowork 开关重新挂载时节点会换，每次渲染后重取（同一节点时 setState 直接跳过）
+  const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- 故意每次渲染后执行：节点换了要跟上
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 读 DOM 节点只能在提交后；同值时 React 不重渲染
+    setHeaderSlot(active ? document.getElementById(SESSION_HEADER_SLOT_ID) : null);
+  });
   const chatHistoryRef = useRef(session.chatHistory);
   const questionTextByIdRef = useRef(questionTextById);
   const hiddenMessageCountRef = useRef(hiddenMessageCount);
@@ -541,6 +560,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
   // sticky user question 检测：基于顶部可见消息 index，在数据数组里往前找最近的用户消息。
   // 不依赖 DOM（虚拟列表会移除滚出视口的元素），所以靠近底部也能稳定显示。
+  // 只在这条提问已经滚出视口上方时显示：提问气泡还在屏幕上（它就是顶部那条）时再钉一遍是重复。
   const handleTopItemChange = useCallback((visibleTopIndex: number) => {
     const history = chatHistoryRef.current;
     const topIndex = visibleTopIndex + hiddenMessageCountRef.current;
@@ -548,7 +568,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     for (let i = Math.min(topIndex, history.length - 1); i >= 0; i--) {
       const m = history[i];
       if (m.role === "user") {
-        current = { id: m.id, text: questionTextByIdRef.current.get(m.id) || "" };
+        if (i < topIndex) current = { id: m.id, text: questionTextByIdRef.current.get(m.id) || "" };
         break;
       }
     }
@@ -1567,44 +1587,54 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             "顶部是 user 消息 / 是 assistant 消息"的边界，所以滚着滚着就触发。
             改成覆盖在列表顶部后，视口高度与它是否出现无关。 */}
         {stickyQuestion && (
+          <div className="absolute top-0 inset-x-0 z-10 border-b border-border/60 bg-background/90 backdrop-blur-sm">
+            <TooltipProvider delayDuration={400}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => scrollToQuestion(stickyQuestion.id)}
+                    aria-label="跳转到该提问"
+                    className="w-full min-w-0 flex items-center gap-1.5 px-3 py-1.5 text-[11.5px] text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <ChevronDown className="w-3 h-3 shrink-0 text-muted-foreground/70 rotate-180" />
+                    <span className="truncate text-left">{stickyQuestion.text}</span>
+                  </button>
+                </TooltipTrigger>
+                {/* 提问较长时条里只露一行：悬停看全文 */}
+                <TooltipContent side="bottom" align="start" className="max-w-[min(480px,calc(100vw-32px))] whitespace-pre-wrap break-words line-clamp-[12]">
+                  {stickyQuestion.text}
+                  <div className="mt-1 opacity-70">点击跳回这条提问</div>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
+        )}
+        {/* 提问目录：放进标题栏（只有可见的面板渲染），顶部条只负责跳回当前提问 */}
+        {active && headerSlot && userQuestions.length >= 2 && createPortal(
           <Popover open={questionListOpen} onOpenChange={setQuestionListOpen}>
-            <div className={`absolute top-0 inset-x-0 z-10 flex items-center gap-1 bg-background ${questionListOpen ? "" : "shadow-[0_5px_14px_-7px_rgba(0,0,0,0.24)] dark:shadow-[0_5px_14px_-7px_rgba(0,0,0,0.55)]"}`}>
+            <PopoverTrigger asChild>
               <button
-                onClick={() => scrollToQuestion(stickyQuestion.id)}
-                title="跳转到该提问"
-                className="flex-1 min-w-0 flex items-center gap-1.5 px-3 py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+                title="提问目录"
+                aria-label="提问目录"
+                className={`p-1 rounded transition-colors cursor-pointer ${questionListOpen ? "text-foreground bg-muted/60" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
               >
-                <ChevronDown className="w-3.5 h-3.5 shrink-0 text-primary/70 -rotate-90" />
-                <span className="truncate text-left">{stickyQuestion.text}</span>
+                <ListChecks className="w-3.5 h-3.5" />
               </button>
-              <PopoverTrigger asChild>
-                <button
-                  title="查看所有用户问题"
-                  className="p-2 shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
-                >
-                  <ListChecks className="w-3.5 h-3.5" />
-                </button>
-              </PopoverTrigger>
-            </div>
+            </PopoverTrigger>
             <PopoverContent
-              align="start"
+              align="end"
               side="bottom"
-              sideOffset={0}
-              collisionPadding={0}
-              className="!w-[var(--radix-popover-content-available-width)] p-0 max-h-[50vh] flex flex-col rounded-none border-t-0 shadow-lg origin-top data-[state=open]:animate-in data-[state=open]:slide-in-from-top-1 data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:slide-out-to-top-1 data-[state=closed]:fade-out-0 duration-150"
+              sideOffset={6}
+              collisionPadding={8}
+              className="w-[min(420px,calc(100vw-16px))] p-0 max-h-[50vh] flex flex-col"
             >
               <QuestionListPanel
-                questions={session.chatHistory.filter((m) => m.role === "user").map((m) => ({
-                  id: m.id,
-                  text: questionTextById.get(m.id) || "",
-                  timestamp: m.timestamp,
-                  hasImage: !!(m.images && m.images.length > 0),
-                  files: m.attachedFiles?.map((f) => f.name),
-                }))}
+                questions={userQuestions}
                 onSelect={(id) => { setQuestionListOpen(false); scrollToQuestion(id); }}
               />
             </PopoverContent>
-          </Popover>
+          </Popover>,
+          headerSlot,
         )}
         {session.chatHistory.length === 0 ? (
           <>
@@ -1636,7 +1666,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               <>
                 {/* 给顶部覆盖的提问条让位（它 absolute 覆盖在列表上方，见上方注释）。
                     常驻、不随提问条出现与否切换：切换的话列表内容高度又会跟着变，等于把问题原样搬了进来。
-                    高度与提问条一致（py-2 + text-xs 行高 ≈ 32px）。 */}
+                    高度不小于提问条（py-1.5 + 11.5px 行高 ≈ 28px）。 */}
                 <div aria-hidden className="h-8" />
                 {hiddenMessageCount > 0 && (
                   <div className="flex justify-center py-2">

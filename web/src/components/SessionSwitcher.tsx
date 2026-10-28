@@ -18,6 +18,13 @@ import { ChevronDown, Plus, History, X, Check, Loader2, MessagesSquare, CodeXml,
 import type { SessionTab } from "./SessionContainer";
 
 /**
+ * 标题栏里留给当前对话面板的按钮位（目前是「提问目录」）。
+ * 对话面板由 SessionContainer 管理、可能同时挂着多个，只有可见的那个通过 portal 往这里渲染，
+ * 标题栏不用知道面板内部的状态。
+ */
+export const SESSION_HEADER_SLOT_ID = "axon-session-header-slot";
+
+/**
  * 切换器上的三个档位。
  * agent/quest 是同一套界面的两种系统提示与工具集；cowork 会整页接管（面向办公文档），
  * 由上层 App 决定渲染哪一侧，这里只负责发出切换意图。
@@ -153,6 +160,7 @@ export function SessionSwitcher({
             <GitFork className="w-3.5 h-3.5" />
           </button>
         )}
+        <div id={SESSION_HEADER_SLOT_ID} className="flex items-center shrink-0 empty:hidden" />
 
         {/* Chat / Code / Cowork 模式切换：IDE 形态下原本挂在辅助侧栏标题栏，那行已隐藏，由这里接管 */}
         {/* 样式见 index.css 的 .axon-mode-switch（配色与原生标题栏那版一致） */}
