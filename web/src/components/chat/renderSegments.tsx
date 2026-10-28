@@ -22,6 +22,8 @@ import { resolveQueuedWaitingIds } from "./toolCardPhase";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { RetryBlock } from "./RetryBlock";
 import { isRelayTool, relayToolLabel } from "./relayUtils";
+import { ActivityGroup } from "./ActivityGroup";
+import { findActivityRuns } from "./activityGroup";
 
 /** 从展示串行号区间（如 "1300-1415" / "2-EOF"）解析起始行号 */
 function parseRangeStart(range?: string): number | undefined {
@@ -311,6 +313,8 @@ export function renderSegments(
   onAcceptEdit?: (path: string) => void,
   onRejectEdit?: (path: string) => void,
   onUndoEdit?: (path: string) => void,
+  /** groupActivity：把连续的工具 / 思考行包进大折叠行（只在消息顶层开启，组内与子 Agent 内不再嵌套） */
+  options?: { groupActivity?: boolean },
 ): ReactNode[] {
   // 过滤掉不会被渲染的段，避免它们夹在中间打断"连续同类工具"的合并：
   // ① hidden 的 tool 段（软失败的前 N 次重试不展示）
@@ -327,7 +331,28 @@ export function renderSegments(
     return true;
   });
 
-  const nodes: ReactNode[] = [];
+  const allNodes: ReactNode[] = [];
+  // 下面的主循环一律往 nodes 里推；处于折叠组区间时 nodes 指向该组的桶，出区间时整桶包成 ActivityGroup。
+  // 区间是「可分组段」的极大连续段，循环里的同类合并（读文件 / 搜索 / 浏览器……）只会吞并同类段，
+  // 不会越过区间边界，所以按下标切桶是安全的；turn 级的计算（排队判定、文件名消歧、Power 去重）
+  // 仍然基于整条消息的全部段，不受分组影响。
+  let nodes: ReactNode[] = allNodes;
+  const runs = options?.groupActivity ? findActivityRuns(segments) : [];
+  let runIdx = 0;
+  let openRun: { start: number; end: number } | null = null;
+  const closeRun = () => {
+    if (!openRun) return;
+    const run = openRun;
+    const tools = segments.slice(run.start, run.end).filter((s): s is ToolSegment => s.type === "tool");
+    allNodes.push(
+      <ActivityGroup key={`activity-${tools[0]?.id ?? run.start}`} tools={tools} live={!!streaming && run.end === segments.length}>
+        {nodes}
+      </ActivityGroup>,
+    );
+    nodes = allNodes;
+    openRun = null;
+    runIdx++;
+  };
   let i = 0;
 
   // 「待执行」vs「生成中」的判定（判定规则与其理由见 toolCardPhase.ts）。
@@ -376,6 +401,11 @@ export function renderSegments(
   const renderedPowers = new Set<string>();
 
   while (i < segments.length) {
+    if (openRun && i >= openRun.end) closeRun();
+    if (!openRun && runs[runIdx] && i === runs[runIdx].start) {
+      openRun = runs[runIdx];
+      nodes = [];
+    }
     const seg = segments[i];
 
     // 文字段
@@ -777,8 +807,9 @@ export function renderSegments(
     );
     i++;
   }
+  closeRun();
 
-  return nodes;
+  return allNodes;
 }
 
 

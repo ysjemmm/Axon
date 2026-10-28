@@ -9,7 +9,7 @@ import type { EventHandlerCtx, WsMessage } from "./types";
 import { AGENT_EVENT } from "@/lib/constants";
 
 import { handleStreamStart, handleStreamDelta, handleStreamPause, handleStreamEnd } from "./streamHandlers";
-import { handleToolCall, handleToolResult } from "./toolHandlers";
+import { handleToolCall, handleToolResult, handleToolGroupSummary } from "./toolHandlers";
 import {
   handleSessionCreated, handleSessionLoaded, handleSessionError,
   handleCompactingStart, handleCompactionNeeded, handleCompactionMigrated, handleCompactingEnd,
@@ -162,6 +162,9 @@ export function createEventHandler(ctx: EventHandlerCtx): (msg: WsMessage) => vo
         return;
       case AGENT_EVENT.TOOL_HISTORY_MISMATCH:
         handleToolHistoryMismatch(msg, ctx);
+        return;
+      case AGENT_EVENT.TOOL_GROUP_SUMMARY:
+        handleToolGroupSummary(msg, ctx);
         return;
 
       // ── Relay ──

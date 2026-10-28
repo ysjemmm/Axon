@@ -124,7 +124,7 @@ function AssistantTurnImpl({
   );
 
   const renderedSegments = useMemo(
-    () => renderSegments(segments, message.streaming, onAcceptEdit, onRejectEdit, onUndoEdit),
+    () => renderSegments(segments, message.streaming, onAcceptEdit, onRejectEdit, onUndoEdit, { groupActivity: true }),
     [segments, message.streaming, onAcceptEdit, onRejectEdit, onUndoEdit],
   );
 

@@ -243,7 +243,9 @@ export type AgentEventPayload =
   | { type: "session_memory"; memory: string }
   | { type: "snapshot_restored"; snapshotId: string; ok: boolean }
   // ── 模型历史格式不兼容（deepseek 输出 DSML 退化）──
-  | { type: "tool_history_mismatch"; model: string };
+  | { type: "tool_history_mismatch"; model: string }
+  // ── 连续工具调用分组的一句话摘要（前端大折叠行的标题；toolCallId = 组内第一个工具调用）──
+  | { type: "tool_group_summary"; toolCallId: string; summary: string };
 
 /**
  * AgentEvent —— 出站事件（含多会话路由标签）。
