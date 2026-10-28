@@ -76,6 +76,8 @@ export enum ToolName {
   // 核对登记（Cowork 专用）：Agent 把做完后的自查结果（合计对不对、有没有遗漏）告诉前端，
   // 渲染成一张核对清单。办公用户敢不敢用 AI，取决于能不能一眼看出结果可信。
   ReportChecks = "report_checks",
+  // 按需加载不常用的工具组（见 session/toolLoadout.ts）
+  LoadTools = "load_tools",
   // 声明式表单：主 Agent 把「需要用户填一套参数」交付成一张可填写的表单/控件面板。
   // 与 ask_user 同源（都需要用户在场），子 Agent 拿不到，故只在 ToolDefBuilder 里注入。
   AskForm = "ask_form",
@@ -328,6 +330,7 @@ export const TOOL_CATALOG: Record<ToolName, ToolSpec> = {
   // 标 transient —— 这条回执对后续轮次没有参考价值，留在历史里纯占上下文。
   [ToolName.ReportOutputs]: { status: S("正在整理产出文件...", "editing"), requiresArgs: true, transient: true },
   [ToolName.ReportChecks]: { status: S("正在核对结果...", "editing"), requiresArgs: true, transient: true },
+  [ToolName.LoadTools]: { status: S("正在加载工具...", "thinking"), requiresArgs: true, transient: true },
   // 会话记忆：入参是整份 md（可能不短），标 transient 让工具的【结果】跨轮被裁掉。
   // 调用本身仍留在历史的 assistant 消息里，故只在值得记的时候调用。
   // 记忆的正式落点是 SessionData.memory，随后由 PromptBuilder 作为按轮注入。

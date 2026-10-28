@@ -13,7 +13,7 @@ import { useState, useContext, useRef, useEffect } from "react";
 // 图标分工（每个前导图标只表示一种东西，避免同一屏里两行长得一样）：
 //   Brain=思考过程  NotebookPen=记忆  AppWindow=浏览器  Telescope=联网搜索  FileDown=抓取网页
 //   Bug=语法诊断  SquareTerminal=执行命令  Server=启动进程  ScrollText=读进程输出  Power=停进程
-import { CheckCircle2, Loader2, SquareTerminal, Eye, EyeOff, FileX, Search, GitCompare, Bug, Check, X, ShieldCheck, Pencil, Plug, Undo2, Server, ScrollText, Power, ExternalLink, FolderTree, Clock, NotebookPen, AppWindow, MessageSquareWarning, SquareX, Telescope, FileDown } from "lucide-react";
+import { CheckCircle2, Loader2, SquareTerminal, Eye, EyeOff, FileX, Search, GitCompare, Bug, Check, X, ShieldCheck, Pencil, Plug, Undo2, Server, ScrollText, Power, ExternalLink, FolderTree, Clock, NotebookPen, AppWindow, MessageSquareWarning, SquareX, Telescope, FileDown, Wrench } from "lucide-react";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { commandPreview } from "@/lib/commandPreview";
@@ -107,6 +107,7 @@ export function queuedActionText(name: string): string {
     case "activate_power": return "激活 Power";
     case "update_memory": return "更新记忆";
     case "update_tasks": return "更新任务清单";
+    case "load_tools": return "加载工具";
     default: return name;
   }
 }
@@ -1107,6 +1108,30 @@ function MemoryUpdatedRow({ tool }: { tool: ToolCallData }) {
   );
 }
 
+/** 按需加载工具组时的工具组名 → 人话（见后端 session/toolLoadout.ts） */
+const TOOL_GROUP_LABELS: Record<string, string> = {
+  browser: "浏览器自动化",
+  relay: "Relay 工作流",
+  artifact: "产物交付",
+  form: "表单",
+  media: "动画 / 生图",
+};
+
+/** load_tools：内部机制，只留一行淡色提示（和「已更新记忆」同一套排版） */
+function LoadToolsRow({ tool }: { tool: ToolCallData }) {
+  const raw = (tool.args as { groups?: unknown } | undefined)?.groups;
+  const groups = (Array.isArray(raw) ? raw : typeof raw === "string" ? [raw] : []).map(String);
+  const names = groups.map((g) => TOOL_GROUP_LABELS[g] ?? g.replace(/^mcp:/, "")).join("、");
+  const inFlight = isToolInFlight(tool.status);
+  const failed = tool.status === "error";
+  return (
+    <div className="my-0.5 flex items-center gap-1.5 py-0.5 text-[11px] min-w-0 text-muted-foreground/60">
+      {inFlight ? <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" /> : <Wrench className={`w-3.5 h-3.5 shrink-0 ${failed ? "text-red-500" : ""}`} />}
+      <span className="truncate">{failed ? "加载工具失败" : inFlight ? "加载工具" : "已加载工具"}{names ? `：${names}` : ""}</span>
+    </div>
+  );
+}
+
 export function ToolCallItem({ tool, onAcceptEdit, onRejectEdit, onUndoEdit }: ToolCallItemProps) {
   // 命令内联审批：该工具调用若有未决审批（未信任命令），在卡片底部展示 拒绝/信任/运行
   const approval = useCommandApproval(tool.id);
@@ -1142,6 +1167,10 @@ export function ToolCallItem({ tool, onAcceptEdit, onRejectEdit, onUndoEdit }: T
   // update_memory：与其它折叠行同一套排版，但这行没有明细可展开（见组件注释）
   if (tool.name === "update_memory") {
     return <MemoryUpdatedRow tool={tool} />;
+  }
+
+  if (tool.name === "load_tools") {
+    return <LoadToolsRow tool={tool} />;
   }
 
   // update_tasks：勾选清单卡片（每次调用渲染当时的完整清单）

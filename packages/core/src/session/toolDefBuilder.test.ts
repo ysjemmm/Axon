@@ -12,7 +12,7 @@ function toolNames(
   const builder = new ToolDefBuilder(
     { mode, questWebSearch, mcpToolDefsCache, host, mediaEnabled } as any,
   );
-  return builder.getToolDefs().map((t) => (t as { function?: { name?: string } }).function?.name ?? "");
+  return builder.getAllToolDefs().map((t) => (t as { function?: { name?: string } }).function?.name ?? "");
 }
 
 /** 造两个假的 MCP 工具定义（形状与 McpController 预取出来的一致）。 */
@@ -89,7 +89,7 @@ describe("ToolDefBuilder 工具装配", () => {
 
   it("create_artifact 的 type 枚举与后端校验的合法取值一致", () => {
     const builder = new ToolDefBuilder({ mode: "quest", questWebSearch: false, mcpToolDefsCache: [] } as any);
-    const def = builder.getToolDefs().find((t) => (t as any).function?.name === "create_artifact") as any;
+    const def = builder.getAllToolDefs().find((t) => (t as any).function?.name === "create_artifact") as any;
     expect(def.function.parameters.properties.type.enum).toEqual(["html", "svg", "markdown", "code", "text"]);
     expect(def.function.parameters.required).toEqual(["title", "type", "content"]);
   });
@@ -114,7 +114,7 @@ describe("ToolDefBuilder 工具装配", () => {
     const builder = new ToolDefBuilder({
       mode: "quest", questWebSearch: false, mcpToolDefsCache: [], host: { mediaRenderer: {} }, mediaEnabled: true,
     } as any);
-    const def = builder.getToolDefs().find((t) => (t as any).function?.name === "render_media") as any;
+    const def = builder.getAllToolDefs().find((t) => (t as any).function?.name === "render_media") as any;
     expect(def.function.parameters.properties.format.enum).toEqual(["gif", "mp4"]);
     expect(def.function.parameters.required).toEqual(["title", "html", "format"]);
   });

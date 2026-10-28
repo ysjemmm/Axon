@@ -78,6 +78,7 @@ const TOOL_KIND_MAP: Record<ToolName, ToolKind> = {
   // 产出登记：不读不写磁盘，只是把"已经做好的文件"告诉前端，归 other
   [ToolName.ReportOutputs]: "other",
   [ToolName.ReportChecks]: "other",
+  [ToolName.LoadTools]: "other",
   // 产物：本质是写文件（落到产物目录），归 edit。与 wiki_save_page 同理——
   // 它不产生 fileDiff，所以不会进「代码改动」那套审阅呈现；渲染成产物卡片由前端单独接管。
   [ToolName.CreateArtifact]: "edit",

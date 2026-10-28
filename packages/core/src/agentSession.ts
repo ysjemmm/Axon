@@ -39,6 +39,7 @@ import {
 import { CoworkSnapshotter } from "./cowork/snapshotter.js";
 import { parseChecks, checksResult } from "./cowork/checks.js";
 import { BackgroundTaskTracker } from "./session/backgroundTasks.js";
+import { ToolLoadout, loadToolsResult } from "./session/toolLoadout.js";
 import { resolveArtifactDir } from "./session/artifactDir.js";
 import { artifactExtension, parseArtifactArgs, parseGenerateImageArgs, parseRenderMediaArgs, pickVersionedPath, sanitizeStem } from "./session/artifactFile.js";
 /**
@@ -107,6 +108,8 @@ export class AgentSession {
   /** @internal */ workspaces: string[]; // 所有工作区路径列表
   private channel: AgentChannel;
   /** @internal */ host: AgentHost;
+  /** 工具按需加载状态（哪些不常用的工具组已加载） */
+  /** @internal */ readonly toolLoadout = new ToolLoadout();
   /** 后台任务（start_process 启动的进程）；宿主不支持后台进程时为 null */
   backgroundTasks: BackgroundTaskTracker | null = null;
   private homeDir: string;
@@ -1748,6 +1751,17 @@ export class AgentSession {
     return this.toolDefBuilder.getToolDefs();
   }
 
+  /** load_tools 工具实现：按组名加载不常用的工具组，下一次请求起生效 */
+  /** @internal */ loadTools(toolArgs: Record<string, unknown>): { result: string; status: "success" | "error" } {
+    const groups = this.toolDefBuilder.toolGroups();
+    return loadToolsResult(this.toolLoadout.load(toolArgs, groups), groups.filter((g) => !this.toolLoadout.isLoaded(g.id)));
+  }
+
+  /** 模型直接调用了未加载组里的工具：照常执行，并把整组加载上 */
+  /** @internal */ noteToolUsed(toolName: string): void {
+    this.toolLoadout.noteToolUsed(toolName, this.toolDefBuilder.toolGroups());
+  }
+
   /** 设置思考开关（每轮用户输入前由 SessionHub 注入，agent / quest 两种模式都生效） */
   setThink(think: boolean): void {
     this.think = think;
@@ -2972,6 +2986,8 @@ export class AgentSession {
         : loadWorkspaceAxonConfig(this.host, this.workspaces, this.homeDir).catch((e: unknown) => { console.warn("[axon] 工作区配置加载失败（忽略）:", (e as Error).message); return null; }),
       this.prefetchMcpTools(),  // ← 之前串行 await，现在并入并行
     ]);
+    // 按需工具：用户这句话命中关键词就先把对应组加载上（MCP 组要等上面的预取完成才知道有哪些）
+    this.toolLoadout.preload(input, this.toolDefBuilder.toolGroups());
     this.ideContextCache = ideCtx;
     this.skillsPromptCache = skillsPrompt;
     this.powersPromptCache = powersPrompt;

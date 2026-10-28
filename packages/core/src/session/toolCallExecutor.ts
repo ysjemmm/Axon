@@ -163,6 +163,7 @@ export class ToolCallExecutor {
     let status: "success" | "error" = "success";
     let commandWasEdited: string | undefined;
     const route = resolveToolDispatchRoute(toolName);
+    this.s.noteToolUsed(toolName);
 
     if (!verdict.allowed) {
       result = verdict.message || "调用被拦截。";
@@ -185,6 +186,10 @@ export class ToolCallExecutor {
       status = out.status;
     } else if (route === "report_outputs") {
       const out = await this.s.reportOutputs(toolArgs, meta);
+      result = out.result;
+      status = out.status;
+    } else if (route === "load_tools") {
+      const out = this.s.loadTools(toolArgs);
       result = out.result;
       status = out.status;
     } else if (route === "report_checks") {

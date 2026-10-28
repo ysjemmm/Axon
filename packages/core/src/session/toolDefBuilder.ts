@@ -11,12 +11,29 @@
 import type { ToolDef } from "../llm/types.js";
 import { getToolDefinitions, ToolName } from "../tools/index.js";
 import type { AgentSession } from "../agentSession.js";
+import type { ToolGroup } from "./toolLoadout.js";
 
 export class ToolDefBuilder {
   constructor(private readonly s: AgentSession) {}
 
-  /** 把 OpenAI Chat 工具定义转成策略层的 ToolDef（主 agent 额外带 delegate_task + relay 工具集） */
+  /**
+   * 本轮发给模型的工具：全量清单经按需加载过滤（不常用的工具组未加载时只留 load_tools 里的索引，
+   * 见 toolLoadout.ts）。Quest 模式的主要交付就是产物，产物组常驻。
+   */
   getToolDefs(): ToolDef[] {
+    const all = this.getAllToolDefs();
+    const groups = this.toolGroups(all);
+    this.s.toolLoadout.hydrate(this.s.messages, groups);
+    return this.s.toolLoadout.apply(all, groups);
+  }
+
+  /** 当前可按需加载的工具组 */
+  toolGroups(all: ToolDef[] = this.getAllToolDefs()): ToolGroup[] {
+    return this.s.toolLoadout.groups(all, this.s.mcpToolMap, this.s.mode === "quest" ? ["artifact"] : []);
+  }
+
+  /** 全量工具清单（主 agent 额外带 delegate_task + relay 工具集） */
+  getAllToolDefs(): ToolDef[] {
     // Quest 模式：不给读写/命令等「动仓库」的工具；但 ask_user（选项问答）是纯交互、不碰仓库，
     // 问答场景同样需要它（让 AI 抛选项、用户点选作答），故始终放行；联网工具按开关放行。
     if (this.s.mode === "quest") {
