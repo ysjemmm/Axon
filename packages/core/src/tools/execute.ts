@@ -16,6 +16,7 @@
  * 逐字符保留模型可见的提示文本、错误文本与业务逻辑。
  */
 
+import { describeShellEnvironment } from "../environment.js";
 import { resolve, relative, sep } from "node:path";
 import { isWithinWorkspaces } from "./safety.js";
 import {
@@ -467,12 +468,8 @@ export async function executeToolCall(
       // 非零退出码：组织"命令失败"错误文本
       if (result.exitCode !== 0 && result.exitCode !== null) {
         const output = (result.stdout || "") + (result.stderr || "");
-        const platform = process.platform;
-        const shellHint = platform === "win32"
-          ? `当前环境是 Windows（PowerShell）。如果是语法错误或"找不到命令"，请改用 PowerShell 的正确写法（例如 Get-ChildItem 而非 ls，Get-Content 而非 cat）。`
-          : platform === "darwin"
-          ? `当前环境是 macOS（zsh/bash）。如果是语法错误或"找不到命令"，请检查命令是否适用于 Unix 环境。`
-          : `当前环境是 Linux。如果是语法错误或"找不到命令"，请检查命令拼写和适用性。`;
+        const env = describeShellEnvironment();
+        const shellHint = `当前环境是 ${env.os}，shell 为 ${env.shell}。如果是语法错误或"找不到命令"，请按这种 shell 的正确写法改写。`;
         throw new ToolError(
           `命令失败（退出码 ${result.exitCode}）：${args.command}\n${output || "(无输出)"}\n${shellHint}`,
           `命令执行失败（退出码 ${result.exitCode}），AI 已获悉并将尝试其他方式`

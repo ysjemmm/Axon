@@ -24,7 +24,7 @@ import { PowerRegistry } from "./powers/powerLoader.js";
 import { LoopGuard, policyForModel, type StuckTarget, type LoopGuardSnapshot } from "./agentGuards.js";
 import { McpRegistry } from "./mcp/mcpRegistry.js";
 import { modelContextWindow } from "./llm/modelContext.js";
-import { SYSTEM_PROMPT, QUEST_SYSTEM_PROMPT } from "./systemPrompt.js";
+import { SYSTEM_PROMPT, QUEST_SYSTEM_PROMPT, isAxonSystemPrompt } from "./systemPrompt.js";
 import { getStrategy, findProviderForModel, declaredThinkingFor, declaredEffortValuesFor, declaredCacheControlFor, declaredVisionFor, getVisionFallbackModel, getModelDisplayName, getProviderDisplayName } from "./providers.js";
 import { PromptBuilder, isRealUserMessage } from "./session/promptBuilder.js";
 import {
@@ -356,9 +356,16 @@ export class AgentSession {
     this.mode = mode;
     this.model = "";
     this.provider = "";
+    const systemPrompt = mode === "quest" ? QUEST_SYSTEM_PROMPT : SYSTEM_PROMPT;
     this.messages = existingMessages && existingMessages.length > 0
       ? existingMessages
-      : [{ role: "system", content: mode === "quest" ? QUEST_SYSTEM_PROMPT : SYSTEM_PROMPT }];
+      : [{ role: "system", content: systemPrompt }];
+    // 旧会话落盘的是当时那版系统提示：换成当前版本，提示词的改进对旧会话同样生效。
+    // 代价是这个会话下一次请求的前缀缓存从头失效一次，之后照常命中。
+    const head = this.messages[0];
+    if (head?.role === "system" && isAxonSystemPrompt(head.content) && head.content !== systemPrompt) {
+      this.messages[0] = { ...head, content: systemPrompt };
+    }
     this.cwd = cwd;
     this.terminalCwd = cwd;
     this.workspaces = workspaces && workspaces.length > 0 ? workspaces : [cwd];
