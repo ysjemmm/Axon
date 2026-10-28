@@ -64,7 +64,7 @@ import {
   ToolCallExecutor,
   type TurnState,
 } from "./session/index.js";
-import { TokenAccountant } from "./session/tokenAccountant.js";
+import { TokenAccountant, type ContextBreakdown } from "./session/tokenAccountant.js";
 import { ToolDefBuilder } from "./session/toolDefBuilder.js";
 import { McpController } from "./session/mcpController.js";
 import { buildToolTurnAssistantMessage } from "./session/toolTurnMessage.js";
@@ -1256,6 +1256,11 @@ export class AgentSession {
   /** 获取最近一次的累计 token 数（委托 TokenAccountant） */
   getLastTotalTokens(): number {
     return this.tokenAccountant.getLastTotalTokens();
+  }
+
+  /** 当前上下文的来源拆分（上下文面板明细）；拆分失败返回 undefined，只少一块明细 */
+  getContextBreakdown(): ContextBreakdown | undefined {
+    try { return this.tokenAccountant.buildContextBreakdown(); } catch { return undefined; }
   }
 
   /** 从持久化快照回填上下文 token 统计（委托 TokenAccountant） */

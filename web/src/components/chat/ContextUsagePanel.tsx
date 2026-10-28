@@ -3,7 +3,10 @@
  *
  * 版式对齐 Claude 的上下文面板：
  *   标题 → 「已使用 x%」与「已用 / 窗口」→ 分段进度条 → 各来源一行（色块 · 名称 · token · 占比）
- *   → 自动压缩预留 / 剩余空间 → 可展开的 MCP 工具明细 → 「距自动压缩还剩 X」与「压缩会话」。
+ *   → 剩余空间 → 可展开的 MCP 工具明细 → 「距自动压缩还剩 X」与「压缩会话」。
+ *
+ * 剩余空间 = 窗口 − 已用（真实还能装多少），不扣自动压缩预留；自动压缩线画成进度条上的刻度，
+ * 离它还有多远看底栏「距自动压缩还剩」。各行加起来正好 100%。
  *
  * 数据来自后端 token_usage 事件的 breakdown（TokenAccountant.buildContextBreakdown）：
  * 各项已按总量缩放，加和等于「已使用」。旧后端没有 breakdown 时只显示总量与底栏。
@@ -23,8 +26,8 @@ const CATEGORY_META: Record<ContextCategoryKey, { label: string; color: string; 
   systemPrompt: { label: "System prompt", color: "#8c8c8c" },
   injections: { label: "Injected context", color: "#8c8c8c", hint: "IDE 上下文、运行环境、工作区规则等按轮注入" },
 };
-// 预留与剩余跟随主题：写死浅灰的话，深色模式下「剩余空间」会变成一块刺眼的白
-const BUFFER_COLOR = "color-mix(in oklab, var(--muted-foreground) 45%, transparent)";
+// 剩余与刻度跟随主题：写死浅灰的话，深色模式下「剩余空间」会变成一块刺眼的白
+const MARK_COLOR = "color-mix(in oklab, var(--muted-foreground) 70%, transparent)";
 const FREE_COLOR = "var(--muted)";
 
 function pct(tokens: number, max: number): string {
@@ -65,8 +68,7 @@ export function ContextUsagePanel({ used, max, breakdown, canCompact, compacting
 
   const categories = (breakdown?.categories ?? []).filter((c) => c.key === "messages" || c.tokens > 0);
   const autoAt = breakdown?.autoCompactAt ?? (hasMax ? Math.round(max * 0.75) : 0);
-  const buffer = hasMax ? Math.max(0, max - autoAt) : 0;
-  const free = hasMax ? Math.max(0, max - used - buffer) : 0;
+  const free = hasMax ? Math.max(0, max - used) : 0;
   const untilAuto = autoAt - used;
   const mcpTools = breakdown?.mcpTools ?? [];
 
@@ -84,9 +86,9 @@ export function ContextUsagePanel({ used, max, breakdown, canCompact, compacting
         </span>
       </div>
 
-      {/* 分段进度条：各来源 → 自动压缩预留 → 剩余（轨道底色） */}
+      {/* 分段进度条：各来源 → 剩余（轨道底色）；竖线刻度 = 自动压缩线 */}
       {hasMax && (
-        <div className="mt-2 flex h-1 w-full overflow-hidden rounded-full" style={{ background: FREE_COLOR }}>
+        <div className="relative mt-2 flex h-1 w-full overflow-hidden rounded-full" style={{ background: FREE_COLOR }}>
           {(categories.length > 0 ? categories : [{ key: "messages" as const, tokens: used }]).map((c, i) => (
             <span
               key={c.key}
@@ -98,7 +100,13 @@ export function ContextUsagePanel({ used, max, breakdown, canCompact, compacting
               }}
             />
           ))}
-          <span className="h-full" style={{ width: `${(Math.min(buffer, max - used) / max) * 100}%`, background: BUFFER_COLOR, marginLeft: 1 }} />
+          {autoAt > 0 && autoAt < max && (
+            <span
+              className="absolute inset-y-0 w-px"
+              style={{ left: `${(autoAt / max) * 100}%`, background: MARK_COLOR }}
+              title={`自动压缩线 ${formatTokenCount(autoAt)}`}
+            />
+          )}
         </div>
       )}
 
@@ -107,7 +115,6 @@ export function ContextUsagePanel({ used, max, breakdown, canCompact, compacting
           {categories.map((c) => (
             <Row key={c.key} color={CATEGORY_META[c.key].color} label={CATEGORY_META[c.key].label} tokens={c.tokens} max={max} hint={CATEGORY_META[c.key].hint} />
           ))}
-          {hasMax && <Row color={BUFFER_COLOR} label="Autocompact buffer" tokens={buffer} max={max} />}
           {hasMax && <Row color={FREE_COLOR} label="Free space" tokens={free} max={max} />}
         </div>
       )}

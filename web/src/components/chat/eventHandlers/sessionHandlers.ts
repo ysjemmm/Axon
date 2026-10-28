@@ -9,7 +9,7 @@ import {
   isRelayTool, relayToolLabel, firstLine, OUTPUT_TOOLS,
 } from "../utils";
 import type { ToolStatus } from "@/components/ToolCallItem";
-import type { AttachedFile, ChatMessage, UserSegment } from "../types";
+import type { AttachedFile, ChatMessage, ContextBreakdown, UserSegment } from "../types";
 import type { EventHandlerCtx, WsMessage } from "./types";
 import { finalizeStreamingTurnAsError } from "./turnHandlers";
 import { artifactReadDescription } from "../artifactMeta";
@@ -293,7 +293,16 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
     // 前端拿注册表的值覆盖分母，会让圆环的分母与后端的分母不是同一个数：中转站的自定义模型名
     // （如 deepseek-v4-flash）前端报大窗口、后端只认兜底窗口时，圆环显示 18%，
     // 而后端已按自己的分母判定 ≥60%，直接命令模型提醒用户「上下文快满了」。
-    ctx.setTokenUsage((prev) => ({ ...prev, used: totalTokens }));
+    // contextWindow / contextBreakdown 由后端随会话下发（与 token_usage 同一来源），可以直接用；
+    // 旧后端没有这两个字段时保持原样，等下一轮 token_usage。
+    const contextWindow = (msg as any).contextWindow as number | undefined;
+    const breakdown = (msg as any).contextBreakdown as ContextBreakdown | undefined;
+    ctx.setTokenUsage((prev) => ({
+      ...prev,
+      used: totalTokens,
+      ...(contextWindow && contextWindow > 0 ? { max: contextWindow } : {}),
+      breakdown,
+    }));
   }
 
   const restoredPending = (msg as any).pendingPaths as string[] | undefined;

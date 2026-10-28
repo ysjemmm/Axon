@@ -729,6 +729,9 @@ export class SessionHub {
         session.getMessages().length > 0 ? filterTransientMessages(session.getMessages()) : filterTransientMessages(savedSession?.messages || []),
       ),
       totalTokens: session.getLastTotalTokens() || savedSession?.totalTokens || 0,
+      // 上下文面板的明细与权威窗口随会话一起下发：否则要等下一轮 token_usage 才有明细
+      contextWindow: session.getContextWindow(),
+      contextBreakdown: session.getContextBreakdown(),
       pendingPaths: session.getPendingPaths(),
       pendingDiffs: session.getPendingDiffs(),
       pendingEditIds: session.getPendingEditIds(),
