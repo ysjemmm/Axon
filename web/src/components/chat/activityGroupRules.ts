@@ -24,7 +24,7 @@ const UNGROUPED_TOOLS = new Set([
   "str_replace", "create_file", "apply_patch",
   "create_artifact", "edit_artifact", "render_media", "generate_image", "report_outputs",
   "ask_user", "ask_form",
-  "use_skill", "activate_power", "update_memory",
+  "use_skill", "activate_power", "update_memory", "update_tasks",
   "delegate_task",
 ]);
 

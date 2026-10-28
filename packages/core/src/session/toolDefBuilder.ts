@@ -30,7 +30,7 @@ export class ToolDefBuilder {
       // 技能 / Power 目录里的附属文件（模板、参考资料）：问答模式没有 read_file，不给就读不到
       tools.push(this.getReadSkillFileToolDef());
       // 会话记忆只改会话自己的一个字段，不碰仓库；问答模式同样有记忆面板和记忆注入
-      tools.push(this.getUpdateMemoryToolDef());
+      tools.push(this.getUpdateMemoryToolDef(), this.getUpdateTasksToolDef());
       // 技能与能力包：只读取方法论文本、不碰仓库（两者在 catalog 里都标了 readOnly），
       // 所以问答模式同样要能把清单里的东西真正加载进来——否则提示里列了 name，
       // 模型却调不了 use_skill / activate_power，等于清单是死的。
@@ -53,7 +53,7 @@ export class ToolDefBuilder {
     }
     const base = getToolDefinitions() as unknown as ToolDef[];
     const tools = [...base, this.getDelegateToolDef(), this.getAskUserToolDef(), this.getAskFormToolDef(), ...this.getRelayToolDefs(), ...this.s.mcpToolDefsCache];
-    tools.push(this.getUpdateMemoryToolDef());
+    tools.push(this.getUpdateMemoryToolDef(), this.getUpdateTasksToolDef());
     tools.push(this.getCreateArtifactToolDef(), this.getEditArtifactToolDef(), this.getReadArtifactToolDef());
     if (this.s.imageEnabled && this.s.host?.imageGenerator) tools.push(this.getGenerateImageToolDef());
     // Cowork：额外给一个「交付产出」工具，让 Agent 自己说清做出了什么文件。
@@ -72,6 +72,41 @@ export class ToolDefBuilder {
       const n = (t as { function?: { name?: string } }).function?.name;
       return n ? names.includes(n) : false;
     });
+  }
+
+  /** update_tasks：多步任务的进度清单，每次传完整清单（见 session/taskList.ts） */
+  private getUpdateTasksToolDef(): ToolDef {
+    return {
+      type: "function",
+      function: {
+        name: "update_tasks",
+        description:
+          "维护这次任务的进度清单，用户会在对话里实时看到勾选进度。每次传【完整清单】（不是增量），整份替换上一版。\n\n" +
+          "【什么时候用】任务需要 3 步以上、或用户一次给了多件事时，开工前先建清单；单步小改、纯问答不要建。\n" +
+          "【怎么维护】开始某一项之前把它标为 in_progress（同一时间只有一项 in_progress）；做完立刻标 completed，不要攒到最后一起勾；" +
+          "过程中发现新的必要步骤就加进去，不再需要的直接删掉；没做完或失败的不要标 completed。\n" +
+          "【标题】祈使句、具体到能看出做什么，例如「修复登录态过期后的跳转」，不要「第一步」这种。\n\n" +
+          "更新后不要在回复里复述清单，界面已经展示了。需要需求 / 设计文档、要跨会话推进的大功能用 Relay，不用这个。",
+        parameters: {
+          type: "object",
+          properties: {
+            tasks: {
+              type: "array",
+              description: "完整的任务清单（按执行顺序）",
+              items: {
+                type: "object",
+                properties: {
+                  title: { type: "string", description: "任务标题（祈使句）" },
+                  status: { type: "string", enum: ["pending", "in_progress", "completed"] },
+                },
+                required: ["title", "status"],
+              },
+            },
+          },
+          required: ["tasks"],
+        },
+      },
+    };
   }
 
   /** update_memory：增量维护会话记忆；保留 content 以兼容旧模型和整份 Markdown 导入。 */

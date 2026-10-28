@@ -65,6 +65,7 @@ import {
   type TurnState,
 } from "./session/index.js";
 import { TokenAccountant, type ContextBreakdown } from "./session/tokenAccountant.js";
+import { parseTaskArgs, taskUpdateResult, latestTasksFromMessages, formatTasksForModel, type TaskItem } from "./session/taskList.js";
 import { ToolDefBuilder } from "./session/toolDefBuilder.js";
 import { McpController } from "./session/mcpController.js";
 import { buildToolTurnAssistantMessage } from "./session/toolTurnMessage.js";
@@ -666,6 +667,30 @@ export class AgentSession {
     if (!version) return false;
     this.setMemory(version.content, "restore");
     return true;
+  }
+
+  /** 最新的任务清单（update_tasks）；null = 本会话还没建过，或尚未从历史恢复 */
+  private taskList: TaskItem[] | null = null;
+
+  /** update_tasks 工具实现：整份替换清单（见 session/taskList.ts） */
+  /** @internal */ updateTasks(toolArgs: Record<string, unknown>): { result: string; status: "success" | "error" } {
+    const parsed = parseTaskArgs(toolArgs);
+    if (!parsed.tasks) return { result: parsed.error || "任务清单无效", status: "error" };
+    this.taskList = parsed.tasks;
+    return { result: taskUpdateResult(parsed.tasks), status: "success" };
+  }
+
+  /**
+   * 历史被压缩、看不到 update_tasks 调用时，把未完成的清单重新注入给模型。
+   * 历史里还在时返回 null：模型能直接看到自己最新的那次调用，重复注入只是占上下文。
+   */
+  /** @internal */ getTaskListNotice(): string | null {
+    const inHistory = latestTasksFromMessages(this.messages);
+    if (inHistory) {
+      this.taskList = inHistory;
+      return null;
+    }
+    return this.taskList ? formatTasksForModel(this.taskList) : null;
   }
 
   /**

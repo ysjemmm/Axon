@@ -573,6 +573,10 @@ export class PromptBuilder {
       );
     }
 
+    // 任务清单：只在历史里已经看不到 update_tasks 调用（被压缩掉）且还有未完成项时注入
+    const tasksNotice = this.s.getTaskListNotice?.();
+    if (tasksNotice) add("tasks", tasksNotice);
+
     // 上下文使用率提醒：只在接近上限时出现，取本轮定格值（见 buildUsageNotice / turnFrozen）
     const usageNotice = this.frozen().usageNotice;
     if (usageNotice) {
@@ -585,7 +589,7 @@ export class PromptBuilder {
 
 type InjectionKey =
   | "env" | "artifact" | "capabilities" | "verbosity" | "workspaces" | "focus" | "terminal"
-  | "ide" | "skills" | "powers" | "wiki" | "workspaceAxon" | "memory" | "usage";
+  | "ide" | "skills" | "powers" | "wiki" | "workspaceAxon" | "memory" | "usage" | "tasks";
 
 /** 一项上下文注入的快照（挂在用户消息的 _contextInjections 上，随历史持久化） */
 export interface ContextInjection {
@@ -610,6 +614,7 @@ const RETIRED_NOTICE: Record<string, string> = {
   workspaceAxon: "此前注入的工作区 .axon 指令已不再适用。",
   memory: "【会话记忆】已被清空，此前的记忆内容不再作为已确认前提。",
   usage: "此前的「上下文使用率」提醒已不再适用。",
+  tasks: "此前注入的【任务清单】已不再适用：以历史里最新一次 update_tasks 为准，或任务已全部完成。",
 };
 
 /** 相对已发出的注入，算出这一份快照需要新发的 system 消息（变化项 + 消失项的作废说明） */

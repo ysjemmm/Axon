@@ -79,6 +79,9 @@ export enum ToolName {
   // 会话记忆：主 Agent 把本次会话值得跨会话带走的结论浓缩成一份 md 写回会话。
   // 记忆是会话级的，子 Agent 独立跑完就丢，故同样只在 ToolDefBuilder 里注入。
   UpdateMemory = "update_memory",
+  // 任务清单：多步任务的轻量进度清单（每次传完整清单），渲染成对话里的勾选卡片。比 Relay 轻得多。
+  // 只在 ToolDefBuilder 里注入给主 Agent。
+  UpdateTasks = "update_tasks",
   // Chat 产物：模型把一份独立成品（HTML 页面 / SVG / 文档 / 代码）交付给用户。
   // 与 create_file 的区别：create_file 是「改项目源码」，产物是「交付物」，统一落到产物目录、
   // 渲染成可预览的卡片。后端直接写盘，所以不带文件工具的问答模式也能用。
@@ -325,6 +328,8 @@ export const TOOL_CATALOG: Record<ToolName, ToolSpec> = {
   // 调用本身仍留在历史的 assistant 消息里，故只在值得记的时候调用。
   // 记忆的正式落点是 SessionData.memory，随后由 PromptBuilder 作为按轮注入。
   [ToolName.UpdateMemory]: { status: S("正在更新会话记忆...", "thinking"), requiresArgs: true, transient: true },
+  // 任务清单：结果只是一句进度回执，标 transient；清单本身在调用参数里，跨轮仍可见
+  [ToolName.UpdateTasks]: { status: S("正在更新任务清单...", "planning"), requiresArgs: true, transient: true },
   // 产物：入参 content 就是整份成品（可能很大），调用本身会留在 assistant 消息里；
   // 标 transient 让工具【结果】那条短回执跨轮被裁掉，不占上下文。
   [ToolName.CreateArtifact]: { status: S("正在生成产物...", "editing"), requiresArgs: true, transient: true },

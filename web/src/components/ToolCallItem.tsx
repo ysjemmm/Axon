@@ -17,6 +17,7 @@ import { CheckCircle2, Loader2, SquareTerminal, Eye, EyeOff, FileX, Search, GitC
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { commandPreview } from "@/lib/commandPreview";
+import { TaskListCard } from "@/components/chat/TaskListCard";
 import { useCommandApproval, CommandApprovalContext, type CommandTrustOption, type CommandDecision } from "@/components/chat/commandApprovalContext";
 import { openDiff, openMergedDiff, usePanelClientId, type DiffRef } from "@/lib/openDiff";
 
@@ -105,6 +106,7 @@ export function queuedActionText(name: string): string {
     case "use_skill": return "加载 Skill";
     case "activate_power": return "激活 Power";
     case "update_memory": return "更新记忆";
+    case "update_tasks": return "更新任务清单";
     default: return name;
   }
 }
@@ -1140,6 +1142,11 @@ export function ToolCallItem({ tool, onAcceptEdit, onRejectEdit, onUndoEdit }: T
   // update_memory：与其它折叠行同一套排版，但这行没有明细可展开（见组件注释）
   if (tool.name === "update_memory") {
     return <MemoryUpdatedRow tool={tool} />;
+  }
+
+  // update_tasks：勾选清单卡片（每次调用渲染当时的完整清单）
+  if (tool.name === "update_tasks") {
+    return <TaskListCard tool={tool} />;
   }
 
   // web_search 特殊渲染：Kiro 风格可折叠搜索结果卡片

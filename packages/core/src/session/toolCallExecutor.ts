@@ -191,6 +191,10 @@ export class ToolCallExecutor {
       const out = this.s.updateMemory(toolArgs);
       result = out.result;
       status = out.status;
+    } else if (route === "update_tasks") {
+      const out = this.s.updateTasks(toolArgs);
+      result = out.result;
+      status = out.status;
     } else if (route === "create_artifact") {
       const out = await this.s.createArtifact(toolArgs, meta);
       result = out.result;

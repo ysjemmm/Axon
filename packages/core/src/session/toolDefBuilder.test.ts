@@ -27,11 +27,11 @@ describe("ToolDefBuilder 工具装配", () => {
   it("问答（Quest）模式默认给的工具都不碰仓库", () => {
     const names = toolNames("quest");
     // create_artifact / edit_artifact / read_artifact 只在产物目录内读写，问答模式也能交付、修改成品。
-    // read_skill_file 只读技能 / Power 目录里的附属文件；update_memory 只改会话自己的记忆。
+    // read_skill_file 只读技能 / Power 目录里的附属文件；update_memory 只改会话自己的记忆；update_tasks 只记进度清单。
     // use_skill / activate_power 只读方法论文本——技能与能力包清单会在系统提示里列给模型，
     // 没有这两个工具清单就是死的（列了名字却加载不到）。
     expect(names).toEqual([
-      "ask_user", "create_artifact", "edit_artifact", "read_artifact", "read_skill_file", "update_memory",
+      "ask_user", "create_artifact", "edit_artifact", "read_artifact", "read_skill_file", "update_memory", "update_tasks",
       "use_skill", "activate_power",
     ]);
   });
