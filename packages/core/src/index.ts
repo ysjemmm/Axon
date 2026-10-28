@@ -53,6 +53,7 @@ export * from "./providers.js";          // ESIGN_PROVIDER（再导出）、getC
 export type * from "./providerTypes.js"; // 仅类型，避免 ESIGN_PROVIDER 值与 providers.js 双重星号导出冲突
 export * from "./providerCatalog.js";    // BUILTIN_PROVIDERS / builtinModels / getBuiltinProvider
 export * from "./providerRegistry.js";   // ProviderRegistry + 路径助手
+export * from "./quota/index.js";          // Provider 用量查询：规则引擎、内置模板、自动识别
 export * from "./providerModels.js";     // model id 唯一性校验（findDuplicateModelIds / assertUniqueModelIds / dedupeModelsById）
 export * from "./providerEnv.js";        // .env 摘行工具（providerEnvKeys / stripProviderEnvLines）
 export * from "./agentSession.js";

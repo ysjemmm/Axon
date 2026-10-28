@@ -7,6 +7,8 @@
  *  - ProviderRegistry 把两者合并成 ResolvedProvider[]，供 getClient / getStrategy / 前端选择器消费
  */
 
+import type { QuotaRule } from "./quota/types.js";
+
 /**
  * provider 的 LLM 调用协议：
  * - chat：OpenAI Chat Completions（通用，绝大多数中转站/网关走这个，包括把 Claude 包装成
@@ -97,6 +99,11 @@ export interface ResolvedProvider {
   models: ProviderModel[];
   /** 当前生效的额度查询规则，不包含 API Key */
   quota?: ProviderQuotaConfig;
+  /**
+   * 额度规则是否来自用户自己的配置。false（工作区配置）时，额度请求只能发往 provider baseUrl 的同一主机，
+   * 防止仓库里的配置把用户保存的额度凭证带到别处。
+   */
+  quotaTrusted?: boolean;
   /** 是否内置 Provider */
   builtin: boolean;
   /** 仅 esign：除 apiKey 外（baseUrl / 协议 / 模型目录）均锁定不可改 */
@@ -122,49 +129,8 @@ export interface RawProviderEntry {
   models?: ProviderModel[];
 }
 
-/** Provider 额度查询的声明式规则。字段路径只支持 $.data.balance 这类受限 JSONPath。 */
-export interface ProviderQuotaConfig {
-  enabled?: boolean;
-  url: string;
-  method?: "GET" | "POST";
-  headers?: Record<string, string>;
-  query?: Record<string, string>;
-  body?: unknown;
-  /** 独立额度令牌认证；缺省时沿用 Provider API Key。 */
-  auth?: {
-    header?: string;
-    prefix?: string;
-    /** 独立 Cookie 的请求头名，通常为 "cookie"；Cookie 内容由安全存储保管。 */
-    cookieHeader?: string;
-    /** 距过期不足该秒数时主动刷新；0 表示仅在 401/403 后刷新。 */
-    refreshBeforeSeconds?: number;
-    /** 配置后额度 access token 视为短期令牌；refreshToken 由安全存储保管。 */
-    refresh?: {
-      url: string;
-      method?: "GET" | "POST";
-      headers?: Record<string, string>;
-      query?: Record<string, string>;
-      body?: unknown;
-      accessTokenPath: string;
-      refreshTokenPath?: string;
-      expiresInPath?: string;
-      expiresAtPath?: string;
-    };
-  };
-  fields: {
-    balance?: string;
-    used?: string;
-    total?: string;
-    unit?: string;
-    expiresAt?: string;
-    /** 下次额度重置时间；支持 Unix 秒或毫秒时间戳。 */
-    resetAt?: string;
-  };
-  /** 展示换算：提取到的余额/已用/总额均除以此值，例如 500000。 */
-  scale?: number;
-  /** 响应中没有单位字段时使用的展示单位，例如 "$" 或 "Credits"。 */
-  unit?: string;
-}
+/** Provider 用量查询规则（结构与说明见 quota/types.ts 的 QuotaRule；旧版单请求规则仍兼容） */
+export type ProviderQuotaConfig = QuotaRule;
 
 /** providers.json 文件结构 */
 export interface ProviderConfigFile {

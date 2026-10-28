@@ -64,7 +64,9 @@ export class ProviderRegistry {
 
     // 1) 内置目录（apiKey 由 builtinApiKeys 覆盖，baseUrl 由 builtinBaseUrls 覆盖，models 由 builtinModels 覆盖）
     for (const def of BUILTIN_PROVIDERS) {
-      byName.set(def.name, this.fromBuiltin(def, file.builtinApiKeys?.[def.name], file.builtinBaseUrls?.[def.name], file.builtinModels?.[def.name], file.builtinQuota?.[def.name]));
+      const resolved = this.fromBuiltin(def, file.builtinApiKeys?.[def.name], file.builtinBaseUrls?.[def.name], file.builtinModels?.[def.name], file.builtinQuota?.[def.name]);
+      if (resolved.quota) resolved.quotaTrusted = !file._workspaceQuota?.has(def.name);
+      byName.set(def.name, resolved);
     }
 
     // 2) 自定义 provider（保留名不可占用）
@@ -84,9 +86,11 @@ export class ProviderRegistry {
   }
 
   /** 合并读取用户级 + 各工作区级 providers.json，同时追踪每个自定义 provider 的来源层级 */
-  private async readMergedConfig(): Promise<ProviderConfigFile & { _providerLevels?: Record<string, "user" | "workspace"> }> {
+  private async readMergedConfig(): Promise<ProviderConfigFile & { _providerLevels?: Record<string, "user" | "workspace">; _workspaceQuota?: Set<string> }> {
     const merged: ProviderConfigFile = { providers: {}, builtinApiKeys: {}, builtinBaseUrls: {}, builtinModels: {}, builtinQuota: {} };
     const levels: Record<string, "user" | "workspace"> = {};
+    /** 额度规则来自工作区配置的内置 provider（宿主据此限制额度请求只能发往 provider 自己的域名） */
+    const workspaceQuota = new Set<string>();
 
     const userCfg = await this.readFile(userProviderConfigPath(this.homeDir));
     Object.assign(merged.providers!, userCfg.providers || {});
@@ -101,14 +105,25 @@ export class ProviderRegistry {
       const wsCfg = await this.readFile(workspaceProviderConfigPath(ws));
       Object.assign(merged.providers!, wsCfg.providers || {});
       Object.assign(merged.builtinApiKeys!, wsCfg.builtinApiKeys || {});
-      Object.assign(merged.builtinBaseUrls!, wsCfg.builtinBaseUrls || {});
       Object.assign(merged.builtinModels!, wsCfg.builtinModels || {});
-      Object.assign(merged.builtinQuota!, wsCfg.builtinQuota || {});
+      // ⚠️ 工作区配置可能来自别人的仓库。内置 provider 的 API Key 通常是用户级的；若工作区能单独改它的
+      // baseUrl 或额度规则，打开一个仓库就会把用户的 Key 发到仓库作者指定的地址（对话请求、或额度查询里的
+      // {{apiKey}}）。所以只有当【同一份工作区配置】自己也提供了该 provider 的 Key 时才采纳这两项——
+      // 那时发出去的是工作区自己的 Key。
+      const ownsKey = (name: string) => !!wsCfg.builtinApiKeys?.[name]?.trim();
+      for (const [name, url] of Object.entries(wsCfg.builtinBaseUrls || {})) {
+        if (ownsKey(name)) merged.builtinBaseUrls![name] = url;
+        else console.warn(`[providers] 忽略工作区 ${ws} 对内置 provider「${name}」baseUrl 的覆盖：该工作区未提供自己的 API Key`);
+      }
+      for (const [name, quota] of Object.entries(wsCfg.builtinQuota || {})) {
+        if (ownsKey(name)) { merged.builtinQuota![name] = quota; workspaceQuota.add(name); }
+        else console.warn(`[providers] 忽略工作区 ${ws} 对内置 provider「${name}」额度规则的覆盖：该工作区未提供自己的 API Key`);
+      }
       if (wsCfg.visionFallbackModel) merged.visionFallbackModel = wsCfg.visionFallbackModel;
       for (const name of Object.keys(wsCfg.providers || {})) levels[name] = "workspace";
     }
 
-    return { ...merged, _providerLevels: levels };
+    return { ...merged, _providerLevels: levels, _workspaceQuota: workspaceQuota };
   }
 
   /** 读取当前生效的识图兜底模型 id（未配置返回 null） */
@@ -163,6 +178,8 @@ export class ProviderRegistry {
       protocol: entry.protocol === "responses" || entry.protocol === "anthropic" ? entry.protocol : "chat",
       models: dedupeModelsById(Array.isArray(entry.models) ? entry.models : []),
       quota: entry.quota,
+      // 工作区里定义的 provider：额度请求只允许发往它自己的域名（见 quota/engine 的 host 校验）
+      quotaTrusted: entry.quota ? level !== "workspace" : undefined,
       builtin: false,
       locked: false,
       configured: !!apiKey && !!entry.baseUrl,

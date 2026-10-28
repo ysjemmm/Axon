@@ -14,9 +14,9 @@ import * as vscode from "vscode";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { ProviderRegistry, refreshProviders } from "@axon/core";
+import { ProviderRegistry, refreshProviders, type QuotaMetric } from "@axon/core";
 import { createVSCodeAgentHost } from "@axon/host-vscode";
-import { queryProviderQuota, quotaTokenStore } from "./quotaService.js";
+import { queryProvider } from "./quotaService.js";
 
 /** 点击状态栏按钮时执行的命令（聚焦 Axon 对话视图）。 */
 const FOCUS_CHAT_COMMAND = "axon.focusChat";
@@ -36,6 +36,8 @@ export interface AxonUsageStats {
 	totalCredits: number;
 	updatedAt: number | null;
 	errorMessage?: string;
+	/** 用量查询返回的全部指标（余额、订阅额度、时间窗口限额……）；有它时状态栏按指标渲染 */
+	metrics?: QuotaMetric[];
 }
 
 /** 官方接口返回的最小数据结构：更新时间由 IDE 在成功更新时自动记录。 */
@@ -77,13 +79,35 @@ function formatUpdatedAt(updatedAt: number | null, now = Date.now()): string {
 	return `${days} 天前更新`;
 }
 
+/** 一条指标的简短文案：有总额显示「已用 / 总额」，只有余额显示「余额」，只有百分比显示「已用 x%」 */
+function metricText(metric: QuotaMetric): string {
+	const unit = metric.unit ? ` ${metric.unit}` : "";
+	if (metric.total !== undefined && metric.used !== undefined) return `${formatCredits(metric.used)} / ${formatCreditLimit(metric.total)}${unit}`;
+	if (metric.remaining !== undefined) return `余额 ${formatCredits(metric.remaining)}${unit}`;
+	if (metric.percent !== undefined) return `已用 ${metric.percent}%`;
+	return metric.used !== undefined ? `已用 ${formatCredits(metric.used)}${unit}` : "—";
+}
+
+function metricDetail(metric: QuotaMetric): string {
+	const parts = [metricText(metric)];
+	if (metric.percent !== undefined && metric.total !== undefined) parts.push(`${metric.percent}%`);
+	if (metric.resetAt) parts.push(`${new Date(metric.resetAt).toLocaleString()} 重置`);
+	return `${metric.label}：${parts.join(" · ")}`;
+}
+
 function usageText(usage: AxonUsageStats, label: string, unit = "Credits"): string {
+	if (usage.metrics?.length && !usage.errorMessage) {
+		return `$(dashboard) ${label}: ${metricText(usage.metrics[0])} · ${formatUpdatedAt(usage.updatedAt)}`;
+	}
 	return `$(dashboard) ${label}: ${formatCredits(usage.usedCredits)} / ${formatCreditLimit(usage.totalCredits)} ${unit} · ${formatUpdatedAt(usage.updatedAt)}`;
 }
 
 function usageTooltip(usage: AxonUsageStats, label: string, unit = "Credits"): string {
 	if (usage.errorMessage) {
 		return `${label} 额度\n获取用量失败：${usage.errorMessage}`;
+	}
+	if (usage.metrics?.length) {
+		return `${label} 用量\n${usage.metrics.map(metricDetail).join("\n")}\n最近更新：${formatUpdatedAt(usage.updatedAt)}`;
 	}
 	return usage.updatedAt
 		? `${label} 额度\n已使用：${formatCredits(usage.usedCredits)} ${unit}\n总额度：${formatCreditLimit(usage.totalCredits)} ${unit}\n最近更新：${formatUpdatedAt(usage.updatedAt)}`
@@ -218,14 +242,19 @@ export function registerAxonUsageStatusBar(context: vscode.ExtensionContext, wor
 			try {
 				const registry = new ProviderRegistry([workspace], createVSCodeAgentHost(), homedir());
 				const provider = (await refreshProviders(registry)).find((entry) => entry.name === activeProvider);
-				if (!provider?.quota?.enabled) throw new Error("未配置额度查询规则");
+				if (!provider?.quota || provider.quota.enabled === false) throw new Error("未配置用量查询（在 Provider 设置里点「自动识别」或选一个模板）");
 				activeLabel = provider.label;
-				const result = await queryProviderQuota(provider, provider.quota, quotaTokenStore(context.secrets, provider.name));
-				activeUnit = result.unit || provider.quota.unit || "Credits";
-				const total = result.total ?? result.balance;
-				const used = result.used ?? (total !== undefined && result.balance !== undefined ? Math.max(0, total - result.balance) : 0);
-				if (total === undefined) throw new Error("额度规则未返回总额或余额");
+				const result = await queryProvider(provider, provider.quota, context.secrets);
+				const primary = result.metrics[0];
+				activeUnit = primary.unit || "Credits";
+				// 账户用量弹窗只认「已用 / 总额」：只有余额时把余额当总额、已用记 0
+				const total = primary.total ?? primary.remaining ?? 0;
+				const used = primary.used ?? (primary.total !== undefined && primary.remaining !== undefined ? primary.total - primary.remaining : 0);
 				controller.setUsage({ usedCredits: used, totalCredits: total });
+				usage = { ...usage, metrics: result.metrics };
+				currentUsageSnapshot = usage;
+				item.text = usageText(usage, activeLabel, activeUnit);
+				item.tooltip = usageTooltip(usage, activeLabel, activeUnit);
 			} catch (error) {
 				usage = { ...usage, errorMessage: (error as Error).message || "未知错误" };
 				currentUsageSnapshot = usage;

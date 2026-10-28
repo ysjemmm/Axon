@@ -576,44 +576,95 @@ export interface RawProviderEntry {
   models?: ProviderModelInfo[];
 }
 
-export interface ProviderQuotaConfig {
-  enabled?: boolean;
+/** 用量查询规则（与 core/quota/types.ts 的 QuotaRule 同构；旧版 url + fields 规则仍兼容） */
+export type QuotaFieldRef = string | { path: string; scale?: number };
+export interface QuotaRequestSpec {
   url: string;
   method?: "GET" | "POST";
   headers?: Record<string, string>;
   query?: Record<string, string>;
   body?: unknown;
+}
+export interface ProviderQuotaConfig {
+  enabled?: boolean;
+  preset?: string;
+  vars?: Record<string, string>;
   auth?: {
     header?: string;
     prefix?: string;
     cookieHeader?: string;
     refreshBeforeSeconds?: number;
-    refresh?: {
-      url: string;
-      method?: "GET" | "POST";
-      headers?: Record<string, string>;
-      query?: Record<string, string>;
-      body?: unknown;
-      accessTokenPath: string;
-      refreshTokenPath?: string;
-      expiresInPath?: string;
-      expiresAtPath?: string;
-    };
+    refresh?: QuotaRequestSpec & { accessTokenPath: string; refreshTokenPath?: string; expiresInPath?: string; expiresAtPath?: string };
   };
-  fields: { balance?: string; used?: string; total?: string; unit?: string; expiresAt?: string; resetAt?: string };
+  steps?: Array<QuotaRequestSpec & { id: string; optional?: boolean }>;
+  metrics?: Array<{
+    label?: string; labelPath?: string; labelMap?: Record<string, string>; each?: string;
+    kind?: QuotaMetricKind; used?: QuotaFieldRef; total?: QuotaFieldRef; remaining?: QuotaFieldRef;
+    percent?: string; resetAt?: string; unit?: string; unitPath?: string; scale?: number;
+  }>;
+  url?: string;
+  method?: "GET" | "POST";
+  headers?: Record<string, string>;
+  query?: Record<string, string>;
+  body?: unknown;
+  fields?: { balance?: string; used?: string; total?: string; unit?: string; expiresAt?: string; resetAt?: string };
   scale?: number;
   unit?: string;
 }
 
+export type QuotaMetricKind = "balance" | "quota" | "window";
+
+export interface QuotaMetric {
+  label: string;
+  kind: QuotaMetricKind;
+  used?: number;
+  total?: number;
+  remaining?: number;
+  percent?: number;
+  unit?: string;
+  resetAt?: number;
+}
+
 export interface ProviderQuotaResult {
+  metrics: QuotaMetric[];
+  updatedAt: number;
+  responsePreview: string;
   balance?: number;
   used?: number;
   total?: number;
   unit?: string;
-  expiresAt?: string;
   resetAt?: number;
+}
+
+export type QuotaCredential = "apiKey" | "accessToken" | "cookie";
+
+export interface QuotaPresetInfo {
+  id: string;
+  label: string;
+  description: string;
+  hosts?: string[];
+  needs: QuotaCredential[];
+  vars?: Array<{ name: string; label: string; placeholder?: string }>;
+  verified: boolean;
+  matched: boolean;
+  rule: ProviderQuotaConfig;
+}
+
+export interface QuotaDetectResponse {
+  presetId?: string;
+  presetLabel?: string;
+  rule?: ProviderQuotaConfig;
+  result?: ProviderQuotaResult;
+  attempts: Array<{ preset: string; label: string; error: string }>;
+}
+
+export interface QuotaOverviewEntry {
+  name: string;
+  label: string;
+  preset?: string;
+  result?: ProviderQuotaResult;
+  error?: string;
   updatedAt: number;
-  responsePreview: string;
 }
 
 /** providers.json 文件结构 */
@@ -722,6 +773,30 @@ export function testProviderQuota(name: string, quota: ProviderQuotaConfig, work
 /** 保存额度访问令牌与刷新令牌到 VS Code 安全存储；空字符串表示保留原值。 */
 export function setProviderQuotaTokens(name: string, tokens: { accessToken?: string; refreshToken?: string; cookie?: string }, workspace?: string): Promise<{ ok: boolean }> {
   return put(`/api/providers/${encodeURIComponent(name)}/quota/tokens${providerQuery(workspace)}`, tokens);
+}
+
+/** 清除该 Provider 保存的全部额度凭证。 */
+export function clearProviderQuotaTokens(name: string, workspace?: string): Promise<{ ok: boolean }> {
+  return del(`/api/providers/${encodeURIComponent(name)}/quota/tokens${providerQuery(workspace)}`);
+}
+
+/** 适用于该 Provider 的内置模板（主机匹配的在前）。 */
+export function listQuotaPresets(name: string, workspace?: string): Promise<{ presets: QuotaPresetInfo[] }> {
+  return get(`/api/providers/${encodeURIComponent(name)}/quota/presets${providerQuery(workspace)}`);
+}
+
+/** 用现有凭证逐个尝试模板，返回第一个取到数值的规则与结果。 */
+export function detectProviderQuota(name: string, workspace?: string): Promise<QuotaDetectResponse> {
+  return post(`/api/providers/${encodeURIComponent(name)}/quota/detect${providerQuery(workspace)}`, {});
+}
+
+/** 所有启用了用量查询的 Provider 的最新用量（宿主侧缓存 3 分钟，refresh=true 强制刷新）。 */
+export function getQuotaOverview(workspace?: string, refresh = false): Promise<{ entries: QuotaOverviewEntry[] }> {
+  const params = new URLSearchParams();
+  if (workspace) params.set("workspace", workspace);
+  if (refresh) params.set("refresh", "1");
+  const qs = params.toString();
+  return get(`/api/quota/overview${qs ? `?${qs}` : ""}`);
 }
 
 /** 读取额度凭证是否已安全保存；不返回任何凭证内容。 */
