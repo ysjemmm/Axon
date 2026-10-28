@@ -323,6 +323,28 @@ code:not(.hljs):not(.prose code) {
   line-height: 22.75px !important;
   vertical-align: baseline;
   max-width: 100%;
+  /* ── 字号与字重必须与正文完全一致 ───────────────────────────────────
+     这一段修的是「行内代码看着不像正文那套字」：
+
+     · 字号：@tailwindcss/typography 会给 code 压到 .857143em（prose-sm），
+       上游还在 className 里额外写了 0.9em。正文 14px，代码只有 12.6px。
+     · 字重：同一插件又把 code 设成 600。正文是 400。
+
+     两者叠在一起，最刺眼的是**中文**：`--font-mono` 队列里前面那些等宽字体
+     都没有汉字，中文最终仍然回退到 Microsoft YaHei / PingFang —— 和正文
+     **是同一个中文字族**，只是被渲染成 12.6px + 600，于是"又小又粗"，
+     观感上就成了"另一个字体"。
+
+     所以中文这一侧本来就不该有差异，把它按回 1em / inherit 即可。
+     font-weight 用 inherit 而不是写死 400：正文里的 code 落在 <strong>/<b>
+     内部时应当跟着一起加粗，写死 400 会把那种强调吃掉。
+
+     拉丁部分仍保留 --font-mono（JetBrains Mono）——代码标识符用等宽是对的，
+     上面的字号/字重对齐后它与正文的视觉节奏已经一致。
+     ⚠️ 用 em 不用 px：这个根节点的字号会被外层整体覆盖（思考块压到 text-xs），
+        px 会在那些更小的上下文里保持原尺寸、比正文还大。 */
+  font-size: 1em !important;
+  font-weight: inherit !important;
 }
 
 /* Markdown 表格：轻量横线结构。
