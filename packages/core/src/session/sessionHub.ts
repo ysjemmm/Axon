@@ -490,7 +490,7 @@ export class SessionHub {
 
     switch (cmd.type) {
       case "load_session":
-        return this.handleLoadSession(cmd.sessionId, clientId, primaryWorkspace);
+        return this.handleLoadSession(cmd.sessionId, clientId, primaryWorkspace, cmd.model, cmd.provider);
       case "get_diff_content":
         return this.handleGetDiffContent(cmd, clientId);
       case "set_workspace":
@@ -706,11 +706,14 @@ export class SessionHub {
   }
 
   /** 加载/切换会话：发送 session_loaded 快照（实时事件由代理 channel 直达，无需缓冲重放） */
-  private async handleLoadSession(sid: string, clientId: string | undefined, primaryWorkspace: string): Promise<void> {
+  private async handleLoadSession(sid: string, clientId: string | undefined, primaryWorkspace: string, model?: string, provider?: string): Promise<void> {
     if (clientId) this.clientSessions.set(clientId, sid);
     this.lastActiveSessionId = sid;
 
     const { session, savedSession } = await this.getOrLoadSession(sid, primaryWorkspace, clientId);
+    // 刚从磁盘恢复的会话还没有模型（模型平时随每条消息下发）：按前端当前选中的、退而用落盘时的模型补上。
+    // 否则窗口按兜底 128k 算——重启 IDE 后 1M 的模型显示「337k / 128k、已到自动压缩线」。
+    session.adoptModelIfUnset(model || savedSession?.model, provider || savedSession?.provider);
 
     const ws_dir = savedSession?.workspace || primaryWorkspace;
     const ws_dirs = (this.deps.workspaces && this.deps.workspaces.length > 0)
@@ -730,8 +733,8 @@ export class SessionHub {
       ),
       totalTokens: session.getLastTotalTokens() || savedSession?.totalTokens || 0,
       // 上下文面板的明细与权威窗口随会话一起下发：否则要等下一轮 token_usage 才有明细
-      contextWindow: session.getContextWindow(),
-      contextBreakdown: session.getContextBreakdown(),
+      // 仍不知道模型时不下发：前端按自己选中的模型占位，等第一轮 token_usage
+      ...(session.model ? { contextWindow: session.getContextWindow(), contextBreakdown: session.getContextBreakdown() } : {}),
       pendingPaths: session.getPendingPaths(),
       pendingDiffs: session.getPendingDiffs(),
       pendingEditIds: session.getPendingEditIds(),

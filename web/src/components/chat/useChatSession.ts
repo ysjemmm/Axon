@@ -96,6 +96,10 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const [providerState, setProviderState] = useState<string | undefined>(() => {
     try { return localStorage.getItem(STORAGE.LAST_PROVIDER) || undefined; } catch { return undefined; }
   });
+  // 加载会话时随指令带上当前选中的模型：重启后后端恢复的会话在发第一条消息前没有模型，
+  // 只能按兜底的 128k 窗口算占用和压缩线（加载指令放在依赖不含模型的 effect 里，故走 ref）
+  const selectedModelRef = useRef({ model, provider: providerState });
+  selectedModelRef.current = { model, provider: providerState };
   const setModel = useCallback((newModel: string, providerName?: string) => {
     setModelState(newModel);
     setProviderState(providerName);
@@ -343,7 +347,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
       setIsLoading(false);
       setWorkspacesLoaded(false);  // 加载历史会话期间也重置，等后端返回工作区后再判断
       typewriter.cancel();
-      send({ type: "load_session", sessionId });
+      send({ type: "load_session", sessionId, ...selectedModelRef.current });
     } else {
       ownedSessionId.current = null;
       lastLoadedSessionId.current = null;

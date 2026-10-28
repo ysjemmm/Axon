@@ -1258,6 +1258,13 @@ export class AgentSession {
     return this.tokenAccountant.getLastTotalTokens();
   }
 
+  /** 会话还没有模型时（刚从磁盘恢复、尚未发过消息）补上；已有模型不覆盖——那是正在用的 */
+  adoptModelIfUnset(model?: string, provider?: string): void {
+    if (this.model || !model) return;
+    this.model = model;
+    if (provider && !this.provider) this.provider = provider;
+  }
+
   /** 自动压缩线（token）：按窗口留余量算，用户可在设置里选更早压缩（见 autoCompactThreshold） */
   getAutoCompactAt(): number {
     return autoCompactThreshold(this.getContextWindow(), this.compactionConfig.autoCompactAt);

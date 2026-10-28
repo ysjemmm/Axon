@@ -78,7 +78,8 @@ export interface ControlCommandRouting {
 export type ControlCommandPayload =
   | UserMessageCommand
   // 会话切换/管理
-  | { type: "load_session"; sessionId: string }
+  /** model / provider：前端当前选中的模型，供恢复的会话在发消息前就按正确的窗口计算占用 */
+  | { type: "load_session"; sessionId: string; model?: string; provider?: string }
   | { type: "new_session"; workspace?: string; model?: string; provider?: string; mode?: "agent" | "quest" | "cowork" }
   /**
    * 会话分叉：从 sessionId 指向的已有会话派生出一个新会话。
