@@ -840,85 +840,191 @@ function CardHeader({ status, Icon, label, right }: { status: ToolStatus; Icon: 
   );
 }
 
+/** 后台进程工具的状态文案（折叠行左侧那句话）。各工具动词不同，所以按 verb 拼。 */
+function processStatusLabel(status: ToolStatus, kind: "start" | "output" | "stop"): string {
+  if (kind === "start") {
+    switch (status) {
+      case "queued": return "准备启动";
+      case "pending": return "正在启动";
+      case "success": return "已启动进程";
+      case "error": return "启动失败";
+      case "cancelled": return "已取消";
+    }
+  }
+  if (kind === "output") {
+    switch (status) {
+      case "queued": return "准备读取输出";
+      case "pending": return "正在读取输出";
+      case "success": return "已读取输出";
+      case "error": return "读取输出失败";
+      case "cancelled": return "已取消";
+    }
+  }
+  switch (status) {
+    case "queued": return "准备停止";
+    case "pending": return "正在停止";
+    case "success": return "已停止进程";
+    case "error": return "停止失败";
+    case "cancelled": return "已取消";
+  }
+}
+
+/** 折叠行右侧的「在终端中查看」按钮：三个进程卡片共用 */
+function FocusTerminalButton({ onBeforeFocus }: { onBeforeFocus?: () => void }) {
+  return (
+    <button
+      onClick={(e) => {
+        // 折叠行整行可点（展开/收起），这个按钮不能连带触发切换
+        e.stopPropagation();
+        onBeforeFocus?.();
+        const vscode = (window as any).__axonVSCode;
+        if (vscode) vscode.postMessage({ type: "focus_terminal" });
+      }}
+      title="在终端中查看"
+      className="p-0.5 rounded opacity-40 transition-opacity hover:opacity-100"
+    >
+      <ExternalLink className="w-3 h-3" />
+    </button>
+  );
+}
+
 /**
- * start_process 卡片（三层）：① 工具信息 ② 执行的命令 ③ terminalId。
- * 未信任命令时复用内联审批条；启动信息作为底部输出。
+ * start_process：折叠行 + 缩进详情。
+ *
+ * 折叠行回答三件事——启动了哪个命令、进程号是什么、在哪往下看。
+ * 早先这里是一张三层大卡片（标题栏 + 命令块 + 输出块），一次后台启动就吃掉三四行高度；
+ * 而它出现的频率并不低（起 dev server、跑脚本），长对话里几张大卡连成一片，
+ * 把真正的文字回复挤没了。现在与「执行命令」同一套版式：默认一行，点开才展开。
+ *
+ * 有待审批时强制展开：审批条藏在折叠态里，用户根本没法操作。
  */
 function ProcessStartCard({ tool, approval }: { tool: ToolCallData; approval: ReturnType<typeof useCommandApproval> }) {
+  const [expanded, setExpanded] = useState(false);
+  const forceExpanded = !!approval;
+  const showDetail = forceExpanded || expanded;
   const handleApprove = (d: CommandDecision) => approval!.approve(d);
-  const startedId = tool.output?.match(/terminalId:\s*(\S+)/)?.[1] || tool.output?.match(/terminalId=(\S+)/)?.[1];
+  // terminalId 只出现在成功回执里（"已在后台启动：… terminalId: bg-1"），失败时没有
+  const startedId = tool.output?.match(/terminalId[=:]\s*(\S+)/)?.[1];
+
   return (
-    <div className={`my-2 rounded-lg border bg-popover overflow-hidden ${approval?.danger ? "border-red-500/80 animate-danger-pulse" : approval ? "border-amber-400/70" : "border-border"}`}>
-      <CardHeader status={tool.status} Icon={Server} label="启动后台进程" right={
-        <div className="flex items-center gap-1">
-          {tool.cwd && <span className="text-[10px] text-muted-foreground/70 font-mono truncate max-w-[160px]">{tool.cwd}</span>}
-          <button
-            onClick={() => { const vscode = (window as any).__axonVSCode; if (vscode) vscode.postMessage({ type: "focus_terminal" }); }}
-            title="在终端中查看"
-            className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-          >
-            <ExternalLink className="w-3 h-3" />
-          </button>
-        </div>
-      } />
-      {/* ② 命令 */}
-      <div className="px-2.5 py-1.5 border-b border-border/40">
-        <code className="text-[11px] font-mono font-semibold text-foreground break-all">{tool.command}</code>
+    <div className="my-0.5">
+      <div
+        onClick={() => { if (!forceExpanded) setExpanded((v) => !v); }}
+        className={`flex items-center gap-1.5 py-0.5 text-[11px] min-w-0 transition-colors ${
+          showDetail ? "text-muted-foreground/70" : "text-muted-foreground/60"
+        } ${forceExpanded ? "" : "cursor-pointer hover:text-muted-foreground"}`}
+      >
+        <CardStatusIcon status={tool.status} Icon={Server} />
+        <span className="shrink-0">{processStatusLabel(tool.status, "start")}</span>
+        {tool.command && (
+          <>
+            <span className="shrink-0 opacity-40">·</span>
+            {/* 命令可能很长（含参数），截断由 CSS 负责，完整内容在展开后与 title */}
+            <span className="min-w-0 truncate font-mono opacity-70" title={tool.command}>{tool.command}</span>
+          </>
+        )}
+        <span className="ml-auto flex items-center gap-1 shrink-0">
+          {startedId && (
+            <span className="px-1.5 py-0.5 rounded bg-muted text-[10px] font-mono text-muted-foreground">{startedId}</span>
+          )}
+          {tool.cwd && (
+            <span className="max-w-[220px] truncate font-mono text-[10px] leading-4 opacity-40">{tool.cwd}</span>
+          )}
+          <FocusTerminalButton />
+        </span>
       </div>
-      {/* 危险命令警告 */}
-      {approval?.danger && (
-        <div className="px-2.5 py-1 bg-red-500/10 border-y border-red-500/20">
-          <p className="text-[10px] text-red-500 font-medium">⚠ {approval.danger}。此命令具有破坏性，请谨慎确认。</p>
-        </div>
-      )}
-      {/* ③ terminalId */}
-      {startedId && (
-        <div className="px-2.5 py-1 flex items-center gap-1.5 text-[10px] text-muted-foreground">
-          <span className="px-1.5 py-0.5 rounded bg-muted font-mono">{startedId}</span>
-          <span>后台运行中</span>
-        </div>
-      )}
-      {approval && <InlineCommandApproval options={approval.options} onApprove={handleApprove} />}
-      {tool.output && <OutputBlock output={tool.output} />}
-    </div>
-  );
-}
-
-/** get_process_output 卡片（两层）：① 工具信息 + terminalId ② 读取到的输出 */
-function ProcessOutputCard({ tool }: { tool: ToolCallData }) {
-  const tid = typeof tool.args?.terminalId === "string" ? (tool.args.terminalId as string) : undefined;
-  return (
-    <div className="my-2 rounded-lg border border-border bg-popover overflow-hidden">
-      <CardHeader
-        status={tool.status}
-        Icon={ScrollText}
-        label="读取进程输出"
-        right={
-          <div className="flex items-center gap-1">
-            {tid && <span className="px-1.5 py-0.5 rounded bg-muted text-[10px] font-mono text-muted-foreground">{tid}</span>}
-            <button
-              onClick={() => { const vscode = (window as any).__axonVSCode; if (vscode) vscode.postMessage({ type: "focus_terminal" }); }}
-              title="在终端中查看"
-              className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-            >
-              <ExternalLink className="w-3 h-3" />
-            </button>
+      <div
+        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
+        style={{ gridTemplateRows: showDetail ? "1fr" : "0fr", opacity: showDetail ? 1 : 0 }}
+        aria-hidden={!showDetail}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className={`ml-5 mt-1 rounded-lg border bg-popover overflow-hidden ${approval?.danger ? "border-red-500/80 animate-danger-pulse" : approval ? "border-amber-400/70" : "border-border"}`}>
+            {tool.command && (
+              <div className="px-2.5 py-1.5">
+                <code className="text-[11px] font-mono font-semibold text-foreground break-all">{tool.command}</code>
+              </div>
+            )}
+            {approval?.danger && (
+              <div className="px-2.5 py-1 bg-red-500/10 border-y border-red-500/20">
+                <p className="text-[10px] text-red-500 font-medium">⚠ {approval.danger}。此命令具有破坏性，请谨慎确认。</p>
+              </div>
+            )}
+            {startedId && (
+              <div className="px-2.5 py-1 flex items-center gap-1.5 text-[10px] text-muted-foreground border-t border-border/50">
+                <span className="px-1.5 py-0.5 rounded bg-muted font-mono">{startedId}</span>
+                <span>后台运行中</span>
+              </div>
+            )}
+            {approval && <InlineCommandApproval options={approval.options} onApprove={handleApprove} />}
+            {tool.output && <OutputBlock output={tool.output} />}
           </div>
-        }
-      />
-      {tool.output && <OutputBlock output={tool.output} />}
+        </div>
+      </div>
     </div>
   );
 }
 
-/** stop_process 卡片（一层）：工具信息 */
+/** get_process_output：折叠行 + 缩进详情（详情就是读回来的那段输出）。 */
+function ProcessOutputCard({ tool }: { tool: ToolCallData }) {
+  const [expanded, setExpanded] = useState(false);
+  const tid = typeof tool.args?.terminalId === "string" ? (tool.args.terminalId as string) : undefined;
+  const hasOutput = !!tool.output;
+
+  return (
+    <div className="my-0.5">
+      <div
+        onClick={() => { if (hasOutput) setExpanded((v) => !v); }}
+        className={`flex items-center gap-1.5 py-0.5 text-[11px] min-w-0 transition-colors ${
+          expanded ? "text-muted-foreground/70" : "text-muted-foreground/60"
+        } ${hasOutput ? "cursor-pointer hover:text-muted-foreground" : ""}`}
+      >
+        <CardStatusIcon status={tool.status} Icon={ScrollText} />
+        <span className="shrink-0">{processStatusLabel(tool.status, "output")}</span>
+        {tid && (
+          <>
+            <span className="shrink-0 opacity-40">·</span>
+            <span className="shrink-0 font-mono opacity-70">{tid}</span>
+          </>
+        )}
+        <span className="ml-auto flex items-center gap-1 shrink-0">
+          <FocusTerminalButton />
+        </span>
+      </div>
+      <div
+        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
+        style={{ gridTemplateRows: expanded ? "1fr" : "0fr", opacity: expanded ? 1 : 0 }}
+        aria-hidden={!expanded}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className="ml-5 mt-1 rounded-lg border border-border bg-popover overflow-hidden">
+            {tool.output && <OutputBlock output={tool.output} />}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * stop_process：折叠行，**没有明细可展开**。
+ *
+ * 停止进程的结果就一句话（停掉了/没这个进程），没有需要展开看的内容，
+ * 所以刻意不挂展开交互——无 cursor-pointer、无 hover 变色。
+ * 一条点下去毫无反应的折叠行，比老实的一行文字更让人困惑（与「已更新记忆」同理）。
+ */
 function ProcessStopCard({ tool }: { tool: ToolCallData }) {
   const tid = typeof tool.args?.terminalId === "string" ? (tool.args.terminalId as string) : undefined;
   return (
-    <div className="flex items-center gap-2 py-1.5 px-2.5 my-2 rounded-lg border border-border bg-muted/20 text-[13px]">
+    <div className="my-0.5 flex items-center gap-1.5 py-0.5 text-[11px] min-w-0 text-muted-foreground/60">
       <CardStatusIcon status={tool.status} Icon={Power} />
-      <span className="text-muted-foreground">停止后台进程</span>
-      {tid && <span className="px-1.5 py-0.5 rounded bg-muted text-[10px] font-mono text-muted-foreground">{tid}</span>}
+      <span className="shrink-0">{processStatusLabel(tool.status, "stop")}</span>
+      {tid && (
+        <>
+          <span className="shrink-0 opacity-40">·</span>
+          <span className="shrink-0 font-mono opacity-70">{tid}</span>
+        </>
+      )}
     </div>
   );
 }
@@ -1141,21 +1247,26 @@ export function ToolCallItem({ tool, onAcceptEdit, onRejectEdit, onUndoEdit }: T
     );
   }
 
-  // 根据状态决定边框样式（queued/pending/rejected/error）
-  let borderClass = "border-border bg-muted/20";
-  if (tool.status === "queued") {
-    // 待执行：不用琥珀色高亮，整卡压暗后退，让正在执行的卡片自然凸显
-    borderClass = "border-border/50 bg-muted/10 opacity-60";
-  } else if (tool.status === "pending") {
-    borderClass = "border-amber-300/60 bg-amber-50 dark:bg-amber-950/20";
-  } else if (tool.rejected) {
-    borderClass = "border-red-300/60 bg-red-50 dark:bg-red-950/20";
-  } else if (tool.status === "error") {
-    borderClass = "border-red-300/60 bg-red-50 dark:bg-red-950/20";
-  }
+  // 兜底分支的统一版式：11px 折叠行，与「执行命令 / 查看文件 / 后台进程」同一套。
+  //
+  // 早前这里是一张 13px + 边框 + 底色的卡片（my-2 rounded-lg border bg-muted/20）。
+  // 它接住的是所有没有专属渲染的工具（list_dir、todo、未知 MCP 之外的杂项…），
+  // 于是同一段对话里会出现两种完全不同的"行"：多数工具一行 11px 灰字，
+  // 偶尔夹一张恰好两倍高的卡片——看起来像"这次调用很特别"，其实只是它没写专属分支。
+  //
+  // 状态不再用整卡底色区分（长对话里几块灰底连成一片很吵），改用文字/图标颜色：
+  // 待执行压暗（后退）、执行中琥珀（要人留意）、失败红色。
+  const rowColor =
+    tool.status === "error" || tool.rejected
+      ? "text-red-500"
+      : tool.status === "pending"
+        ? "text-amber-600 dark:text-amber-400"
+        : tool.status === "queued"
+          ? "text-muted-foreground/45"
+          : "text-muted-foreground/60 hover:text-muted-foreground";
 
   return (
-    <div className={`flex items-center gap-2 py-1.5 px-2.5 my-2 rounded-lg border text-[13px] ${borderClass}`}>
+    <div className={`flex items-center gap-1.5 py-0.5 text-[11px] min-w-0 transition-colors ${rowColor}`}>
       {renderIcon()}
       {/* MCP 工具：badge 显示 server 名 + 描述显示"调用 工具名" */}
       {tool.mcpServer && (
@@ -1175,7 +1286,7 @@ export function ToolCallItem({ tool, onAcceptEdit, onRejectEdit, onUndoEdit }: T
             ? <span className="text-muted-foreground truncate min-w-0">调用 <span className="font-medium text-foreground">{tool.mcpTool}</span></span>
             : <TruncatedText text={action} className="text-muted-foreground" />}
       {tool.status !== "queued" && fileName && (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-muted/40 text-xs font-mono shrink-0" title={String(tool.diff?.absPath || tool.diff?.path || tool.args?.path || fileName)}>
+        <span className="inline-flex items-center gap-1 min-w-0 font-mono shrink-0" title={String(tool.diff?.absPath || tool.diff?.path || tool.args?.path || fileName)}>
           <FileTypeIcon fileName={fileName} />
           <ClickableFileName fileName={fileName} absPath={String(tool.diff?.absPath || tool.diff?.path || tool.args?.path || "")} className="text-foreground" />
           {lineRange && <span className="text-muted-foreground/70">{lineRange}</span>}
