@@ -68,6 +68,7 @@ import { TokenAccountant } from "./session/tokenAccountant.js";
 import { ToolDefBuilder } from "./session/toolDefBuilder.js";
 import { McpController } from "./session/mcpController.js";
 import { buildToolTurnAssistantMessage } from "./session/toolTurnMessage.js";
+import { editArtifact, readArtifact, readSkillFile } from "./session/artifactTools.js";
 import { ToolGroupTracker, generateToolGroupSummary, isVisibleProse, type ClosedToolGroup } from "./session/toolGroupSummary.js";
 import { DelegateRunner } from "./session/delegateRunner.js";
 import { RelayToolRunner } from "./session/relayToolRunner.js";
@@ -767,6 +768,46 @@ export class AgentSession {
     } catch (err) {
       if (meta) meta.userMessage = "保存产物失败，请检查产物目录是否可写";
       return { result: `保存产物失败：${(err as Error).message}`, status: "error" };
+    }
+  }
+
+  /**
+   * edit_artifact / read_artifact / read_skill_file 的实现（见 session/artifactTools.ts）。
+   * 都只在产物目录、技能 / Power 目录里操作，碰不到用户仓库，问答模式同样可用。
+   */
+  /** @internal */ async runArtifactTool(
+    toolName: string,
+    toolArgs: Record<string, unknown>,
+    meta?: ToolMeta,
+  ): Promise<{ result: string; status: "success" | "error" }> {
+    const deps = { host: this.host, artifactDir: this.getArtifactDir() };
+    try {
+      if (toolName === "edit_artifact") {
+        const out = await editArtifact(deps, toolArgs);
+        if (!out.ok) {
+          if (meta) meta.userMessage = out.userMessage;
+          return { result: out.result, status: "error" };
+        }
+        // 与 create_artifact 同一套协议：meta 随工具结果落盘（历史恢复），事件让当前这一轮立刻出卡片
+        if (meta) meta.artifact = out.artifact;
+        this.send("artifact_created", { ...out.artifact });
+        return { result: out.result, status: "success" };
+      }
+      if (toolName === "read_artifact") {
+        const out = await readArtifact(deps, toolArgs);
+        return { result: out.result, status: out.ok ? "success" : "error" };
+      }
+      // read_skill_file：已发现的技能与 Power 目录都可读（读取前不要求先 use_skill）
+      const [skills, powers] = await Promise.all([
+        this.skillRegistry.discover().catch(() => []),
+        this.powerRegistry ? this.powerRegistry.discover().catch(() => []) : Promise.resolve([]),
+      ]);
+      const roots = [...skills.map((s) => s.dir), ...powers.map((p) => p.dir), this.lastLoadedSkillDir];
+      const out = await readSkillFile(this.host, roots, toolArgs, this.lastLoadedSkillDir || undefined);
+      return { result: out.result, status: out.ok ? "success" : "error" };
+    } catch (err) {
+      if (meta) meta.userMessage = "操作产物失败";
+      return { result: `操作失败：${(err as Error).message}`, status: "error" };
     }
   }
 
@@ -1975,8 +2016,12 @@ export class AgentSession {
   /** use_skill 工具的 skill 加载器（绑定 this，传给 executeToolCall） */
   /** @internal */ loadSkillForTool = async (name: string): Promise<{ name: string; dir: string; body: string } | null> => {
     const skill = await this.skillRegistry.load(name);
+    // 记下最近加载的技能目录：read_skill_file 的相对路径按它解析
+    if (skill?.dir) this.lastLoadedSkillDir = skill.dir;
     return skill ? { name: skill.name, dir: skill.dir, body: skill.body } : null;
   };
+  /** 最近一次 use_skill 加载的技能目录（read_skill_file 相对路径的基准） */
+  private lastLoadedSkillDir = "";
 
   /** activate_power 工具的 Power 加载器（绑定 this，传给 executeToolCall） */
   private loadPowerForTool = async (name: string) => {

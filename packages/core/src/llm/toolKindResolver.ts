@@ -85,6 +85,10 @@ const TOOL_KIND_MAP: Record<ToolName, ToolKind> = {
   [ToolName.RenderMedia]: "edit",
   // 会话记忆：不读不写磁盘，只改会话自己的一个字段，同样归 other
   [ToolName.UpdateMemory]: "other",
+  // 产物的局部修改同 create_artifact 归 edit（不产生 fileDiff，卡片由产物卡片接管）；两个读取归 read
+  [ToolName.EditArtifact]: "edit",
+  [ToolName.ReadArtifact]: "read",
+  [ToolName.ReadSkillFile]: "read",
 };
 
 /**

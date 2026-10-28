@@ -53,13 +53,26 @@ export function artifactSubtitle(artifact: Pick<ArtifactInfo, "size" | "version"
   return parts.join(" · ");
 }
 
-/** 从调用参数里取标题：生成中还没有 artifact 时，用它先把标题显示出来 */
+function fileNameOf(path: unknown): string {
+  return typeof path === "string" ? path.split("/").pop()?.split("\\").pop() || path : "";
+}
+
+/** 从调用参数里取标题：生成中还没有 artifact 时，用它先把标题显示出来（edit_artifact 没有标题，用文件名） */
 export function pendingArtifactTitle(args: Record<string, unknown> | undefined): string {
   const title = typeof args?.title === "string" ? args.title.trim() : "";
-  return title || "产物";
+  return title || fileNameOf(args?.path) || "产物";
 }
 
 /** 生成中的提示语：渲染动画要几十秒，要和"写文档"的提示区分开，否则用户以为卡住了 */
 export function pendingArtifactHint(toolName: string): string {
-  return toolName === "render_media" ? "正在渲染动画，可能需要一会儿…" : "正在生成产物…";
+  if (toolName === "render_media") return "正在渲染动画，可能需要一会儿…";
+  return toolName === "edit_artifact" ? "正在修改产物…" : "正在生成产物…";
+}
+
+/** 产物 / 技能资料读取工具的卡片文案；不是这两个工具返回 null */
+export function artifactReadDescription(toolName: string, args: Record<string, unknown> | undefined): string | null {
+  const name = fileNameOf(args?.path);
+  if (toolName === "read_artifact") return name ? `已读取产物 ${name}` : "已列出产物";
+  if (toolName === "read_skill_file") return name ? `已读取技能资料 ${name}` : "已读取技能资料";
+  return null;
 }

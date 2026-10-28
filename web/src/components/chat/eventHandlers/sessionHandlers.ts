@@ -12,6 +12,7 @@ import type { ToolStatus } from "@/components/ToolCallItem";
 import type { AttachedFile, ChatMessage, UserSegment } from "../types";
 import type { EventHandlerCtx, WsMessage } from "./types";
 import { finalizeStreamingTurnAsError } from "./turnHandlers";
+import { artifactReadDescription } from "../artifactMeta";
 
 export function handleSessionCreated(msg: WsMessage, ctx: EventHandlerCtx): void {
   if (ctx.compactionMigratedRef.current) return;
@@ -177,7 +178,7 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
             case "parallel_execute":
               desc = relayToolLabel(toolName);
               break;
-            default: desc = `已完成 ${toolName}`;
+            default: desc = artifactReadDescription(toolName, tcArgs) ?? `已完成 ${toolName}`;
           }
           currentAssistant.segments!.push({
             type: "tool",

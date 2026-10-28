@@ -25,7 +25,12 @@ export class ToolDefBuilder {
       // 纯问答里没有使用场景，故不注入。
       const tools: ToolDef[] = [this.getAskUserToolDef()];
       // 产物不碰仓库（后端直接写到产物目录），问答模式同样可以交付 HTML 页面、SVG、文档。
-      tools.push(this.getCreateArtifactToolDef());
+      // 局部修改与读回也只在产物目录内：改一处不必整份重写，压缩 / 分叉后也能读回原文。
+      tools.push(this.getCreateArtifactToolDef(), this.getEditArtifactToolDef(), this.getReadArtifactToolDef());
+      // 技能 / Power 目录里的附属文件（模板、参考资料）：问答模式没有 read_file，不给就读不到
+      tools.push(this.getReadSkillFileToolDef());
+      // 会话记忆只改会话自己的一个字段，不碰仓库；问答模式同样有记忆面板和记忆注入
+      tools.push(this.getUpdateMemoryToolDef());
       // 技能与能力包：只读取方法论文本、不碰仓库（两者在 catalog 里都标了 readOnly），
       // 所以问答模式同样要能把清单里的东西真正加载进来——否则提示里列了 name，
       // 模型却调不了 use_skill / activate_power，等于清单是死的。
@@ -49,7 +54,7 @@ export class ToolDefBuilder {
     const base = getToolDefinitions() as unknown as ToolDef[];
     const tools = [...base, this.getDelegateToolDef(), this.getAskUserToolDef(), this.getAskFormToolDef(), ...this.getRelayToolDefs(), ...this.s.mcpToolDefsCache];
     tools.push(this.getUpdateMemoryToolDef());
-    tools.push(this.getCreateArtifactToolDef());
+    tools.push(this.getCreateArtifactToolDef(), this.getEditArtifactToolDef(), this.getReadArtifactToolDef());
     if (this.s.imageEnabled && this.s.host?.imageGenerator) tools.push(this.getGenerateImageToolDef());
     // Cowork：额外给一个「交付产出」工具，让 Agent 自己说清做出了什么文件。
     // 只在办公面板注入 —— Chat/Code 那侧有工具卡片和 diff，不需要再多一个上报动作。
@@ -148,6 +153,87 @@ export class ToolDefBuilder {
             language: { type: "string", description: "仅 type=code 时填写：编程语言，如 python / typescript / bash。决定保存的扩展名。" },
           },
           required: ["title", "type", "content"],
+        },
+      },
+    };
+  }
+
+  /** edit_artifact：在已有产物上做局部修改，存成新版本 */
+  private getEditArtifactToolDef(): ToolDef {
+    return {
+      type: "function",
+      function: {
+        name: "edit_artifact",
+        description:
+          "修改一份已经交付的文本产物（html / svg / markdown / code / text）：只提交要改的片段，不用整份重写。\n\n" +
+          "【什么时候用】用户要在已有产物上调整（改颜色、加一个按钮、修一段文字、修 bug），改动是局部的。" +
+          "改动超过一半、或要换一种结构时，直接用 create_artifact 重新交付更合适。\n\n" +
+          "【怎么用】path 传产物的绝对路径（create_artifact / read_artifact 的返回里有）；edits 是若干 { oldStr, newStr }，" +
+          "按顺序应用。oldStr 必须与产物当前内容逐字符一致（含空格缩进换行）并且只出现一次，带几行上下文使它唯一。" +
+          "手里没有产物的最新原文（压缩之后、换了会话、或用户在别处改过）就先用 read_artifact 读一下。\n\n" +
+          "【结果】存成新版本（report-v2.html 这样），旧版本保留；界面显示新版本卡片，回复里简短说明改了什么即可。",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "要修改的产物绝对路径" },
+            edits: {
+              type: "array",
+              description: "按顺序应用的修改",
+              items: {
+                type: "object",
+                properties: {
+                  oldStr: { type: "string", description: "产物里原样存在、且只出现一次的一段文本" },
+                  newStr: { type: "string", description: "替换成的文本（删除就传空串）" },
+                },
+                required: ["oldStr", "newStr"],
+              },
+            },
+            title: { type: "string", description: "可选：卡片标题，不填沿用原文件名" },
+          },
+          required: ["path", "edits"],
+        },
+      },
+    };
+  }
+
+  /** read_artifact：列出 / 读取产物目录里的产物 */
+  private getReadArtifactToolDef(): ToolDef {
+    return {
+      type: "function",
+      function: {
+        name: "read_artifact",
+        description:
+          "读取已交付产物的当前内容，或列出本会话产物目录里有哪些产物。\n" +
+          "不带 path：列出产物目录（文件路径与大小）；带 path：返回该产物的完整文本。\n" +
+          "要修改一份产物、但上下文里已经没有它的原文时（压缩之后、换了会话、用户说「改一下上次那个页面」）先读一下，再用 edit_artifact 改。" +
+          "上下文里已有最新原文就不必再读。",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "可选：产物绝对路径；不传则列出产物目录" },
+          },
+          required: [],
+        },
+      },
+    };
+  }
+
+  /** read_skill_file：读技能 / Power 目录里的附属文件 */
+  private getReadSkillFileToolDef(): ToolDef {
+    return {
+      type: "function",
+      function: {
+        name: "read_skill_file",
+        description:
+          "读取技能或 Power 目录里的附属文件：模板、参考资料、示例、规范。传目录则列出其中的文件。\n" +
+          "加载的技能说明里提到「参考 templates/xxx」「先读 references/yyy」时用它读。" +
+          "path 可以是绝对路径，也可以是相对于最近一次 use_skill 加载的技能目录的相对路径。只能读技能 / Power 目录，读不到用户的项目文件。",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "文件或目录路径（绝对路径，或相对于最近加载的技能目录）" },
+          },
+          required: ["path"],
         },
       },
     };

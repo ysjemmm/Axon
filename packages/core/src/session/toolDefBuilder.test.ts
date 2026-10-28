@@ -24,12 +24,16 @@ function fakeMcpTools(): unknown[] {
 }
 
 describe("ToolDefBuilder 工具装配", () => {
-  it("问答（Quest）模式默认给 ask_user / create_artifact / use_skill / activate_power——不带读写/命令类工具", () => {
+  it("问答（Quest）模式默认给的工具都不碰仓库", () => {
     const names = toolNames("quest");
-    // create_artifact 由后端直接写到产物目录、不碰仓库，所以问答模式也可以交付成品。
-    // use_skill / activate_power 只读方法论文本、同样不碰仓库——技能与能力包清单会在
-    // 系统提示里列给模型，没有这两个工具清单就是死的（列了名字却加载不到）。
-    expect(names).toEqual(["ask_user", "create_artifact", "use_skill", "activate_power"]);
+    // create_artifact / edit_artifact / read_artifact 只在产物目录内读写，问答模式也能交付、修改成品。
+    // read_skill_file 只读技能 / Power 目录里的附属文件；update_memory 只改会话自己的记忆。
+    // use_skill / activate_power 只读方法论文本——技能与能力包清单会在系统提示里列给模型，
+    // 没有这两个工具清单就是死的（列了名字却加载不到）。
+    expect(names).toEqual([
+      "ask_user", "create_artifact", "edit_artifact", "read_artifact", "read_skill_file", "update_memory",
+      "use_skill", "activate_power",
+    ]);
   });
 
   it("问答模式拿不到任何读写 / 命令 / 浏览器工具（只读原则不被 use_skill 的引入带偏）", () => {
