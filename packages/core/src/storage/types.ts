@@ -62,7 +62,7 @@ export interface SessionData {
    * 会话记忆（Markdown）：本次会话里「值得跨会话带走」的结论的浓缩。
    *
    * 与 messages 分开存是刻意的：它不参与对话轮次、不随每轮重发，只在请求组装时
-   * 作为一条尾部注入发出（见 PromptBuilder.buildInjections）。因此它既不会污染
+   * 作为一条按轮注入发出（见 PromptBuilder.buildInjections）。因此它既不会污染
    * 历史与存档，内容变化时也不会打断历史那一段的前缀缓存。
    * 来源有二：模型调用 update_memory 维护，或用户把一份 .md 导入到会话里。
    */

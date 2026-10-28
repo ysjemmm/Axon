@@ -86,7 +86,7 @@ export type ControlCommandPayload =
    * 两种入口，共用这一条指令：
    * · 不带截断参数（会话列表 / 顶栏「分叉」）—— 新会话只继承源会话的「记忆」
    *   （SessionData.memory），不复制对话消息历史。用户要带走的是结论而不是过程。
-   *   记忆会随每轮请求作为尾部注入发出（见 PromptBuilder.buildInjections），
+   *   记忆会随每轮请求作为按轮注入发出（见 PromptBuilder.buildInjections），
    *   因此分叉后模型立刻就知道此前沉淀下的结论。源会话保持不变。
    * · 带截断参数（某条 AI 回复上的「从这里分叉」）—— 额外把截至那一轮为止的历史
    *   一并复制进新会话，见下面两个字段。此时记忆同样会复制。

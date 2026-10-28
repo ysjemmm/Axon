@@ -4,7 +4,7 @@
  * 职责单一：把"会话当前状态"翻译成发给 LLM 的消息数组。包含：
  * - GPT 系冗长度校准
  * - IDE 上下文提示（活动文件/选区/git diff）
- * - 多工作区 / 终端 cwd / skill / power / 上下文使用率等 system 注入
+ * - 多工作区 / 终端 cwd / skill / power / 上下文使用率等 system 注入（缓存友好模型按轮锚在用户消息之前）
  * - 瞬态工具结果过滤、消息配对清洗、旧工具结果摘要截断
  *
  * 设计：本类不持有状态，只通过构造注入的 session 引用读取会话当前状态（@internal 字段），
@@ -245,13 +245,27 @@ export class PromptBuilder {
     );
   }
 
-  /** 构造发给 LLM 的消息：保证 [system_prompt + 历史] 前缀稳定，注入消息放尾部 */
+  /**
+   * 构造发给 LLM 的消息。
+   *
+   * 缓存友好模型（DeepSeek / Qwen / GLM / Kimi / GPT 等）：每轮的上下文注入锚在
+   * **该轮用户消息之前**，而不是追加在整段历史之后。
+   *
+   * 为什么不放尾部：一轮里有 N 次工具调用，就有 N 次请求。注入放尾部时，每次请求的
+   * 最后一段都是「渲染协议 + IDE 上下文 + skills + 记忆……」这一大块 system 消息，
+   * 模型读到的末尾不是「工具结果刚回来」，而是像新一轮刚开始——于是每一步的思考都先把
+   * 「用户让我按方向 A，我已经做了……」重新复述一遍，看起来像每次回复都失忆。
+   * 而且尾部注入跟在不断增长的历史之后，永远落在未命中区，每一步都按全价重发一遍。
+   *
+   * 现在的做法：每轮开头把注入定格成快照挂在用户消息上（见 snapshotContextInjections），
+   * 请求组装时在每个带快照的用户消息前，只发出相对上一份快照**变了的那几项**。
+   * 轮内每一步的前缀逐字节不变；跨轮时旧快照原样留在历史里，前缀同样不断。
+   * 只针对当前这一步的临时纠偏（_tailInjected 的 system 消息）仍放尾部。
+   */
   buildRequestMessages(): ChatCompletionMessageParam[] {
-    const injections = this.buildInjections();
     const isDeepSeek = /deepseek/i.test(this.s.model);
     // 自动 Prompt Caching（GPT / o 系列）和显式前缀缓存模型都要求：
-    // 已发过的 system + 历史保持在请求最前面，运行时注入只能追加到尾部。
-    // 否则 IDE 上下文、工作区焦点等一变化，就会从 system 后立刻截断缓存前缀。
+    // 已发过的 system + 历史保持在请求最前面，不能被易变注入插到前面去。
     const isCacheFriendly = isDeepSeek || /^(gpt|o1|o3|o4)/i.test(this.s.model)
       || /glm|qwen|moonshot|kimi|yi-/i.test(this.s.model);
 
@@ -266,8 +280,8 @@ export class PromptBuilder {
     // 工具结果在【写入历史时】按各工具的单次上限一次裁到位（toolOutcomeRecorder → capToolContent），
     // 此后不再改写：回合收尾的旧结果裁剪（pruneOldToolResults）也已移除，理由相同。
     // 旧结果的总体积交给滚动压缩——低频的整体重写，而不是每轮一刀。
-    // 请求组装这里只做"不改变已发内容"的事：抽出尾部注入、换成运行时内容、清洗工具配对。
-    const extractedInjections: ChatCompletionMessageParam[] = [];
+    // 请求组装这里只做"不改变已发内容"的事：抽出单步临时注入、换成运行时内容、清洗工具配对。
+    const ephemeralTail: ChatCompletionMessageParam[] = [];
     const preFiltered: ChatCompletionMessageParam[] = [];
 
     const toRuntimeMessage = (m: ChatCompletionMessageParam): ChatCompletionMessageParam => {
@@ -276,12 +290,16 @@ export class PromptBuilder {
         const { displayContent, runtimeContent, ...rest } = anyMsg;
         return { ...rest, content: runtimeContent || null } as ChatCompletionMessageParam;
       }
+      if (anyMsg.role === "user" && anyMsg._contextInjections) {
+        const { _contextInjections, ...rest } = anyMsg;
+        return rest as ChatCompletionMessageParam;
+      }
       return m;
     };
 
     for (const m of this.s.messages) {
       if ((m as any)._tailInjected && (m as any).role === "system") {
-        extractedInjections.push(m);
+        ephemeralTail.push(m);
       } else {
         preFiltered.push(toRuntimeMessage(m));
       }
@@ -289,39 +307,94 @@ export class PromptBuilder {
 
     const truncated = sanitizeToolPairing(preFiltered);
 
-    const allTailInjections = isCacheFriendly ? [...extractedInjections, ...injections] : injections;
-    if (allTailInjections.length === 0) return truncated;
-    if (truncated.length === 0) return allTailInjections;
+    if (isCacheFriendly) {
+      return [...this.anchorContextInjections(truncated, this.s.messages), ...ephemeralTail];
+    }
 
+    // 非缓存友好链路（Anthropic / Responses 会把 system 合并到最前面）：注入紧跟系统提示词
+    const allInjections = [...this.buildInjections(), ...ephemeralTail];
+    if (allInjections.length === 0) return truncated;
+    if (truncated.length === 0) return allInjections;
     const [systemMsg, ...rest] = truncated;
-    if (isCacheFriendly) return [systemMsg, ...rest, ...allTailInjections];
-    return [systemMsg, ...allTailInjections, ...rest];
+    return [systemMsg, ...allInjections, ...rest];
+  }
+
+  /**
+   * 把每轮的上下文注入展开到对应用户消息之前（只发相对上一份快照有变化的项）。
+   *
+   * 快照从原始 messages 里取（runtime 消息已剥掉 _contextInjections），按用户消息的出现顺序对应。
+   * 最后一条真实用户消息若没有快照（旧会话 / 未走 beginTurn 的内部路径），用实时注入兜底；
+   * 历史里一份快照都没有时，兜底的这一份就会完整发出——与旧行为的内容一致，只是位置前移。
+   */
+  private anchorContextInjections(
+    runtime: ChatCompletionMessageParam[],
+    original: ChatCompletionMessageParam[],
+  ): ChatCompletionMessageParam[] {
+    const snapshots = new Map<number, ContextInjection[]>();
+    let userOrdinal = 0;
+    for (const m of original) {
+      if (!isRealUserMessage(m)) continue;
+      const snap = (m as any)._contextInjections;
+      if (Array.isArray(snap)) snapshots.set(userOrdinal, snap);
+      userOrdinal++;
+    }
+
+    const userCount = runtime.filter(isRealUserMessage).length;
+    if (userCount === 0) {
+      // 没有用户消息（极端内部路径）：退回旧的尾部注入
+      return [...runtime, ...this.buildInjections()];
+    }
+    if (!snapshots.has(userCount - 1)) snapshots.set(userCount - 1, this.snapshotContextInjections());
+
+    const emitted = new Map<string, string>();
+    const result: ChatCompletionMessageParam[] = [];
+    let ordinal = 0;
+    for (const m of runtime) {
+      if (isRealUserMessage(m)) {
+        const snap = snapshots.get(ordinal++);
+        if (snap) result.push(...diffInjections(emitted, snap));
+      }
+      result.push(m);
+    }
+    return result;
+  }
+
+  /**
+   * 本轮上下文注入的快照（每项带 key，用于跨轮比较只发变化项）。
+   * AgentSession 在 beginTurn() 之后把它挂到本轮用户消息上，本轮之内不再变化。
+   */
+  snapshotContextInjections(): ContextInjection[] {
+    return this.buildKeyedInjections().map(({ key, message }) => ({ key, content: messageText(message) }));
   }
 
   /** 构建本轮要注入的 system 消息（长度校准/验证/多工作区/IDE/skill/power），供请求组装与 token 估算复用 */
   buildInjections(): ChatCompletionMessageParam[] {
-    const injections: ChatCompletionMessageParam[] = [];
+    return this.buildKeyedInjections().map(({ message }) => message);
+  }
 
-    injections.push({ role: "system", content: ENHANCED_RENDERING_PROTOCOL });
+  private buildKeyedInjections(): Array<{ key: InjectionKey; message: ChatCompletionMessageParam }> {
+    const injections: Array<{ key: InjectionKey; message: ChatCompletionMessageParam }> = [];
+    const add = (key: InjectionKey, content: string) => injections.push({ key, message: { role: "system", content } });
+
+    add("render", ENHANCED_RENDERING_PROTOCOL);
 
     const verbosityCalibration = this.getVerbosityCalibration();
     if (verbosityCalibration) {
-      injections.push({ role: "system", content: verbosityCalibration });
+      add("verbosity", verbosityCalibration);
     }
 
     if (this.s.workspaces.length > 1) {
       const wsInfo = this.s.workspaces.map((p, i) => `  ${i + 1}. ${p}`).join("\n");
-      injections.push({
-        role: "system",
-        content:
-          `当前会话绑定了多个工作区：\n${wsInfo}\n\n` +
+      add(
+        "workspaces",
+        `当前会话绑定了多个工作区：\n${wsInfo}\n\n` +
           `重要规则：\n` +
           `- 所有路径一律使用绝对路径，禁止使用相对路径\n` +
           `- execute_command 必须始终传 cwd 参数（绝对路径），指定命令要在哪个工作区目录执行（不要省略）\n` +
           `- 访问文件时，path 必须使用完整绝对路径\n` +
           `- 不要用 ../、../../ 等相对路径去猜测其他工作区的位置\n` +
           `- search 工具的 path 参数：搜索某个工作区时直接传该工作区的绝对路径`,
-      });
+      );
 
       // 列表本身不分主次，模型容易随便挑一个工作区就开查。再补一条"聚焦"提示，
       // 把用户当前真正在看的那个工作区标出来（依据活动文件，其次主工作区）。
@@ -330,7 +403,7 @@ export class PromptBuilder {
       // 焦点取本轮定格值：一轮之内用户切文件不会让 system 前缀变样（见 turnFrozen）。
       const focusHint = this.frozen().focusHint;
       if (focusHint) {
-        injections.push({ role: "system", content: focusHint });
+        add("focus", focusHint);
       }
     }
 
@@ -339,50 +412,94 @@ export class PromptBuilder {
     // 这条提示只影响"不传 cwd"的兜底行为。
     const terminalNotice = this.frozen().terminalNotice;
     if (terminalNotice) {
-      injections.push({ role: "system", content: terminalNotice });
+      add("terminal", terminalNotice);
     }
 
     if (this.s.ideContextCache) {
-      injections.push({ role: "system", content: this.s.ideContextCache, _tailInjected: true } as ChatCompletionMessageParam);
+      add("ide", this.s.ideContextCache);
     }
 
     if (this.s.skillsPromptCache) {
-      injections.push({ role: "system", content: this.s.skillsPromptCache, _tailInjected: true } as ChatCompletionMessageParam);
+      add("skills", this.s.skillsPromptCache);
     }
 
     if (this.s.powersPromptCache) {
-      injections.push({ role: "system", content: this.s.powersPromptCache, _tailInjected: true } as ChatCompletionMessageParam);
+      add("powers", this.s.powersPromptCache);
     }
 
     // Wiki 索引：只列「有哪些页、讲什么」，正文由模型按需 read_file（渐进式披露）。
-    // 与 skills / powers 同样走 _tailInjected —— 它放在历史之后，内容变化时不会让
-    // 前面那一大段历史的前缀缓存失效（前缀缓存的价值主要在历史，不在注入本身）。
     // 未使用 Wiki 的项目此处为 null，整条注入不存在。
     if (this.s.wikiPromptCache) {
-      injections.push({ role: "system", content: this.s.wikiPromptCache, _tailInjected: true } as ChatCompletionMessageParam);
+      add("wiki", this.s.wikiPromptCache);
     }
 
-    // 会话记忆：整份文档作为一条尾部注入。
+    // 会话记忆：整份文档作为一条注入。
     // 刻意不并进系统提示开头：它的内容随会话推进而变化，放前面会让整段前缀缓存
-    // 从变化点起失效；放尾部，变化的代价就只落在这一条自己身上。
+    // 从变化点起失效；作为按轮注入，变化的代价就只落在这一条自己身上。
     if (this.s.memory && this.s.memory.trim()) {
-      injections.push({
-        role: "system",
-        content:
-          "【会话记忆】以下内容由你此前主动写入、或由用户导入，是本次会话已确认的背景前提。" +
+      add(
+        "memory",
+        "【会话记忆】以下内容由你此前主动写入、或由用户导入，是本次会话已确认的背景前提。" +
           "直接当作已知事实使用：不要重新询问，也不要在回复里复述它。\n\n" + this.s.memory.trim(),
-        _tailInjected: true,
-      } as ChatCompletionMessageParam);
+      );
     }
 
     // 上下文使用率提醒：只在接近上限时出现，取本轮定格值（见 buildUsageNotice / turnFrozen）
     const usageNotice = this.frozen().usageNotice;
     if (usageNotice) {
-      injections.push({ role: "system", content: usageNotice, _tailInjected: true } as ChatCompletionMessageParam);
+      add("usage", usageNotice);
     }
 
     return injections;
   }
+}
+
+type InjectionKey =
+  | "render" | "verbosity" | "workspaces" | "focus" | "terminal"
+  | "ide" | "skills" | "powers" | "wiki" | "memory" | "usage";
+
+/** 一项上下文注入的快照（挂在用户消息的 _contextInjections 上，随历史持久化） */
+export interface ContextInjection {
+  key: string;
+  content: string;
+}
+
+/** 某项注入在新一轮里消失时的作废说明，避免模型继续按历史里的旧版本行事 */
+const RETIRED_NOTICE: Record<string, string> = {
+  verbosity: "此前的「输出长度校准」已不再适用。",
+  workspaces: "此前的「多工作区规则」已不再适用：当前会话只绑定了一个工作区。",
+  focus: "此前的「工作区聚焦」提示已不再适用。",
+  terminal: "此前的「终端工作目录」提示已不再适用：终端已回到主工作区。",
+  ide: "此前的【IDE 上下文】已过期，不要再据此判断用户当前的编辑器状态。",
+  skills: "此前列出的 skill 清单已不再适用。",
+  powers: "此前列出的 power 清单已不再适用。",
+  wiki: "此前列出的 Wiki 索引已不再适用。",
+  memory: "【会话记忆】已被清空，此前的记忆内容不再作为已确认前提。",
+  usage: "此前的「上下文使用率」提醒已不再适用。",
+};
+
+/** 相对已发出的注入，算出这一份快照需要新发的 system 消息（变化项 + 消失项的作废说明） */
+function diffInjections(emitted: Map<string, string>, snapshot: ContextInjection[]): ChatCompletionMessageParam[] {
+  const out: ChatCompletionMessageParam[] = [];
+  const present = new Set<string>();
+  for (const { key, content } of snapshot) {
+    present.add(key);
+    if (emitted.get(key) === content) continue;
+    emitted.set(key, content);
+    out.push({ role: "system", content });
+  }
+  for (const key of [...emitted.keys()]) {
+    if (present.has(key)) continue;
+    emitted.delete(key);
+    out.push({ role: "system", content: RETIRED_NOTICE[key] ?? `此前的「${key}」注入已不再适用。` });
+  }
+  return out;
+}
+
+/** 用户真正发出的消息（排除截图回填、续写引导这类系统代发的 user 消息） */
+export function isRealUserMessage(m: ChatCompletionMessageParam): boolean {
+  const anyMsg = m as any;
+  return anyMsg?.role === "user" && !anyMsg._screenshotInjection && !anyMsg._tailInjected && !anyMsg._ephemeralInjected;
 }
 
 /** 一轮之内定格不变的易变注入 */

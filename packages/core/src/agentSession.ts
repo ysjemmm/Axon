@@ -26,7 +26,7 @@ import { McpRegistry } from "./mcp/mcpRegistry.js";
 import { modelContextWindow } from "./llm/modelContext.js";
 import { SYSTEM_PROMPT, QUEST_SYSTEM_PROMPT } from "./systemPrompt.js";
 import { getStrategy, findProviderForModel, declaredThinkingFor, declaredEffortValuesFor, declaredCacheControlFor, declaredVisionFor, getVisionFallbackModel, getModelDisplayName, getProviderDisplayName } from "./providers.js";
-import { PromptBuilder } from "./session/promptBuilder.js";
+import { PromptBuilder, isRealUserMessage } from "./session/promptBuilder.js";
 import {
   createHumanizedStatusState,
   describeAction,
@@ -125,7 +125,7 @@ export class AgentSession {
   /**
    * 会话记忆（Markdown）——本次会话里「值得跨会话带走」的结论的浓缩。
    *
-   * 刻意不放进 messages：它不参与对话轮次，只作为一条尾部注入每轮发一次，
+   * 刻意不放进 messages：它不参与对话轮次，只作为一条按轮注入每轮发一次，
    * 因此不污染历史与存档，内容变化时也不会打断历史那一段的前缀缓存。
    * 落盘在 SessionData.memory，由 update_memory 工具或用户导入 .md 维护。
    */
@@ -558,7 +558,7 @@ export class AgentSession {
     }
   }
 
-  /** 当前会话记忆（Markdown）；供尾部注入与前端读取 */
+  /** 当前会话记忆（Markdown）；供按轮注入与前端读取 */
   getMemory(): string {
     return this.memory;
   }
@@ -585,7 +585,7 @@ export class AgentSession {
    * ── 关于上下文开销 ──
    * 入参就是整份文档，所以在 catalog 里标了 transient：工具【结果】跨轮会被裁掉。
    * 调用本身仍留在历史的 assistant 消息里，因此只在真正值得记的时候写，不要每轮重写。
-   * 记忆的正式落点是 SessionData.memory，随后由 PromptBuilder 作为尾部注入每轮发一条。
+   * 记忆的正式落点是 SessionData.memory，随后由 PromptBuilder 作为按轮注入每轮发一条。
    */
   /** @internal */ updateMemory(toolArgs: Record<string, unknown>): { result: string; status: "success" | "error" } {
     const content = typeof toolArgs.content === "string" ? toolArgs.content.trim() : "";
@@ -2656,6 +2656,13 @@ export class AgentSession {
     // 定格本轮的易变注入（终端 cwd / 工作区聚焦）：一轮之内 system 前缀逐字节不变，
     // 否则 Anthropic / Responses 链路每次命令换目录都会整段断缓存（见 PromptBuilder.beginTurn）
     this.promptBuilder.beginTurn();
+    // 本轮上下文注入定格成快照挂在用户消息上：请求组装把它展开在这条消息之前，
+    // 而不是每次工具调用后都追加到历史末尾（见 PromptBuilder.buildRequestMessages）
+    // 已有快照（同一条消息重跑）时不覆盖：改写已发过的历史会断前缀缓存。
+    const turnUserMsg = [...this.messages].reverse().find(isRealUserMessage) as any;
+    if (turnUserMsg && !turnUserMsg._contextInjections) {
+      turnUserMsg._contextInjections = this.promptBuilder.snapshotContextInjections();
+    }
     // 再显式挡一次：不依赖 announceWikiRecall 自己对 null 的处理（那是它的实现细节，
     // 万一它把 null 当成"本轮没有召回"而渲染一张空卡片，Quest 模式就会冒出一块莫名其妙的东西）
     if (this.mode !== "quest") this.announceWikiRecall(wikiRecall);

@@ -43,7 +43,7 @@ function systemPrefix(s: any): string {
 }
 
 describe("尾部注入在一轮内保持稳定", () => {
-  it("GPT Chat 把易变 system 注入放在历史尾部，保留可自动缓存的稳定前缀", () => {
+  it("GPT Chat 把易变 system 注入锚在本轮用户消息之前，保留可自动缓存的稳定前缀", () => {
     const s = makeSession({
       model: "gpt-5.6-sol",
       messages: [
@@ -55,9 +55,10 @@ describe("尾部注入在一轮内保持稳定", () => {
     });
 
     const request = s.promptBuilder.buildRequestMessages();
-    expect(request.slice(0, 3)).toEqual(s.messages);
-    expect(request.at(-1)?.role).toBe("system");
-    expect(request.at(-1)?.content).toBe("CURRENT IDE CONTEXT");
+    expect(request[0]).toEqual(s.messages[0]);
+    expect(request.slice(-2)).toEqual(s.messages.slice(1));
+    expect(request.at(-3)?.role).toBe("system");
+    expect(request.at(-3)?.content).toBe("CURRENT IDE CONTEXT");
   });
 
   it("同一轮中 execute_command 换了目录，system 前缀不变", () => {
@@ -124,16 +125,17 @@ describe("尾部注入在一轮内保持稳定", () => {
     expect(after.startsWith(before.slice(0, -1))).toBe(true);
   });
 
-  it("会话记忆作为尾部注入发出；清空后不再注入", () => {
-    // 用缓存友好模型：只有这条链路才把注入放在历史【之后】
+  it("会话记忆随本轮注入发出；清空后不再注入", () => {
+    // 用缓存友好模型：只有这条链路才把注入锚在用户消息前（而不是紧跟系统提示）
     const s = makeSession({ model: "gpt-5.6-sol", memory: "# 记忆\n- 结论 A" });
     s.promptBuilder.beginTurn();
     const request = s.promptBuilder.buildRequestMessages();
 
     expect(systemPrefix(s)).toContain("【会话记忆】");
     expect(systemPrefix(s)).toContain("结论 A");
-    // 必须是尾部注入：排在历史之后，不夹在系统提示与历史之间
-    expect(request.at(-1)?.content).toContain("【会话记忆】");
+    // 紧挨着本轮用户消息，不夹在系统提示与历史之间
+    expect(request.at(-2)?.content).toContain("【会话记忆】");
+    expect(request.at(-1)?.content).toBe("u1");
 
     s.memory = "";
     expect(systemPrefix(s)).not.toContain("【会话记忆】");
