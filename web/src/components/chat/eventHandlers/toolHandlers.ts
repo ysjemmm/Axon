@@ -14,6 +14,7 @@ import type { ToolSegment } from "../types";
 import type { EventHandlerCtx, WsMessage } from "./types";
 import { clearPendingRetry } from "./stateHandlers";
 import { sealReasoning } from "../reasoningPlacement";
+import { artifactReadDescription } from "../artifactMeta";
 import { TOOL, TIMEOUT } from "@/lib/constants";
 
 export function handleToolCall(msg: WsMessage, ctx: EventHandlerCtx): void {
@@ -339,6 +340,7 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
               finalDesc = msg.result?.slice(0, 60) || seg.description;
             }
           }
+          finalDesc = artifactReadDescription(msg.name || seg.name, (msg as any).args || seg.args) ?? finalDesc;
           segs[matchIdx] = {
             ...seg,
             status: toolStatus,

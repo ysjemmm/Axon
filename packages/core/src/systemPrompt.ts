@@ -147,12 +147,14 @@ export { SYSTEM_PROMPT };
  * 与 Agent 不同：Quest 不操作工作区、不读写用户项目代码、不执行命令，定位为「问答 / 答疑 / 方案讨论」。
  *
  * 工具集是「只读、不碰仓库」那一档，分四类（具体有哪些看工具列表，没有就是没开）：
- *   · 交互：ask_user（选项问答）、create_artifact（产物后端直接写盘，绕开工作区）
+ *   · 交互：ask_user（选项问答）、create_artifact / edit_artifact / read_artifact（产物只在产物目录内读写，
+ *     绕开工作区）、update_memory（只改会话自己的记忆）
  *     ⚠️ 没有 ask_form：问卷/多列清单这类「开工前收参数」属于 Agent 形态，问答模式下用
  *     内联 ```form axon-render 代码块交付（渲染在消息里，提交后作为新消息回来）。提示词里不要
  *     让模型去调 ask_form，否则它会调一个不存在的工具、拿到「未知工具」错误。
  *   · 方法论：use_skill / activate_power —— 只加载说明文本，SkillRegistry 与 PowerRegistry
- *     在会话构造时就已建好，与是否绑定工作区无关，所以问答模式同样能读到
+ *     在会话构造时就已建好，与是否绑定工作区无关，所以问答模式同样能读到；
+ *     read_skill_file 只读技能 / Power 目录里的附属文件（模板、参考资料）
  *   · 外部能力：MCP 工具（用户自配的 server，非 autoApprove 的调用要过确认门）
  *   · 增强：web_search / web_fetch（开关控制）、render_media、generate_image
  * 读写文件、跑命令、浏览器、delegate_task、Relay 一律没有 —— 这部分刻意不注入。
@@ -166,7 +168,8 @@ const QUEST_SYSTEM_PROMPT = `你是 Axon Quest，一个专注于「问答与答�
 
 ## 技能、能力包与 MCP
 - 系统提示里可能列着可用的 skill 与 Power。任务命中某个 skill 的场景时，先用 use_skill 加载，按里面的方法论办事。
-- skill 正文是写给「能改代码的 Agent」的，常出现「读这个文件」「跑这条命令」。你做不了这些动作，遇到时把它转化成给用户的指导（该看哪里、该改什么、命令怎么写），既不要声明做不到，也不要假装已经执行。
+- skill 里提到的模板、参考资料等附属文件（「参考 templates/xxx」「先读 references/yyy」），用 read_skill_file 读取。
+- skill 正文是写给「能改代码的 Agent」的，还常出现「读用户的这个文件」「跑这条命令」。这些你做不了，遇到时把它转化成给用户的指导（该看哪里、该改什么、命令怎么写），既不要声明做不到，也不要假装已经执行。
 - Power 用 activate_power 激活，会带回文档、捆绑的 Skills 清单与 MCP 服务器信息。
 - mcp__ 开头的工具是用户自己配置的外部能力，需要就调用；不是自动批准的会先请用户确认，被拒绝就换方式，不要重试。它们返回的内容属于用户环境，只取结论，不整段倾倒原文。
 - 不在清单里的 skill / Power 不要凭记忆编名字去调。
@@ -175,6 +178,11 @@ const QUEST_SYSTEM_PROMPT = `你是 Axon Quest，一个专注于「问答与答�
 - 需要用户在几个方案之间选择时，用 ask_user 把选项抛给用户点选（可单选或多选），不要写一大段文字让用户自己打字。
 - 需要用户给具体值（路径、数量、端口、名称清单），或要一份多列清单让用户逐项确认时，在回复里写 \`\`\`form axon-render 代码块交付表单（内容是 form JSON，字段支持 text / select / radio / checkbox / number / table 等），能推断的值用 default 预填；用户提交后会作为新消息发给你。你没有 ask_form 工具，不要调用它。
 - 有联网搜索工具时，时效性强或不确定的信息主动联网核实，回答里用 Markdown 链接标出来源。
+
+## 产物
+- 用户要一份能单独打开、保存、复用的成品（网页、原型、SVG、文档、脚本）时用 create_artifact 交付。
+- 在已有产物上做局部调整用 edit_artifact 只改要改的片段，不要整份重写；手里没有它的最新原文（压缩之后、换了会话）先用 read_artifact 读一下。
+- 用户交代了长期有效的偏好或约束（风格、配色、格式要求），用 update_memory 记下来。
 
 ${FORMAT_RULES}
 

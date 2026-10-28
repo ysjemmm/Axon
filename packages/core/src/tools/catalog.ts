@@ -88,6 +88,13 @@ export enum ToolName {
   // 与 create_artifact 的区别：产物是后端渲染出的二进制文件，模型只给 HTML 和参数。
   // 不碰仓库、不给模型任何命令权限，所以 Quest 模式也可以用；仅在宿主提供 mediaRenderer 时注入。
   RenderMedia = "render_media",
+  // 产物的局部修改 / 读取：只在产物目录内操作（见 session/artifactTools.ts）。
+  // 改产物不必再整份重写；压缩后、分叉后也能读回原文。只注入给主 Agent。
+  EditArtifact = "edit_artifact",
+  ReadArtifact = "read_artifact",
+  // 读技能 / Power 目录里的附属文件（模板、参考资料）。Quest 没有 read_file，
+  // 技能里「参考 templates/xxx」这类步骤原本完全读不到。只读、不出这些目录。
+  ReadSkillFile = "read_skill_file",
 }
 
 /**
@@ -324,6 +331,10 @@ export const TOOL_CATALOG: Record<ToolName, ToolSpec> = {
   // 媒体渲染：入参 html 可能很大，调用本身会留在 assistant 消息里；
   // 标 transient 让工具【结果】那条回执跨轮被裁掉。渲染耗时较长，进度由执行过程中的 status 事件细化。
   [ToolName.RenderMedia]: { status: S("正在渲染动画...", "running"), requiresArgs: true, transient: true },
+  // 局部修改：入参只有改动片段，结果是一行回执，同样标 transient
+  [ToolName.EditArtifact]: { status: S("正在修改产物...", "editing"), requiresArgs: true, transient: true },
+  [ToolName.ReadArtifact]: { status: S("正在读取产物...", "reading"), readOnly: true, transient: true, contentLimit: 40_000 },
+  [ToolName.ReadSkillFile]: { status: S("正在读取技能资料...", "reading"), requiresArgs: true, readOnly: true, transient: true, contentLimit: 40_000 },
 };
 
 const DEFAULT_CONTENT_LIMIT = 3_000;
