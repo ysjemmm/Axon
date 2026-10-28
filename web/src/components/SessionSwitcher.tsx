@@ -12,6 +12,7 @@
  *   信息会丢，所以标题右侧补一个运行中计数圆点，否则多会话并行变成黑箱。
  */
 
+import { displaySessionTitle, editableSessionTitle } from "@/lib/sessionTitle";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { ChevronDown, Plus, History, X, Check, Loader2, MessagesSquare, CodeXml, Table2, GitFork } from "lucide-react";
 import type { SessionTab } from "./SessionContainer";
@@ -90,9 +91,13 @@ export function SessionSwitcher({
         {renaming && current ? (
           <input
             autoFocus
-            defaultValue={current.title}
+            defaultValue={editableSessionTitle(current.title)}
             className="flex-1 min-w-0 bg-transparent border-b border-primary text-[13px] outline-none px-1"
-            onBlur={(e) => { onRename(current.key, e.target.value); setRenaming(false); }}
+            onBlur={(e) => {
+              // 没改动就不提交：输入框里是去掉省略号的版本，直接提交会把标题改短
+              if (e.target.value.trim() !== editableSessionTitle(current.title)) onRename(current.key, e.target.value);
+              setRenaming(false);
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter") (e.target as HTMLInputElement).blur();
               if (e.key === "Escape") setRenaming(false);
@@ -102,10 +107,10 @@ export function SessionSwitcher({
           <button
             onClick={() => setOpen((v) => !v)}
             onDoubleClick={() => { if (current) { setOpen(false); setRenaming(true); } }}
-            title={current ? `${current.title}（点击切换会话，双击重命名）` : "会话"}
+            title={current ? `${displaySessionTitle(current.title)}（点击切换会话，双击重命名）` : "会话"}
             className="flex-1 min-w-0 flex items-center gap-1 px-1.5 py-1 rounded text-[13px] text-foreground hover:bg-muted/50 transition-colors cursor-pointer"
           >
-            <span className="truncate font-medium">{current?.title || "新对话"}</span>
+            <span className="truncate font-medium">{displaySessionTitle(current?.title) || "新对话"}</span>
             {backgroundRunning > 0 && (
               <span
                 title={`另有 ${backgroundRunning} 个会话正在运行`}
@@ -196,7 +201,7 @@ export function SessionSwitcher({
                     <Check className="w-3 h-3 text-primary" />
                   ) : null}
                 </span>
-                <span className="flex-1 truncate">{t.title}</span>
+                <span className="flex-1 truncate">{displaySessionTitle(t.title)}</span>
                 <button
                   onClick={(e) => { e.stopPropagation(); onCloseTab(t.key, e); }}
                   title="关闭对话"

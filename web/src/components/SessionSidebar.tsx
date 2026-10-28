@@ -2,6 +2,7 @@
  * 会话侧边栏 - 列表 + 新建 + 切换 + 删除
  */
 
+import { displaySessionTitle } from "@/lib/sessionTitle";
 import { useState, useEffect } from "react";
 import { Plus, MessageSquare, Trash2, PanelLeft, Search, Loader2, GitFork } from "lucide-react";
 import { listSessions, deleteSession } from "@/lib/apiClient";
@@ -151,7 +152,7 @@ export function SessionSidebar({ currentSessionId, connected: _connected, filter
           >
             <MessageSquare className="w-4 h-4 text-muted-foreground shrink-0" />
             <div className="flex-1 min-w-0">
-              <div className="text-sm truncate">{s.title}</div>
+              <div className="text-sm truncate">{displaySessionTitle(s.title)}</div>
               <div className="text-[11px] text-muted-foreground/70">{formatTime(s.updatedAt)}</div>
             </div>
             <button

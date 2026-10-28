@@ -13,6 +13,7 @@
  * 一个 SessionHub 实例对应一条 UI 连接（一个 webview / 一个 ws）；一条连接下可有多个面板。
  */
 
+import { uniqueAutoTitle, uniqueSessionTitle, PLACEHOLDER_TITLE } from "./sessionTitle.js";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { AgentSession } from "../agentSession.js";
 import { CommandGate } from "../tools/index.js";
@@ -1003,7 +1004,9 @@ export class SessionHub {
     const ws_dirs = source.workspaces && source.workspaces.length > 0 ? source.workspaces : allWorkspaces;
     // 落盘的 mode 可能是 cowork，运行时降级成 agent（见 normalizeMode 的说明）
     const mode = this.normalizeMode(source.mode);
-    const title = `${source.title} · 分叉`;
+    // 同一个会话分叉多次时与已有标题去重（「xxx · 分叉 (2)」），否则列表里分不清
+    const existingTitles = (await this.storage.listSessions().catch(() => [])).map((s) => s.title);
+    const title = uniqueSessionTitle(`${source.title} · 分叉`, existingTitles);
 
     // 有没有截断参数，决定这次分叉带不带历史前缀：
     // · 不带（会话列表 / 顶栏入口）→ 维持原语义：messages 留空，只带记忆；
@@ -1103,8 +1106,7 @@ export class SessionHub {
       ? parentSaved.workspaces
       : allWorkspaces;
     const mode = parentSaved?.mode ?? "agent";
-    const titleSource = migrateData.userInput.content;
-    const title = titleSource.slice(0, 30) + (titleSource.length > 30 ? "..." : "");
+    const title = await uniqueAutoTitle(this.storage, migrateData.userInput.content);
 
     // 创建新会话并预加载压缩后的消息
     const created = await this.storage.createSession({
@@ -1336,8 +1338,8 @@ export class SessionHub {
 
       let title = savedSession?.title;
       const titleSource = cmd.displayText || cmd.content;
-      if (title === "新对话" && titleSource) {
-        title = titleSource.slice(0, 30) + (titleSource.length > 30 ? "..." : "");
+      if (title === PLACEHOLDER_TITLE && titleSource) {
+        title = await uniqueAutoTitle(this.storage, titleSource, turnSid);
       }
 
       await this.storage.updateSession(turnSid, {
@@ -1372,8 +1374,8 @@ export class SessionHub {
       const savedSession = await this.storage.getSession(sid);
       let title = savedSession?.title;
       const titleSource = cmd.displayText || cmd.content;
-      if (title === "新对话" && titleSource) {
-        title = titleSource.slice(0, 30) + (titleSource.length > 30 ? "..." : "");
+      if (title === PLACEHOLDER_TITLE && titleSource) {
+        title = await uniqueAutoTitle(this.storage, titleSource, sid);
       }
       await this.storage.updateSession(sid, {
         messages,

@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { resolve, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { RelayStore, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, assertUniqueModelIds, supportsThinking, providerEnvKeys, stripProviderEnvLines, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry, type ProviderQuotaConfig } from "@axon/core";
+import { RelayStore, renameSessionTitle, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, assertUniqueModelIds, supportsThinking, providerEnvKeys, stripProviderEnvLines, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry, type ProviderQuotaConfig } from "@axon/core";
 import { createVSCodeAgentHost } from "@axon/host-vscode";
 import { queryProviderQuota, quotaTokenStore, validateQuotaQuery } from "./quotaService.js";
 import { createMarketplaceRegistry, persistSourcesToSettings } from "./marketplaceBridge.js";
@@ -123,8 +123,11 @@ export class RequestRouter {
         return { ok: true };
       }
       if (method === "PATCH") {
-        await d.storage.updateSession(id, (body || {}) as Record<string, never>);
-        return { ok: true };
+        // 重命名：标题与其它会话去重，返回最终标题（可能带了「 (2)」序号），前端据此更新
+        const { title, ...rest } = (body || {}) as Record<string, unknown>;
+        if (Object.keys(rest).length > 0) await d.storage.updateSession(id, rest as Record<string, never>);
+        const finalTitle = typeof title === "string" ? await renameSessionTitle(d.storage, id, title) : null;
+        return { ok: true, ...(finalTitle ? { title: finalTitle } : {}) };
       }
     }
 

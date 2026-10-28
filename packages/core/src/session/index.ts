@@ -32,3 +32,4 @@ export {
 } from "./sessionTraceWriter.js";
 export { resolveToolDispatchRoute } from "./toolDispatchRouter.js";
 export { SessionHub } from "./sessionHub.js";
+export { autoSessionTitle, uniqueSessionTitle, uniqueAutoTitle, renameSessionTitle, PLACEHOLDER_TITLE } from "./sessionTitle.js";
