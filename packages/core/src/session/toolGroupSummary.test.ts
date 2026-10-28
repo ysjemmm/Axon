@@ -90,3 +90,16 @@ describe("generateToolGroupSummary", () => {
     expect(seen.messages[1].content).toContain("- 读取文件 a.ts");
   });
 });
+
+describe("正文一出现就提前收尾", () => {
+  it("流式阶段 close 之后，本轮 onRound 遇到同一段正文不会重复产出分组", () => {
+    const t = new ToolGroupTracker();
+    t.onRound(null, [call("a", "search"), call("b", "read_file")]);
+    // 下一轮刚流出第一句正文：立即收尾
+    expect(t.close().map((g) => g.anchorToolCallId)).toEqual(["a"]);
+    // 这一轮结束时 onRound 带着同一段正文和新的工具调用
+    expect(t.onRound("找到了，再看下存储实现", [call("c", "read_file")])).toEqual([]);
+    expect(t.onRound(null, [call("d", "search")])).toEqual([]);
+    expect(t.close().map((g) => g.anchorToolCallId)).toEqual(["c"]);
+  });
+});
