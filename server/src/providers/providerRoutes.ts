@@ -13,10 +13,20 @@ import {
   refreshProviders,
   probeProviderModels,
   supportsThinking,
+  presetsForBaseUrl,
+  detectQuota,
+  quotaSecrets,
+  clearQuotaSecrets,
+  quotaTokenStatus,
+  saveQuotaTokens,
+  queryProvider,
+  quotaOverview,
+  invalidateQuotaOverview,
   type AgentHost,
   type ResolvedProvider,
 } from "@axon/core";
 import { ProviderConfigService, type ProviderLevel } from "./providerConfigService.js";
+import { FileSecretStore } from "./fileSecretStore.js";
 
 export interface ProviderRouterDeps {
   createHost: () => AgentHost;
@@ -75,6 +85,7 @@ function flattenModels(providers: ResolvedProvider[]) {
 /** 在 Express app 上注册所有 /api/providers/* 路由 */
 export function registerProviderRoutes(app: Express, deps: ProviderRouterDeps): void {
   const service = new ProviderConfigService();
+  const secrets = new FileSecretStore();
 
   /** 用注册表重新解析并注入 core 运行时（写操作后调用） */
   const refresh = async (workspace?: string): Promise<ResolvedProvider[]> => {
@@ -148,7 +159,7 @@ export function registerProviderRoutes(app: Express, deps: ProviderRouterDeps): 
    */
   app.delete("/api/providers/env/:name", async (req, res) => {
     try {
-      const name = decodeURIComponent(req.params.name);
+      const name = decodeURIComponent(String(req.params.name));
       const ws = queryStr(req, "workspace");
       const result = await service.removeEnvProvider(name);
       await refresh(ws);
@@ -216,6 +227,108 @@ export function registerProviderRoutes(app: Express, deps: ProviderRouterDeps): 
         key = (entry.apiKey || "").trim();
       }
       res.json({ models: await probeProviderModels(url, key) });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  // ── 用量查询 / 计费单价（与 IDE 扩展同一套接口，逻辑在 core/quota/hostService.ts）──
+  // 请求只在服务端发出，网页拿不到 API Key 和保存的凭证。
+
+  const findProvider = async (req: Request): Promise<ResolvedProvider> => {
+    const name = decodeURIComponent(String(req.params.name));
+    const provider = (await refresh(queryStr(req, "workspace"))).find((p) => p.name === name);
+    if (!provider) throw new Error(`provider 不存在：${name}`);
+    return provider;
+  };
+
+  app.get("/api/quota/overview", async (req, res) => {
+    try {
+      const providers = await refresh(queryStr(req, "workspace"));
+      res.json({ entries: await quotaOverview(providers, secrets, queryStr(req, "refresh") === "1") });
+    } catch (err) {
+      fail(res, err, 500);
+    }
+  });
+
+  app.put("/api/providers/:level/:name/quota", async (req, res) => {
+    try {
+      const level = parseLevel(req.params.level);
+      const ws = queryStr(req, "workspace");
+      const name = decodeURIComponent(String(req.params.name));
+      await service.setQuota(level, name, req.body?.quota ?? null, ws);
+      await refresh(ws);
+      invalidateQuotaOverview(name);
+      res.json({ ok: true });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  app.put("/api/providers/:level/:name/pricing", async (req, res) => {
+    try {
+      const level = parseLevel(req.params.level);
+      const ws = queryStr(req, "workspace");
+      await service.setPricing(level, decodeURIComponent(String(req.params.name)), req.body?.pricing, ws);
+      await refresh(ws);
+      res.json({ ok: true });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  app.get("/api/providers/:name/quota/presets", async (req, res) => {
+    try {
+      res.json({ presets: presetsForBaseUrl((await findProvider(req)).baseUrl) });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  app.post("/api/providers/:name/quota/detect", async (req, res) => {
+    try {
+      const provider = await findProvider(req);
+      const detected = await detectQuota(provider, { secrets: quotaSecrets(secrets, provider) });
+      res.json({ presetId: detected.preset?.id, presetLabel: detected.preset?.label, rule: detected.rule, result: detected.result, attempts: detected.attempts });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  app.post("/api/providers/:name/quota/test", async (req, res) => {
+    try {
+      const provider = await findProvider(req);
+      const quota = req.body?.quota;
+      if (!quota) throw new Error("额度查询规则不能为空");
+      res.json(await queryProvider(provider, quota, secrets));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  app.get("/api/providers/:name/quota/tokens", async (req, res) => {
+    try {
+      res.json(await quotaTokenStatus(secrets, await findProvider(req)));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  app.put("/api/providers/:name/quota/tokens", async (req, res) => {
+    try {
+      await saveQuotaTokens(secrets, await findProvider(req), req.body || {});
+      res.json({ ok: true });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  app.delete("/api/providers/:name/quota/tokens", async (req, res) => {
+    try {
+      const provider = await findProvider(req);
+      await clearQuotaSecrets(secrets, provider);
+      invalidateQuotaOverview(provider.name);
+      res.json({ ok: true });
     } catch (err) {
       fail(res, err);
     }

@@ -11,7 +11,7 @@
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { RESERVED_PROVIDER_NAMES, assertUniqueModelIds, providerEnvKeys, stripProviderEnvLines, type ProviderConfigFile, type ProviderModel, type RawProviderEntry } from "@axon/core";
+import { RESERVED_PROVIDER_NAMES, assertUniqueModelIds, providerEnvKeys, stripProviderEnvLines, normalizePricing, validateQuotaRule, type ProviderConfigFile, type ProviderModel, type ProviderQuotaConfig, type RawProviderEntry } from "@axon/core";
 
 export type ProviderLevel = "user" | "workspace";
 
@@ -32,7 +32,8 @@ export class ProviderConfigService {
     try {
       const raw = await fs.readFile(this.configPath(level, workspace), "utf8");
       const parsed = JSON.parse(raw) as ProviderConfigFile;
-      return { providers: parsed.providers || {}, builtinApiKeys: parsed.builtinApiKeys || {}, builtinBaseUrls: parsed.builtinBaseUrls || {} };
+      // 其余字段（builtinModels / builtinQuota / visionFallbackModel 等）原样带上，写回时才不会丢
+      return { ...parsed, providers: parsed.providers || {}, builtinApiKeys: parsed.builtinApiKeys || {}, builtinBaseUrls: parsed.builtinBaseUrls || {} };
     } catch {
       return { providers: {}, builtinApiKeys: {}, builtinBaseUrls: {} };
     }
@@ -52,6 +53,7 @@ export class ProviderConfigService {
       throw new Error("配置非法：必须是对象");
     }
     const normalized: ProviderConfigFile = {
+      ...config,
       providers: config.providers || {},
       builtinApiKeys: config.builtinApiKeys || {},
       builtinBaseUrls: config.builtinBaseUrls || {},
@@ -145,6 +147,35 @@ export class ProviderConfigService {
     config.builtinApiKeys = config.builtinApiKeys || {};
     if (apiKey.trim()) config.builtinApiKeys[name] = apiKey.trim();
     else delete config.builtinApiKeys[name];
+    await this.write(level, config, workspace);
+  }
+
+  /** 设置 / 删除用量查询规则（内置 provider 存 builtinQuota，与 API Key 分开） */
+  async setQuota(level: ProviderLevel, name: string, quota: ProviderQuotaConfig | null, workspace?: string): Promise<void> {
+    if (quota) validateQuotaRule(quota);
+    const config = await this.read(level, workspace);
+    if (RESERVED_PROVIDER_NAMES.includes(name)) {
+      config.builtinQuota = config.builtinQuota || {};
+      if (quota) config.builtinQuota[name] = quota;
+      else delete config.builtinQuota[name];
+    } else {
+      const entry = config.providers?.[name];
+      if (!entry) throw new Error(`provider 不存在：${name}`);
+      if (quota) entry.quota = quota;
+      else delete entry.quota;
+    }
+    await this.write(level, config, workspace);
+  }
+
+  /** 设置 / 删除计费单价（只用于回复底部的花费估算；官方 provider 用 Credits，不支持） */
+  async setPricing(level: ProviderLevel, name: string, raw: unknown, workspace?: string): Promise<void> {
+    if (RESERVED_PROVIDER_NAMES.includes(name)) throw new Error("官方 Provider 按 Credits 计费，不支持自定义单价");
+    const pricing = normalizePricing(raw);
+    const config = await this.read(level, workspace);
+    const entry = config.providers?.[name];
+    if (!entry) throw new Error(`provider 不存在：${name}`);
+    if (pricing) entry.pricing = pricing;
+    else delete entry.pricing;
     await this.write(level, config, workspace);
   }
 

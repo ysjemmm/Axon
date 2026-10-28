@@ -12,9 +12,9 @@ import { homedir } from "node:os";
 import { resolve, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { RelayStore, renameSessionTitle, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, assertUniqueModelIds, supportsThinking, providerEnvKeys, stripProviderEnvLines, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry, type ProviderQuotaConfig, type ProviderPricing, type ModelPrice, validateQuotaRule, presetsForBaseUrl, detectQuota } from "@axon/core";
+import { RelayStore, renameSessionTitle, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, assertUniqueModelIds, supportsThinking, providerEnvKeys, stripProviderEnvLines, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry, type ProviderQuotaConfig, normalizePricing, validateQuotaRule, presetsForBaseUrl, detectQuota } from "@axon/core";
 import { createVSCodeAgentHost } from "@axon/host-vscode";
-import { queryProvider, quotaSecrets, clearQuotaSecrets, quotaOverview, invalidateQuotaOverview } from "./quotaService.js";
+import { queryProvider, quotaSecrets, clearQuotaSecrets, quotaTokenStatus, saveQuotaTokens, quotaOverview, invalidateQuotaOverview } from "./quotaService.js";
 import { createMarketplaceRegistry, persistSourcesToSettings } from "./marketplaceBridge.js";
 
 const execFileAsync = promisify(execFile);
@@ -838,18 +838,11 @@ export class RequestRouter {
     const providerQuotaTokensMatch = path.match(/^\/api\/providers\/([^/]+)\/quota\/tokens$/);
     if (providerQuotaTokensMatch && method === "GET") {
       const provider = await findProvider(decodeURIComponent(providerQuotaTokensMatch[1]));
-      const store = quotaSecrets(d.secrets, provider);
-      const [accessToken, refreshToken, cookie] = await Promise.all([store.getAccessToken(), store.getRefreshToken(), store.getCookie()]);
-      return { hasAccessToken: !!accessToken?.value, hasRefreshToken: !!refreshToken, hasCookie: !!cookie };
+      return quotaTokenStatus(d.secrets, provider);
     }
     if (providerQuotaTokensMatch && method === "PUT") {
       const provider = await findProvider(decodeURIComponent(providerQuotaTokensMatch[1]));
-      const tokens = (body || {}) as { accessToken?: string; refreshToken?: string; cookie?: string };
-      const store = quotaSecrets(d.secrets, provider);
-      if (tokens.accessToken?.trim()) await store.setAccessToken(tokens.accessToken.trim(), undefined);
-      if (tokens.refreshToken?.trim()) await store.setRefreshToken(tokens.refreshToken.trim());
-      if (tokens.cookie?.trim()) await store.setCookie(tokens.cookie.trim());
-      invalidateQuotaOverview(provider.name);
+      await saveQuotaTokens(d.secrets, provider, (body || {}) as { accessToken?: string; refreshToken?: string; cookie?: string });
       return { ok: true };
     }
     if (providerQuotaTokensMatch && method === "DELETE") {
@@ -1158,30 +1151,3 @@ function flattenProviderModels(providers: ResolvedProvider[]) {
     );
 }
 
-/** 校验并清理计费单价：只保留非负数字；什么都没填返回 undefined（即删除配置） */
-function normalizePricing(raw: unknown): ProviderPricing | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const input = raw as { currency?: unknown; default?: unknown; models?: unknown };
-  const cleanPrice = (value: unknown): ModelPrice | undefined => {
-    if (!value || typeof value !== "object") return undefined;
-    const out: ModelPrice = {};
-    for (const key of ["input", "output", "cacheRead"] as const) {
-      const n = (value as Record<string, unknown>)[key];
-      if (n === undefined || n === null || n === "") continue;
-      if (typeof n !== "number" || !Number.isFinite(n) || n < 0) throw new Error(`单价必须是非负数字：${key}`);
-      out[key] = n;
-    }
-    return Object.keys(out).length ? out : undefined;
-  };
-  const models: Record<string, ModelPrice> = {};
-  if (input.models && typeof input.models === "object") {
-    for (const [id, value] of Object.entries(input.models as Record<string, unknown>)) {
-      const price = cleanPrice(value);
-      if (price) models[id] = price;
-    }
-  }
-  const fallback = cleanPrice(input.default);
-  if (!fallback && Object.keys(models).length === 0) return undefined;
-  const currency = typeof input.currency === "string" ? input.currency.trim().slice(0, 8) : "";
-  return { ...(currency ? { currency } : {}), ...(fallback ? { default: fallback } : {}), ...(Object.keys(models).length ? { models } : {}) };
-}

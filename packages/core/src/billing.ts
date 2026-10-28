@@ -82,3 +82,31 @@ export function describeTurnUsage(b: TurnBilling, credits: number): string {
   if (b.billing === "credits") return `${credits.toFixed(2)} credits`;
   return `${formatTokenCount(b.usage.input + b.usage.output)} tokens`;
 }
+
+/** 校验并清理计费单价：只保留非负数字；什么都没填返回 undefined（即删除配置） */
+export function normalizePricing(raw: unknown): ProviderPricing | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const input = raw as { currency?: unknown; default?: unknown; models?: unknown };
+  const cleanPrice = (value: unknown): ModelPrice | undefined => {
+    if (!value || typeof value !== "object") return undefined;
+    const out: ModelPrice = {};
+    for (const key of ["input", "output", "cacheRead"] as const) {
+      const n = (value as Record<string, unknown>)[key];
+      if (n === undefined || n === null || n === "") continue;
+      if (typeof n !== "number" || !Number.isFinite(n) || n < 0) throw new Error(`单价必须是非负数字：${key}`);
+      out[key] = n;
+    }
+    return Object.keys(out).length ? out : undefined;
+  };
+  const models: Record<string, ModelPrice> = {};
+  if (input.models && typeof input.models === "object") {
+    for (const [id, value] of Object.entries(input.models as Record<string, unknown>)) {
+      const price = cleanPrice(value);
+      if (price) models[id] = price;
+    }
+  }
+  const fallback = cleanPrice(input.default);
+  if (!fallback && Object.keys(models).length === 0) return undefined;
+  const currency = typeof input.currency === "string" ? input.currency.trim().slice(0, 8) : "";
+  return { ...(currency ? { currency } : {}), ...(fallback ? { default: fallback } : {}), ...(Object.keys(models).length ? { models } : {}) };
+}
