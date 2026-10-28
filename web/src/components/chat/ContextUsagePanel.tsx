@@ -73,7 +73,9 @@ export function ContextUsagePanel({ used, max, breakdown, canCompact, compacting
   const percent = hasMax ? Math.min(used / max, 1) * 100 : 0;
 
   const categories = (breakdown?.categories ?? []).filter((c) => c.key === "messages" || c.tokens > 0);
-  const autoAt = breakdown?.autoCompactAt ?? (hasMax ? fallbackAutoCompactAt(max) : 0);
+  const autoAt = breakdown && Number.isFinite(breakdown.autoCompactAt) && breakdown.autoCompactAt > 0
+    ? breakdown.autoCompactAt
+    : (hasMax ? fallbackAutoCompactAt(max) : 0);
   const free = hasMax ? Math.max(0, max - used) : 0;
   const untilAuto = autoAt - used;
   const mcpTools = breakdown?.mcpTools ?? [];

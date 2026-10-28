@@ -134,6 +134,7 @@ export class TokenAccountant {
       mcpTools: mcpTools
         .map((t) => ({ ...t, tokens: Math.round(t.tokens * scale) }))
         .sort((a, b) => b.tokens - a.tokens),
+      contextWindow: window,
       autoCompactAt: this.s.getAutoCompactAt(),
       manualCompactAt: Math.round(window * MANUAL_COMPACT_RATIO),
     };
@@ -319,6 +320,8 @@ export interface ContextBreakdown {
   categories: Array<{ key: ContextCategoryKey; tokens: number }>;
   /** 每个 MCP 工具定义的占用（降序） */
   mcpTools: Array<{ name: string; server: string; tool: string; tokens: number }>;
+  /** 算这些阈值所用的上下文窗口：面板的分母必须与它一致，否则会出现「32% 却已到压缩线」 */
+  contextWindow: number;
   /** 自动压缩线（session.getAutoCompactAt）：回合开始前达到则询问用户，回答中途达到则无感压缩 */
   autoCompactAt: number;
   /** 达到这个占用才允许手动压缩 */

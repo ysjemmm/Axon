@@ -107,7 +107,9 @@ export function useChatSession(opts: UseChatSessionOptions) {
     const targetModel = providerName
       ? getModels().find((m) => m.id === newModel && m.provider === providerName)
       : findModel(newModel);
-    if (targetModel) setTokenUsage((prev) => ({ ...prev, max: targetModel.contextWindow > 0 ? targetModel.contextWindow : prev.max }));
+    // 换模型：先用注册表的窗口占位，等后端下一次 token_usage 报出它认定的窗口；
+    // 旧明细按旧模型的窗口算（压缩线也是），一并清掉，免得和新分母混在一起
+    if (targetModel) setTokenUsage((prev) => ({ ...prev, max: targetModel.contextWindow > 0 ? targetModel.contextWindow : prev.max, maxFromBackend: false, breakdown: undefined }));
     baseSend({ type: CONTROL_CMD.SET_ACTIVE_PROVIDER, provider: providerName, clientId });
   }, [baseSend, clientId]);
   const [workspace, setWorkspace] = useState<string>("");
@@ -260,7 +262,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
   useEffect(() => {
     const currentModel = models.find((m) => m.id === model);
     if (!currentModel?.contextWindow) return;
-    setTokenUsage((prev) => (prev.max === currentModel.contextWindow ? prev : { ...prev, max: currentModel.contextWindow }));
+    // 只在后端还没报过窗口时占位：模型列表刷新不能把后端的窗口冲掉
+    setTokenUsage((prev) => (prev.maxFromBackend || prev.max === currentModel.contextWindow ? prev : { ...prev, max: currentModel.contextWindow }));
   }, [model, models]);
 
   // ── 通知上层流式状态变化（供 SessionContainer 决定保活/卸载） ──

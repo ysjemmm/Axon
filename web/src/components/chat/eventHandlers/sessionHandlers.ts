@@ -300,7 +300,7 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
     ctx.setTokenUsage((prev) => ({
       ...prev,
       used: totalTokens,
-      ...(contextWindow && contextWindow > 0 ? { max: contextWindow } : {}),
+      ...(contextWindow && contextWindow > 0 ? { max: contextWindow, maxFromBackend: true } : {}),
       breakdown,
     }));
   }

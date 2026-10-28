@@ -247,6 +247,8 @@ export type ContextCategoryKey = "messages" | "systemTools" | "mcpTools" | "skil
 export interface ContextBreakdown {
   categories: Array<{ key: ContextCategoryKey; tokens: number }>;
   mcpTools: Array<{ name: string; server: string; tool: string; tokens: number }>;
+  /** 后端算阈值用的窗口（旧后端没有） */
+  contextWindow?: number;
   autoCompactAt: number;
   manualCompactAt: number;
 }
@@ -257,4 +259,9 @@ export interface TokenUsageState {
   max: number;
   cumulative: number;
   breakdown?: ContextBreakdown;
+  /**
+   * max 已由后端下发（token_usage / session_loaded）。此后前端模型注册表不能再覆盖它：
+   * 压缩线、35% 门槛都是后端按自己的窗口算的，分母换成注册表的值，面板就会自相矛盾。
+   */
+  maxFromBackend?: boolean;
 }
