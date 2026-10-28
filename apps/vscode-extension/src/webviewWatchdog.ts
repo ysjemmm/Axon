@@ -8,8 +8,14 @@
  * 于是让它来当外部观察者：webview 定期发心跳，心跳停了就说明界面卡了，
  * 此刻由宿主记下时间点与最后状态（正在跑什么操作、DOM 规模、是否正在流式）。
  *
- * 只在面板可见时判定：面板不可见时 Chromium 会节流定时器，心跳变慢属正常现象，
- * 不能算作卡死（否则切走标签就会误报）。
+ * 只在「窗口在前台 且 面板可见」时判定：任一条件不满足时 Chromium 都会节流定时器，
+ * 心跳变慢是正常现象，不能算作卡死。
+ * ⚠️ 早先只判了 view.visible —— 那是「视图在侧栏里可见」，窗口失焦时仍为 true，
+ * 于是用户切到别的应用放一会儿，回来就看到一条「界面似乎失去响应」。判定条件必须包含窗口焦点。
+ *
+ * 判定结果只写日志，不弹窗：这类判断基于"心跳超时"，休眠唤醒、系统负载抖动、
+ * 远程连接卡顿都会命中，做成必现弹窗纯属打扰。需要现场时用命令
+ * 「Axon: 查看诊断日志（界面卡死排查）」打开这份日志即可。
  */
 
 import * as vscode from "vscode";
@@ -60,12 +66,19 @@ export class WebviewStallWatchdog {
   private beatCount = 0;
   /** 累计检测到的卡死次数，便于判断是偶发还是高频 */
   private stallCount = 0;
+  /** 窗口焦点变化订阅（失焦期间不判定，见 check） */
+  private windowStateSub: vscode.Disposable | undefined;
 
   /** @param isVisible 面板当前是否可见（不可见时不判定，规避浏览器节流造成的误报） */
   constructor(private readonly isVisible: () => boolean) {}
 
   start(): void {
     log("观察器启动：等待 webview 心跳（每 3s 一次，超过 7s 未收到即记录为失去响应）");
+    // 焦点变化时重置基准：失焦期间心跳可能被节流，回到前台若沿用旧时间戳，
+    // 第一眼就会判成"刚刚卡死过"。两个方向都重置，才只在真正的前台运行时判定。
+    this.windowStateSub = vscode.window.onDidChangeWindowState(() => {
+      if (this.lastBeatAt) this.lastBeatAt = Date.now();
+    });
     this.timer = setInterval(() => this.check(), CHECK_INTERVAL_MS);
   }
 
@@ -95,6 +108,8 @@ export class WebviewStallWatchdog {
 
   /** 巡检：心跳是否已停 */
   private check(): void {
+    // 窗口不在前台就不判定：用户切走 / 最小化后 Chromium 会节流定时器，心跳变慢属正常
+    if (!vscode.window.state.focused) return;
     if (!this.isVisible()) return;
     if (!this.lastBeatAt) return; // 还没收到首次心跳，不判定
     const silentMs = Date.now() - this.lastBeatAt;
@@ -104,19 +119,20 @@ export class WebviewStallWatchdog {
     this.stallCount++;
     const p = this.lastPayload;
     const streaming = p?.state?.streaming;
+    // 只写日志、不弹窗。判定依据只是"心跳超时"，机器休眠唤醒、系统卡顿、
+    // 远程连接抖动都会命中同一条件；做成弹窗会变成"离开一会儿就冒出来"的噪音。
     log(
       `⚠️ webview 已 ${(silentMs / 1000).toFixed(1)}s 无心跳 —— 界面此刻失去响应（用户看到的"卡灰"应发生在此期间）。` +
       ` 现场：正在执行=${p?.span || "无"} | DOM=${p?.dom || "-"} | AI在输出=${streaming === undefined ? "未知" : streaming ? "是" : "否"}` +
       ` | 累计心跳=${this.beatCount} | 累计卡死=${this.stallCount}`,
-    );
-    void vscode.window.showWarningMessage(
-      "Axon 界面似乎失去响应，已记录诊断信息（详见「输出 → Axon 诊断」）",
     );
   }
 
   dispose(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+    this.windowStateSub?.dispose();
+    this.windowStateSub = undefined;
     log("观察器停止");
   }
 }

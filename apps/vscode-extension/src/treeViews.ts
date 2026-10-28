@@ -56,7 +56,7 @@ export class RelayTreeProvider implements vscode.TreeDataProvider<SimpleItem> {
 
 // ─── Skills TreeView（分组：项目 / 全局 / 内置）────────────────────────────
 
-type SkillTreeNode = SkillGroupItem | SimpleItem;
+type SkillTreeNode = SkillGroupItem | SimpleItem | ExpandableSkillItem | SkillFileNode;
 
 class SkillGroupItem extends vscode.TreeItem {
   readonly nodeType = "skillGroup" as const;
@@ -66,13 +66,40 @@ class SkillGroupItem extends vscode.TreeItem {
   }
 }
 
+/**
+ * 可展开的 Skill 节点。
+ *
+ * 一个 skill 不止 SKILL.md：scripts/、assets/、references/ 等一起构成技能包。
+ * 这里让节点可展开、就地列出内部文件；点击标题仍打开 SkillStudio。
+ * 内置方法论是编译进产物的内存常量（没有磁盘目录），不实例化本类、保持单行。
+ */
+class ExpandableSkillItem extends vscode.TreeItem {
+  readonly nodeType = "skillDir" as const;
+  constructor(
+    public readonly skillName: string,
+    public readonly dir: string,
+    public readonly source: string,
+    public readonly disabled: boolean,
+    icon: string,
+    arg: Record<string, unknown>,
+    contextValue: string,
+  ) {
+    super(skillName, vscode.TreeItemCollapsibleState.Collapsed);
+    this.description = disabled ? "已禁用" : "";
+    this.iconPath = new vscode.ThemeIcon(icon);
+    this.contextValue = contextValue;
+    this.tooltip = dir;
+    this.command = { command: "axon.openSkill", title: "打开 Skill", arguments: [arg] };
+  }
+}
+
 export class SkillsTreeProvider implements vscode.TreeDataProvider<SkillTreeNode> {
   private _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this._onDidChange.event;
 
-  private allSkills: { name: string; source: string; disabled: boolean; skillFile?: string }[] = [];
+  private allSkills: { name: string; source: string; disabled: boolean; skillFile?: string; dir?: string }[] = [];
 
-  refresh(skills: { name: string; source: string; disabled: boolean; skillFile?: string }[]): void {
+  refresh(skills: { name: string; source: string; disabled: boolean; skillFile?: string; dir?: string }[]): void {
     this.allSkills = skills;
     this._onDidChange.fire();
   }
@@ -81,7 +108,7 @@ export class SkillsTreeProvider implements vscode.TreeDataProvider<SkillTreeNode
     return element;
   }
 
-  getChildren(element?: SkillTreeNode): SkillTreeNode[] {
+  async getChildren(element?: SkillTreeNode): Promise<SkillTreeNode[]> {
     if (!element) {
       // 顶层：分组节点
       const groups: SkillTreeNode[] = [];
@@ -109,15 +136,26 @@ export class SkillsTreeProvider implements vscode.TreeDataProvider<SkillTreeNode
         // 它没有磁盘目录，"删除"无从谈起，菜单里不该摆这个永远失败的操作。
         // 两者共用 toggle 菜单、只有普通 skill 带 delete/rename（见 package.json 的 view/item/context）。
         const ctxValue = s.source === "builtin" ? "skillBuiltinToggleable" : "skillToggleable";
+        const arg = { name: s.name, source: s.source, skillFile: s.skillFile || "", disabled: s.disabled };
+        // 有磁盘目录的 skill 可展开查看内部文件（scripts/assets 等）；内置方法论无目录，保持单行
+        if (s.dir) {
+          return new ExpandableSkillItem(s.name, s.dir, s.source, s.disabled, icon, arg, ctxValue);
+        }
         return new SimpleItem(
           s.name,
           desc,
           icon,
           "axon.openSkill",
-          [{ name: s.name, source: s.source, skillFile: s.skillFile || "", disabled: s.disabled }],
+          [arg],
           ctxValue,
         );
       });
+    }
+    if (element instanceof ExpandableSkillItem) {
+      return listDirNodes(element.dir);
+    }
+    if (element instanceof SkillFileNode && element.isDirectory) {
+      return listDirNodes(element.filePath);
     }
     return [];
   }
@@ -305,6 +343,31 @@ class SkillFileNode extends vscode.TreeItem {
   }
 }
 
+/**
+ * 列出目录下的文件与子目录（先目录后文件，跳过隐藏项）。
+ * 侧边栏两个 Skill 视图共用：一个技能包除了 SKILL.md，还有 scripts/、assets/ 等。
+ */
+async function listDirNodes(dirPath: string): Promise<SkillFileNode[]> {
+  const path = require("path") as typeof import("path");
+  try {
+    const entries = await vscode.workspace.fs.readDirectory(vscode.Uri.file(dirPath));
+    const dirs = entries.filter(([, t]) => t === vscode.FileType.Directory).sort(([a], [b]) => a.localeCompare(b));
+    const files = entries.filter(([, t]) => t === vscode.FileType.File).sort(([a], [b]) => a.localeCompare(b));
+    const nodes: SkillFileNode[] = [];
+    for (const [name] of dirs) {
+      if (name.startsWith(".")) continue; // 隐藏项不进树
+      nodes.push(new SkillFileNode(name, path.join(dirPath, name), true));
+    }
+    for (const [name] of files) {
+      if (name.startsWith(".")) continue;
+      nodes.push(new SkillFileNode(name, path.join(dirPath, name), false));
+    }
+    return nodes;
+  } catch {
+    return [];
+  }
+}
+
 export class CustomSkillsTreeProvider implements vscode.TreeDataProvider<SkillNode> {
   private _onDidChange = new vscode.EventEmitter<SkillNode | undefined>();
   readonly onDidChangeTreeData = this._onDidChange.event;
@@ -351,40 +414,15 @@ export class CustomSkillsTreeProvider implements vscode.TreeDataProvider<SkillNo
 
     if (element instanceof SkillDirNode) {
       // Skill 目录下的文件列表
-      return this.listDir(element.dirPath);
+      return listDirNodes(element.dirPath);
     }
 
     if (element instanceof SkillFileNode && element.isDirectory) {
       // 子目录下的文件列表
-      return this.listDir(element.filePath);
+      return listDirNodes(element.filePath);
     }
 
     return [];
-  }
-
-  /** 列出目录下的文件和子目录 */
-  private async listDir(dirPath: string): Promise<SkillFileNode[]> {
-    try {
-      const uri = vscode.Uri.file(dirPath);
-      const entries = await vscode.workspace.fs.readDirectory(uri);
-      const nodes: SkillFileNode[] = [];
-      // 先目录后文件，按名称排序
-      const dirs = entries.filter(([, t]) => t === vscode.FileType.Directory).sort(([a], [b]) => a.localeCompare(b));
-      const files = entries.filter(([, t]) => t === vscode.FileType.File).sort(([a], [b]) => a.localeCompare(b));
-      for (const [name] of dirs) {
-        if (name.startsWith(".")) continue; // 隐藏文件
-        const path = require("path");
-        nodes.push(new SkillFileNode(name, path.join(dirPath, name), true));
-      }
-      for (const [name] of files) {
-        if (name.startsWith(".")) continue;
-        const path = require("path");
-        nodes.push(new SkillFileNode(name, path.join(dirPath, name), false));
-      }
-      return nodes;
-    } catch {
-      return [];
-    }
   }
 }
 

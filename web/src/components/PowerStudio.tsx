@@ -6,6 +6,7 @@
  *   - MCP 服务器：列表、增删、编辑配置
  *   - Skills：捆绑的 Skill 列表、增删、编辑 SKILL.md
  *   - Steering：工作流引导文件列表
+ *   - 文件：目录树 + 编辑器，浏览/修改 Power 目录下任意文件
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -20,10 +21,12 @@ import {
   Plus,
   Trash2,
   Check,
+  FolderTree,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CodeEditor } from "@/components/CodeEditor";
+import { FileTree } from "@/components/FileTreeView";
 import {
   getPower,
   togglePower,
@@ -37,8 +40,12 @@ import {
   listSkills,
   readSkillFile,
   savePowerSkillContent,
+  getPowerTree,
+  readPowerFile,
+  writePowerFile,
   type RawMcpServer,
   type PowerDetail,
+  type SkillFileNode,
 } from "@/lib/apiClient";
 
 /** 运行时判断是否在 VS Code webview 中 */
@@ -51,7 +58,7 @@ interface PowerStudioProps {
   powerName: string;
 }
 
-type Tab = "overview" | "mcp" | "skills" | "steering";
+type Tab = "overview" | "mcp" | "skills" | "steering" | "files";
 
 export function PowerStudio({ workspace, powerName }: PowerStudioProps) {
   const [power, setPower] = useState<PowerDetail | null>(null);
@@ -137,14 +144,20 @@ export function PowerStudio({ workspace, powerName }: PowerStudioProps) {
         <TabBtn active={tab === "mcp"} onClick={() => setTab("mcp")} icon={<Plug className="w-3 h-3" />} label={`MCP${power.mcpServerCount ? ` (${power.mcpServerCount})` : ""}`} />
         <TabBtn active={tab === "skills"} onClick={() => setTab("skills")} icon={<Package className="w-3 h-3" />} label={`Skills${power.skillCount ? ` (${power.skillCount})` : ""}`} />
         <TabBtn active={tab === "steering"} onClick={() => setTab("steering")} icon={<BookOpen className="w-3 h-3" />} label={`Steering${power.steeringFiles.length ? ` (${power.steeringFiles.length})` : ""}`} />
+        <TabBtn active={tab === "files"} onClick={() => setTab("files")} icon={<FolderTree className="w-3 h-3" />} label="文件" />
       </div>
 
       {/* Tab 内容 */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      {/*
+        文件 Tab 自己带左右分栏与独立滚动，不能被外层 overflow-y-auto 套住：
+        那会让左侧目录树跟着右侧内容一起滚，树就会「跑掉」。
+      */}
+      <div className={tab === "files" ? "flex-1 min-h-0 overflow-hidden" : "flex-1 min-h-0 overflow-y-auto"}>
         {tab === "overview" && <OverviewTab power={power} />}
         {tab === "mcp" && <McpTab power={power} workspace={workspace} onSaved={loadPower} />}
         {tab === "skills" && <SkillsTab power={power} workspace={workspace} onChanged={loadPower} />}
         {tab === "steering" && <SteeringTab power={power} workspace={workspace} onChanged={loadPower} />}
+        {tab === "files" && <FilesTab power={power} workspace={workspace} />}
       </div>
     </div>
   );
@@ -936,6 +949,141 @@ function SteeringTab({ power, workspace, onChanged }: { power: PowerDetail; work
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── 文件 Tab ──
+
+/**
+ * Power 目录的文件浏览与编辑。
+ *
+ * Power 目录里往往不止 POWER.md 与 skills/：从 Claude 插件转换来的能力包会带
+ * styles/、core/、tools/、docs/ 等资源目录，动辄上千个文件。没有这个视图，
+ * 用户只能看到「1 Skills」，会以为导入不完整。
+ *
+ * 默认全部折叠（expandDepth = -1）：styles/ 下可能有几十个风格子目录，
+ * 一进来就全展开会刷屏，也会让首屏卡顿。
+ */
+function FilesTab({ power, workspace }: { power: PowerDetail; workspace: string }) {
+  const [tree, setTree] = useState<SkillFileNode[]>([]);
+  const [loadingTree, setLoadingTree] = useState(false);
+  const [treeError, setTreeError] = useState("");
+
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [content, setContent] = useState("");
+  const [savedContent, setSavedContent] = useState("");
+  const [loadingFile, setLoadingFile] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [fileError, setFileError] = useState("");
+
+  const dirty = content !== savedContent;
+  const selectedName = selectedPath ? selectedPath.split("/").pop() || selectedPath : "";
+
+  const loadTree = useCallback(async () => {
+    setLoadingTree(true);
+    setTreeError("");
+    try {
+      const data = await getPowerTree(power.name, workspace || undefined);
+      setTree(data.tree || []);
+    } catch (err) {
+      setTreeError((err as Error).message);
+      setTree([]);
+    }
+    setLoadingTree(false);
+  }, [power.name, workspace]);
+
+  useEffect(() => {
+    loadTree();
+  }, [loadTree]);
+
+  const openFile = useCallback(async (path: string) => {
+    setSelectedPath(path);
+    setLoadingFile(true);
+    setFileError("");
+    try {
+      const data = await readPowerFile(power.name, path, workspace || undefined);
+      setContent(data.content);
+      setSavedContent(data.content);
+    } catch (err) {
+      setFileError((err as Error).message);
+      setContent("");
+      setSavedContent("");
+    }
+    setLoadingFile(false);
+  }, [power.name, workspace]);
+
+  const handleSave = useCallback(async () => {
+    if (!selectedPath || saving) return;
+    setSaving(true);
+    setFileError("");
+    try {
+      await writePowerFile(power.name, selectedPath, content, workspace || undefined);
+      setSavedContent(content);
+    } catch (err) {
+      setFileError((err as Error).message);
+    }
+    setSaving(false);
+  }, [selectedPath, saving, content, power.name, workspace]);
+
+  return (
+    <div className="flex h-full overflow-hidden">
+      {/* 左侧：目录树 */}
+      <div className="w-64 shrink-0 border-r border-border flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between px-3 py-2 border-b border-border shrink-0">
+          <span className="text-xs font-medium text-muted-foreground">
+            文件{tree.length > 0 ? ` · ${tree.length} 项` : ""}
+          </span>
+          <button
+            onClick={loadTree}
+            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50"
+            title="刷新"
+          >
+            <Loader2 className={`w-3.5 h-3.5 ${loadingTree ? "animate-spin" : ""}`} />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-2 py-2">
+          {loadingTree && tree.length === 0 && (
+            <div className="flex justify-center py-4"><Loader2 className="w-4 h-4 animate-spin text-muted-foreground" /></div>
+          )}
+          {treeError && <div className="text-xs text-red-500 p-2">{treeError}</div>}
+          {!loadingTree && !treeError && tree.length === 0 && (
+            <div className="text-xs text-muted-foreground p-2">目录为空</div>
+          )}
+          <FileTree nodes={tree} selectedPath={selectedPath} onSelectFile={openFile} expandDepth={-1} />
+        </div>
+      </div>
+
+      {/* 右侧：编辑器 */}
+      <div className="flex-1 flex flex-col overflow-hidden bg-background">
+        <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0 min-w-0">
+          <span className="text-xs font-mono text-muted-foreground truncate flex-1">
+            {selectedPath || "从左侧选择一个文件"}
+          </span>
+          {dirty && <span className="text-xs text-amber-500 shrink-0">● 未保存</span>}
+          {selectedPath && (
+            <Button size="sm" onClick={handleSave} disabled={saving || !dirty} className="h-7 shrink-0">
+              {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+              保存
+            </Button>
+          )}
+        </div>
+        {fileError && <div className="text-xs text-red-500 px-4 py-2 border-b border-border">{fileError}</div>}
+        {!selectedPath && (
+          <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground">
+            从左侧选择一个文件进行查看或编辑
+          </div>
+        )}
+        {selectedPath && (
+          loadingFile ? (
+            <div className="flex-1 flex items-center justify-center">
+              <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <CodeEditor fileName={selectedName} value={content} onChange={setContent} onSave={handleSave} />
+          )
+        )}
+      </div>
     </div>
   );
 }

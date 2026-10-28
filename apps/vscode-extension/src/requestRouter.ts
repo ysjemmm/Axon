@@ -9,11 +9,13 @@
 
 import * as vscode from "vscode";
 import { homedir } from "node:os";
+import { resolve, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { RelayStore, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, assertUniqueModelIds, supportsThinking, providerEnvKeys, stripProviderEnvLines, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry, type ProviderQuotaConfig } from "@axon/core";
 import { createVSCodeAgentHost } from "@axon/host-vscode";
 import { queryProviderQuota, quotaTokenStore, validateQuotaQuery } from "./quotaService.js";
+import { createMarketplaceRegistry, persistSourcesToSettings } from "./marketplaceBridge.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -39,6 +41,22 @@ function parsePath(rawPath: string): { path: string; query: URLSearchParams } {
 function relayRoots(query: URLSearchParams, defaultWorkspace: string): string[] {
   const ws = query.get("workspace") || defaultWorkspace;
   return [ws, homedir()];
+}
+
+/**
+ * 在 baseDir 内安全地解析相对路径：任何 `..` 逃逸都直接抛错。
+ *
+ * Power 的文件读写把用户给的相对路径直接拼到磁盘路径上，不做校验的话
+ * 一句 `../../.ssh/id_rsa` 就能读写到能力包目录之外。与 skillUrlImport.ts
+ * 里的同名工具同口径：解析后用 `startsWith(base + sep)` 判定边界。
+ */
+function safeJoinInside(baseDir: string, rel: string): string {
+  const base = resolve(baseDir);
+  const target = resolve(base, rel);
+  if (target !== base && !target.startsWith(base + sep)) {
+    throw new Error(`路径越界：${rel}`);
+  }
+  return target;
 }
 
 /** 清理指定工作区中 axios 创建的 git 快照 ref */
@@ -126,6 +144,50 @@ export class RequestRouter {
         return { skills: [] };
       }
     }
+    // 某个 skill 目录的完整文件树（SkillStudio 文件管理视图用）。
+    // 一个技能包不止 SKILL.md：scripts/、assets/、references/ 都要能看到。
+    // 此前 VS Code 宿主只实现了 /file 单文件读取，这条路由缺失，文件树必定加载失败。
+    const skillTreeMatch = path.match(/^\/api\/skills\/([^/]+)\/tree$/);
+    if (skillTreeMatch && method === "GET") {
+      const skillName = decodeURIComponent(skillTreeMatch[1]);
+      const ws = query.get("workspace") || d.defaultWorkspace;
+      try {
+        const { SkillRegistry } = await import("@axon/core");
+        const registry = new SkillRegistry([ws], createVSCodeAgentHost(), homedir());
+        const meta = (await registry.discover()).find((m) => m.name === skillName);
+        if (!meta || !meta.dir) throw new Error("skill 不存在或没有磁盘目录");
+
+        const { readdir } = await import("node:fs/promises");
+        const { join } = await import("node:path");
+        interface TreeFileNode {
+          name: string;
+          path: string;
+          type: "file" | "directory";
+          children?: TreeFileNode[];
+        }
+        const walk = async (absDir: string, relDir: string, depth: number): Promise<TreeFileNode[]> => {
+          if (depth > 6) return []; // 防深层目录把响应撑爆
+          const entries = await readdir(absDir, { withFileTypes: true });
+          const nodes: TreeFileNode[] = [];
+          const sorted = entries
+            .filter((entry) => !entry.name.startsWith("."))
+            .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
+          for (const entry of sorted) {
+            const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
+            if (entry.isDirectory()) {
+              nodes.push({ name: entry.name, path: rel, type: "directory", children: await walk(join(absDir, entry.name), rel, depth + 1) });
+            } else if (entry.isFile()) {
+              nodes.push({ name: entry.name, path: rel, type: "file" });
+            }
+          }
+          return nodes;
+        };
+        return { name: meta.name, dir: meta.dir, tree: await walk(meta.dir, "", 0) };
+      } catch (err) {
+        throw new Error(`无法读取 skill 文件树: ${(err as Error).message}`);
+      }
+    }
+
     // 读取 skill 目录下文件
     const skillFileMatch = path.match(/^\/api\/skills\/([^/]+)\/file$/);
     if (skillFileMatch && method === "GET") {
@@ -240,6 +302,82 @@ export class RequestRouter {
         return { ok: true };
       }
     }
+
+    // Power 目录的完整文件树。
+    //
+    // Power 里通常不止 POWER.md 与 skills/：从 Claude 插件转换来的能力包还会带
+    // styles/、core/、tools/、docs/ 这些资源目录，动辄上千个文件。没有这条路由，
+    // 面板里只能看到「1 Skills」，用户会以为导入不完整（实际是面板没入口展示）。
+    const powerTreeMatch = path.match(/^\/api\/powers\/([^/]+)\/tree$/);
+    if (powerTreeMatch && method === "GET") {
+      const name = decodeURIComponent(powerTreeMatch[1]);
+      const ws = query.get("workspace") || d.defaultWorkspace;
+      const { PowerRegistry } = await import("@axon/core");
+      const registry = new PowerRegistry([ws], createVSCodeAgentHost(), homedir());
+      const meta = (await registry.discover()).find((m) => m.name === name);
+      if (!meta) throw new Error("power 不存在");
+      const { readdir } = await import("node:fs/promises");
+      const { join } = await import("node:path");
+      interface TreeFileNode {
+        name: string;
+        path: string;
+        type: "file" | "directory";
+        children?: TreeFileNode[];
+      }
+      const walk = async (absDir: string, relDir: string, depth: number): Promise<TreeFileNode[]> => {
+        if (depth > 6) return []; // 与 /api/skills/:name/tree 同口径：防深层目录把响应撑爆
+        let entries: import("node:fs").Dirent[];
+        try {
+          entries = await readdir(absDir, { withFileTypes: true });
+        } catch {
+          return [];
+        }
+        const nodes: TreeFileNode[] = [];
+        const sorted = entries
+          .filter((entry) => !entry.name.startsWith("."))
+          .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
+        for (const entry of sorted) {
+          const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
+          if (entry.isDirectory()) {
+            nodes.push({ name: entry.name, path: rel, type: "directory", children: await walk(join(absDir, entry.name), rel, depth + 1) });
+          } else if (entry.isFile()) {
+            nodes.push({ name: entry.name, path: rel, type: "file" });
+          }
+        }
+        return nodes;
+      };
+      return { name: meta.name, dir: meta.dir, tree: await walk(meta.dir, "", 0) };
+    }
+
+    // 读写 Power 目录下的单个文件（path 相对 power 根目录，"/" 分隔）
+    const powerFileMatch = path.match(/^\/api\/powers\/([^/]+)\/file$/);
+    if (powerFileMatch && (method === "GET" || method === "PUT")) {
+      const name = decodeURIComponent(powerFileMatch[1]);
+      const ws = query.get("workspace") || d.defaultWorkspace;
+      const { PowerRegistry } = await import("@axon/core");
+      const registry = new PowerRegistry([ws], createVSCodeAgentHost(), homedir());
+      const meta = (await registry.discover()).find((m) => m.name === name);
+      if (!meta) throw new Error("power 不存在");
+
+      if (method === "GET") {
+        const relPath = query.get("path") || "POWER.md";
+        const abs = safeJoinInside(meta.dir, relPath);
+        const { readFile } = await import("node:fs/promises");
+        const content = await readFile(abs, "utf-8");
+        return { path: relPath, content };
+      }
+
+      // PUT：写回。路径必须仍在 power 目录内（safeJoinInside 已挡 ../ 逃逸）。
+      const { path: relPath, content } = (body || {}) as { path?: string; content?: string };
+      if (!relPath) throw new Error("path 必填");
+      const abs = safeJoinInside(meta.dir, relPath);
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      const { dirname } = await import("node:path");
+      await mkdir(dirname(abs), { recursive: true });
+      await writeFile(abs, content ?? "", "utf-8");
+      return { ok: true, path: relPath };
+    }
+
     const powerToggleMatch = path.match(/^\/api\/powers\/([^/]+)\/toggle$/);
     if (powerToggleMatch && method === "PATCH") {
       const name = decodeURIComponent(powerToggleMatch[1]);
@@ -369,42 +507,39 @@ export class RequestRouter {
 
     // ── Marketplace（Skill/Power 远程源）──
     if (path === "/api/marketplaces" && method === "GET") {
-      const { MarketplaceRegistry } = await import("@axon/core");
-      const registry = new MarketplaceRegistry(homedir(), createVSCodeAgentHost());
+      const registry = await createMarketplaceRegistry();
       return { sources: await registry.listSources() };
     }
     if (path === "/api/marketplaces" && method === "POST") {
-      const { MarketplaceRegistry } = await import("@axon/core");
-      const registry = new MarketplaceRegistry(homedir(), createVSCodeAgentHost());
+      const registry = await createMarketplaceRegistry();
       const source = (body || {}) as { name?: string; url?: string; description?: string };
       if (!source.name || !source.url) throw new Error("name 和 url 必填");
       await registry.addSource({ name: source.name, url: source.url, description: source.description });
+      await persistSourcesToSettings(await registry.listSources());
       return { ok: true };
     }
     const marketplaceDeleteMatch = path.match(/^\/api\/marketplaces\/([^/]+)$/);
     if (marketplaceDeleteMatch && method === "DELETE") {
-      const { MarketplaceRegistry } = await import("@axon/core");
-      const registry = new MarketplaceRegistry(homedir(), createVSCodeAgentHost());
+      const registry = await createMarketplaceRegistry();
       await registry.removeSource(decodeURIComponent(marketplaceDeleteMatch[1]));
+      await persistSourcesToSettings(await registry.listSources());
       return { ok: true };
     }
     if (path === "/api/marketplaces/config/raw" && method === "GET") {
-      const { MarketplaceRegistry } = await import("@axon/core");
-      const registry = new MarketplaceRegistry(homedir(), createVSCodeAgentHost());
+      const registry = await createMarketplaceRegistry();
       return { content: await registry.readRawConfig() };
     }
     if (path === "/api/marketplaces/config/raw" && method === "PUT") {
-      const { MarketplaceRegistry } = await import("@axon/core");
-      const registry = new MarketplaceRegistry(homedir(), createVSCodeAgentHost());
+      const registry = await createMarketplaceRegistry();
       const content = (body as { content?: string } | undefined)?.content;
       if (typeof content !== "string") throw new Error("content 必须是字符串");
       await registry.writeRawConfig(content);
+      await persistSourcesToSettings(await registry.listSources());
       return { ok: true };
     }
     const marketplaceItemsMatch = path.match(/^\/api\/marketplaces\/([^/]+)\/items$/);
     if (marketplaceItemsMatch && method === "GET") {
-      const { MarketplaceRegistry } = await import("@axon/core");
-      const registry = new MarketplaceRegistry(homedir(), createVSCodeAgentHost());
+      const registry = await createMarketplaceRegistry();
       return { items: await registry.fetchItems(decodeURIComponent(marketplaceItemsMatch[1])) };
     }
     const marketplaceInstallMatch = path.match(/^\/api\/marketplaces\/([^/]+)\/install$/);
@@ -414,10 +549,10 @@ export class RequestRouter {
       if (kind !== "skill" && kind !== "power") throw new Error("kind 必须是 skill 或 power");
       if (!itemPath) throw new Error("path 必填");
       const ws = workspace || d.defaultWorkspace;
-      const { MarketplaceRegistry, parseFrontmatter, parsePowerFrontmatter, globalSkillsDir, workspaceSkillsDir, globalPowersDir, workspacePowersDir } = await import("@axon/core");
+      const { parseFrontmatter, parsePowerFrontmatter, globalSkillsDir, workspaceSkillsDir, globalPowersDir, workspacePowersDir } = await import("@axon/core");
       const { join } = await import("node:path");
       const { mkdir, writeFile } = await import("node:fs/promises");
-      const registry = new MarketplaceRegistry(homedir(), createVSCodeAgentHost());
+      const registry = await createMarketplaceRegistry();
       const content = await registry.downloadItemContent(sourceName, itemPath);
       if (kind === "skill") {
         const { name } = parseFrontmatter(content);

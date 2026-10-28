@@ -494,6 +494,12 @@ export class SessionHub {
         return this.handleSetWorkspace(cmd, clientId);
       case "set_workspace_group":
         return this.handleSetWorkspaceGroup(cmd, clientId, primaryWorkspace);
+      case "initialize_workspace":
+        return this.handleInitializeWorkspace(cmd, clientId);
+      case "propose_workspace_axon":
+        return this.handleProposeWorkspaceAxon(cmd, clientId);
+      case "inspect_workspace_axon":
+        return this.handleInspectWorkspaceAxon(cmd, clientId);
       case "reset_session":
         if (clientId) {
           this.clientSessions.delete(clientId);
@@ -777,6 +783,65 @@ export class SessionHub {
       // 工作区文件夹变化广播：应用到全部活跃会话，并广播给所有面板
       for (const s of this.activeSessions.values()) applyTo(s);
       this.send("workspace_set", { workspace: dir, workspaces: dirs });
+    }
+  }
+
+  /** 用户明确确认后的显式初始化：普通工作区切换不创建任何 .axon 文件。 */
+  private async handleInitializeWorkspace(
+    cmd: Extract<ControlCommand, { type: "initialize_workspace" }>,
+    clientId: string | undefined,
+  ): Promise<void> {
+    const workspace = typeof cmd.workspace === "string" ? cmd.workspace : "";
+    const sid = this.resolveSessionId(cmd);
+    const session = this.getActiveSession(sid);
+    if (!workspace || !session || !(await this.deps.isValidDir(workspace))) {
+      this.emitResult(sid, clientId, { type: "workspace_error", message: "无法初始化：工作区目录无效或会话尚未建立" } as AgentEvent);
+      return;
+    }
+    try {
+      const result = await session.initializeWorkspaceAxon(workspace, cmd.axonContent);
+      this.emitResult(sid, clientId, { type: "workspace_axon_initialized", ...result } as AgentEvent);
+    } catch (error) {
+      this.emitResult(sid, clientId, { type: "workspace_error", message: `初始化 Axon 工作区失败：${(error as Error).message}` } as AgentEvent);
+    }
+  }
+
+  /** 只读生成 AXON.md 草案，不写入工作区。 */
+  private async handleProposeWorkspaceAxon(
+    cmd: Extract<ControlCommand, { type: "propose_workspace_axon" }>,
+    clientId: string | undefined,
+  ): Promise<void> {
+    const workspace = typeof cmd.workspace === "string" ? cmd.workspace : "";
+    const sid = this.resolveSessionId(cmd);
+    const session = this.getActiveSession(sid);
+    if (!workspace || !session || !(await this.deps.isValidDir(workspace))) {
+      this.emitResult(sid, clientId, { type: "workspace_error", message: "无法生成草案：工作区目录无效或会话尚未建立" } as AgentEvent);
+      return;
+    }
+    try {
+      const content = await session.proposeWorkspaceAxon(workspace);
+      this.emitResult(sid, clientId, { type: "workspace_axon_proposal", workspace, content } as AgentEvent);
+    } catch (error) {
+      this.emitResult(sid, clientId, { type: "workspace_error", message: `生成 AXON.md 草案失败：${(error as Error).message}` } as AgentEvent);
+    }
+  }
+
+  /** 只读探测各工作区 .axon 状态；不会创建任何目录或文件。 */
+  private async handleInspectWorkspaceAxon(
+    cmd: Extract<ControlCommand, { type: "inspect_workspace_axon" }>,
+    clientId: string | undefined,
+  ): Promise<void> {
+    const sid = this.resolveSessionId(cmd);
+    const session = this.getActiveSession(sid);
+    if (!session) {
+      this.emitResult(sid, clientId, { type: "workspace_error", message: "无法读取状态：会话尚未建立" } as AgentEvent);
+      return;
+    }
+    try {
+      const workspaces = await session.inspectWorkspacesAxon();
+      this.emitResult(sid, clientId, { type: "workspace_axon_status", workspaces } as AgentEvent);
+    } catch (error) {
+      this.emitResult(sid, clientId, { type: "workspace_error", message: `读取工作区状态失败：${(error as Error).message}` } as AgentEvent);
     }
   }
 

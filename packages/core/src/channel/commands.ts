@@ -120,6 +120,12 @@ export type ControlCommandPayload =
   // 工作区
   | { type: "set_workspace"; workspace: string; workspaces?: string[] }
   | { type: "set_workspace_group"; groupId: string }
+  /** 用户明确确认后初始化指定工作区的 .axon 文件；普通切换工作区不会创建文件。 */
+  | { type: "initialize_workspace"; workspace: string; axonContent?: string }
+  /** 只读分析工作区，生成 AXON.md 草案；不会写入文件。 */
+  | { type: "propose_workspace_axon"; workspace: string }
+  /** 只读探测当前会话全部工作区的 .axon 状态；不会创建目录或文件。 */
+  | { type: "inspect_workspace_axon" }
   /** 前端模型选择切换时同步当前 Provider，供 IDE 状态栏展示对应额度。 */
   | { type: "set_active_provider"; provider?: string }
   // 执行控制

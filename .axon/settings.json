@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "memory": {
+    "enabled": true,
+    "maxInjectedChars": 25600
+  },
+  "workspaceConfig": {
+    "loadRules": true
+  }
+}

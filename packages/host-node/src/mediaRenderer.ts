@@ -20,7 +20,7 @@
 
 import { spawn } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { cpus, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Browser } from "playwright-core";
 import { MEDIA_LIMITS } from "@axon/core";
@@ -44,6 +44,15 @@ const RAF_PRIME_MS = 16;
 const NARRATION_TAIL_SEC = 0.5;
 
 /**
+ * 默认并行截图 worker 数：取 CPU 核数的一半，夹在 2~4。
+ *
+ * 截图是整条链路里最慢的一步（每帧一次真实渲染 + PNG 编码落盘），编码只占零头，
+ * 所以这里按段并行开多个浏览器，是当前最有效的提速手段。
+ * 不按核数全开：每个浏览器自己也要吃内存和 CPU，开太多会互相拖慢，收益反而下降。
+ */
+const DEFAULT_CAPTURE_WORKERS = Math.max(2, Math.min(4, Math.floor(cpus().length / 2)));
+
+/**
  * 内置前端库目录（扩展的 media/vendor），由宿主在启动时注册。
  *
  * 渲染环境默认拦截一切外网请求（模型生成的页面按不可信代码对待）。但三维场景需要
@@ -53,6 +62,81 @@ const NARRATION_TAIL_SEC = 0.5;
 let mediaVendorDir: string | undefined;
 export function setMediaVendorDir(dir: string | undefined): void {
   mediaVendorDir = dir;
+}
+
+/**
+ * 内置库目录里允许出现的扩展名 → MIME。
+ *
+ * 早前这里不分类型一律返回 application/javascript，后果是 Three.js 本体能加载、
+ * 但它引用的贴图和模型全被浏览器当成脚本解析而失败 —— 三维场景只剩光秃秃的几何体。
+ * 浏览器按 Content-Type 决定怎么处理响应，静态资源必须给对类型。
+ *
+ * 只走白名单：不认识的扩展名一律 application/octet-stream（按下载处理而非执行），
+ * 这样以后有人往目录里多放了 .html 之类的东西，也不会被当页面渲染。
+ */
+const VENDOR_MIME: Record<string, string> = {
+  ".js": "application/javascript; charset=utf-8",
+  ".mjs": "application/javascript; charset=utf-8",
+  ".cjs": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".avif": "image/avif",
+  ".svg": "image/svg+xml",
+  ".glb": "model/gltf-binary",
+  ".gltf": "model/gltf+json",
+  ".hdr": "image/vnd.radiance",
+  ".exr": "image/x-exr",
+  ".ktx2": "image/ktx2",
+  ".bin": "application/octet-stream",
+  ".wasm": "application/wasm",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".otf": "font/otf",
+  ".mp3": "audio/mpeg",
+  ".ogg": "audio/ogg",
+  ".wav": "audio/wav",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+};
+
+/** 按扩展名取 MIME；未知类型按二进制下载处理，不当脚本执行 */
+function vendorContentType(name: string): string {
+  const dot = name.lastIndexOf(".");
+  const ext = dot >= 0 ? name.slice(dot).toLowerCase() : "";
+  return VENDOR_MIME[ext] ?? "application/octet-stream";
+}
+
+/**
+ * 把 /vendor/xxx/yyy.js 解析成 vendor 目录下的相对路径。
+ *
+ * 相比早前"只允许单层文件名"，这里放开了子目录：三维场景的贴图和模型通常按
+ * textures/、models/ 分目录存放，锁死单层等于素材根本加载不进来。
+ *
+ * 但路径穿越的防线一步不松：解码后逐段检查，任何一段是 ..、空段、或含反斜杠
+ * 就整条拒绝。返回 null 时请求落回下面的外链拦截，宁可报"被拦"，也不让一句
+ * ../ 读出扩展目录之外的文件。
+ */
+function vendorRelativePath(pathname: string): string | null {
+  if (!pathname.startsWith("/vendor/")) return null;
+  let rel: string;
+  try {
+    // 先解码再校验：%2e%2e 这类编码绕不过检查，因为检查的是解码后的结果
+    rel = decodeURIComponent(pathname.slice("/vendor/".length));
+  } catch {
+    return null; // 畸形转义（如 %zz）直接拒绝
+  }
+  if (!rel || rel.includes("\\") || rel.startsWith("/")) return null;
+  const segments = rel.split("/");
+  if (segments.some((s) => s === "" || s === "." || s === "..")) return null;
+  return segments.join("/");
 }
 
 // ── 子进程 ────────────────────────────────────────────────────────────────
@@ -421,6 +505,11 @@ export interface CaptureOptions {
   audio?: { sampleRate: number; outPath: string; durationSec: number };
   signal?: AbortSignal;
   onProgress?: (done: number, total: number) => void;
+  /**
+   * 并行截图 worker 数。每个 worker 独立开一个浏览器，负责一段帧区间。
+   * 不传走默认（CPU 核数一半，夹在 2~4）；传 1 退回单浏览器顺序截图。
+   */
+  workers?: number;
 }
 
 /**
@@ -431,6 +520,65 @@ export interface CaptureOptions {
  * 取消时强制关闭）全部收在这里，调用方不用再管。
  */
 export async function captureFrames(opts: CaptureOptions): Promise<string[]> {
+  const workerCount = Math.max(1, Math.min(opts.workers ?? DEFAULT_CAPTURE_WORKERS, opts.frameCount));
+  if (workerCount === 1) {
+    const warnings: string[] = [];
+    let done = 0;
+    await captureRange(
+      opts,
+      0,
+      opts.frameCount,
+      () => {
+        done += 1;
+        opts.onProgress?.(done, opts.frameCount);
+      },
+      warnings,
+    );
+    return warnings;
+  }
+
+  // 分段并行：每段一个独立浏览器，各截自己那一段，但文件名仍按【全局帧号】落盘，
+  // 于是 ffmpeg 那边照旧读 frame_%06d.png 就行，编码链路一行不用改。
+  // 帧数少时不值得并行：启动浏览器的固定开销会盖过收益，所以 workerCount 被 frameCount 夹住。
+  const per = Math.ceil(opts.frameCount / workerCount);
+  const warnings: string[] = [];
+  let done = 0;
+  const tasks: Promise<void>[] = [];
+  for (let w = 0; w < workerCount; w++) {
+    const start = w * per;
+    const end = Math.min(opts.frameCount, start + per);
+    if (start >= end) continue;
+    tasks.push(
+      captureRange(
+        opts,
+        start,
+        end,
+        () => {
+          done += 1;
+          opts.onProgress?.(done, opts.frameCount);
+        },
+        warnings,
+      ),
+    );
+  }
+  await Promise.all(tasks);
+  return warnings;
+}
+
+/**
+ * 截取 [startFrame, endFrame) 这一段帧。
+ *
+ * 每个 worker 自己起一个浏览器、自己装配路由与假时钟，互不干扰。
+ * 段起点不为 0 时，先把假时钟快进到该帧时刻：依赖 setTimeout / rAF 的动画必须"走过"
+ * 中间这段才追得上进度；CSS 动画与 window.renderFrame 由 __axonSeek 按绝对 t 定位，不受影响。
+ */
+async function captureRange(
+  opts: CaptureOptions,
+  startFrame: number,
+  endFrame: number,
+  onFrameDone: () => void,
+  warningsOut: string[],
+): Promise<void> {
   const warnings: string[] = [];
   const throwIfAborted = () => {
     if (opts.signal?.aborted) throw new Error("渲染已取消");
@@ -457,14 +605,15 @@ export async function captureFrames(opts: CaptureOptions): Promise<string[]> {
         return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: opts.html });
       }
       if (/^(data|blob|about):/i.test(url)) return route.continue();
-      // 内置库（如 Three.js）：页面用 /vendor/<文件名> 引用，这里直接读本地文件返回，仍然不出网。
-      // 只允许单层文件名 —— 挡掉 ../ 和任何带路径分隔符的写法，避免拼出扩展目录之外的任意文件。
+      // 内置库（如 Three.js）：页面用 /vendor/<路径> 引用，这里直接读本地文件返回，仍然不出网。
+      // 允许子目录（贴图/模型按 textures/、models/ 分层），路径穿越由 vendorRelativePath 逐段挡掉；
+      // Content-Type 按扩展名给，否则 png/glb/woff2 会被当成脚本解析失败。
       if (mediaVendorDir) {
         try {
-          const name = new URL(url).pathname.replace(/^\/vendor\//, "");
-          if (name && !/[\\/]/.test(name) && !name.includes("..")) {
-            const body = await readFile(join(mediaVendorDir, name));
-            return route.fulfill({ status: 200, contentType: "application/javascript; charset=utf-8", body });
+          const rel = vendorRelativePath(new URL(url).pathname);
+          if (rel) {
+            const body = await readFile(join(mediaVendorDir, rel));
+            return route.fulfill({ status: 200, contentType: vendorContentType(rel), body });
           }
         } catch {
           // 文件不存在 → 落回下面的外链拦截，让模型在 warnings 里看到原因
@@ -495,8 +644,18 @@ export async function captureFrames(opts: CaptureOptions): Promise<string[]> {
     // JS 动画整体比 CSS / renderFrame 晚 16ms（不到一帧），可以接受；CSS 与 renderFrame 是按 t 定位的，不受影响。
     await page.clock.runFor(RAF_PRIME_MS);
 
+    // 本段不是从第 0 帧开始时，先把假时钟快进到段起点：
+    // 依赖 setTimeout / rAF 的动画必须真的"走过"前面那段时间才能追到正确状态，
+    // 而 CSS 动画与 window.renderFrame 由 __axonSeek 按绝对 t 定位，不受这次快进影响。
+    // 快进本身很廉价（只推进虚拟时钟），比逐帧截图便宜两个数量级。
     let clockMs = 0;
-    for (let i = 0; i < opts.frameCount; i++) {
+    if (startFrame > 0) {
+      const startMs = Math.round((startFrame * 1000) / opts.fps);
+      await page.clock.runFor(startMs);
+      clockMs = startMs;
+    }
+
+    for (let i = startFrame; i < endFrame; i++) {
       throwIfAborted();
       const targetMs = Math.round((i * 1000) / opts.fps);
       if (targetMs > clockMs) {
@@ -505,12 +664,13 @@ export async function captureFrames(opts: CaptureOptions): Promise<string[]> {
       }
       await page.evaluate(`window.__axonSeek(${targetMs})`);
       await page.screenshot({ path: join(opts.dir, frameName(i + 1)), type: "png", caret: "hide" });
-      opts.onProgress?.(i + 1, opts.frameCount);
+      onFrameDone();
     }
 
-    // 页面音效：截完帧再单独跑一次离线音频渲染。
+    // 页面音效：整片只需合成一次，所以只在负责第一段的 worker 里做，
+    // 否则 N 个 worker 会各渲染一遍同一段音频，最后互相覆盖。
     // 放在画面之后，是因为音频合成失败也不该影响已经截好的画面（降级成只有画面/旁白）。
-    if (opts.audio) {
+    if (opts.audio && startFrame === 0) {
       throwIfAborted();
       try {
         const base64 = await page.evaluate(
@@ -533,7 +693,8 @@ export async function captureFrames(opts: CaptureOptions): Promise<string[]> {
     if (pageErrors.length) {
       warnings.push(`页面脚本报错：${pageErrors.join(" | ")}，画面可能不完整`);
     }
-    return warnings;
+    // 分段并行时每段各自收集警告，统一交回外层汇总，调用方只看到一份
+    warningsOut.push(...warnings);
   } catch (err) {
     // 取消时是我们主动关的浏览器，此时浏览器侧报的是"已关闭"，对调用方没有意义，统一成取消
     if (opts.signal?.aborted) throw new Error("渲染已取消");

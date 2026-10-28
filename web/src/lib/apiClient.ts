@@ -363,6 +363,27 @@ export function getPower(name: string, workspace?: string): Promise<PowerDetail>
   return get(`/api/powers/${name}${powerQuery(workspace)}`);
 }
 
+/**
+ * Power 目录的完整文件树。
+ *
+ * Power 目录里通常不止 POWER.md 与 skills/：从 Claude 插件转换来的能力包还会带
+ * styles/、core/、tools/、docs/ 这些资源目录，动辄上千个文件。面板不给入口的话，
+ * 用户只能去文件管理器里翻，会以为「导入的东西不全」。
+ */
+export function getPowerTree(name: string, workspace?: string): Promise<{ name: string; dir: string; tree: SkillFileNode[] }> {
+  return get(`/api/powers/${name}/tree${powerQuery(workspace)}`);
+}
+
+/** 读取 Power 目录下指定文件（path 为相对 power 根目录的 "/" 分隔路径） */
+export function readPowerFile(name: string, path: string, workspace?: string): Promise<{ path: string; content: string }> {
+  return get(`/api/powers/${name}/file${skillQuery({ path, workspace })}`);
+}
+
+/** 写入 Power 目录下指定文件 */
+export function writePowerFile(name: string, path: string, content: string, workspace?: string): Promise<{ ok: boolean; path: string }> {
+  return put(`/api/powers/${name}/file`, { path, content, workspace });
+}
+
 /** 启用/禁用 power */
 export function togglePower(name: string, enabled: boolean, workspace?: string): Promise<{ ok: boolean; name: string; enabled: boolean }> {
   return patch(`/api/powers/${name}/toggle${powerQuery(workspace)}`, { enabled });

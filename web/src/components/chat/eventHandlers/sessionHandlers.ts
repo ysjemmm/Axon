@@ -84,7 +84,18 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
       const effort = typeof (m as any).effort === "string" ? (m as any).effort : undefined;
       restored.push({ id: clientMessageId || `hist-u-${seq++}`, role: "user", timestamp: (m as any).timestamp as number | undefined, content: bodyText, images, attachedFiles, userSegments: restoredSegments, effort });
     } else if (m.role === "assistant") {
-      const text = typeof m.content === "string" ? (m.content || "").trim() : "";
+      // 正文来源分两种，必须都读：
+      // · 正常回复：content 就是正文。
+      // · 工具轮（带 tool_calls）：content 恒为 null（那是发给模型的上下文，塞正文会让模型
+      //   把自己的过渡叙述当范例、每轮照抄同一句式），真正的正文只在 displayContent 里。
+      // 早先这里只读 content，于是重启后工具之间夹杂的正文全部消失——它当时只存在于
+      // 内存态的 stream_delta 里，刷新即失。
+      const rawText = typeof m.content === "string" && m.content.trim()
+        ? m.content
+        : typeof (m as any).displayContent === "string"
+          ? ((m as any).displayContent as string)
+          : "";
+      const text = rawText.trim();
       const hasToolCalls = m.tool_calls && m.tool_calls.length > 0;
 
       if (!currentAssistant) {

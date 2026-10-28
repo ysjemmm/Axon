@@ -9,7 +9,8 @@
  */
 
 import { useEffect, useState } from "react";
-import { Brain, Download, History, Upload, X } from "lucide-react";
+// 记忆用 NotebookPen（Brain 归「思考过程」独占，见 ToolCallItem 的 MemoryUpdatedRow 注释）
+import { NotebookPen, Download, History, Upload, X } from "lucide-react";
 import { getSession, listSessions, type SessionMeta } from "@/lib/apiClient";
 
 export interface MemoryPanelProps {
@@ -103,7 +104,7 @@ export function MemoryPanel({ memory, onSave, onClose }: MemoryPanelProps) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 px-4 py-3 border-b border-border/60">
-          <Brain className="w-4 h-4 text-primary shrink-0" />
+          <NotebookPen className="w-4 h-4 text-primary shrink-0" />
           <span className="text-sm font-medium text-foreground">会话记忆</span>
           <span className="text-[11px] text-muted-foreground/60 truncate">
             导出这份 .md，就能在新会话里导入接着用

@@ -150,7 +150,7 @@ function AssistantTurnImpl({
             {rawContent}
           </pre>
         ) : (
-          <div className="space-y-1">{renderedSegments}</div>
+          <div className="axon-turn-body">{renderedSegments}</div>
         )}
 
         {!message.streaming && message.turnStats && (

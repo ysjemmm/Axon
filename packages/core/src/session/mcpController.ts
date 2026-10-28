@@ -19,12 +19,16 @@ export class McpController {
   /**
    * 预取 MCP 工具（每轮用户输入前）：解析三来源配置 → 同步连接 → 拉取工具清单，
    * 构建模型可见的工具定义与「模型名 → 真实目标」映射。
-   * MCP 是增强项：任何环节失败都不阻塞主流程，清空缓存即可（其它工具照常）。Quest 模式不启用。
+   * MCP 是增强项：任何环节失败都不阻塞主流程，清空缓存即可（其它工具照常）。
+   *
+   * Quest（纯问答）模式同样启用：MCP 工具属于用户自己配置的外部能力，不碰本地仓库，
+   * 且非 autoApprove 的调用一律走确认门（见 runMcpTool），不会在用户不知情时动到东西。
+   * 早先这里对 Quest 直接 return，结果是问答模式即便配了 server 也一个工具都看不到。
    */
   async prefetchMcpTools(): Promise<void> {
     this.s.mcpToolDefsCache = [];
     this.s.mcpToolMap.clear();
-    if (!this.s.mcp || this.s.mode === "quest") return;
+    if (!this.s.mcp) return;
     try {
       const specs = await this.s.mcpRegistry.resolve();
       await this.s.mcp.syncServers(specs);

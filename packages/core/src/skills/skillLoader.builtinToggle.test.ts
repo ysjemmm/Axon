@@ -92,38 +92,38 @@ describe("内置 skill 支持禁用", () => {
 
   it("禁用后写用户级名单，且不往任何 skill 目录写标记文件", async () => {
     const { reg, F } = registryWith({});
-    const meta = (await builtinMeta(reg, "test-driven-development"))!;
+    const meta = (await builtinMeta(reg, "brainstorming"))!;
     await reg.setEnabled(meta, true);
 
     expect(norm(CFG)).toBeTruthy();
-    expect(JSON.parse(F.get(norm(CFG))!).disabled).toEqual(["test-driven-development"]);
+    expect(JSON.parse(F.get(norm(CFG))!).disabled).toEqual(["brainstorming"]);
     // 除配置文件外不应产生任何写入（内置 skill 没有磁盘目录）
     expect([...F.keys()]).toEqual([norm(CFG)]);
   });
 
   it("禁用后：discover 标记为已禁用、不再进 skill 清单、也加载不到", async () => {
-    const { reg } = registryWith({ [CFG]: JSON.stringify({ disabled: ["root-cause-tracing"] }) });
-    const meta = (await builtinMeta(reg, "root-cause-tracing"))!;
+    const { reg } = registryWith({ [CFG]: JSON.stringify({ disabled: ["code-quality"] }) });
+    const meta = (await builtinMeta(reg, "code-quality"))!;
     expect(meta.disabled).toBe(true);
 
     const prompt = await reg.buildSkillsPrompt();
-    expect(prompt).not.toContain("root-cause-tracing");
+    expect(prompt).not.toContain("code-quality");
     // 别的内置 skill 不受牵连
     expect(prompt).toContain("systematic-debugging");
 
     // AI 即便凭记忆调用也拿不到（load 对已禁用的返回 null）
-    expect(await reg.load("root-cause-tracing")).toBeNull();
+    expect(await reg.load("code-quality")).toBeNull();
   });
 
   it("重新启用：从名单移除，且不影响名单里的其它条目", async () => {
     const { reg, F } = registryWith({
-      [CFG]: JSON.stringify({ disabled: ["systematic-debugging", "root-cause-tracing"] }),
+      [CFG]: JSON.stringify({ disabled: ["systematic-debugging", "code-quality"] }),
     });
-    const meta = (await builtinMeta(reg, "root-cause-tracing"))!;
+    const meta = (await builtinMeta(reg, "code-quality"))!;
     await reg.setEnabled(meta, false);
 
     expect(JSON.parse(F.get(norm(CFG))!).disabled).toEqual(["systematic-debugging"]);
-    expect((await builtinMeta(reg, "root-cause-tracing"))!.disabled).toBe(false);
+    expect((await builtinMeta(reg, "code-quality"))!.disabled).toBe(false);
     expect((await builtinMeta(reg, "systematic-debugging"))!.disabled).toBe(true);
   });
 
@@ -150,10 +150,10 @@ describe("内置 skill 支持禁用", () => {
 
   it("工作区放同名 skill 可覆盖被禁用的内置项（禁用名单不阻断覆盖）", async () => {
     const { reg } = registryWith({
-      [CFG]: JSON.stringify({ disabled: ["root-cause-tracing"] }),
-      ...skillAt("C:\\ws\\.axon\\skills", "root-cause-tracing"),
+      [CFG]: JSON.stringify({ disabled: ["code-quality"] }),
+      ...skillAt("C:\\ws\\.axon\\skills", "code-quality"),
     });
-    const meta = (await reg.discover()).find((m) => m.name === "root-cause-tracing")!;
+    const meta = (await reg.discover()).find((m) => m.name === "code-quality")!;
     // 覆盖后来源是工作区，且是启用的——用户的定制不会被内置禁用名单误伤
     expect(meta.source).toBe("workspace");
     expect(meta.disabled).toBe(false);

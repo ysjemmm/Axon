@@ -111,7 +111,7 @@ export function ReasoningBlock({
               若把它们改回 px，就会在这个更小的上下文里比正文还大（曾出现「思考过程里代码字体特别大」）。 */}
           <div
             ref={scrollRef}
-            className="pl-4 border-l-2 border-muted-foreground/15 max-h-52 overflow-y-auto [&_.prose]:text-muted-foreground/70 [&_.prose]:text-xs [&_.prose]:leading-snug [&_.prose_p]:my-0.5 [&_.prose_ul]:my-0.5 [&_.prose_ol]:my-0.5"
+            className="axon-reasoning pl-4 border-l-2 border-muted-foreground/15 max-h-52 overflow-y-auto [&_.prose]:text-muted-foreground/70 [&_.prose]:text-xs [&_.prose]:leading-snug [&_.prose_p]:my-0.5 [&_.prose_ul]:my-0.5 [&_.prose_ol]:my-0.5"
           >
             <MarkdownRenderer content={cleanedContent} streaming={streaming} />
           </div>

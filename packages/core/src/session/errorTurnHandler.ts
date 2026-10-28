@@ -44,6 +44,10 @@ export class ErrorTurnHandler {
    * 去重：本轮流式内容可能已作为带 tool_calls 的 assistant 消息 content 落在历史里
    * （工具执行后才中断的场景），此时再 push 一条纯文本会导致内容重复。
    * 向前扫描到本轮用户消息边界，若已有相同内容的 assistant 消息则跳过。
+   *
+   * ⚠️ 比较三个字段而不是只看 content：工具轮的正文现在落在 displayContent 上
+   * （content 恒为 null，见 toolTurnMessage.ts）。只比 content 会判成"还没记录"，
+   * 于是补录一条同样的文本——重启后用户会看到那段话出现两次。
    */
   private recordStreamedContentOnce(streamedContent?: string): void {
     if (!streamedContent || !streamedContent.trim()) return;
@@ -52,8 +56,10 @@ export class ErrorTurnHandler {
       const m = this.s.messages[i];
       if (m.role === "user") break; // 越过本轮边界，不再回溯
       if (m.role === "assistant") {
-        const c = (m as any).content || (m as any).runtimeContent || "";
-        if (typeof c === "string" && c.trim() === trimmed) return; // 已记录，跳过
+        const candidates = [(m as any).content, (m as any).displayContent, (m as any).runtimeContent];
+        for (const c of candidates) {
+          if (typeof c === "string" && c.trim() === trimmed) return; // 已记录，跳过
+        }
       }
     }
     this.s.messages.push({ role: "assistant", content: streamedContent } as any);

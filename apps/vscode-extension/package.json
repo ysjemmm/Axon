@@ -30,6 +30,30 @@
     "configuration": {
       "title": "Axon",
       "properties": {
+        "axon.marketplace.sources": {
+          "type": "array",
+          "default": [],
+          "scope": "window",
+          "markdownDescription": "团队 Skill / Power 仓库源。每个源是一个提供 `index.json` 索引的 HTTP(S) 地址，例如 `https://example.com/team-skills`。\n\n字段：\n- `name`：源名称（唯一，用于展示）\n- `url`：源根地址，必须 http/https\n- `description`：备注（可选）\n\n这与「从仓库安装」面板编辑的是同一份配置，两处修改会互相同步。",
+          "items": {
+            "type": "object",
+            "required": ["name", "url"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "源唯一名称（展示用）"
+              },
+              "url": {
+                "type": "string",
+                "description": "源根地址，必须 http/https"
+              },
+              "description": {
+                "type": "string",
+                "description": "备注说明（可选）"
+              }
+            }
+          }
+        },
         "axon.trustedCommands": {
           "type": "array",
           "items": {
@@ -420,6 +444,11 @@
         "title": "启用/禁用 Skill"
       },
       {
+        "command": "axon.skill.refresh",
+        "title": "刷新 Skills",
+        "icon": "$(refresh)"
+      },
+      {
         "command": "axon.openPower",
         "title": "Axon: 打开 Power"
       },
@@ -463,6 +492,11 @@
         "command": "axon.power.import",
         "title": "导入 Power",
         "icon": "$(folder-opened)"
+      },
+      {
+        "command": "axon.power.refresh",
+        "title": "刷新 Powers",
+        "icon": "$(refresh)"
       },
       {
         "command": "axon.power.installFromMarketplace",
@@ -698,67 +732,72 @@
         {
           "command": "axon.skill.create",
           "when": "view == axon.customSkills",
-          "group": "navigation"
+          "group": "navigation@1"
         },
         {
           "command": "axon.skill.import",
           "when": "view == axon.customSkills",
-          "group": "navigation"
+          "group": "1_import@1"
         },
         {
           "command": "axon.skill.deleteBatch",
           "when": "view == axon.customSkills",
-          "group": "navigation"
+          "group": "2_maint@2"
+        },
+        {
+          "command": "axon.skill.refresh",
+          "when": "view == axon.customSkills",
+          "group": "2_maint@1"
         },
         {
           "command": "axon.skill.create",
           "when": "view == axon.skills",
-          "group": "navigation"
+          "group": "navigation@1"
         },
         {
           "command": "axon.skill.import",
           "when": "view == axon.skills",
-          "group": "navigation"
+          "group": "1_import@1"
         },
         {
           "command": "axon.skill.installFromMarketplace",
           "when": "view == axon.skills",
-          "group": "navigation"
-        },
-        {
-          "command": "axon.openMarketplaceManager",
-          "when": "view == axon.skills",
-          "group": "navigation"
+          "group": "1_import@2"
         },
         {
           "command": "axon.skill.deleteBatch",
           "when": "view == axon.skills",
-          "group": "navigation"
+          "group": "2_maint@2"
+        },
+        {
+          "command": "axon.skill.refresh",
+          "when": "view == axon.skills",
+          "group": "2_maint@1"
         },
         {
           "command": "axon.power.create",
           "when": "view == axon.powers",
-          "group": "navigation"
+          "group": "navigation@1"
         },
         {
           "command": "axon.power.import",
           "when": "view == axon.powers",
-          "group": "navigation"
+          "group": "1_import@1"
         },
         {
           "command": "axon.power.installFromMarketplace",
           "when": "view == axon.powers",
-          "group": "navigation"
+          "group": "1_import@2"
         },
         {
-          "command": "axon.openMarketplaceManager",
+          "command": "axon.power.refresh",
           "when": "view == axon.powers",
-          "group": "navigation"
+          "group": "2_maint@1"
         },
         {
           "command": "axon.openMcp",
           "when": "view == axon.powers",
-          "group": "navigation"
+          "group": "3_other@1"
         },
         {
           "command": "axon.mcp.refresh",

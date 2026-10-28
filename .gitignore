@@ -5,4 +5,18 @@ dist/
 .env
 
 apps/vscode-extension/media/web/
-.axon/
+
+# Axon 工作区协议：共享的 AXON.md / rules / skills / agents / memory / settings.json 可提交。
+# 本机运行痕迹、个人覆盖和可能包含凭据的连接配置不进入版本库。
+.axon/traces/
+.axon/AXON.local.md
+.axon/settings.local.json
+.axon/settings/providers.json
+.axon/settings/mcp.json
+AXON.local.md
+
+# 临时产物：本地调试脚本、渲染中间帧、Python 字节码
+__pycache__/
+*.pyc
+tmp-newsreel/
+tmp/find-out.txt

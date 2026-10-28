@@ -1000,13 +1000,14 @@ export async function executeToolCall(
         sections.push(`\n## 文档\n${power.body}`);
       }
       if (power.skills.length > 0) {
-        // 附上 SKILL.md 的绝对路径：Power 捆绑的 skills 目前【不】进入 SkillRegistry 的发现链路
-        // （powerLoader.getActiveSkillDirs 暂无调用方），所以不能只写"可用 use_skill 加载"——
-        // 那样 AI 会去调用一个加载不到的名字。直接给路径，用 read_file 就能取到细节。
+        // 这些 skill 已经进入 SkillRegistry 的发现链路（AgentSession 构造时把
+        // powerRegistry.getActiveSkillDirs 作为目录提供者传了进去），所以 use_skill 能直接加载到，
+        // 名称就是下面列出的 name —— 不要再让模型去 read_file 猜路径。
+        // 路径仍一并给出，作为兜底：万一某个形态没有 use_skill（如只读子 Agent），还能直接读原文。
         const skillList = power.skills
           .map((s) => `- ${s.name}：${s.description}${s.dir ? `（SKILL.md：${s.dir}/SKILL.md）` : ""}`)
           .join("\n");
-        sections.push(`\n## 捆绑的 Skills（细节见各自的 SKILL.md）\n${skillList}`);
+        sections.push(`\n## 捆绑的 Skills（用 use_skill(name) 加载，name 即下列名称）\n${skillList}`);
       }
       if (Object.keys(power.mcpServers).length > 0) {
         const mcpList = Object.entries(power.mcpServers).map(([k, v]) => `- ${k}：${v.command} ${(v.args || []).join(" ")}`).join("\n");

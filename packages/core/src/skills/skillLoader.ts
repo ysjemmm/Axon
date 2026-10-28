@@ -315,8 +315,12 @@ export class SkillRegistry {
    * 生成注入主 agent 系统提示的 skill 清单文本（渐进式披露的轻量层）。
    * 无 skill 时返回 null（不污染提示）。
    * 含 when（触发场景）的 skill 会标注触发时机，配合"动手前先扫 skill"纪律实现自动触发。
+   *
+   * allowDelegate=false 用于纯问答（Quest）模式：那里没有 delegate_task 工具，
+   * 若照抄"两种使用方式"会让模型去调一个不存在的工具，文案必须跟着工具集走。
    */
-  async buildSkillsPrompt(): Promise<string | null> {
+  async buildSkillsPrompt(opts: { allowDelegate?: boolean } = {}): Promise<string | null> {
+    const allowDelegate = opts.allowDelegate !== false;
     const metas = await this.discover();
     const enabled = metas.filter((m) => !m.disabled);
     if (enabled.length === 0) return null;
@@ -325,6 +329,15 @@ export class SkillRegistry {
       const tag = m.source === "builtin" ? "[内置] " : m.source === "power" ? "[Power] " : "";
       return `- ${tag}${m.name}：${m.description}${trigger}`;
     });
+    const howTo = allowDelegate
+      ? `使用方式（两种，按任务选）：\n` +
+        `1. use_skill(name)：把该技能的完整说明加载进【你自己】的上下文，由你直接按说明执行。` +
+        `适合轻量、需要过程对用户可见、或你想边做边参考技能步骤的情况。\n` +
+        `2. delegate_task(skill, prompt)：把任务连同技能交给【隔离的子 Agent】执行，你只拿回最终结论。` +
+        `适合大型、独立、可压缩成摘要的任务。\n\n` +
+        `上下文隔离：use_skill 的说明只进调用方自己的上下文——你用不会污染子 Agent，子 Agent 用也不会污染你。\n`
+      : `使用方式：use_skill(name) 把该技能的完整说明加载进【你自己】的上下文，由你直接按说明执行。\n` +
+        `上下文隔离：技能说明只进你这一轮自己的上下文。\n`;
     return (
       `你可以调用以下"技能（skill）"来完成专门任务。每个 skill 封装了某类任务的完整执行步骤和方法论：\n` +
       `${lines.join("\n")}\n\n` +
@@ -332,12 +345,7 @@ export class SkillRegistry {
       `如果当前任务命中了某个 skill 的【触发场景】，你【必须】先用 use_skill 加载它、按它的方法论执行，\n` +
       `而不是凭直觉自由发挥。这些方法论是经过验证的工程纪律（如调试、TDD、评审），能显著提升产出质量。\n` +
       `命中即用，不要跳过；确实不匹配再按常规方式做。\n\n` +
-      `使用方式（两种，按任务选）：\n` +
-      `1. use_skill(name)：把该技能的完整说明加载进【你自己】的上下文，由你直接按说明执行。` +
-      `适合轻量、需要过程对用户可见、或你想边做边参考技能步骤的情况。\n` +
-      `2. delegate_task(skill, prompt)：把任务连同技能交给【隔离的子 Agent】执行，你只拿回最终结论。` +
-      `适合大型、独立、可压缩成摘要的任务。\n\n` +
-      `上下文隔离：use_skill 的说明只进调用方自己的上下文——你用不会污染子 Agent，子 Agent 用也不会污染你。\n` +
+      howTo +
       `注意：普通小问题（读个文件、答个概念）直接自己回答，不要为了用 skill 而用。`
     );
   }

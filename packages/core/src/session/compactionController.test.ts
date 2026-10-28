@@ -6,9 +6,17 @@ vi.mock("../compactor.js", () => ({
   needsCompaction: (total: number, max = 1_000_000, pct = 0.35) => total > max * pct,
   compactMessages: async (messages: any[]) => [messages[0], { role: "user", content: "摘要" }],
   rollingCompact: async (messages: any[]) => [[messages[0], { role: "user", content: "摘要" }], true],
+  generateSessionMemory: vi.fn(async () => [{
+    action: "upsert",
+    key: "auto-memory",
+    section: "status",
+    title: "自动记忆",
+    content: "自动合并后的记忆",
+  }]),
 }));
 
 import { CompactionController } from "./compactionController.js";
+import { generateSessionMemory } from "../compactor.js";
 
 /** 用字符数当作"占用估算"，只为区分压缩前后的量级 */
 const estimate = (messages: any[]) =>
@@ -32,6 +40,9 @@ function makeSession(messages: any[]) {
     rollingSummaryInProgress: false,
     rollingSummaryAccumulated: 0,
     compactionConfig: { enabled: true, keepRecentMessages: 2 },
+    setMemory: vi.fn(),
+    applyMemoryUpdates: vi.fn(),
+    getMemory: () => "已有记忆",
     send: vi.fn(),
     getContextWindow: () => 1_000_000,
     getLastTotalTokens: () => s.lastTotalTokens,
@@ -88,5 +99,27 @@ describe("压缩后的上下文占用落盘", () => {
     expect(migrated).toBe(false);
     expect(persisted).toHaveLength(1);
     expect(persisted[0]).toBe(estimate(s.messages));
+  });
+});
+
+describe("混合会话记忆策略", () => {
+  it("累计三轮后后台生成一次记忆，且不阻塞收尾调用", async () => {
+    vi.mocked(generateSessionMemory).mockClear();
+    const { s } = makeSession([
+      { role: "system", content: "system" },
+      { role: "user", content: "设计工作区" },
+      { role: "assistant", content: "完成" },
+    ]);
+    const controller = new CompactionController(s);
+
+    await controller.maybeRefreshMemoryAfterTurn(1000);
+    await controller.maybeRefreshMemoryAfterTurn(1000);
+    expect(generateSessionMemory).not.toHaveBeenCalled();
+
+    await controller.maybeRefreshMemoryAfterTurn(1000);
+    expect(generateSessionMemory).toHaveBeenCalledTimes(1);
+    expect(s.applyMemoryUpdates).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({ key: "auto-memory", content: "自动合并后的记忆" }),
+    ]));
   });
 });

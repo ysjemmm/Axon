@@ -67,6 +67,7 @@ import {
 import { TokenAccountant } from "./session/tokenAccountant.js";
 import { ToolDefBuilder } from "./session/toolDefBuilder.js";
 import { McpController } from "./session/mcpController.js";
+import { buildToolTurnAssistantMessage } from "./session/toolTurnMessage.js";
 import { DelegateRunner } from "./session/delegateRunner.js";
 import { RelayToolRunner } from "./session/relayToolRunner.js";
 import { AskUserToolExecutor, type AskUserQuestion, type AskUserAnswer } from "./session/askUserToolExecutor.js";
@@ -77,6 +78,8 @@ import { resolveInWorkspaces } from "./tools/search.js";
 import { CommandGate } from "./tools/index.js";
 import { EditController } from "./session/editController.js";
 import { CompactionController } from "./session/compactionController.js";
+import { applyMemoryUpdates, parseMemoryUpdates, type MemoryUpdate } from "./session/memoryStore.js";
+import { initializeWorkspaceAxon, inspectWorkspacesAxon, loadWorkspaceAxonConfig, type WorkspaceAxonStatus } from "./session/workspaceConfig.js";
 import { CreditBudgetGate } from "./session/creditBudgetGate.js";
 import { RelayStore } from "./relay/relayStore.js";
 import { WikiStore, wikiRecallSignature, type WikiRecall } from "./wiki/wikiStore.js";
@@ -179,6 +182,8 @@ export class AgentSession {
   /** @internal */ skillsPromptCache: string | null = null;
   // 本轮请求的 Power 清单提示
   /** @internal */ powersPromptCache: string | null = null;
+  // 工作区 .axon 指令 / rules / memory 的本轮快照
+  /** @internal */ workspaceAxonPromptCache: string | null = null;
   // 本轮请求的 IDE 上下文提示（仅 IDE 形态有 host.ideContext 时；handleUserInput 开头预取）。
   // 活动文件/选区是同步可得，git diff 是异步，统一在预取阶段拼好，buildRequestMessages 同步注入。
   /** @internal */ ideContextCache: string | null = null;
@@ -575,26 +580,37 @@ export class AgentSession {
     this.send("session_memory", { memory: this.memory });
   }
 
+  /** 增量更新会话记忆：按 key 合并知识块，仍以完整 Markdown 对外持久化。 */
+  applyMemoryUpdates(updates: MemoryUpdate[]): void {
+    const next = applyMemoryUpdates(this.memory, updates);
+    if (!next || next === this.memory) return;
+    this.setMemory(next);
+  }
+
   /**
-   * update_memory 工具实现：把本次会话的精华浓缩成一份 Markdown 写回会话。
+   * update_memory 工具实现：优先按知识块增量维护记忆，兼容旧版完整 Markdown 替换。
    *
-   * ── 为什么是整份替换，而不是追加 ──
-   * 记忆的语义是「当前应该被记住的全部内容」。追加式只增不减，几十轮之后必然长成
-   * 一篇流水账，真正重要的结论反而被埋掉；整份替换逼着模型每次都重新收敛一遍。
-   *
-   * ── 关于上下文开销 ──
-   * 入参就是整份文档，所以在 catalog 里标了 transient：工具【结果】跨轮会被裁掉。
-   * 调用本身仍留在历史的 assistant 消息里，因此只在真正值得记的时候写，不要每轮重写。
-   * 记忆的正式落点是 SessionData.memory，随后由 PromptBuilder 作为按轮注入每轮发一条。
+   * 记忆的正式落点仍是 SessionData.memory；结构化块只负责合并，最终持久化与前端协议继续
+   * 使用完整 Markdown，因此旧快照、导入导出和会话分叉都不需要迁移格式。
    */
   /** @internal */ updateMemory(toolArgs: Record<string, unknown>): { result: string; status: "success" | "error" } {
     const content = typeof toolArgs.content === "string" ? toolArgs.content.trim() : "";
-    if (!content) {
-      return { result: "content 为空，没有任何内容被写入。确实要清空记忆时，请改成传一句明确的清空说明。", status: "error" };
+    const updatesValue = toolArgs.updates;
+    const updates: MemoryUpdate[] = Array.isArray(updatesValue)
+      ? updatesValue.filter((item): item is MemoryUpdate => !!item && typeof item === "object" && typeof (item as any).key === "string")
+      : typeof updatesValue === "string" ? parseMemoryUpdates(updatesValue) : [];
+    if (updates.length > 0) {
+      this.applyMemoryUpdates(updates);
+    } else if (content) {
+      // 兼容旧模型/旧提示：content 仍表示完整 Markdown 替换。
+      this.setMemory(content);
+    } else {
+      return { result: "updates/content 为空，没有任何内容被写入。请提供增量 updates，或传入完整 Markdown content。", status: "error" };
     }
-    this.setMemory(content);
+    // 主动更新已经拿到了模型最新的完整记忆，清掉后台节流计数，避免紧接着重复生成一次。
+    this.compactionController.markMemoryUpdated();
     return {
-      result: `会话记忆已更新（${content.length} 字符）。它会随后续每次请求自动注入，不必在回复里复述。`,
+      result: `会话记忆已更新（${this.memory.length} 字符，${updates.length > 0 ? `合并 ${updates.length} 个增量块` : "完整替换"}）。它会随后续每次请求自动注入，不必在回复里复述。`,
       status: "success",
     };
   }
@@ -982,6 +998,44 @@ export class AgentSession {
     this.mcpRegistry?.setWorkspaces(this.workspaces);
     this.relayStore?.setRoots([this.cwd, this.homeDir]);
     this.wikiStore?.setRoots([this.cwd, ...this.workspaces]);
+  }
+
+  /** 用户明确确认后的工作区初始化；普通打开/切换工作区不写 .axon。 */
+  async initializeWorkspaceAxon(workspace: string, axonContent?: string) {
+    return initializeWorkspaceAxon(this.host, workspace, axonContent);
+  }
+
+  /** 只读探测各工作区的 .axon 现状；不创建目录、不写文件。 */
+  async inspectWorkspacesAxon(): Promise<WorkspaceAxonStatus[]> {
+    return inspectWorkspacesAxon(this.host, this.workspaces);
+  }
+
+  /** 只读分析工作区，生成 AXON.md 草案；不写入任何文件。 */
+  async proposeWorkspaceAxon(workspace: string): Promise<string> {
+    const base = await this.resolveExecutingModel();
+    const strategy = getStrategy(base.provider, base.model);
+    const runner = new SubAgentRunner({
+      strategy,
+      model: base.model,
+      cwd: workspace,
+      workspaces: this.workspaces,
+      host: deriveSubAgentHost(this.host),
+      signal: this.abortSignal,
+      emit: () => {},
+      skillLoader: this.loadSkillForTool,
+      web: this.web,
+      think: this.think,
+      modelSupportsThinking: declaredThinkingFor(base.model, base.provider),
+      readOnly: true,
+    });
+    const result = await runner.run(
+      "请只读分析这个工作区，生成一份 AXON.md 草案。\n" +
+      "必须包含：项目结构、主要模块、构建/测试命令、长期开发约定、验证方式和明显的架构边界。\n" +
+      "不要修改任何文件，不要运行写操作，不要读取或引用 CLAUDE.md、.claude/、AGENTS.md。\n" +
+      "最终只输出完整 Markdown 正文，不要输出解释、代码围栏或前后套话。",
+      null,
+    );
+    return result.text.trim();
   }
 
   /** 跟踪终端实际工作目录（execute_command / start_process 执行后同步） */
@@ -2035,9 +2089,10 @@ export class AgentSession {
     this.persistMessages(); // 最终回复落盘，切走也保留
     this.send("stream_end", { elapsed: out.elapsed, tokens: out.turnTokens, model: this.model, modelName: getModelDisplayName(this.model, this.provider), providerName: getProviderDisplayName(this.provider), effort: this.effort, credits: out.credits, creditDetail: out.creditDetail });
     this.rollingSummaryAccumulated = out.nextRollingSummaryAccumulated;
-    if (out.shouldTriggerRollingSummary) {
-      this.maybeRollingSummary();
-    }
+    if (out.shouldTriggerRollingSummary) this.maybeRollingSummary();
+    // 混合记忆策略：每轮都登记；若滚动压缩已启动，入口会等待它完成后再决定是否后台更新，
+    // 否则按轮数/token 节流合并。整个过程不 await，不阻塞用户继续发送下一条消息。
+    void this.compactionController.maybeRefreshMemoryAfterTurn(out.turnTokens);
   }
 
   /**
@@ -2632,9 +2687,10 @@ export class AgentSession {
 
 
     // 预取 IDE 上下文 / skill / power / MCP / Wiki 索引 —— 它们之间无依赖，并行拉取以缩短首字延迟
-    const [ideCtx, skillsPrompt, powersPrompt, wikiRecall] = await Promise.all([
+    const [ideCtx, skillsPrompt, powersPrompt, wikiRecall, axonConfig] = await Promise.all([
       this.promptBuilder.buildIdeContextPrompt(false).catch((e: unknown) => { console.warn("[ide-ctx] 预取失败（忽略）:", (e as Error).message); return null; }),
-      this.skillRegistry.buildSkillsPrompt().catch((e: unknown) => { console.warn("[skill] 发现 skill 失败（忽略）:", (e as Error).message); return null; }),
+      // Quest 没有 delegate_task，清单文案里的"两种使用方式"要收敛成一种（见 buildSkillsPrompt 的 allowDelegate）
+      this.skillRegistry.buildSkillsPrompt({ allowDelegate: this.mode !== "quest" }).catch((e: unknown) => { console.warn("[skill] 发现 skill 失败（忽略）:", (e as Error).message); return null; }),
       this.powerRegistry ? this.powerRegistry.buildPowersPrompt().catch((e: unknown) => { console.warn("[power] 发现 power 失败（忽略）:", (e as Error).message); return null; }) : Promise.resolve(null),
       // Wiki 召回：一次取回注入文本 + 页面清单（同一次 summary，保证两者同一份快照）。
       // 无页面时返回 null，注入侧据此完全跳过 —— 未使用 Wiki 的项目零成本
@@ -2647,11 +2703,15 @@ export class AgentSession {
       this.mode === "quest"
         ? Promise.resolve(null)
         : this.wikiStore.buildRecall().catch((e: unknown) => { console.warn("[wiki] 索引构建失败（忽略）:", (e as Error).message); return null; }),
+      this.mode === "quest"
+        ? Promise.resolve(null)
+        : loadWorkspaceAxonConfig(this.host, this.workspaces, this.homeDir).catch((e: unknown) => { console.warn("[axon] 工作区配置加载失败（忽略）:", (e as Error).message); return null; }),
       this.prefetchMcpTools(),  // ← 之前串行 await，现在并入并行
     ]);
     this.ideContextCache = ideCtx;
     this.skillsPromptCache = skillsPrompt;
     this.powersPromptCache = powersPrompt;
+    this.workspaceAxonPromptCache = axonConfig?.prompt ?? null;
     this.wikiPromptCache = wikiRecall?.prompt ?? null;
     // 定格本轮的易变注入（终端 cwd / 工作区聚焦）：一轮之内 system 前缀逐字节不变，
     // 否则 Anthropic / Responses 链路每次命令换目录都会整段断缓存（见 PromptBuilder.beginTurn）
@@ -2845,27 +2905,31 @@ export class AgentSession {
       }
 
       // 记录 assistant 消息并执行工具。
-      // displayContent: null → 不展示给用户（工具轮叙述对用户无价值，只会造成重复刷屏）。
-      // runtimeContent: 保留原文 → 让模型下轮能看到自己说过什么，减少重复叙述倾向。
-      const assistantMsg = {
-        role: "assistant" as const,
-        content: contentBuffer || null,
-        // DeepSeek 等 reasoning 模型要求带 tool_calls 的 assistant 消息原样回传思考状态。
-        // 使用 provider 协议字段名，PromptBuilder 会保留该字段进入下一轮请求。
-        ...(turn.reasoningContent ? { reasoning_content: turn.reasoningContent } : {}),
-        // Anthropic extended thinking 下一轮必须原样回传 thinking + signature；
-        // 不能只保存统一的 reasoning_content，否则原生协议会丢失签名校验块。
-        ...(turn.anthropicThinkingBlocks && turn.anthropicThinkingBlocks.length > 0
-          ? { anthropic_thinking_blocks: turn.anthropicThinkingBlocks }
-          : {}),
-        displayContent: null,
-        runtimeContent: contentBuffer || null,
-        tool_calls: toolCalls.map((tc) => ({
-          id: tc.id,
-          type: "function" as const,
-          function: { name: tc.name, arguments: tc.arguments },
-        })),
-      };
+      //
+      // ⚠️ 工具轮的正文「不进模型上下文，但必须进展示层」。
+      //
+      // 曾经的写法是 `content: contentBuffer`，并注释"保留原文让模型下轮能看到自己说过什么，
+      // 减少重复叙述倾向"。实测效果完全相反：历史里累积的"用户选择了X，我先摸清Y再动手"
+      // 这类过渡叙述成了少样本范例，模型下一轮看到自己上轮这么开头，就照抄同一句式，
+      // 于是每轮开头都是一句几乎一字不差的重述。
+      //
+      // 这不是猜测。promptBuilder.ts 里记录过同一机制的另一处实例：注入说明一旦被写进可见回复，
+      // 之后每轮都会照演一遍（推理不持久化，但可见回复会）。
+      //
+      // 真正有信息量的是 tool_calls（模型能看到自己调过什么）与最终回复，
+      // 过渡叙述对后续决策没有价值，只贡献重复。
+      //
+      // ⚠️ 但「model 不看的」不等于「用户不该看到」。早先在这里把 displayContent 也一并置 null，
+      // 注释理由是"历史展示走 displayContent（本来就是 null）"——那句是错的：用户当时看到的
+      // 那几段文字走的是内存态的 stream_delta，重启 IDE 就没了；唯一能撑过重启的是 displayContent。
+      // 结果就是工具之间夹杂的正文在重启后全部消失。
+      // 现在由 buildToolTurnAssistantMessage 统一负责这三个字段的分工（见该文件头注释）。
+      const assistantMsg = buildToolTurnAssistantMessage({
+        text: contentBuffer,
+        toolCalls,
+        reasoningContent: turn.reasoningContent,
+        anthropicThinkingBlocks: turn.anthropicThinkingBlocks,
+      });
       this.messages.push(assistantMsg);
 
       // 工具轮执行：由新链路 DefaultToolDispatchHandler 编排（驱动 plan→execute→complete 状态机），

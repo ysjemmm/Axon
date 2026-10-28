@@ -9,7 +9,7 @@
  */
 
 import type { ToolDef } from "../llm/types.js";
-import { getToolDefinitions } from "../tools/index.js";
+import { getToolDefinitions, ToolName } from "../tools/index.js";
 import type { AgentSession } from "../agentSession.js";
 
 export class ToolDefBuilder {
@@ -26,6 +26,14 @@ export class ToolDefBuilder {
       const tools: ToolDef[] = [this.getAskUserToolDef()];
       // 产物不碰仓库（后端直接写到产物目录），问答模式同样可以交付 HTML 页面、SVG、文档。
       tools.push(this.getCreateArtifactToolDef());
+      // 技能与能力包：只读取方法论文本、不碰仓库（两者在 catalog 里都标了 readOnly），
+      // 所以问答模式同样要能把清单里的东西真正加载进来——否则提示里列了 name，
+      // 模型却调不了 use_skill / activate_power，等于清单是死的。
+      // 注意 Quest 没有 delegate_task，use_skill 是唯一入口（技能清单文案里会据此收敛说法）。
+      tools.push(...this.pickBaseToolDefs(ToolName.UseSkill, ToolName.ActivatePower));
+      // MCP：由用户自己配置的外部能力，本身不碰仓库，且非 autoApprove 的调用会走确认门。
+      // 缓存为空时（没配 server / 预取失败）自然不注入。
+      if (this.s.mcpToolDefsCache.length > 0) tools.push(...this.s.mcpToolDefsCache);
       // 动画渲染：只在宿主真能渲染时才给，否则模型会调一个必然失败的工具。
       // 它不碰仓库、不给模型命令权限（渲染流程固定封在宿主里），所以问答模式也可以用。
       // 动画渲染：既要宿主有这个能力，也要用户在设置里明确开启。
@@ -34,13 +42,7 @@ export class ToolDefBuilder {
       // 文生图：和动画渲染一样，能力来自宿主（需配置生图服务），未配置时不注入。
       if (this.s.imageEnabled && this.s.host?.imageGenerator) tools.push(this.getGenerateImageToolDef());
       if (this.s.questWebSearch) {
-        const base = getToolDefinitions() as unknown as ToolDef[];
-        tools.push(
-          ...base.filter((t) => {
-            const name = (t as { function?: { name?: string } }).function?.name;
-            return name === "web_search" || name === "web_fetch";
-          }),
-        );
+        tools.push(...this.pickBaseToolDefs(ToolName.WebSearch, ToolName.WebFetch));
       }
       return tools;
     }
@@ -56,32 +58,53 @@ export class ToolDefBuilder {
   }
 
   /**
-   * update_memory 工具定义：把本次会话的精华浓缩成一份 Markdown 写回会话。
-   *
-   * 主 Agent 专属：记忆是会话级的，子 Agent 独立跑完就丢，给它写记忆没有意义
-   *（还可能把主会话攒下的记忆覆盖掉）。
+   * 从公共工具定义里按名字挑选。
+   * Quest 用它只放行「只读、不碰仓库」的那几项（技能 / 能力包 / 联网），
+   * 而不是整份 getToolDefinitions()——后者含读写、命令、浏览器等，问答模式不得触及。
    */
+  private pickBaseToolDefs(...names: string[]): ToolDef[] {
+    return (getToolDefinitions() as unknown as ToolDef[]).filter((t) => {
+      const n = (t as { function?: { name?: string } }).function?.name;
+      return n ? names.includes(n) : false;
+    });
+  }
+
+  /** update_memory：增量维护会话记忆；保留 content 以兼容旧模型和整份 Markdown 导入。 */
   private getUpdateMemoryToolDef(): ToolDef {
     return {
       type: "function",
       function: {
         name: "update_memory",
         description:
-          "把本次会话里【值得跨会话带走】的内容浓缩成一份 Markdown，写进会话记忆。\n\n" +
-          "【什么时候写】用户交代了长期有效的偏好或约束（技术栈、命名、流程、禁用项）、" +
-          "敲定了一个重要决策及其理由、或给出了下次继续要用的背景时，写完再接着干活。\n" +
-          "不要为了“记录一下”而调用：闲聊、一次性的中间过程、能直接从代码里读出来的事实都不必记。\n\n" +
-          "【写什么】只留精华——结论、约束、理由、待办。用短句和小标题组织，一屏以内读完；" +
-          "不要抄对话原文，不要写过程流水账。\n\n" +
-          "【整份替换】每次传入的都是记忆的【完整内容】，不是增量。" +
-          "先想清楚这一版应该长什么样再写，已经过时的条目要主动删掉。\n\n" +
-          "【不要复述】写完不要在回复里再把记忆念一遍，用户能在记忆面板里直接看到它。",
+          "增量维护本次会话里【值得跨会话带走】的记忆，不要每次重写整份 Markdown。\n\n" +
+          "【什么时候写】用户交代了长期有效的偏好或约束、敲定了重要设计决策、" +
+          "形成了工作区理解、完成了关键改动、留下了待办或踩坑经验时。\n" +
+          "不要记录寒暄、一次性中间过程或能直接从源码读取的普通事实。\n\n" +
+          "【推荐格式】传 updates 数组，每个元素包含 action（upsert/append/delete）、稳定 key、" +
+          "section、title 和 Markdown content。upsert 更新同一知识块，append 追加新条目，delete 删除过时块。\n\n" +
+          "【兼容格式】content 仍可传完整 Markdown，表示明确要求整体替换；正常情况下不要使用 content。\n\n" +
+          "更新后不要在回复里复述记忆正文，用户可以在记忆面板查看。",
         parameters: {
           type: "object",
           properties: {
-            content: { type: "string", description: "会话记忆的完整 Markdown 内容（整份替换）" },
+            updates: {
+              type: "array",
+              description: "推荐：要合并的记忆块更新数组。每个元素包含 action、key、section、title、content。",
+              items: {
+                type: "object",
+                properties: {
+                  action: { type: "string", enum: ["upsert", "append", "delete"] },
+                  key: { type: "string", description: "稳定的知识块 key，例如 neutral-tool-icons" },
+                  section: { type: "string", enum: ["project", "workspace", "decisions", "preferences", "status", "pitfalls", "todos", "other"] },
+                  title: { type: "string" },
+                  content: { type: "string", description: "该知识块的 Markdown 内容" },
+                },
+                required: ["action", "key"],
+              },
+            },
+            content: { type: "string", description: "兼容模式：完整 Markdown，整份替换现有记忆；正常更新不要使用" },
           },
-          required: ["content"],
+          required: [],
         },
       },
     };

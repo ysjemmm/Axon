@@ -10,6 +10,7 @@
 
 import type { CreditDetail } from "../credits.js";
 import type { WikiGenerationEvent } from "../wiki/wikiController.js";
+import type { WorkspaceAxonStatus } from "../session/workspaceConfig.js";
 
 /** relay/skill 等复杂载荷暂以宽松类型占位，阶段 1 迁移 relay 模块时替换为精确类型 */
 type Json = Record<string, unknown>;
@@ -218,6 +219,9 @@ export type AgentEventPayload =
   // ── 工作区 ──
   | { type: "workspace_set"; workspace: string; workspaces: string[]; groupId?: string; groupName?: string }
   | { type: "workspace_error"; message: string }
+  | { type: "workspace_axon_initialized"; workspace: string; created: string[]; existing: string[] }
+  | { type: "workspace_axon_proposal"; workspace: string; content: string }
+  | { type: "workspace_axon_status"; workspaces: WorkspaceAxonStatus[] }
 
   // ── 命令信任与安全 ──
   | { type: "confirm_command_request"; requestId: string; command: string; options: { choice: string; pattern: string; label: string }[]; id?: string }

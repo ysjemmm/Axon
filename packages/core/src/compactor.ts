@@ -15,6 +15,7 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 import { DEFAULT_CONTEXT_WINDOW } from "./llm/modelContext.js";
 import type { LLMStrategy } from "./llm/types.js";
 import { NO_TRUNCATE_TOOLS } from "./tools/catalog.js";
+import { parseMemoryUpdates, type MemoryUpdate } from "./session/memoryStore.js";
 
 /** 压缩配置 */
 interface CompactConfig {
@@ -193,13 +194,32 @@ function serializeHistory(messages: ChatCompletionMessageParam[]): string {
  * 摘要只需要知道「聊了什么」；记忆还要记住「具体改了哪个文件、执行了什么命令、报错原文是什么」。
  * 500 字符经常正好把关键路径或错误信息切掉，所以这里放到 2000。
  */
-function serializeHistoryForMemory(messages: ChatCompletionMessageParam[]): string {
-  const MAX_CHARS = 2000;
+/** @internal 供记忆生成测试验证工具调用不会被压成无信息的"（工具调用）"。 */
+export function serializeHistoryForMemory(messages: ChatCompletionMessageParam[]): string {
+  const MAX_CHARS = 3000;
   return messages
     .map((msg) => {
       if (!msg) return "";
       const role = msg.role === "user" ? "用户" : msg.role === "assistant" ? "助手" : msg.role === "system" ? "系统" : "工具";
-      const content = typeof msg.content === "string" ? msg.content : "(工具调用)";
+      const rawContent = typeof msg.content === "string"
+        ? msg.content
+        : Array.isArray(msg.content)
+          ? msg.content.map((part: any) => part?.type === "text" ? part.text : part?.type === "image_url" ? "（图片）" : "").filter(Boolean).join(" ")
+          : typeof (msg as any).runtimeContent === "string"
+            ? (msg as any).runtimeContent
+            : "";
+      const toolCalls = Array.isArray((msg as any).tool_calls)
+        ? (msg as any).tool_calls.map((call: any) => {
+            const name = call?.function?.name || call?.name || "未知工具";
+            const args = call?.function?.arguments;
+            let parsedArgs = args || "";
+            if (typeof args === "string") {
+              try { parsedArgs = JSON.stringify(JSON.parse(args)); } catch { /* 保留原始参数 */ }
+            }
+            return `调用工具 ${name}${parsedArgs ? ` 参数：${parsedArgs}` : ""}`;
+          }).join("；")
+        : "";
+      const content = [rawContent, toolCalls].filter(Boolean).join("\n").trim() || "（无文本内容）";
       const truncated = content.length > MAX_CHARS ? content.slice(0, MAX_CHARS) + "…（已截断）" : content;
       return `[${role}] ${truncated}`;
     })
@@ -222,35 +242,41 @@ export async function generateSessionMemory(
   messages: ChatCompletionMessageParam[],
   strategy: LLMStrategy,
   model: string,
-): Promise<string> {
+): Promise<MemoryUpdate[]> {
   const historyText = serializeHistoryForMemory(messages);
-  const systemPrompt = `你是会话记忆维护助手。把「已有记忆」与「本次会话记录」合并成一份完整的新记忆。
+  const systemPrompt = `你是会话记忆维护助手。你的任务是从「已有记忆」与「本次会话记录」中提取本次真正值得长期保留的增量知识。
 
 ${prevMemory ? `【已有记忆】\n${prevMemory}\n` : "【已有记忆】（目前为空）\n"}
 【本次会话记录】
 ${historyText}
 
 要求：
-1. 输出是【整份替换】的完整记忆，不是增量 diff；不要出现「本次新增」「相较上次」这类字样。
-2. **尽可能完整，宁可多写也不要漏**。必须保留：用户交代的偏好与约束、敲定的决策及其理由、
+1. 只输出 JSON，不要 Markdown，不要解释。格式必须是：
+   {"updates":[{"action":"upsert|append|delete","key":"稳定英文或拼音 key","section":"project|workspace|decisions|preferences|status|pitfalls|todos|other","title":"中文标题","content":"Markdown 内容"}]}
+2. 只返回本次对话新增、修正或删除的知识块，不要把没有变化的旧记忆重新输出。
+3. **尽可能完整，宁可多写也不要漏**。优先保留：用户交代的偏好与约束、敲定的决策及其理由、
    改过或生成的关键文件绝对路径、重要结论与数据、未完成的待办、踩过的坑与规避方式。
-3. 已有记忆里仍然有效的要保留；被后续对话推翻或更新的，直接改成最新结论，不要新旧并存。
-4. 丢弃：寒暄、重复确认、工具调用的过程细节、失败重试的中间态。
-5. 用 Markdown 小标题 + 短句，按主题分组，不要写成流水账。
-6. 只输出记忆正文本身，不要解释你在做什么。`;
+4. 已有记忆里仍然有效的内容不要重复返回；被后续对话推翻或更新的，用 upsert 替换原 key；
+   明确过时的内容才用 delete。
+5. 丢弃：寒暄、重复确认、工具调用的过程细节、失败重试的中间态；但不要丢掉工具调用揭示的关键文件路径、
+   工作区结构、搜索结论、实际改动和验证结果。
+6. **优先吸收最近几轮的新信息**：本轮形成的设计决策、界面/交互规范、用户偏好、对工作区的理解、
+   已完成与未完成事项，都要覆盖进记忆；不要因为已有记忆很长就只原样返回旧项目说明。
+7. 每个 key 只代表一个稳定知识块，尽量按主题合并，不要为每一句话创建一个块。
+8. 没有值得更新的内容时返回 {"updates":[]}。`;
 
   const turn = await strategy.runTurn({
     model,
     messages: [
       { role: "system", content: systemPrompt },
-      { role: "user", content: "请输出合并后的完整会话记忆。" },
+      { role: "user", content: "请只输出本次需要合并的 JSON 增量更新，不要输出完整旧记忆。" },
     ],
     tools: [],
     callbacks: SILENT_CALLBACKS,
-    maxOutputTokens: 2000,
+    maxOutputTokens: 4000,
   });
 
-  return (turn.content || "").trim();
+  return parseMemoryUpdates(turn.content || "");
 }
 
 /** 生成摘要用的空回调（不需要流式上报给前端，只取最终 content） */

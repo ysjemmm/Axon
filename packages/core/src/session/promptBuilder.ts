@@ -67,6 +67,26 @@ export class PromptBuilder {
    */
   private turnFrozen: FrozenInjections | null = null;
 
+  /**
+   * 保留最近多少轮的 reasoning_content 原样回传，更早的【清空内容、保留字段】。
+   *
+   * ── 为什么是 0（全部清空）而不是"保留最近三轮" ──
+   * 先试过保留最近 3 轮，实测无效：那 3 轮本身就已经是同一种句式的复制品
+   * （"用户选择了X，我先摸清Y"），保留下来等于把 3 个范例原样喂回去，模型照抄。
+   * 这类重复只需要【一个】样本就足以形成 few-shot，所以「少留几轮」不解决问题，必须清零。
+   *
+   * ── 为什么必须清空的是历史，而不是指望系统提示 ──
+   * 重复发生在思考块（reasoning_content）里，系统提示只能约束可见正文，管不到模型的内部推理。
+   * 唯一能影响它的是它"看到自己上几轮是怎么想的"——不给它看，就没有可模仿的模板。
+   *
+   * ── 为什么清内容而不是删字段 ──
+   * 部分端点对「带 tool_calls 却缺 reasoning_content」会直接报错，保留空字符串既满足
+   * 字段存在性，又不引入任何语义。任务脉络仍由 tool_calls 与工具结果完整承载，不缺信息。
+   *
+   * 想调回"保留最近 N 轮"就把这个值改成 N（N > 0），规则链无需改动。
+   */
+  private static readonly REASONING_KEEP_RECENT = 0;
+
   /** 每轮开头调用：按当前状态定格本轮的易变注入 */
   beginTurn(): void {
     this.turnFrozen = this.computeVolatile();
@@ -284,24 +304,43 @@ export class PromptBuilder {
     const ephemeralTail: ChatCompletionMessageParam[] = [];
     const preFiltered: ChatCompletionMessageParam[] = [];
 
-    const toRuntimeMessage = (m: ChatCompletionMessageParam): ChatCompletionMessageParam => {
+    // 找出所有带思考的消息位置：最老的若干条要清空内容
+    const reasoningIndexes: number[] = [];
+    this.s.messages.forEach((m, i) => {
+      const r = (m as { reasoning_content?: unknown }).reasoning_content;
+      if (typeof r === "string" && r.length > 0) reasoningIndexes.push(i);
+    });
+    const dropReasoning = new Set(
+      reasoningIndexes.slice(0, Math.max(0, reasoningIndexes.length - PromptBuilder.REASONING_KEEP_RECENT)),
+    );
+
+    const toRuntimeMessage = (m: ChatCompletionMessageParam, index: number): ChatCompletionMessageParam => {
       const anyMsg = m as any;
+      let out: ChatCompletionMessageParam = m;
       if (anyMsg.role === "assistant" && Array.isArray(anyMsg.tool_calls)) {
         const { displayContent, runtimeContent, ...rest } = anyMsg;
-        return { ...rest, content: runtimeContent || null } as ChatCompletionMessageParam;
+        out = { ...rest, content: runtimeContent || null } as ChatCompletionMessageParam;
       }
       if (anyMsg.role === "user" && anyMsg._contextInjections) {
         const { _contextInjections, ...rest } = anyMsg;
-        return rest as ChatCompletionMessageParam;
+        out = rest as ChatCompletionMessageParam;
       }
-      return m;
+      // 旧轮思考清空内容（字段保留）：防止历史里累积的同质思考把模型带向重复
+      if (dropReasoning.has(index)) {
+        return {
+          ...(out as unknown as Record<string, unknown>),
+          reasoning_content: "",
+        } as unknown as ChatCompletionMessageParam;
+      }
+      return out;
     };
 
-    for (const m of this.s.messages) {
+    for (let i = 0; i < this.s.messages.length; i++) {
+      const m = this.s.messages[i];
       if ((m as any)._tailInjected && (m as any).role === "system") {
         ephemeralTail.push(m);
       } else {
-        preFiltered.push(toRuntimeMessage(m));
+        preFiltered.push(toRuntimeMessage(m, i));
       }
     }
 
@@ -433,7 +472,14 @@ export class PromptBuilder {
       add("wiki", this.s.wikiPromptCache);
     }
 
-    // 会话记忆：整份文档作为一条注入。
+    // 工作区 .axon：项目指令、路径规则与长期工作区知识。它和会话记忆分开：
+    // .axon 属于仓库/工作区共享上下文，会话记忆属于当前会话；两者都放尾部，避免配置变化
+    // 让历史前缀缓存整体失效。
+    if (this.s.workspaceAxonPromptCache) {
+      injections.push({ role: "system", content: this.s.workspaceAxonPromptCache, _tailInjected: true } as ChatCompletionMessageParam);
+    }
+
+    // 会话记忆：整份文档作为一条尾部注入。
     // 刻意不并进系统提示开头：它的内容随会话推进而变化，放前面会让整段前缀缓存
     // 从变化点起失效；作为按轮注入，变化的代价就只落在这一条自己身上。
     if (this.s.memory && this.s.memory.trim()) {

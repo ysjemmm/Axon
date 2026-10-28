@@ -2,19 +2,56 @@ import { describe, expect, it } from "vitest";
 import { ToolDefBuilder } from "./toolDefBuilder.js";
 
 /** 用最小假会话驱动工具装配，只看最终暴露给模型的工具名。 */
-function toolNames(mode: string, questWebSearch = false, host?: unknown, mediaEnabled = false): string[] {
+function toolNames(
+  mode: string,
+  questWebSearch = false,
+  host?: unknown,
+  mediaEnabled = false,
+  mcpToolDefsCache: unknown[] = [],
+): string[] {
   const builder = new ToolDefBuilder(
-    { mode, questWebSearch, mcpToolDefsCache: [], host, mediaEnabled } as any,
+    { mode, questWebSearch, mcpToolDefsCache, host, mediaEnabled } as any,
   );
   return builder.getToolDefs().map((t) => (t as { function?: { name?: string } }).function?.name ?? "");
 }
 
+/** 造两个假的 MCP 工具定义（形状与 McpController 预取出来的一致）。 */
+function fakeMcpTools(): unknown[] {
+  return ["mcp__user_fs__read", "mcp__power_kb__search"].map((n) => ({
+    type: "function",
+    function: { name: n, description: `[MCP·fake] ${n}`, parameters: { type: "object", properties: {} } },
+  }));
+}
+
 describe("ToolDefBuilder 工具装配", () => {
-  it("问答（Quest）模式默认只给 ask_user 与 create_artifact——不带读写/命令类工具", () => {
+  it("问答（Quest）模式默认给 ask_user / create_artifact / use_skill / activate_power——不带读写/命令类工具", () => {
     const names = toolNames("quest");
-    // create_artifact 由后端直接写到产物目录、不碰仓库，所以问答模式也可以交付成品；
-    // 但除这两个之外不得有任何别的工具。
-    expect(names).toEqual(["ask_user", "create_artifact"]);
+    // create_artifact 由后端直接写到产物目录、不碰仓库，所以问答模式也可以交付成品。
+    // use_skill / activate_power 只读方法论文本、同样不碰仓库——技能与能力包清单会在
+    // 系统提示里列给模型，没有这两个工具清单就是死的（列了名字却加载不到）。
+    expect(names).toEqual(["ask_user", "create_artifact", "use_skill", "activate_power"]);
+  });
+
+  it("问答模式拿不到任何读写 / 命令 / 浏览器工具（只读原则不被 use_skill 的引入带偏）", () => {
+    const names = toolNames("quest", true, { mediaRenderer: {}, imageGenerator: {} }, true);
+    for (const forbidden of [
+      "read_file", "create_file", "str_replace", "apply_patch",
+      "execute_command", "start_process", "list_dir", "search", "check_diagnostics",
+      "open_browser", "screenshot_page", "browser_eval",
+      "delegate_task", "relay_create",
+    ]) {
+      expect(names).not.toContain(forbidden);
+    }
+  });
+
+  it("问答模式注入 MCP 工具（用户自配的外部能力，非 autoApprove 走确认门）", () => {
+    const names = toolNames("quest", false, undefined, false, fakeMcpTools());
+    expect(names).toContain("mcp__user_fs__read");
+    expect(names).toContain("mcp__power_kb__search");
+  });
+
+  it("MCP 缓存为空时不注入任何 mcp__ 工具（没配 server / 预取失败）", () => {
+    expect(toolNames("quest").some((n) => n.startsWith("mcp__"))).toBe(false);
   });
 
   it("问答模式开启联网时，ask_user 与 web_search/web_fetch 并存", () => {

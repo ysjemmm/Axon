@@ -8,7 +8,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Loader2, ImagePlus, X, Paperclip, Plus, Camera, ChevronDown, ListChecks, Globe, Brain, FolderOpen } from "lucide-react";
+import { Loader2, ImagePlus, X, Paperclip, Plus, Camera, ChevronDown, ListChecks, Globe, NotebookPen, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -18,6 +18,7 @@ import { useModelEffort, resolveEffortForModel } from "./chat/useModelEffort";
 import { getVisionFallbackModel } from "@/lib/apiClient";
 import { updateDiagState } from "@/lib/diagnostics";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
+import { WorkspaceAxonPanel, type WorkspaceAxonStatusItem } from "@/components/WorkspaceAxonPanel";
 import { WorkspaceGroupManager, type WorkspaceGroup } from "@/components/WorkspaceGroupManager";
 import { AxonMascot } from "@/components/AxonMascot";
 import { useMascotMood } from "./chat/useMascotMood";
@@ -106,6 +107,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   const session = useChatSession({ clientId, sessionId, mode, connected, send, onSessionCreated, onCompactionMigrated, onSessionForked, onStreamingChange });
   const [hiddenMessageCount, setHiddenMessageCount] = useState(0);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [axonProposal, setAxonProposal] = useState<{ workspace: string; content: string } | null>(null);
+  const [axonProposalLoading, setAxonProposalLoading] = useState(false);
   /** 上一次的会话消息总数：用于区分"追加消息"与"压缩/编辑后变短" */
   const prevHistoryLenRef = useRef(session.chatHistory.length);
 
@@ -285,6 +288,18 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   });
   const pendingArtifactPickRef = useRef<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [axonPanelOpen, setAxonPanelOpen] = useState(false);
+  const [axonStatuses, setAxonStatuses] = useState<WorkspaceAxonStatusItem[]>([]);
+  const [axonStatusLoading, setAxonStatusLoading] = useState(false);
+  /** 用户已忽略"未启用"提示的工作区，避免每轮都弹 */
+  const [axonNoticeDismissed, setAxonNoticeDismissed] = useState<string[]>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("axon.workspaceAxonNoticeDismissed") || "[]") as unknown;
+      return Array.isArray(saved) ? saved.filter((v): v is string => typeof v === "string") : [];
+    } catch {
+      return [];
+    }
+  });
   const [groupManagerOpen, setGroupManagerOpen] = useState(false);
   const [skillStudioOpen, setSkillStudioOpen] = useState(false);
   /** 图片查看器状态：当前图片组 + 索引（输入框图片与历史消息图片共用） */
@@ -1219,7 +1234,38 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     host.postMessage({ type: "pick_artifact_dir", clientId, requestId, initialPath: artifactDir });
   }, [clientId, artifactDir]);
 
+  // 工作区变化时只读探测一次 .axon 现状：供"未启用"轻提示与状态面板使用。
+  // 只发查询命令，绝不触发创建；探测失败也不打扰正常对话。
+  useEffect(() => {
+    if (!connected || !session.workspace) return;
+    setAxonStatusLoading(true);
+    send({ type: "inspect_workspace_axon", clientId, sessionId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, session.workspace, clientId, sessionId]);
+
   useSessionEvents(clientId, useCallback((msg) => {
+    if (msg.type === "workspace_axon_proposal") {
+      const proposal = msg as { workspace?: string; content?: string };
+      setAxonProposal(proposal.workspace && proposal.content ? { workspace: proposal.workspace, content: proposal.content } : null);
+      setAxonProposalLoading(false);
+      return;
+    }
+    if (msg.type === "workspace_axon_status") {
+      const status = msg as { workspaces?: WorkspaceAxonStatusItem[] };
+      setAxonStatuses(Array.isArray(status.workspaces) ? status.workspaces : []);
+      setAxonStatusLoading(false);
+      return;
+    }
+    if (msg.type === "workspace_axon_initialized") {
+      setAxonProposal(null);
+      setAxonProposalLoading(false);
+      // 初始化后立刻回读一次，列表与"未启用"提示同步到最新状态
+      send({ type: "inspect_workspace_axon", clientId, sessionId });
+      return;
+    }
+    if (msg.type === "workspace_error") {
+      setAxonProposalLoading(false);
+    }
     // 宿主选完产物目录后的回包。requestId 对不上说明是别的面板/过期的请求，直接忽略。
     if (msg.type === "artifact_dir_picked") {
       const r = msg as { requestId?: string; path?: string; error?: string };
@@ -1361,6 +1407,45 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
    * 决策类提示（工具确认 / 压缩选择 / Credits 暂停）不在此列，它们留在输入框内部。
    */
   const noticeItems: NoticeItem[] = [];
+  /**
+   * 主工作区没启用 .axon 时给一条轻提示。只提示、不创建——初始化必须由用户点。
+   * 已忽略过的工作区记在 localStorage，避免每轮重复打扰。
+   */
+  const primaryAxonStatus = axonStatuses.find((item) => item.workspace === session.workspace);
+  if (
+    session.workspace
+    && primaryAxonStatus
+    && !primaryAxonStatus.hasAxonMd
+    && !axonNoticeDismissed.includes(session.workspace)
+  ) {
+    const targetWorkspace = session.workspace;
+    noticeItems.push({
+      id: "axon-workspace-not-initialized",
+      tone: "info",
+      title: "此工作区未启用 Axon 配置",
+      detail: `${targetWorkspace} 还没有 .axon/AXON.md，项目约定与长期知识不会被自动带入。`,
+      actions: [
+        {
+          label: "初始化",
+          onClick: () => send({ type: "initialize_workspace", workspace: targetWorkspace, clientId, sessionId }),
+        },
+        {
+          label: "查看全部工作区",
+          onClick: () => {
+            setAxonPanelOpen(true);
+            send({ type: "inspect_workspace_axon", clientId, sessionId });
+          },
+        },
+      ],
+      onDismiss: () => {
+        const next = [...axonNoticeDismissed, targetWorkspace];
+        setAxonNoticeDismissed(next);
+        try {
+          localStorage.setItem("axon.workspaceAxonNoticeDismissed", JSON.stringify(next));
+        } catch { /* 忽略写入失败 */ }
+      },
+    });
+  }
   // 1) 文件 / 附件错误（3 秒自动消失，可手动关）
   if (fileError) {
     noticeItems.push({
@@ -2082,7 +2167,9 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                     }
                     aria-label="会话记忆"
                   >
-                    <Brain className={`h-4 w-4 ${hasMemory ? "text-primary" : ""}`} />
+                    {/* 记忆用 NotebookPen、思考过程用 Brain：两者此前共用 Brain，
+                        同一屏里「思考过程」和「已更新记忆」长得一模一样，用户分不开。 */}
+                    <NotebookPen className={`h-4 w-4 ${hasMemory ? "text-primary" : ""}`} />
                     {hasMemory && (
                       <span className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-primary" />
                     )}
@@ -2171,6 +2258,25 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         onOpenChange={setPickerOpen}
         initialPath={session.workspace || undefined}
         onSelect={session.selectWorkspace}
+        onInitialize={(path) => send({ type: "initialize_workspace", workspace: path, clientId, sessionId })}
+        onPropose={(path) => { setAxonProposalLoading(true); send({ type: "propose_workspace_axon", workspace: path, clientId, sessionId }); }}
+        proposal={axonProposal}
+        proposalLoading={axonProposalLoading}
+        onAcceptProposal={(workspace, content) => send({ type: "initialize_workspace", workspace, axonContent: content, clientId, sessionId })}
+        onCloseProposal={() => setAxonProposal(null)}
+      />
+
+      {/* 工作区 Axon 状态一览：只读展示，逐个初始化，不提供批量创建 */}
+      <WorkspaceAxonPanel
+        open={axonPanelOpen}
+        onOpenChange={(next) => {
+          setAxonPanelOpen(next);
+          if (next) send({ type: "inspect_workspace_axon", clientId, sessionId });
+        }}
+        statuses={axonStatuses}
+        loading={axonStatusLoading}
+        onRefresh={() => send({ type: "inspect_workspace_axon", clientId, sessionId })}
+        onInitialize={(workspace) => send({ type: "initialize_workspace", workspace, clientId, sessionId })}
       />
 
 

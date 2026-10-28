@@ -17,7 +17,7 @@ import { join, basename, dirname } from "node:path";
 import { SessionHub, type ControlCommand, type WorkspaceGroup, type CompactionUserConfig, type CreditBudgetUserConfig, webSearch, webFetch, setBuiltinPowersDir } from "@axon/core";
 import { DEFAULT_COMPACTION_CONFIG, DEFAULT_CREDIT_BUDGET_CONFIG, DEFAULT_TRACE_CONFIG, type TraceConfig } from "@axon/core";
 import { createVSCodeAgentHost, VSCodeCommandTrustStore } from "@axon/host-vscode";
-import { JsonFileStorage, createNodeMcpCapability, ensureFfmpeg, setMediaVendorDir, setImageProviderConfig } from "@axon/host-node";
+import { JsonFileStorage, createNodeMcpCapability, ensureFfmpeg, findFfmpeg, setMediaVendorDir, setImageProviderConfig } from "@axon/host-node";
 import type { ImageProviderConfig } from "@axon/host-node";
 import { loadProviderEnv } from "./loadEnv.js";
 import { VSCodeChannel } from "./vscodeChannel.js";
@@ -30,6 +30,8 @@ import { registerGitBlameAnnotation } from "./gitBlameAnnotation.js";
 import { registerInlineCompletion } from "./inlineCompletion.js";
 import { registerAskAxonCodeAction } from "./codeActionProvider.js";
 import { showDiagLog } from "./webviewWatchdog.js";
+import { downloadGitHubDir, parseGitHubUrl } from "./skillUrlImport.js";
+import { createMarketplaceRegistry } from "./marketplaceBridge.js";
 
 /** 批量导入结果（单条） */
 interface ImportResult {
@@ -147,8 +149,17 @@ function readImageConfig(): ImageProviderConfig | undefined {
  *
  * 用带进度的通知而不是静默后台下载：160MB 的下载如果没有任何反馈，
  * 用户会以为开关坏了。失败也只提示一次，不阻塞其它功能。
+ *
+ * ⚠️ 已就绪必须直接返回，不能「走一遍进度再弹一条已就绪」。
+ * 这条曾被写成无条件执行，而它在每次启动 IDE 时都会被调用一次（见下方 readMediaEnabled 分支）；
+ * 本机早有缓存，于是每次启动都立刻命中缓存、立刻弹出同一句「动画渲染组件已就绪」。
+ * 而 VS Code 的普通通知不会自动超时消失，只能手动点 × —— 于是它就长期挂在通知中心。
+ * 结论：不是「想办法让它自动关」，而是组件已经就绪时压根不该产生任何界面反馈。
  */
 async function prepareMediaComponents(): Promise<void> {
+  // 内置 / PATH / 缓存任一命中即已就绪：不显示进度、不提示，静默返回
+  if (await findFfmpeg()) return;
+
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
@@ -157,7 +168,7 @@ async function prepareMediaComponents(): Promise<void> {
     },
     async (progress) => {
       try {
-        await ensureFfmpeg({
+        const loc = await ensureFfmpeg({
           onProgress: ({ phase, doneBytes, totalBytes }) => {
             if (phase === "download" && totalBytes > 0) {
               const pct = Math.min(100, Math.floor((doneBytes / totalBytes) * 100));
@@ -169,8 +180,12 @@ async function prepareMediaComponents(): Promise<void> {
             }
           },
         });
-        void vscode.window.showInformationMessage("动画渲染组件已就绪，现在可以让 AI 生成 GIF / MP4 了。");
+        // 只有这次真的下载过才值得说一句；用状态栏消息（几秒后自动消失），不往通知中心堆东西
+        if (loc.source === "downloaded") {
+          vscode.window.setStatusBarMessage("$(check) 动画渲染组件已就绪，可以让 AI 生成 GIF / MP4 了", 5000);
+        }
       } catch (err) {
+        // 失败要立刻让用户知道，否则能力静默不可用——这一条保留弹窗（且只在真出错时出现）
         void vscode.window.showErrorMessage(`动画渲染组件准备失败：${(err as Error).message}`);
       }
     },
@@ -209,16 +224,318 @@ async function scanChildDirsWithMarker(parentDir: string, markerFile: string): P
 }
 
 /**
+ * 归一化源目录：返回真正含标记文件的那个目录（Skill 用 SKILL.md，Power 用 POWER.md）。
+ *
+ * 常见误操作是直接选整个仓库根目录（如 lemo-opuscar），而标记文件在
+ * `plugin/skills/<name>/` 这类子目录里。此时若照抄整个仓库，复制会成功，
+ * 但扫描只认 `<根>/<目录>/<标记文件>`，列表里永远看不到它。
+ * 这里先看目录本身，再有限深度地找唯一的标记文件；找到多个说明无法确定，交回用户重选。
+ */
+async function resolveSkillSourceDir(dir: string, markerFile = "SKILL.md"): Promise<{ dir: string; note?: string } | null> {
+  const path = require("path") as typeof import("path");
+  const hasMarker = async (d: string): Promise<boolean> => {
+    try {
+      const stat = await vscode.workspace.fs.stat(vscode.Uri.file(path.join(d, markerFile)));
+      return !!(stat.type & vscode.FileType.File);
+    } catch {
+      return false;
+    }
+  };
+  if (await hasMarker(dir)) return { dir };
+
+  const found: string[] = [];
+  const walk = async (current: string, depth: number): Promise<void> => {
+    if (depth > 4 || found.length > 1) return;
+    let children: [string, vscode.FileType][];
+    try {
+      children = await vscode.workspace.fs.readDirectory(vscode.Uri.file(current));
+    } catch {
+      return;
+    }
+    for (const [name, type] of children) {
+      if (found.length > 1) return;
+      if (!(type & vscode.FileType.Directory)) continue;
+      // 跳过依赖与 VCS 目录，避免在大仓库里乱翻
+      if (name === ".git" || name === "node_modules" || name === ".axon" || name === "dist") continue;
+      const child = path.join(current, name);
+      if (await hasMarker(child)) {
+        found.push(child);
+      } else {
+        await walk(child, depth + 1);
+      }
+    }
+  };
+  await walk(dir, 0);
+  if (found.length === 1) {
+    const rel = path.relative(dir, found[0]) || "当前目录";
+    return { dir: found[0], note: `已定位到 ${rel} 下的 ${markerFile}` };
+  }
+  return null;
+}
+
+/**
+ * 本次导入产生的临时根目录：「从链接导入」下载的内容、以及 Claude 插件格式转换出来的
+ * 中间目录都在这里登记，导入流程结束后由 cleanupImportTemp 统一清理。
+ *
+ * 用数组而不是单个变量：一次导入可能同时来自链接与格式转换，覆盖会让先前的临时目录
+ * 永远清不掉。
+ */
+const pendingImportTempRoots: string[] = [];
+
+/**
+ * 清理导入留下的临时文件。
+ * 必须在复制动作完成之后调用——提前调用会把还没复制走的源文件删掉。
+ */
+async function cleanupImportTemp(): Promise<void> {
+  const roots = pendingImportTempRoots.splice(0);
+  if (roots.length === 0) return;
+  const { rm } = await import("node:fs/promises");
+  for (const root of roots) {
+    try {
+      await rm(root, { recursive: true, force: true });
+    } catch {
+      /* 清理失败不影响导入结果 */
+    }
+  }
+}
+
+// ── Claude Code Plugin → Axon Power 兼容 ─────────────────────────────────
+
+/** 一个待转换的 Claude 插件 */
+interface ClaudePluginSource {
+  name: string;
+  description?: string;
+  /** 插件根目录的绝对路径 */
+  dir: string;
+  /**
+   * 插件所在仓库的根目录（即市场目录）。
+   *
+   * 与 dir 不同时说明插件只是仓库里的一个子目录。很多插件是「薄壳」：
+   * plugin/ 里只有 SKILL.md 与 setup.sh，真正的资源（styles/、core/、tools/）在仓库根。
+   * 严格照着 source 只搬子目录，用户会看到「下载了几千个文件，导进来只有几个」。
+   */
+  rootDir?: string;
+}
+
+/** 读 JSON 文件；不存在或内容不合法都返回 null（不抛错，交回调用方降级） */
+async function readJsonFile(file: string): Promise<Record<string, unknown> | null> {
+  try {
+    const raw = await vscode.workspace.fs.readFile(vscode.Uri.file(file));
+    return JSON.parse(Buffer.from(raw).toString("utf8")) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/** 路径是否存在（文件或目录），不抛错 */
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await vscode.workspace.fs.stat(vscode.Uri.file(target));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 识别 Claude Code Plugin 格式，返回其中的插件目录。
+ *
+ * 兼容两种形态（对应 Claude 的两种安装方式）：
+ *  1. 市场仓库：根目录有 `.claude-plugin/marketplace.json`，其 `plugins[]` 每项带
+ *     `name` / `description` / `source`（相对仓库根的路径，如 `"./plugin"`）。
+ *     lemo-opuscar 就是这一种。
+ *  2. 插件本体：目录自身有 `.claude-plugin/plugin.json`。
+ *
+ * 只认相对路径形态的 source：`{"source":"github","repo":"..."}` 与 `git-subdir` 需要
+ * 另外联网下载，这里不猜——返回空数组让上层按「不认识」处理，好过拉错东西。
+ */
+async function resolveClaudePluginSources(rootDir: string): Promise<ClaudePluginSource[]> {
+  const path = require("path") as typeof import("path");
+
+  const marketplace = await readJsonFile(path.join(rootDir, ".claude-plugin", "marketplace.json"));
+  const entries = marketplace?.plugins;
+  if (Array.isArray(entries)) {
+    const out: ClaudePluginSource[] = [];
+    for (const raw of entries as Array<Record<string, unknown>>) {
+      const source = raw?.source;
+      if (typeof source !== "string" || !source.trim()) continue;
+      const dir = path.resolve(rootDir, source);
+      const name = typeof raw.name === "string" && raw.name ? raw.name : path.basename(dir);
+      out.push({
+        name,
+        description: typeof raw.description === "string" ? raw.description : undefined,
+        dir,
+        rootDir,
+      });
+    }
+    if (out.length > 0) return out;
+  }
+
+  const own = await readJsonFile(path.join(rootDir, ".claude-plugin", "plugin.json"));
+  if (own) {
+    return [
+      {
+        name: typeof own.name === "string" && own.name ? own.name : path.basename(rootDir),
+        description: typeof own.description === "string" ? own.description : undefined,
+        dir: rootDir,
+        rootDir,
+      },
+    ];
+  }
+
+  return [];
+}
+
+/**
+ * 由插件元信息生成 POWER.md 正文。
+ *
+ * Claude 插件没有 POWER.md（元信息在 plugin.json），而 Axon 靠 POWER.md 识别能力包，
+ * 所以转换时必须补上这一份。正文只写清来源与结构，不编造用途描述——描述优先取
+ * 插件自己声明的 description。
+ */
+function buildPowerMd(src: ClaudePluginSource): string {
+  const description = (src.description || `从 Claude Code 插件「${src.name}」导入的能力包`)
+    .replace(/\r?\n/g, " ")
+    .trim();
+  // source 是仓库子目录时，仓库根的内容也一并导入了。必须在这里写明，
+  // 否则用户打开 Power 只看到 POWER.md 与一个 skill，会以为 styles/、core/ 这些没进来。
+  const mergedRoot = src.rootDir && !isSamePath(src.rootDir, src.dir);
+  return [
+    "---",
+    `name: ${src.name}`,
+    `description: ${description}`,
+    `keywords: [${src.name}, claude-plugin]`,
+    "---",
+    "",
+    `# ${src.name}`,
+    "",
+    description,
+    "",
+    "## 来源",
+    "",
+    "本能力包由 Axon 从 Claude Code Plugin 格式自动转换而来：",
+    "",
+    "- 原插件的 `.claude-plugin/` 元信息已原样保留",
+    "- 原插件的 `skills/` 目录按 Axon Power 约定直接可用",
+    "- POWER.md 是转换时补写的（Claude 插件本身没有这个文件）",
+    ...(mergedRoot
+      ? [
+          "- **插件声明的 source 只是仓库里的一个子目录，其资源不完整；仓库根的其他内容（如 styles/、core/、tools/、docs/）已一并导入**",
+          "- 仓库根导入时跳过 `.git`（体积大且无运行价值）、`node_modules`、`.venv` 等依赖目录",
+        ]
+      : []),
+    "",
+  ].join("\n");
+}
+
+/**
+ * 把 Claude 插件目录转换成 Axon Power 目录。
+ *
+ * 做法是「复制到临时目录 + 补 POWER.md」，而不是就地改用户的源目录：转换结果随后
+ * 走与普通 Power 完全相同的重名检查与复制流程，源目录保持不被触碰；
+ * 临时目录统一登记，导入结束后自动清理。
+ */
+async function convertClaudePlugins(srcs: ClaudePluginSource[]): Promise<string[]> {
+  const path = require("path") as typeof import("path");
+  const { mkdtemp } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "axon-claude-plugin-"));
+  pendingImportTempRoots.push(tempRoot);
+
+  const out: string[] = [];
+  for (const src of srcs) {
+    const target = path.join(tempRoot, src.name);
+    await vscode.workspace.fs.copy(vscode.Uri.file(src.dir), vscode.Uri.file(target), { overwrite: true });
+
+    // ⚠️ 只搬 source 指向的子目录是不够的。
+    //
+    // lemo-opuscar 的 marketplace.json 写的是 `"source": "./plugin"`，而 plugin/ 里只有
+    // plugin.json + SKILL.md + setup.sh 三个文件；真正的 styles/（1983 个）、core/（46 个）、
+    // tools/（12 个）、docs/（69 个）全在仓库根。用户下载了两千多个文件、导入后只看到 4 个，
+    // 就是因为这里严格照着 source 搬。
+    //
+    // 所以 source 只是仓库子目录时，把仓库根的内容也并进来（子目录优先，不覆盖）。
+    // 跳过 .git（本仓库占 142MB）、依赖目录与已搬过的 plugin/。
+    if (src.rootDir && !isSamePath(src.rootDir, src.dir)) {
+      const SKIP = new Set([".git", "node_modules", ".venv", "plugin", ".claude-plugin", ".github", "dist", ".axon"]);
+      let entries: [string, vscode.FileType][] = [];
+      try {
+        entries = await vscode.workspace.fs.readDirectory(vscode.Uri.file(src.rootDir));
+      } catch {
+        entries = [];
+      }
+      for (const [name] of entries) {
+        if (SKIP.has(name)) continue;
+        const from = path.join(src.rootDir, name);
+        const to = path.join(target, name);
+        // plugin/ 里已经搬过来的内容优先，不覆盖
+        if (await pathExists(to)) continue;
+        try {
+          await vscode.workspace.fs.copy(vscode.Uri.file(from), vscode.Uri.file(to), { overwrite: false });
+        } catch {
+          /* 单个条目失败不影响整体导入 */
+        }
+      }
+    }
+
+    const powerMd = path.join(target, "POWER.md");
+    let hasPowerMd = true;
+    try {
+      await vscode.workspace.fs.stat(vscode.Uri.file(powerMd));
+    } catch {
+      hasPowerMd = false;
+    }
+    if (!hasPowerMd) {
+      await vscode.workspace.fs.writeFile(vscode.Uri.file(powerMd), new TextEncoder().encode(buildPowerMd(src)));
+    }
+    out.push(target);
+  }
+  return out;
+}
+
+/**
  * 让用户批量选择要导入的源目录，返回选中目录的绝对路径列表（取消返回 undefined）。
- * 提供两种方式：
+ * 提供三种方式：
  *  1. 浏览目录（文件对话框中可按住 Ctrl 多选文件夹）
  *  2. 从父目录勾选（选一个父目录，列出其下所有含标记文件的子目录，逐个勾选）
+ *  3. 从链接导入（粘贴 GitHub 仓库/目录地址，只抓取目标子目录）
  */
 async function pickImportSourceDirs(label: string, markerFile: string): Promise<string[] | undefined> {
   const modeBrowse = "浏览并选择目录（可按住 Ctrl 多选）";
   const modeParent = "从父目录勾选（列出后逐个勾选，推荐）";
-  const mode = await vscode.window.showQuickPick([modeBrowse, modeParent], { placeHolder: `${label} 导入方式` });
+  const modeUrl = "从链接导入（粘贴 GitHub 地址）";
+  const mode = await vscode.window.showQuickPick([modeBrowse, modeParent, modeUrl], { placeHolder: `${label} 导入方式` });
   if (!mode) return undefined;
+
+  if (mode === modeUrl) {
+    const raw = await vscode.window.showInputBox({
+      title: `从链接导入 ${label}`,
+      prompt: `粘贴 GitHub 仓库或目录链接，目标目录里应含 ${markerFile}`,
+      placeHolder: "https://github.com/owner/repo/tree/main/path/to/skill",
+      ignoreFocusOut: true,
+      validateInput: (value) => (value.trim() && !parseGitHubUrl(value) ? "请填写 GitHub 仓库或目录链接" : undefined),
+    });
+    if (!raw) return undefined;
+
+    const target = parseGitHubUrl(raw);
+    if (!target) {
+      vscode.window.showErrorMessage("无法识别该链接，请使用 GitHub 仓库或目录地址。");
+      return undefined;
+    }
+
+    try {
+      const downloaded = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `从链接导入 ${label}`, cancellable: false },
+        (progress) => downloadGitHubDir(target, (message) => progress.report({ message })),
+      );
+      pendingImportTempRoots.push(downloaded.tempRoot);
+      return [downloaded.dir];
+    } catch (err) {
+      vscode.window.showErrorMessage(`从链接导入失败：${(err as Error).message}`);
+      return undefined;
+    }
+  }
 
   if (mode === modeBrowse) {
     const uris = await vscode.window.showOpenDialog({
@@ -1129,7 +1446,8 @@ export function activate(context: vscode.ExtensionContext): void {
       // 注入 Power 捆绑的 skills：否则会出现「AI 能 use_skill 加载、用户在面板里却看不到」
       const registry = new SkillRegistry([defaultWorkspace], host, homedir(), () => powers.getActiveSkillDirs());
       const skills = await registry.discover();
-      skillsTree.refresh(skills.map((s) => ({ name: s.name, source: s.source, disabled: s.disabled, skillFile: s.skillFile })));
+      // 带 dir：Skill 节点要能展开列出 scripts/assets 等内部文件
+      skillsTree.refresh(skills.map((s) => ({ name: s.name, source: s.source, disabled: s.disabled, skillFile: s.skillFile, dir: s.dir })));
       customSkillsTree.refresh(
         skills.map((s) => ({ name: s.name, source: s.source, disabled: s.disabled, skillFile: s.skillFile, dir: s.dir })),
         workspaceSkillsDir(defaultWorkspace),
@@ -1172,9 +1490,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
     vscode.commands.registerCommand("axon.skill.installFromMarketplace", async () => {
-      const { MarketplaceRegistry } = await import("@axon/core");
-      const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
-      const registry = new MarketplaceRegistry(homedir(), createHost());
+      const registry = await createMarketplaceRegistry();
       const sources = await registry.listSources();
       if (sources.length === 0) {
         vscode.window.showInformationMessage("还没有配置任何 Marketplace 源，请先添加一个团队仓库地址。", "添加源")
@@ -1207,19 +1523,12 @@ export function activate(context: vscode.ExtensionContext): void {
       const selectedItem = skillItems.find((i) => i.name === itemChoice.label && i.path === itemChoice.detail);
       if (!selectedItem) return;
 
-      const locationChoice = await vscode.window.showQuickPick(
-        ["安装到项目", "安装到全局"],
-        { placeHolder: "安装到哪里？" },
-      );
-      if (!locationChoice) return;
-      const isProject = locationChoice === "安装到项目";
-
       try {
         const content = await registry.downloadItemContent(sourceChoice.label, selectedItem.path);
-        const { parseFrontmatter, globalSkillsDir, workspaceSkillsDir } = await import("@axon/core");
+        const { parseFrontmatter, globalSkillsDir } = await import("@axon/core");
         const { name } = parseFrontmatter(content);
         if (!name) throw new Error("SKILL.md 缺少 frontmatter 中的 name 字段");
-        const baseDir = isProject ? workspaceSkillsDir(defaultWorkspace) : globalSkillsDir(homedir());
+        const baseDir = globalSkillsDir(homedir());
         const dir = require("path").join(baseDir, name);
         await vscode.workspace.fs.createDirectory(vscode.Uri.file(dir));
         await vscode.workspace.fs.writeFile(vscode.Uri.file(require("path").join(dir, "SKILL.md")), new TextEncoder().encode(content));
@@ -1229,22 +1538,14 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.showErrorMessage(`安装失败：${(err as Error).message}`);
       }
     }),
-    vscode.commands.registerCommand("axon.skill.create", async (node?: unknown) => {
-      // 判断在哪个组创建：如果从右键菜单触发，node 可能是 SkillGroupNode
-      const choices = ["项目 Skill（当前工作区）", "全局 Skill（用户级）"];
-      let choice: string | undefined;
-      if (node && typeof node === "object" && "source" in node) {
-        choice = (node as { source: string }).source === "workspace" ? choices[0] : choices[1];
-      } else {
-        choice = await vscode.window.showQuickPick(choices, { placeHolder: "创建到哪里？" });
-      }
-      if (!choice) return;
-      const isProject = choice === choices[0];
+    vscode.commands.registerCommand("axon.skill.create", async () => {
+      // 目标固定为全局（~/.axon/skills）：与导入一致，不再追问"建在工作区还是全局"。
+      // 技能本就是跨项目复用的方法论，追问一次只是多一次点击。
       const name = await vscode.window.showInputBox({ prompt: "Skill 名称（英文、短横线分隔）", placeHolder: "my-skill" });
       if (!name || !name.trim()) return;
       const slugName = name.trim().toLowerCase().replace(/\s+/g, "-");
-      const { globalSkillsDir, workspaceSkillsDir } = await import("@axon/core");
-      const baseDir = isProject ? workspaceSkillsDir(defaultWorkspace) : globalSkillsDir(homedir());
+      const { globalSkillsDir } = await import("@axon/core");
+      const baseDir = globalSkillsDir(homedir());
       const path = require("path");
       const skillDir = path.join(baseDir, slugName);
       const skillFile = path.join(skillDir, "SKILL.md");
@@ -1325,27 +1626,57 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.showErrorMessage(`重命名失败：${(err as Error).message}`);
       }
     }),
-    vscode.commands.registerCommand("axon.skill.import", async (node?: unknown) => {
-      // 批量导入 Skill：支持「浏览多选目录」或「从父目录勾选」两种方式
-      const choices = ["导入到项目", "导入到全局"];
-      let choice: string | undefined;
-      if (node && typeof node === "object" && "source" in node) {
-        choice = (node as { source: string }).source === "workspace" ? choices[0] : choices[1];
-      } else {
-        choice = await vscode.window.showQuickPick(choices, { placeHolder: "导入到哪里？" });
-      }
-      if (!choice) return;
-      const isProject = choice === choices[0];
+    vscode.commands.registerCommand("axon.skill.import", async () => {
+      // 批量导入 Skill：支持「浏览多选目录」或「从父目录勾选」两种方式。
+      // 目标固定为全局（~/.axon/skills）：技能本就是跨项目复用的方法论，
+      // 每次导入都追问"放项目还是全局"只是一次多余点击；且没有打开工作区时那一步必然失败。
+      const path = require("path") as typeof import("path");
+
       const sourceDirs = await pickImportSourceDirs("Skill", "SKILL.md");
       if (!sourceDirs) return;
-      const { globalSkillsDir, workspaceSkillsDir } = await import("@axon/core");
-      const baseDir = isProject ? workspaceSkillsDir(defaultWorkspace) : globalSkillsDir(homedir());
-      const conflicts = await findNameConflicts(baseDir, sourceDirs);
+
+      // 复制只是第一步：目录里没有 SKILL.md 就永远扫不出来，所以复制前先归一化并校验。
+      const resolvedDirs: string[] = [];
+      const invalid: string[] = [];
+      const relocated: string[] = [];
+      for (const raw of sourceDirs) {
+        const found = await resolveSkillSourceDir(raw);
+        if (!found) {
+          invalid.push(path.basename(raw));
+          continue;
+        }
+        resolvedDirs.push(found.dir);
+        if (found.note) relocated.push(`${path.basename(raw)}（${found.note}）`);
+      }
+      if (invalid.length > 0) {
+        const proceed = await vscode.window.showWarningMessage(
+          `${invalid.length} 个目录里没有找到 SKILL.md（或找到多个无法确定）：${invalid.join("、")}。请选择包含 SKILL.md 的目录本身。`,
+          { modal: true },
+          "跳过这些，导入其余",
+        );
+        if (!proceed) return;
+      }
+      if (resolvedDirs.length === 0) {
+        vscode.window.showErrorMessage("没有可导入的 Skill 目录。");
+        return;
+      }
+      if (relocated.length > 0) {
+        vscode.window.showInformationMessage(`已自动定位 SKILL.md：${relocated.join("；")}`);
+      }
+
+      const { globalSkillsDir } = await import("@axon/core");
+      const baseDir = globalSkillsDir(homedir());
+      const conflicts = await findNameConflicts(baseDir, resolvedDirs);
       const strategy = await resolveOverwriteStrategy("Skill", conflicts.size);
       if (!strategy) return;
-      const results = await copyDirsInto(baseDir, sourceDirs, { conflicts, strategy });
+      const results = await copyDirsInto(baseDir, resolvedDirs, { conflicts, strategy });
       await refreshSkillTree();
       reportImportResults("Skill", results);
+      await cleanupImportTemp();
+    }),
+    vscode.commands.registerCommand("axon.skill.refresh", async () => {
+      await refreshSkillTree();
+      vscode.window.setStatusBarMessage("Skills 已刷新", 2000);
     }),
   );
 
@@ -1394,9 +1725,7 @@ export function activate(context: vscode.ExtensionContext): void {
       });
     }),
     vscode.commands.registerCommand("axon.power.installFromMarketplace", async () => {
-      const { MarketplaceRegistry } = await import("@axon/core");
-      const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
-      const registry = new MarketplaceRegistry(homedir(), createHost());
+      const registry = await createMarketplaceRegistry();
       const sources = await registry.listSources();
       if (sources.length === 0) {
         vscode.window.showInformationMessage("还没有配置任何 Marketplace 源，请先添加一个团队仓库地址。", "添加源")
@@ -1429,19 +1758,12 @@ export function activate(context: vscode.ExtensionContext): void {
       const selectedItem = powerItems.find((i) => i.name === itemChoice.label && i.path === itemChoice.detail);
       if (!selectedItem) return;
 
-      const locationChoice = await vscode.window.showQuickPick(
-        ["安装到项目", "安装到全局"],
-        { placeHolder: "安装到哪里？" },
-      );
-      if (!locationChoice) return;
-      const isProject = locationChoice === "安装到项目";
-
       try {
         const content = await registry.downloadItemContent(sourceChoice.label, selectedItem.path);
-        const { parsePowerFrontmatter, globalPowersDir, workspacePowersDir } = await import("@axon/core");
+        const { parsePowerFrontmatter, globalPowersDir } = await import("@axon/core");
         const { name } = parsePowerFrontmatter(content);
         if (!name) throw new Error("POWER.md 缺少 frontmatter 中的 name 字段");
-        const baseDir = isProject ? workspacePowersDir(defaultWorkspace) : globalPowersDir(homedir());
+        const baseDir = globalPowersDir(homedir());
         const dir = require("path").join(baseDir, name);
         await vscode.workspace.fs.createDirectory(vscode.Uri.file(dir));
         await vscode.workspace.fs.writeFile(vscode.Uri.file(require("path").join(dir, "POWER.md")), new TextEncoder().encode(content));
@@ -1462,15 +1784,12 @@ export function activate(context: vscode.ExtensionContext): void {
       });
     }),
     vscode.commands.registerCommand("axon.power.create", async () => {
-      const choices = ["项目 Power（当前工作区）", "全局 Power（用户级）"];
-      const choice = await vscode.window.showQuickPick(choices, { placeHolder: "创建到哪里？" });
-      if (!choice) return;
-      const isProject = choice === choices[0];
+      // 目标固定为全局（~/.axon/powers），与导入一致。
       const name = await vscode.window.showInputBox({ prompt: "Power 名称（英文、短横线分隔）", placeHolder: "my-power" });
       if (!name || !name.trim()) return;
       const slugName = name.trim().toLowerCase().replace(/\s+/g, "-");
       // 重名校验
-      const { PowerRegistry, globalPowersDir, workspacePowersDir } = await import("@axon/core");
+      const { PowerRegistry, globalPowersDir } = await import("@axon/core");
       const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
       const registry = new PowerRegistry([defaultWorkspace], createHost(), homedir());
       const existing = await registry.discover();
@@ -1479,7 +1798,7 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       const path = require("path");
-      const baseDir = isProject ? workspacePowersDir(defaultWorkspace) : globalPowersDir(homedir());
+      const baseDir = globalPowersDir(homedir());
       const powerDir = path.join(baseDir, slugName);
       const powerFile = path.join(powerDir, "POWER.md");
       // 创建目录和模板 POWER.md
@@ -1545,21 +1864,75 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
     vscode.commands.registerCommand("axon.power.import", async () => {
-      // 批量导入 Power：支持「浏览多选目录」或「从父目录勾选」两种方式
-      const choices = ["导入到项目", "导入到全局"];
-      const choice = await vscode.window.showQuickPick(choices, { placeHolder: "导入到哪里？" });
-      if (!choice) return;
-      const isProject = choice === choices[0];
+      // 批量导入 Power：支持「浏览多选目录」「从父目录勾选」「从链接导入」三种方式。
+      // 目标固定为全局（~/.axon/powers），与 Skill 导入保持一致——每次追问"放项目还是全局"
+      // 只是一次多余点击，且没有打开工作区时那条分支必然失败。
+      const path = require("path") as typeof import("path");
       const sourceDirs = await pickImportSourceDirs("Power", "POWER.md");
       if (!sourceDirs) return;
-      const { globalPowersDir, workspacePowersDir } = await import("@axon/core");
-      const baseDir = isProject ? workspacePowersDir(defaultWorkspace) : globalPowersDir(homedir());
-      const conflicts = await findNameConflicts(baseDir, sourceDirs);
+
+      // 与 Skill 导入同样的归一化：用户常直接选整个仓库根，POWER.md 其实在子目录里。
+      // 都没有 POWER.md 时再退一步：若是 Claude Code Plugin 格式（只有 .claude-plugin/ 与 skills/），
+      // 就地转成 Power（复制到临时目录 + 补写 POWER.md），不再要求用户自己去翻目录。
+      const resolvedDirs: string[] = [];
+      const invalid: string[] = [];
+      const relocated: string[] = [];
+      const convertedNames: string[] = [];
+      const claudePlugins: ClaudePluginSource[] = [];
+      for (const raw of sourceDirs) {
+        const found = await resolveSkillSourceDir(raw, "POWER.md");
+        if (!found) {
+          const plugins = await resolveClaudePluginSources(raw);
+          if (plugins.length > 0) claudePlugins.push(...plugins);
+          else invalid.push(path.basename(raw));
+          continue;
+        }
+        resolvedDirs.push(found.dir);
+        if (found.note) relocated.push(`${path.basename(raw)}（${found.note}）`);
+      }
+      if (claudePlugins.length > 0) {
+        resolvedDirs.push(...(await convertClaudePlugins(claudePlugins)));
+        convertedNames.push(...claudePlugins.map((p) => p.name));
+      }
+      if (invalid.length > 0) {
+        const proceed = await vscode.window.showWarningMessage(
+          `${invalid.length} 个目录里既没有 POWER.md，也不是 Claude Code 插件格式（缺少 .claude-plugin/）：${invalid.join("、")}。` +
+            `请选择包含 POWER.md 的目录本身，或含 .claude-plugin/marketplace.json 的插件仓库根。`,
+          { modal: true },
+          "跳过这些，导入其余",
+        );
+        if (!proceed) {
+          await cleanupImportTemp();
+          return;
+        }
+      }
+      if (resolvedDirs.length === 0) {
+        await cleanupImportTemp();
+        vscode.window.showErrorMessage("没有可导入的 Power 目录。");
+        return;
+      }
+      if (relocated.length > 0) {
+        vscode.window.showInformationMessage(`已自动定位 POWER.md：${relocated.join("；")}`);
+      }
+      if (convertedNames.length > 0) {
+        vscode.window.showInformationMessage(
+          `已按 Claude Plugin 格式转换并补写 POWER.md：${convertedNames.join("、")}`,
+        );
+      }
+
+      const { globalPowersDir } = await import("@axon/core");
+      const baseDir = globalPowersDir(homedir());
+      const conflicts = await findNameConflicts(baseDir, resolvedDirs);
       const strategy = await resolveOverwriteStrategy("Power", conflicts.size);
       if (!strategy) return;
-      const results = await copyDirsInto(baseDir, sourceDirs, { conflicts, strategy });
+      const results = await copyDirsInto(baseDir, resolvedDirs, { conflicts, strategy });
       await refreshPowerTree();
       reportImportResults("Power", results);
+      await cleanupImportTemp();
+    }),
+    vscode.commands.registerCommand("axon.power.refresh", async () => {
+      await refreshPowerTree();
+      vscode.window.setStatusBarMessage("Powers 已刷新", 2000);
     }),
     vscode.commands.registerCommand("axon.power.importSkills", async (item?: vscode.TreeItem) => {
       // 向已有 Power 批量导入 Skills：支持「浏览多选目录」或「从父目录勾选」
@@ -1576,6 +1949,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const results = await copyDirsInto(skillsDir, sourceDirs, { conflicts, strategy });
       await refreshPowerTree();
       reportImportResults("Skill", results);
+      await cleanupImportTemp();
     }),
     vscode.commands.registerCommand("axon.power.importSteering", async (item?: vscode.TreeItem) => {
       // 向已有 Power 批量导入 Steering 文件
@@ -1720,7 +2094,8 @@ export function activate(context: vscode.ExtensionContext): void {
       const powerRegistry = new PowerRegistry([defaultWorkspace], host2, homedir());
       const registry = new SkillRegistry([defaultWorkspace], host2, homedir(), () => powerRegistry.getActiveSkillDirs());
       const skills = await registry.discover();
-      skillsTree.refresh(skills.map((s) => ({ name: s.name, source: s.source, disabled: s.disabled, skillFile: s.skillFile })));
+      // 带 dir：Skill 节点要能展开列出 scripts/assets 等内部文件
+      skillsTree.refresh(skills.map((s) => ({ name: s.name, source: s.source, disabled: s.disabled, skillFile: s.skillFile, dir: s.dir })));
       customSkillsTree.refresh(
         skills.map((s) => ({ name: s.name, source: s.source, disabled: s.disabled, skillFile: s.skillFile, dir: s.dir })),
         workspaceSkillsDir(defaultWorkspace),

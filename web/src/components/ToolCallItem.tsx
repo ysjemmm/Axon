@@ -10,7 +10,10 @@
  */
 
 import { useState, useContext, useRef, useEffect } from "react";
-import { CheckCircle2, Loader2, SquareTerminal, Eye, EyeOff, FileX, Search, GitCompare, Bug, ChevronRight, Check, X, Globe, ShieldCheck, Pencil, Plug, Undo2, Server, ScrollText, Power, ExternalLink, FolderTree, Clock } from "lucide-react";
+// 图标分工（每个前导图标只表示一种东西，避免同一屏里两行长得一样）：
+//   Brain=思考过程  NotebookPen=记忆  AppWindow=浏览器  Telescope=联网搜索  FileDown=抓取网页
+//   Bug=语法诊断  SquareTerminal=执行命令  Server=启动进程  ScrollText=读进程输出  Power=停进程
+import { CheckCircle2, Loader2, SquareTerminal, Eye, EyeOff, FileX, Search, GitCompare, Bug, Check, X, ShieldCheck, Pencil, Plug, Undo2, Server, ScrollText, Power, ExternalLink, FolderTree, Clock, NotebookPen, AppWindow, MessageSquareWarning, SquareX, Telescope, FileDown } from "lucide-react";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCommandApproval, CommandApprovalContext, type CommandTrustOption, type CommandDecision } from "@/components/chat/commandApprovalContext";
@@ -100,6 +103,7 @@ export function queuedActionText(name: string): string {
     case "web_fetch": return "抓取网页";
     case "use_skill": return "加载 Skill";
     case "activate_power": return "激活 Power";
+    case "update_memory": return "更新记忆";
     default: return name;
   }
 }
@@ -673,40 +677,77 @@ export interface BrowserSessionData {
   queuedOnly?: boolean;
 }
 
-/** 浏览器会话大卡片：把连续的浏览器操作折叠合并 */
+/**
+ * 从 URL 取主机名，作为折叠行右侧的定位信息（取不到就退回原串，如 about:blank）。
+ * 只显示 host 不显示整条 URL：折叠行要能一眼看出"在哪个站点"，完整地址在展开后各有各的行。
+ */
+function browserHostLabel(url?: string): string {
+  if (!url) return "";
+  try {
+    const u = new URL(url);
+    return u.host || u.protocol.replace(":", "");
+  } catch {
+    return url.replace(/^https?:\/\//, "").split("/")[0];
+  }
+}
+
+/**
+ * 浏览器会话：**所有连续的浏览器操作合并成一条折叠行**（分组本身在渲染层做，见 renderSegments）。
+ *
+ * 折叠行只留三件事：多少步、最后一步在干什么、在哪个站点。
+ * 早先的卡片默认就摊开最近 3 步、再挂一句"还有 N 步"，既不是真折叠，也让浏览器操作
+ * 在对话里占掉别人两三倍的纵向空间。
+ */
 export function BrowserSessionGroup({ group }: { group: BrowserSessionData }) {
   const [expanded, setExpanded] = useState(false);
-  // 默认折叠时只显示最近 3 条
-  const visibleSteps = expanded ? group.steps : group.steps.slice(-3);
-  const hasMore = group.steps.length > 3;
+  const last = group.steps[group.steps.length - 1];
+  const lastLabel = last ? browserStepLabel(last) : "";
+  const host = browserHostLabel(group.url);
 
   return (
-    <div className={`my-2 rounded-lg border overflow-hidden ${group.hasError ? "border-red-300/60" : group.pending ? "border-amber-300/60" : "border-border"} bg-popover`}>
-      {/* 标题栏 */}
+    <div className="my-0.5">
       <div
-        className="flex items-center gap-2 py-1.5 px-2.5 text-[13px] bg-foreground/[0.04] cursor-pointer hover:bg-foreground/[0.06] transition-colors"
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => setExpanded((v) => !v)}
+        className={`flex items-center gap-1.5 py-0.5 text-[11px] min-w-0 cursor-pointer transition-colors ${
+          expanded ? "text-muted-foreground/70" : "text-muted-foreground/60"
+        } hover:text-muted-foreground`}
       >
         {group.pending
           ? <GroupInFlightIcon queuedOnly={group.queuedOnly} />
-          : group.closed
-            ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-            : <Globe className="w-3.5 h-3.5 text-blue-500 shrink-0" />}
-        <span className="font-medium text-foreground">Browser Session</span>
-        {group.url && <span className="text-[10px] text-muted-foreground font-mono truncate max-w-[180px]">{group.url}</span>}
-        <span className="ml-auto text-[10px] text-muted-foreground">{group.steps.length} 步</span>
-        <ChevronRight className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`} />
-      </div>
-      {/* 步骤列表 */}
-      <div className="divide-y divide-border/40">
-        {!expanded && hasMore && (
-          <div className="px-2.5 py-1 text-[10px] text-muted-foreground text-center cursor-pointer hover:text-foreground" onClick={() => setExpanded(true)}>
-            ↑ 还有 {group.steps.length - 3} 步…
-          </div>
+          : group.hasError
+            ? <AppWindow className="w-3.5 h-3.5 shrink-0 text-red-500" />
+            : group.closed
+              ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+              : <AppWindow className="w-3.5 h-3.5 shrink-0" />}
+        <span className="shrink-0">浏览器</span>
+        <span className="shrink-0 opacity-40">·</span>
+        <span className="shrink-0 tabular-nums">{group.steps.length} 步</span>
+        {lastLabel && (
+          <>
+            <span className="shrink-0 opacity-40">·</span>
+            <span className="min-w-0 truncate font-mono">{lastLabel}</span>
+          </>
         )}
-        {visibleSteps.map((step) => (
-          <BrowserStepRow key={step.id} step={step} />
-        ))}
+        {host && (
+          <span className="ml-auto shrink-0 max-w-[40%] truncate font-mono text-[10px] opacity-40" title={group.url}>
+            {host}
+          </span>
+        )}
+      </div>
+      <div
+        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
+        style={{ gridTemplateRows: expanded ? "1fr" : "0fr", opacity: expanded ? 1 : 0 }}
+        aria-hidden={!expanded}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className="ml-5 mt-1 rounded-lg border border-border bg-popover overflow-hidden">
+            {group.steps.map((step, i) => (
+              <div key={step.id} className={i > 0 ? "border-t border-border/50" : ""}>
+                <BrowserStepRow step={step} />
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -895,7 +936,7 @@ function BrowserOpenCard({ tool }: { tool: ToolCallData }) {
     <div className="my-2 rounded-lg border border-border bg-popover overflow-hidden">
       <CardHeader
         status={tool.status}
-        Icon={Globe}
+        Icon={AppWindow}
         label="打开浏览器"
         right={url ? <span className="text-[10px] text-blue-600 dark:text-blue-400 font-mono truncate max-w-[200px]">{url}</span> : undefined}
       />
@@ -919,7 +960,8 @@ function BrowserOpenCard({ tool }: { tool: ToolCallData }) {
 function BrowserLogsCard({ tool }: { tool: ToolCallData }) {
   return (
     <div className="my-2 rounded-lg border border-border bg-popover overflow-hidden">
-      <CardHeader status={tool.status} Icon={Bug} label="浏览器控制台 / 报错" />
+      {/* Bug 归「语法诊断」独占：控制台输出是"页面里说的话"，用消息气泡更贴切，也避免两行撞图标 */}
+      <CardHeader status={tool.status} Icon={MessageSquareWarning} label="浏览器控制台 / 报错" />
       {tool.output && <OutputBlock output={tool.output} />}
     </div>
   );
@@ -929,8 +971,39 @@ function BrowserLogsCard({ tool }: { tool: ToolCallData }) {
 function BrowserCloseCard({ tool }: { tool: ToolCallData }) {
   return (
     <div className="flex items-center gap-2 py-1.5 px-2.5 my-2 rounded-lg border border-border bg-muted/20 text-[13px]">
-      <CardStatusIcon status={tool.status} Icon={X} />
+      {/* 用方框叉而不是裸 X：裸 X 与"失败状态"是同一个字形，出现在折叠行左侧会让人以为这次调用挂了 */}
+      <CardStatusIcon status={tool.status} Icon={SquareX} />
       <span className="text-muted-foreground">关闭浏览器</span>
+    </div>
+  );
+}
+
+/**
+ * update_memory：沿用折叠行的排版（11px 单行、中性图标、无边框），
+ * 但这行**没有明细可展开** —— 记忆正文在「记忆面板」里看，工具卡片只说明这一步做了什么。
+ *
+ * 所以刻意不挂展开交互（无 cursor-pointer、无箭头、无 hover 变色）：
+ * 一条点下去没有任何反应的折叠行，比一条老实的一行文字更让人困惑。
+ *
+ * 图标曾用 Brain，和「思考过程」那行撞了（两行都出自本产品的不同语义，用户一眼分不开）。
+ * 现在思考过程独占 Brain（它本身就是"在脑子里想"），记忆改用 NotebookPen（把结论记进本子）。
+ */
+function MemoryUpdatedRow({ tool }: { tool: ToolCallData }) {
+  const queued = tool.status === "queued";
+  const inFlight = isToolInFlight(tool.status);
+  const failed = tool.status === "error";
+  const label = failed ? "记忆更新失败" : queued ? "待更新记忆" : inFlight ? "更新记忆" : "已更新记忆";
+
+  return (
+    <div className="my-0.5 flex items-center gap-1.5 py-0.5 text-[11px] min-w-0 text-muted-foreground/60">
+      {queued
+        ? <Clock className="w-3.5 h-3.5 shrink-0 opacity-50" />
+        : failed
+          ? <NotebookPen className="w-3.5 h-3.5 shrink-0 text-red-500" />
+          : inFlight
+            ? <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
+            : <NotebookPen className="w-3.5 h-3.5 shrink-0" />}
+      <span className="shrink-0">{label}</span>
     </div>
   );
 }
@@ -965,6 +1038,11 @@ export function ToolCallItem({ tool, onAcceptEdit, onRejectEdit, onUndoEdit }: T
   // check_diagnostics 特殊渲染：可折叠卡片，标题一行 + 展开后按文件列结果
   if (tool.name === "check_diagnostics") {
     return <DiagnosticsItem tool={tool} />;
+  }
+
+  // update_memory：与其它折叠行同一套排版，但这行没有明细可展开（见组件注释）
+  if (tool.name === "update_memory") {
+    return <MemoryUpdatedRow tool={tool} />;
   }
 
   // web_search 特殊渲染：Kiro 风格可折叠搜索结果卡片
@@ -1032,6 +1110,35 @@ export function ToolCallItem({ tool, onAcceptEdit, onRejectEdit, onUndoEdit }: T
     // apply_patch 的描述里没有文件名，从 diff.path 兜底取 basename
     const diffBase = tool.diff?.path ? tool.diff.path.split("/").pop()?.split("\\").pop() || null : null;
     return <FileEditItem tool={tool} action={action} fileName={tool.displayName || fileName || diffBase} icon={renderIcon()} onAcceptEdit={onAcceptEdit} onRejectEdit={onRejectEdit} onUndoEdit={onUndoEdit} />;
+  }
+
+  // 文件类工具「执行完了但没有任何改动」——典型是 apply_patch 的补丁内容与目标状态一致，
+  // 结果是"补丁未产生任何改动"。这类调用没有 diff 可看，但它依然是一次工具调用，
+  // 早前会掉到下面的通用卡片分支（13px + 边框 + my-2），在长对话里比旁边的折叠行重一整档，
+  // 看起来像"这次改动很特别"，实际上什么都没做。这里统一成 11px 无边框折叠行。
+  const noChangeSuccess =
+    tool.status === "success" &&
+    !tool.diff &&
+    (tool.name === "apply_patch" || tool.name === "str_replace" || tool.name === "create_file");
+  if (noChangeSuccess) {
+    return (
+      <div
+        className="flex items-center gap-1.5 py-0.5 text-[11px] min-w-0 text-muted-foreground/60"
+        title={tool.description}
+      >
+        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+        <span className="truncate min-w-0">未产生改动</span>
+        {fileName && (
+          <>
+            <span className="shrink-0 opacity-40">·</span>
+            <span className="inline-flex items-center gap-1 min-w-0 font-mono" title={String(tool.args?.path || fileName)}>
+              <FileTypeIcon fileName={fileName} />
+              <span className="truncate">{fileName}</span>
+            </span>
+          </>
+        )}
+      </div>
+    );
   }
 
   // 根据状态决定边框样式（queued/pending/rejected/error）
@@ -1702,7 +1809,7 @@ function WebSearchItem({ tool }: { tool: ToolCallData }) {
       >
         {pending
           ? <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
-          : <Search className="w-3.5 h-3.5 shrink-0" />}
+          : <Telescope className="w-3.5 h-3.5 shrink-0" />}
         <span className="shrink-0">搜索网络</span>
         <span className="shrink-0 opacity-40">·</span>
         <span className="min-w-0 truncate font-mono">{query}</span>
@@ -1775,7 +1882,7 @@ function WebFetchItem({ tool }: { tool: ToolCallData }) {
     <div className="my-0.5 flex items-center gap-1.5 py-0.5 text-[11px] min-w-0 text-muted-foreground/60">
       {pending
         ? <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
-        : <Globe className="w-3.5 h-3.5 shrink-0" />}
+        : <FileDown className="w-3.5 h-3.5 shrink-0" />}
       <span className="shrink-0">已抓取</span>
       <span className="shrink-0 opacity-40">·</span>
       {/* 链接本身是折叠行里唯一可点的对象，蓝色是它的"可点"信号，不随图标一起转灰 */}

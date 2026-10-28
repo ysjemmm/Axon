@@ -113,62 +113,69 @@ export function RelayProgressCard({ steps, pending, queuedOnly }: { steps: { nam
   if (steps.length === 0) return null;
   const last = steps[steps.length - 1];
   const hasError = steps.some((s) => s.status === "error");
+  const running = pending && !queuedOnly;
 
   // 从 steps 中提取 relay ID（relay_create 的 description 包含 "id: xxx"）
   const relayId = steps.find((s) => s.relayId)?.relayId;
 
-  const handleClick = () => {
-    setExpanded((v) => !v);
-  };
-
+  // 折叠行 + 缩进详情：完整轨迹（阶段进度条/任务清单/评审）在右侧 Relay 面板，
+  // 对话流里只保留一行，避免刷屏。样式对齐其它工具折叠行（11px 单行、无箭头）。
   return (
-    <div className="my-2 rounded-lg border border-primary/30 bg-primary/5 overflow-hidden">
-      <button
-        onClick={handleClick}
-        className="flex items-center gap-2 w-full py-1.5 px-2.5 text-xs text-left hover:bg-primary/10 transition-colors"
+    <div className="my-0.5">
+      <div
+        onClick={() => setExpanded((v) => !v)}
+        className={`flex items-center gap-1.5 py-0.5 text-[11px] min-w-0 cursor-pointer transition-colors ${
+          expanded ? "text-muted-foreground/70" : "text-muted-foreground/60"
+        } hover:text-muted-foreground`}
       >
-        {pending
-          ? (queuedOnly
-              ? <Clock className="w-3.5 h-3.5 shrink-0 text-muted-foreground/50" />
-              : <Loader2 className="w-3.5 h-3.5 shrink-0 text-primary animate-spin" />)
-          : <ListChecks className={`w-3.5 h-3.5 shrink-0 ${hasError ? "text-red-500" : "text-primary"}`} />}
-        <span className="text-muted-foreground shrink-0">Relay</span>
-        <span className="text-foreground truncate flex-1 min-w-0">{last.description}</span>
+        {hasError
+          ? <X className="w-3.5 h-3.5 shrink-0 text-red-500" />
+          : running
+            ? <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin text-amber-500" />
+            : queuedOnly
+              ? <Clock className="w-3.5 h-3.5 shrink-0 opacity-50" />
+              : <ListChecks className="w-3.5 h-3.5 shrink-0" />}
+        <span className="shrink-0">Relay</span>
+        <span className="shrink-0 opacity-40">·</span>
+        <span className="truncate min-w-0">{last.description}</span>
         {steps.length > 1 && (
-          <span className="text-[10px] text-muted-foreground shrink-0">{steps.length} 步</span>
+          <span className="shrink-0 text-[10px] opacity-50">{steps.length} 步</span>
         )}
-        {steps.length > 1 && (
-          <ChevronRight className={`w-3.5 h-3.5 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`} />
-        )}
-      </button>
-      {expanded && steps.length > 1 && (
-        <div className="border-t border-primary/20 px-2.5 py-1.5 space-y-1">
-          {steps.map((s, idx) => (
-            <div key={idx} className="flex items-center gap-2 text-xs">
-              {s.status === "error"
-                ? <X className="w-3 h-3 shrink-0 text-red-500" />
-                : s.status === "queued"
-                  ? <Clock className="w-3 h-3 shrink-0 text-muted-foreground/50" />
-                  : s.status === "pending"
-                    ? <Loader2 className="w-3 h-3 shrink-0 animate-spin text-muted-foreground" />
-                    : <Check className="w-3 h-3 shrink-0" />}
-              <span className="text-muted-foreground/80 truncate">{s.description}</span>
-            </div>
-          ))}
-          {relayId && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                const vs = (window as any).__axonVSCode;
-                if (vs) vs.postMessage({ type: "open_relay", relayId });
-              }}
-              className="mt-1 text-[10px] text-primary/70 hover:text-primary underline cursor-pointer"
-            >
-              在 Relay 面板中查看 →
-            </button>
-          )}
+      </div>
+      <div
+        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
+        style={{ gridTemplateRows: expanded ? "1fr" : "0fr", opacity: expanded ? 1 : 0 }}
+        aria-hidden={!expanded}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className="ml-5 mt-1 space-y-1 text-[11px] text-muted-foreground/70">
+            {steps.map((s, idx) => (
+              <div key={idx} className="flex items-center gap-1.5 min-w-0">
+                {s.status === "error"
+                  ? <X className="w-3 h-3 shrink-0 text-red-500" />
+                  : s.status === "queued"
+                    ? <Clock className="w-3 h-3 shrink-0 opacity-50" />
+                    : s.status === "pending"
+                      ? <Loader2 className="w-3 h-3 shrink-0 animate-spin opacity-70" />
+                      : <Check className="w-3 h-3 shrink-0" />}
+                <span className="truncate">{s.description}</span>
+              </div>
+            ))}
+            {relayId && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const vs = (window as any).__axonVSCode;
+                  if (vs) vs.postMessage({ type: "open_relay", relayId });
+                }}
+                className="text-[10px] text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+              >
+                在 Relay 面板中查看 →
+              </button>
+            )}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

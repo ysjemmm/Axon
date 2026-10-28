@@ -17,7 +17,55 @@ import type { LLMStrategy } from "../llm/types.js";
 import type { AgentSession } from "../agentSession.js";
 
 export class CompactionController {
+  /**
+   * 混合记忆策略的节流计数：主动 update_memory 仍是即时入口，后台只在积累到一定量后合并一次。
+   * 这两个计数不写入快照——它们只是"距离下一次后台检查还有多少"，重启后重新积累比持久化
+   * 一份容易失真的计数更简单安全。
+   */
+  private memoryRefreshTurns = 0;
+  private memoryRefreshTokens = 0;
+  private memoryRefreshInProgress = false;
+
+  /** 混合策略阈值：三轮或约 6000 token，任一达到就后台更新一次会话记忆。 */
+  private static readonly MEMORY_REFRESH_TURNS = 3;
+  private static readonly MEMORY_REFRESH_TOKENS = 6_000;
+
   constructor(private readonly s: AgentSession) {}
+
+  /**
+   * 每轮正常回复结束后调用。达到阈值才启动后台记忆合并，不阻塞当前回复或下一轮输入。
+   *
+   * 如果这一轮同时触发了滚动摘要，滚动摘要会用压缩前快照刷新记忆，这里不再重复调用；
+   * refreshMemory 成功/完成后会统一清零两个计数。
+   */
+  async maybeRefreshMemoryAfterTurn(turnTokens: number): Promise<void> {
+    this.memoryRefreshTurns += 1;
+    this.memoryRefreshTokens += Math.max(0, turnTokens);
+    if (this.memoryRefreshInProgress || this.s.isCompacting || this.s.rollingSummaryInProgress) return;
+    if (
+      this.memoryRefreshTurns < CompactionController.MEMORY_REFRESH_TURNS
+      && this.memoryRefreshTokens < CompactionController.MEMORY_REFRESH_TOKENS
+    ) return;
+
+    // 先消费本批计数，再开始异步调用。调用期间新完成的回合会累加到下一批，
+    // 不能在 finally 里整体清零，否则用户连续输入时会丢掉这段期间的记忆触发量。
+    this.memoryRefreshTurns = 0;
+    this.memoryRefreshTokens = 0;
+    this.memoryRefreshInProgress = true;
+    try {
+      const strategy = getStrategy(this.s.provider, this.s.model);
+      const snapshot = [...this.s.messages];
+      await this.refreshMemory(snapshot, strategy);
+    } finally {
+      this.memoryRefreshInProgress = false;
+    }
+  }
+
+  /** 主动 update_memory 已经把最新内容写入，不要紧接着再后台调用一次。 */
+  markMemoryUpdated(): void {
+    this.memoryRefreshTurns = 0;
+    this.memoryRefreshTokens = 0;
+  }
 
   /** 手动触发上下文压缩（供前端"压缩上下文"按钮调用）。需超过当前模型窗口 35% 才允许。 */
   async compactSession(): Promise<void> {
@@ -63,10 +111,10 @@ export class CompactionController {
       // 太少的历史没什么可记的，省一次调用
       if (snapshot.length < 3) return;
       const prev = this.s.getMemory();
-      const next = await generateSessionMemory(prev, snapshot, strategy, this.s.model);
-      if (next && next !== prev) {
-        this.s.setMemory(next);
-        console.debug(`[memory] 压缩时已同步更新会话记忆（${next.length} 字符）`);
+      const updates = await generateSessionMemory(prev, snapshot, strategy, this.s.model);
+      if (updates.length > 0) {
+        this.s.applyMemoryUpdates(updates);
+        console.debug(`[memory] 压缩时已合并会话记忆增量（${updates.length} 个知识块）`);
       }
     } catch (err) {
       console.warn("[memory] 压缩时更新会话记忆失败（忽略）:", (err as Error).message);
@@ -91,6 +139,9 @@ export class CompactionController {
       // hydrateTokenUsage 把它回填，界面从 4% 跳回 61%，要等用户发下一句话重算才降下来。
       this.s.updateAndSendTokenUsage();
       this.s.persistMessages();
+      // 压缩前的完整快照即将交给记忆模型；消费掉压缩前累计的后台触发量，
+      // 压缩期间新完成的回合仍会继续累加到下一批。
+      this.markMemoryUpdated();
       await this.refreshMemory(snapshot, strategy);
     } catch (err) {
       this.s.isCompacting = false;
@@ -130,6 +181,8 @@ export class CompactionController {
         console.debug("[rolling] 滚动摘要完成，上下文体积已缩减");
         // 静默通知前端（状态栏可显示但不弹窗）
         this.s.send("rolling_summary_done", { success: true });
+        // 滚动摘要同样会用压缩前快照刷新记忆，避免与后台混合入口重复调用。
+        this.markMemoryUpdated();
         await this.refreshMemory(snapshot, strategy);
       }
     } catch (err) {
@@ -163,6 +216,7 @@ export class CompactionController {
       this.s.compactionMigrationMessages = await compactMessages(this.s.messages, strategy, this.s.model);
       // 恢复用户消息到原会话（保持历史完整，仅压缩版本不包含它）
       if (userMsg) this.s.messages.push(userMsg);
+      this.markMemoryUpdated();
       await this.refreshMemory(snapshot, strategy);
     } catch (err) {
       this.s.compactionMigrationMessages = null;
