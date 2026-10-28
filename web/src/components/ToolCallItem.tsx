@@ -16,6 +16,7 @@ import { useState, useContext, useRef, useEffect } from "react";
 import { CheckCircle2, Loader2, SquareTerminal, Eye, EyeOff, FileX, Search, GitCompare, Bug, Check, X, ShieldCheck, Pencil, Plug, Undo2, Server, ScrollText, Power, ExternalLink, FolderTree, Clock, NotebookPen, AppWindow, MessageSquareWarning, SquareX, Telescope, FileDown } from "lucide-react";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { commandPreview } from "@/lib/commandPreview";
 import { useCommandApproval, CommandApprovalContext, type CommandTrustOption, type CommandDecision } from "@/components/chat/commandApprovalContext";
 import { openDiff, openMergedDiff, usePanelClientId, type DiffRef } from "@/lib/openDiff";
 
@@ -496,23 +497,6 @@ function commandStatusLabel(status: ToolStatus): string {
 }
 
 /**
- * 折叠行显示的终端名。
- *
- * ⚠️ 不能写死：execute_command 是在**用户自己的终端**里跑的（走 Shell Integration），
- * shell 类型取决于用户环境——Windows 默认 PowerShell、macOS 默认 zsh、Linux 常见 bash。
- * 统一写成 Bash 更不对：Windows 上根本没有 Bash。
- *
- * 这里按平台做近似推断：比写死一个准确，但仍是推断——Windows 用户改用 cmd / WSL、
- * 或 macOS 用户换 fish 时，显示会不准。真要精确需要宿主把终端类型透传上来。
- */
-function shellLabel(): string {
-  const p = `${navigator.platform || ""} ${navigator.userAgent || ""}`;
-  if (/win/i.test(p)) return "PowerShell";
-  if (/mac/i.test(p)) return "zsh";
-  return "bash";
-}
-
-/**
  * execute_command 卡片（含编辑能力）：
  * - 标题栏右侧有编辑按钮（铅笔图标），点击后命令区变成可编辑 textarea
  * - 编辑模式下"运行"按钮用编辑后的命令，信任也基于编辑后的内容
@@ -545,6 +529,7 @@ function CommandCardItem({ tool, approval }: { tool: ToolCallData; approval: Ret
   }, [tool.status, elapsedMs]);
 
   const startEditing = () => { setEditedCmd(tool.command || ""); setEditing(true); };
+  const preview = commandPreview(tool.command);
 
   // 包装 approval.approve：如果用户编辑了命令，附带 editedCommand
   const handleApprove = (d: CommandDecision) => {
@@ -571,8 +556,14 @@ function CommandCardItem({ tool, approval }: { tool: ToolCallData; approval: Ret
         <span className="shrink-0">
           {isWaitingInput && tool.status === "pending" ? "等待输入" : commandStatusLabel(tool.status)}
         </span>
-        <span className="shrink-0 opacity-40">·</span>
-        <span className="shrink-0">{shellLabel()}</span>
+        {/* 显示命令本身（长命令折叠中间，见 commandPreview），而不是终端名：
+            一列「已执行命令 · PowerShell」看不出每一行做了什么。悬停看完整命令。 */}
+        {preview && (
+          <>
+            <span className="shrink-0 opacity-40">·</span>
+            <span className="min-w-0 truncate font-mono text-[10.5px]" title={tool.command}>{preview}</span>
+          </>
+        )}
         {tool.status === "queued" && <Clock className="w-3.5 h-3.5 shrink-0 opacity-60" />}
         {tool.status === "pending" && <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />}
         {tool.status === "success" && <Check className="w-3.5 h-3.5 shrink-0" />}
