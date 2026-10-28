@@ -38,7 +38,7 @@ function Row({ color, label, tokens, max, hint, muted }: {
     <div className="flex items-center gap-2.5 h-6">
       <span className="size-3 shrink-0 rounded-[3px]" style={{ background: color }} />
       <span
-        className={`flex-1 min-w-0 truncate leading-6 ${hint ? "underline decoration-dotted decoration-[1.5px] decoration-[#9ca3af] underline-offset-4" : ""} ${muted ? "text-muted-foreground" : "text-foreground/75"}`}
+        className={`flex-1 min-w-0 truncate leading-6 ${muted ? "text-muted-foreground" : "text-foreground/75"}`}
         title={hint}
       >
         {label}
