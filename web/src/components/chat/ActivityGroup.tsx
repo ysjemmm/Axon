@@ -14,7 +14,8 @@ import { useContext, useState, type ReactNode } from "react";
 import { ChevronRight, Layers, Loader2 } from "lucide-react";
 import { isToolInFlight } from "@/components/ToolCallItem";
 import { CommandApprovalContext } from "./commandApprovalContext";
-import { summarizeRunStats } from "./activityGroup";
+// 带 Rules 后缀：同目录的 ActivityGroup.tsx 与它只差大小写，大小写不敏感的文件系统会认错文件
+import { summarizeRunStats } from "./activityGroupRules";
 import type { ToolSegment } from "./types";
 
 export function ActivityGroup({ tools, live, children }: {

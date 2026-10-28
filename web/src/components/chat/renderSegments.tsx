@@ -23,7 +23,10 @@ import { ReasoningBlock } from "./ReasoningBlock";
 import { RetryBlock } from "./RetryBlock";
 import { isRelayTool, relayToolLabel } from "./relayUtils";
 import { ActivityGroup } from "./ActivityGroup";
-import { findActivityRuns } from "./activityGroup";
+// ⚠️ 同目录下还有个 ActivityGroup.tsx，只差大小写。Windows / macOS 的文件系统
+// 不区分大小写，`./activityGroup` 会随机落到那一个上（表现为
+// "ActivityGroup is not exported by ActivityGroup.ts"）。所以辅助模块带 Rules 后缀。
+import { findActivityRuns } from "./activityGroupRules";
 
 /** 从展示串行号区间（如 "1300-1415" / "2-EOF"）解析起始行号 */
 function parseRangeStart(range?: string): number | undefined {
