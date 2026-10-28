@@ -359,11 +359,14 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   }, [session.isLoading]);
 
   // ── 输入区版式：单行 / 多行 ──────────────────────────────────────────────
-  // 空态（以及只有一行文字时）整块只有一行高：编辑区与工具栏并排；
+  // 只有一行文字时整块只有一行高：编辑区与工具栏并排（空态居中时例外，见 composerStacked）；
   // 内容超过一行（敲回车、粘贴多行、或长文本自动折行）时切成上下两段，并随内容继续长高。
   const [composerMultiline, setComposerMultiline] = useState(false);
   /** state 的同步镜像：同一次事件里可能连跑两遍判定，读 state 会拿到旧值 */
   const composerMultilineRef = useRef(false);
+  // 空态居中时一律用上下两段的版式，并给编辑区留出几行高度：新对话页的输入框就是这一屏的主角，
+  // 压成一行细条既不好点、也不像"从这里开始"。有消息之后再回到按内容判定的单行 / 多行。
+  const composerStacked = composerMultiline || composerCentered;
   /** 输入区内容层：它的自然高度就是动画的目标高度 */
   const inputAreaRef = useRef<HTMLDivElement>(null);
   const editorWrapRef = useRef<HTMLDivElement>(null);
@@ -1998,7 +2001,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
           >
             <div
               ref={inputAreaRef}
-              className={composerMultiline ? "flex flex-col" : "flex items-center gap-1"}
+              className={composerStacked ? "flex flex-col" : "flex items-center gap-1"}
             >
               {/* 输入框：contentEditable 富文本，tag 内联在光标处（MentionEditor）
                   多行版式：满宽、沿用原来的内边距；
@@ -2011,9 +2014,11 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               <div
                 ref={editorWrapRef}
                 className={
-                  composerMultiline
-                    ? "w-full px-3 pr-10 pt-2 pb-1"
-                    : "min-w-0 flex-1 pl-3 pr-1 py-1.5 [&_.ProseMirror]:min-h-[22px]"
+                  composerCentered
+                    ? "w-full px-4 pt-3.5 pb-1 [&_.ProseMirror]:min-h-[66px]"
+                    : composerMultiline
+                      ? "w-full px-3 pr-10 pt-2 pb-1"
+                      : "min-w-0 flex-1 pl-3 pr-1 py-1.5 [&_.ProseMirror]:min-h-[22px]"
                 }
               >
                 <MentionEditor
@@ -2044,7 +2049,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               */}
               <div
                 className={
-                  composerMultiline
+                  composerStacked
                     ? "flex items-center justify-between gap-2 px-1.5 pb-1.5"
                     : "flex shrink-0 items-center gap-0.5 px-1.5"
                 }
