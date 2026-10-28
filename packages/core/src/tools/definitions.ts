@@ -609,6 +609,7 @@ export function getToolDefinitions() {
  * 单一来源在 catalog.ts（按 readOnly 标记派生），这里别名导出以兼容既有引用。
  */
 export { READ_ONLY_TOOLS as READ_ONLY_TOOL_NAMES } from "./catalog.js";
+import type { CoworkCheck } from "../cowork/checks.js";
 import { READ_ONLY_TOOLS, contentLimitForTool } from "./catalog.js";
 
 /** 返回只读工具定义子集，供并行调研子 Agent 使用（不写盘、不跑命令）。 */
@@ -758,6 +759,8 @@ export interface ToolMeta {
   reportedOutputs?: string[];
   /** 校验后的产出及 AI 声明的创建/编辑类型；类型缺失的旧调用保持中性。 */
   reportedOutputItems?: { path: string; kind?: "created" | "edited"; snapshotDir?: string }[];
+  /** Cowork report_checks 登记的核对结果；随工具结果保存，供历史恢复。 */
+  reportedChecks?: CoworkCheck[];
   /**
    * Chat 产物：create_artifact 成功落盘后的描述。随工具结果保存，前端据此渲染产物卡片，
    * 重开会话时也靠它从历史里还原（卡片不能只存在于一次性的实时事件里）。

@@ -1,4 +1,5 @@
 import { isScriptFile } from "./taskIntent";
+import type { CoworkCheck } from "./flowTypes";
 
 export interface OutputFile {
   path: string;
@@ -21,6 +22,7 @@ export interface HistoryMessage {
   content?: unknown;
   reportedOutputs?: string[];
   reportedOutputItems?: OutputFile[];
+  reportedChecks?: CoworkCheck[];
 }
 
 function absolutePath(path: string): boolean {
@@ -88,4 +90,14 @@ export function restoreOutputs(messages: HistoryMessage[]): OutputFile[] {
     }
   }
   return outputs;
+}
+
+/** 从一个用户回合的历史消息中恢复核对结果（取最后一次成功登记的） */
+export function restoreChecks(messages: HistoryMessage[]): CoworkCheck[] {
+  let checks: CoworkCheck[] = [];
+  for (const message of messages) {
+    if (message.role !== "tool" || message._toolName !== "report_checks" || message.status !== "success") continue;
+    if (Array.isArray(message.reportedChecks) && message.reportedChecks.length > 0) checks = message.reportedChecks;
+  }
+  return checks;
 }

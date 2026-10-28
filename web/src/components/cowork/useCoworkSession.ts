@@ -24,7 +24,8 @@ import type { WsMessage } from "@/hooks/useWebSocket";
 import { resolveModel, shouldEnableThinking } from "@/components/chat/useModelEffort";
 import { AGENT_EVENT, CONTROL_CMD, TOOL } from "@/lib/constants";
 import { describeIntent, describeStatusPhase, describeToolPhase, isScriptFile } from "./taskIntent";
-import { restoreOutputs, type HistoryMessage, type OutputFile } from "./restoreOutputs";
+import { restoreChecks, restoreOutputs, type HistoryMessage, type OutputFile } from "./restoreOutputs";
+import type { CoworkCheck } from "./flowTypes";
 
 /** 一条任务的生命周期状态 */
 export type CoworkTaskStatus = "running" | "done" | "failed" | "cancelled";
@@ -68,18 +69,29 @@ export interface CoworkTask {
   outputs: OutputFile[];
   /** Agent 的最终回复正文（流式累积） */
   reply: string;
+  /** 交付前的核对结果（report_checks） */
+  checks: CoworkCheck[];
+  /** 本轮是在运行哪个流程（自由任务为空） */
+  flow?: { id: string; name: string };
   /** 失败原因 */
   error?: string;
 }
 
 /** 一次任务提交的完整参数（排队时原样存起来，出队时照原样发） */
 export interface CoworkSubmitParams {
+  /** 用户看到的那句话（任务卡片、历史列表） */
   request: string;
+  /** 发给 Agent 的完整消息（见 flowPrompt.ts） */
+  content: string;
   files: { path: string; name: string }[];
   model: string;
   provider?: string;
   effort: string | null;
   outputDir: string;
+  /** 运行流程时带上：后端记一次运行，卡片上标出来源 */
+  flow?: { id: string; name: string };
+  /** 在全新的会话里跑（每次运行流程都是独立的一期，不该带着上一期的记忆） */
+  fresh?: boolean;
 }
 
 /** 排队中的任务 */
@@ -125,6 +137,9 @@ export function useCoworkSession({ clientId, connected, send }: UseCoworkSession
     // 队列必须清掉：那些任务是针对上一个会话的上下文排的，
     // 留着会在新会话里莫名发出来
     setQueue([]);
+    // 后端按面板记着「当前会话」：不解除这层映射，下一条消息仍会进旧会话，
+    // 「新任务」就只是清空了界面、实际还带着上一个任务的记忆。
+    send({ type: "reset_session", clientId });
   }, [clientId, running, send, sessionId]);
 
   /**
@@ -199,7 +214,10 @@ export function useCoworkSession({ clientId, connected, send }: UseCoworkSession
           };
           if (m.role === "user") {
             const previous = restored[restored.length - 1];
-            if (previous) previous.outputs = restoreOutputs(turnMessages);
+            if (previous) {
+              previous.outputs = restoreOutputs(turnMessages);
+              previous.checks = restoreChecks(turnMessages);
+            }
             turnMessages = [];
             // displayText 是用户真正打的字；content 里还夹着文件路径清单和产出目录提示
             const text = typeof m.displayText === "string" && m.displayText
@@ -223,6 +241,7 @@ export function useCoworkSession({ clientId, connected, send }: UseCoworkSession
               touchedFiles: [],
               outputs: [],
               reply: "",
+              checks: [],
             });
           } else if (m.role === "assistant" && typeof m.content === "string" && m.content.trim()) {
             // 回复并入最近一条任务；没有对应任务（历史异常）时丢弃，不凭空造卡片
@@ -232,7 +251,10 @@ export function useCoworkSession({ clientId, connected, send }: UseCoworkSession
           if (restored.length > 0) turnMessages.push(m as HistoryMessage);
         }
         const last = restored[restored.length - 1];
-        if (last) last.outputs = restoreOutputs(turnMessages);
+        if (last) {
+          last.outputs = restoreOutputs(turnMessages);
+          last.checks = restoreChecks(turnMessages);
+        }
         setTasks(restored);
         setLoadingHistory(false);
         const total = (msg as { totalTokens?: number }).totalTokens;
@@ -322,6 +344,13 @@ export function useCoworkSession({ clientId, connected, send }: UseCoworkSession
         return;
       }
 
+      // ── 核对结果 ──
+      case "cowork_checks": {
+        const checks = (msg as { checks?: CoworkCheck[] }).checks;
+        if (Array.isArray(checks)) patchActive({ checks });
+        return;
+      }
+
       // ── 上下文用量 ──
       case AGENT_EVENT.TOKEN_USAGE: {
         const m = msg as { used?: number; max?: number };
@@ -397,8 +426,7 @@ export function useCoworkSession({ clientId, connected, send }: UseCoworkSession
   const sendNow = useCallback((params: CoworkSubmitParams) => {
     const taskId = `cowork-${Date.now()}`;
     const fileNames = params.files.map((f) => f.name);
-
-    setTasks((prev) => [...prev, {
+    const task: CoworkTask = {
       id: taskId,
       request: params.request,
       fileNames,
@@ -406,54 +434,39 @@ export function useCoworkSession({ clientId, connected, send }: UseCoworkSession
       status: "running",
       // 意图在发起时识别一次就固定下来：它描述目标，不该跟着阶段抖动。
       // 必须此刻就算出来——等后端第一个事件回来再显示，开头那几秒就又是空白。
-      intent: describeIntent(params.request, fileNames),
+      intent: params.flow ? params.flow.name : describeIntent(params.request, fileNames),
       intentGenerated: false,
       phase: "",
       startedAt: Date.now(),
       touchedFiles: [],
       outputs: [],
       reply: "",
-    }]);
+      checks: [],
+      ...(params.flow ? { flow: params.flow } : {}),
+    };
+
+    // 全新会话：解除后端的面板→会话映射，并且这一条不带旧 sessionId
+    if (params.fresh) {
+      send({ type: "reset_session", clientId });
+      setSessionId(null);
+      setTokenUsage({ used: 0, max: 0 });
+      setTasks([task]);
+    } else {
+      setTasks((prev) => [...prev, task]);
+    }
     activeTaskRef.current = taskId;
     cancelledRef.current = false;
     setRunning(true);
 
-    // 组装给 Agent 的消息。
-    //
-    // 用绝对路径列清单而不是附件：document-forge 的读取流程就是"确认路径 → 转文本 →
-    // 读结果"，给路径正好对上。产出目录也写进正文 —— POWER.md 里「用户给了路径就用
-    // 用户的」这条规则会消费它，不需要新增协议字段。
-    const lines: string[] = [];
-    if (params.files.length > 0) {
-      lines.push("要处理的文件：");
-      for (const f of params.files) lines.push(`- ${f.path}`);
-      lines.push("");
-    }
-    lines.push(params.request);
-    lines.push("");
-    lines.push("请用 Markdown 分段回答：不同处理阶段各成一段，必要时用小标题或列表，不要把多个回合的内容拼成一长段。简短回答无需刻意加标题。");
-    if (params.outputDir) {
-      lines.push("");
-      lines.push(`产出文件请放到：${params.outputDir}`);
-    }
-    // 明确要求登记产出。
-    //
-    // 工具描述里已经写了用法，但模型未必主动想起来调 —— 办公任务的"交付"这一步
-    // 对它来说不如写文件本身显眼。在用户消息里点一句，命中率高得多。
-    // 这也是产出卡片的唯一数据来源：不登记就什么都不显示。
-    lines.push("");
-    lines.push("做完后，如果生成或改写了文件，请调用 report_outputs 登记最终产出，并为每个文件标明 kind：本轮新建用 created，修改已有文件用 edited（临时脚本不用登记）。");
-
     send({
       type: CONTROL_CMD.USER_MESSAGE,
       clientId,
-      sessionId,
-      content: lines.join("\n"),
+      sessionId: params.fresh ? undefined : sessionId,
+      // 完整消息由 flowPrompt.ts 拼好：文件绝对路径清单、步骤、核对项、交付约定。
+      // 用绝对路径列清单而不是附件：document-forge 的读取流程就是"确认路径 → 转文本 → 读结果"。
+      content: params.content,
       displayText: params.request,
-      // 附件清单必须随消息落盘：历史还原时要靠它把文件名显示回来。
-      // 早先漏传了这个字段，而还原逻辑却在读 attachedFiles —— 于是刷新后
-      // 文件就"消失"了（不是没持久化展示，是压根没存进去）。
-      // path 一并存：还原出的卡片要能点开预览，光有文件名做不到。
+      // 附件清单必须随消息落盘：历史还原时要靠它把文件名显示回来；path 一并存，卡片才能点开预览。
       ...(params.files.length > 0
         ? { attachedFiles: params.files.map((f) => ({ name: f.name, path: f.path, size: 0 })) }
         : {}),
@@ -463,6 +476,7 @@ export function useCoworkSession({ clientId, connected, send }: UseCoworkSession
       // 处理文档需要读写文件和跑脚本的能力），但落盘时保留 cowork 标记，
       // 这样历史列表能把办公会话和 Code 的开发会话分开列。
       mode: "cowork",
+      ...(params.flow ? { flowId: params.flow.id } : {}),
       // 产出目录单独传给后端；正文里的路径供模型决定文件存放位置。
       ...(params.outputDir ? { outputDir: params.outputDir } : {}),
       think: shouldEnableThinking(resolveModel(params.model, params.provider), params.effort),

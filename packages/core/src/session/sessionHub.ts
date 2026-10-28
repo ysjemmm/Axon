@@ -27,6 +27,8 @@ import type { SessionStorage } from "../storage/types.js";
 import type { SessionHubDeps } from "./types.js";
 import { filterPersistableMessages, filterTransientMessages, slimDiffBodies, findDiffBody } from "./persistable.js";
 import { buildForkMessages } from "./forkHistory.js";
+import { CoworkFlowStore, generateFlowDraft } from "../cowork/flows.js";
+import { getStrategy } from "../providers.js";
 
 /**
  * 每个 session 的代理 channel：拦截该 session emit 的所有事件，
@@ -589,6 +591,23 @@ export class SessionHub {
         session?.handleCreditBudgetChoice(cmd.choice);
         return;
       }
+      case "cowork_list_flows":
+        return this.emitFlows(clientId);
+      case "cowork_save_flow": {
+        try {
+          const flow = await this.flowStore().save(cmd.flow);
+          this.emitResult(null, clientId, { type: "cowork_flow_saved", requestId: cmd.requestId, flow } as AgentEvent);
+        } catch (err) {
+          this.emitResult(null, clientId, { type: "cowork_flow_saved", requestId: cmd.requestId, error: (err as Error).message } as AgentEvent);
+          return;
+        }
+        return this.emitFlows(clientId);
+      }
+      case "cowork_delete_flow":
+        await this.flowStore().remove(String(cmd.id || ""));
+        return this.emitFlows(clientId);
+      case "cowork_draft_flow":
+        return this.handleDraftFlow(cmd.sessionId, cmd.requestId, clientId);
       case "focus_browser": {
         // 聚焦浏览器：无 clientId 也能用——对所有活跃会话尝试聚焦（通常只有一个浏览器）
         const sid = this.resolveSessionId(cmd);
@@ -1234,6 +1253,38 @@ export class SessionHub {
     return filterPersistableMessages(messages);
   }
 
+  // ── Cowork 流程 ──
+
+  private flowStoreInstance: CoworkFlowStore | null = null;
+
+  private flowStore(): CoworkFlowStore {
+    if (!this.flowStoreInstance) this.flowStoreInstance = new CoworkFlowStore(this.deps.createHost().fs, this.deps.homeDir);
+    return this.flowStoreInstance;
+  }
+
+  private async emitFlows(clientId: string | undefined): Promise<void> {
+    const flows = await this.flowStore().list();
+    this.emitResult(null, clientId, { type: "cowork_flows", flows } as AgentEvent);
+  }
+
+  /** 用该会话自己的模型把它提炼成流程草稿；失败时把原因回给前端，不抛 */
+  private async handleDraftFlow(sessionId: string, requestId: string | undefined, clientId: string | undefined): Promise<void> {
+    const reply = (data: Record<string, unknown>) =>
+      this.emitResult(null, clientId, { type: "cowork_flow_draft", requestId, ...data } as AgentEvent);
+    try {
+      const active = this.activeSessions.get(sessionId);
+      const saved = active ? null : await this.storage.getSession(sessionId);
+      const messages = active ? active.getMessages() : (saved?.messages ?? []);
+      const model = active?.model || saved?.model || "";
+      const provider = active?.provider || saved?.provider || "";
+      if (!model || !provider) throw new Error("找不到这个任务用的模型，请先在下方选择模型后重试");
+      const draft = await generateFlowDraft({ strategy: getStrategy(provider, model), model, messages });
+      reply({ draft });
+    } catch (err) {
+      reply({ error: (err as Error).message || "整理流程失败" });
+    }
+  }
+
   /** 设置编辑模式 */
   private async handleSetEditMode(
     cmd: Extract<ControlCommand, { type: "set_edit_mode" }>,
@@ -1319,6 +1370,10 @@ export class SessionHub {
     // Cowork 附件快照：开启后每轮对附件做原稿副本（查看改动/恢复原稿的依据）。
     // 与 humanizedStatus 同理挂在 Cowork 轮上；同会话复用同一 sessionId 的快照区。
     if (mode.persisted === "cowork" && sid) session.enableCoworkSnapshots(sid);
+    // 运行流程：记一次运行（失败不影响任务本身）
+    if (mode.persisted === "cowork" && sid && typeof cmd.flowId === "string" && cmd.flowId) {
+      void this.flowStore().recordRun(cmd.flowId, sid).catch(() => undefined);
+    }
     // Quest 模式：每轮注入联网开关（决定工具集）
     if (mode.runtime === "quest") {
       session.setQuestOptions(cmd.quest || {});

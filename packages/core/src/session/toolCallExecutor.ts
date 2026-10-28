@@ -187,6 +187,10 @@ export class ToolCallExecutor {
       const out = await this.s.reportOutputs(toolArgs, meta);
       result = out.result;
       status = out.status;
+    } else if (route === "report_checks") {
+      const out = this.s.reportChecks(toolArgs, meta);
+      result = out.result;
+      status = out.status;
     } else if (route === "update_memory") {
       const out = this.s.updateMemory(toolArgs);
       result = out.result;

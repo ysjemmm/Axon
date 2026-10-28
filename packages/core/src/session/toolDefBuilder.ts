@@ -58,7 +58,7 @@ export class ToolDefBuilder {
     if (this.s.imageEnabled && this.s.host?.imageGenerator) tools.push(this.getGenerateImageToolDef());
     // Cowork：额外给一个「交付产出」工具，让 Agent 自己说清做出了什么文件。
     // 只在办公面板注入 —— Chat/Code 那侧有工具卡片和 diff，不需要再多一个上报动作。
-    if (this.s.humanizedStatus) tools.push(this.getDeliverToolDef());
+    if (this.s.humanizedStatus) tools.push(this.getDeliverToolDef(), this.getReportChecksToolDef());
     return tools;
   }
 
@@ -443,6 +443,49 @@ export class ToolDefBuilder {
             },
           },
           required: ["files"],
+        },
+      },
+    };
+  }
+
+  /**
+   * report_checks 工具定义（Cowork 专用）：做完后的自查结果。
+   *
+   * 财务、会计最怕「数字错了还看不出来」。让 Agent 在交付前按核对项逐条验证，
+   * 并把结果（通过 / 需留意 / 不通过 + 具体数字）登记出来，界面渲染成核对清单。
+   */
+  private getReportChecksToolDef(): ToolDef {
+    return {
+      type: "function",
+      function: {
+        name: "report_checks",
+        description:
+          "登记你对本轮结果做的核对，界面会显示成一张核对清单，让用户一眼看出结果能不能信。\n\n" +
+          "【什么时候调用】交付文件之前，真正去验证过之后调用一次（通常紧挨着 report_outputs）。" +
+          "用户给了核对项就逐条核对；没给就自己挑最容易出错的地方核对：金额合计、条数、有无遗漏或重复、日期范围。\n\n" +
+          "【必须真的验证过】每一条都要基于你实际算出来或读出来的数字，detail 里写清楚数字，" +
+          "例如「汇总表合计 128,430.50，三张原表加总 128,430.50，一致」。没验证就不要写 pass。\n\n" +
+          "【status】pass=核对一致；warn=能交付但有需要用户留意的地方（如 2 行缺少日期，已标黄）；" +
+          "fail=核对不一致且没能解决。有 fail 时要在最终回复里说明原因和建议。\n\n" +
+          "【不要调用】纯问答、只是读文件回答问题、没有可核对内容时跳过。",
+        parameters: {
+          type: "object",
+          properties: {
+            checks: {
+              type: "array",
+              description: "核对结果，2 到 8 条",
+              items: {
+                type: "object",
+                properties: {
+                  label: { type: "string", description: "核对的是什么，如「合计金额」「记录条数」" },
+                  status: { type: "string", enum: ["pass", "warn", "fail"] },
+                  detail: { type: "string", description: "具体数字和结论，一句话" },
+                },
+                required: ["label", "status", "detail"],
+              },
+            },
+          },
+          required: ["checks"],
         },
       },
     };

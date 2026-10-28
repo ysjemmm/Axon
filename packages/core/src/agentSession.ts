@@ -37,6 +37,7 @@ import {
   type HumanizedStatusState,
 } from "./session/humanizedStatus.js";
 import { CoworkSnapshotter } from "./cowork/snapshotter.js";
+import { parseChecks, checksResult } from "./cowork/checks.js";
 import { resolveArtifactDir } from "./session/artifactDir.js";
 import { artifactExtension, parseArtifactArgs, parseGenerateImageArgs, parseRenderMediaArgs, pickVersionedPath, sanitizeStem } from "./session/artifactFile.js";
 /**
@@ -1890,6 +1891,15 @@ export class AgentSession {
     }
 
     return { result: `已登记 ${accepted.length} 个产出文件，已显示给用户。`, status: "success" };
+  }
+
+  /** report_checks 工具实现（Cowork）：把自查结果推给前端，并随工具结果落盘供历史恢复 */
+  /** @internal */ reportChecks(toolArgs: Record<string, unknown>, meta?: ToolMeta): { result: string; status: "success" | "error" } {
+    const checks = parseChecks(toolArgs);
+    if (checks.length === 0) return { result: "checks 为空：每条需要 label、status（pass/warn/fail）和 detail。没有可核对的内容时不要调用。", status: "error" };
+    if (meta) meta.reportedChecks = checks;
+    this.send("cowork_checks", { checks });
+    return { result: checksResult(checks), status: "success" };
   }
 
   /**

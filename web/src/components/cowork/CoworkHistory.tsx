@@ -9,33 +9,22 @@
 
 import { displaySessionTitle } from "@/lib/sessionTitle";
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, Trash2, X } from "lucide-react";
+import { Loader2, Repeat2, Trash2, X } from "lucide-react";
 import { deleteSession, listSessions, type SessionMeta } from "@/lib/apiClient";
-
-/** 相对时间：办公用户关心的是"多久以前"，不是精确时间戳 */
-function relativeTime(iso: string): string {
-  const then = new Date(iso).getTime();
-  if (!Number.isFinite(then)) return "";
-  const diff = Date.now() - then;
-  const min = Math.floor(diff / 60_000);
-  if (min < 1) return "刚刚";
-  if (min < 60) return `${min} 分钟前`;
-  const hour = Math.floor(min / 60);
-  if (hour < 24) return `${hour} 小时前`;
-  const day = Math.floor(hour / 24);
-  if (day < 30) return `${day} 天前`;
-  return new Date(then).toLocaleDateString("zh-CN");
-}
+import { relativeTime } from "./relativeTime";
+import type { CoworkFlow } from "./flowTypes";
 
 interface CoworkHistoryProps {
   open: boolean;
   /** 当前打开的会话 id，用于高亮 */
   currentSessionId: string | null;
+  /** 会话 → 来源流程（流程记着自己的运行记录） */
+  flowOfSession?: Map<string, CoworkFlow>;
   onClose: () => void;
   onSelect: (sessionId: string) => void;
 }
 
-export function CoworkHistory({ open, currentSessionId, onClose, onSelect }: CoworkHistoryProps) {
+export function CoworkHistory({ open, currentSessionId, flowOfSession, onClose, onSelect }: CoworkHistoryProps) {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -115,7 +104,12 @@ export function CoworkHistory({ open, currentSessionId, onClose, onSelect }: Cow
               className="min-w-0 flex-1 text-left"
             >
               <span className="block truncate text-[13px] text-foreground">{displaySessionTitle(session.title) || "未命名任务"}</span>
-              <span className="mt-0.5 block text-[11px] text-muted-foreground">{relativeTime(session.updatedAt)}</span>
+              <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                {flowOfSession?.get(session.id) && (
+                  <span className="inline-flex items-center gap-0.5 text-primary"><Repeat2 className="h-3 w-3" />{flowOfSession.get(session.id)!.name}</span>
+                )}
+                {relativeTime(session.updatedAt)}
+              </span>
             </button>
             <button
               onClick={() => handleDelete(session.id)}

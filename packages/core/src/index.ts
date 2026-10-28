@@ -72,3 +72,5 @@ export * from "./marketplace/marketplaceRegistry.js";
 // Credits 计费系统（Token → Credits 换算）
 export * from "./credits.js";
 export * from "./billing.js";
+export * from "./cowork/flows.js";
+export * from "./cowork/checks.js";

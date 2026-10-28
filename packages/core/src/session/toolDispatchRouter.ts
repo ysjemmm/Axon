@@ -13,6 +13,7 @@ export type ToolDispatchRoute =
   | "ask_user"
   | "ask_form"
   | "report_outputs"
+  | "report_checks"
   | "update_memory"
   | "update_tasks"
   | "create_artifact"
@@ -37,6 +38,7 @@ export function resolveToolDispatchRoute(toolName: string): ToolDispatchRoute {
   if (toolName === ToolName.AskUser) return "ask_user";
   if (toolName === ToolName.AskForm) return "ask_form";
   if (toolName === ToolName.ReportOutputs) return "report_outputs";
+  if (toolName === ToolName.ReportChecks) return "report_checks";
   if (toolName === ToolName.UpdateMemory) return "update_memory";
   if (toolName === ToolName.UpdateTasks) return "update_tasks";
   if (toolName === ToolName.CreateArtifact) return "create_artifact";

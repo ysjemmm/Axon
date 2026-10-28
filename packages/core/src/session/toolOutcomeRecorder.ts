@@ -159,6 +159,7 @@ export class ToolOutcomeRecorder {
       readRange: meta.readRange,
       reportedOutputs: meta.reportedOutputs,
       reportedOutputItems: meta.reportedOutputItems,
+      reportedChecks: meta.reportedChecks,
       artifact: meta.artifact,
       diagnostics: meta.diagnostics,
       searchResults: (meta as any).searchResults,

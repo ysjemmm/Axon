@@ -8,6 +8,8 @@
  * 注意：这里只定义“事件形状”，不定义传输方式。传输由 AgentChannel 的具体实现决定。
  */
 
+import type { CoworkCheck } from "../cowork/checks.js";
+import type { CoworkFlow, CoworkFlowInputDraft } from "../cowork/flows.js";
 import type { CreditDetail } from "../credits.js";
 import type { BillingMode, TurnCost, TurnUsage } from "../billing.js";
 import type { WikiGenerationEvent } from "../wiki/wikiController.js";
@@ -121,6 +123,11 @@ export type AgentEventPayload =
    * files 带每个文件的创建/编辑类型，前端据此显示对应颜色。
    */
   | { type: "cowork_outputs"; paths: string[]; files?: { path: string; kind?: "created" | "edited"; snapshotDir?: string }[] }
+  // ── Cowork 核对与流程 ──
+  | { type: "cowork_checks"; checks: CoworkCheck[] }
+  | { type: "cowork_flows"; flows: CoworkFlow[] }
+  | { type: "cowork_flow_saved"; requestId?: string; flow?: CoworkFlow; error?: string }
+  | { type: "cowork_flow_draft"; requestId?: string; draft?: Omit<CoworkFlowInputDraft, "id">; error?: string }
 
   // ── token 用量 ──
   | { type: "token_usage"; used: number; max: number; cumulative?: number;
