@@ -94,6 +94,13 @@ export interface CoworkSubmitParams {
   fresh?: boolean;
 }
 
+/** 等用户确认的连接器操作 */
+export interface PendingConfirm {
+  /** 「连接器名 · 工具名」 */
+  label: string;
+  args: Record<string, unknown>;
+}
+
 /** 排队中的任务 */
 export interface QueuedTask {
   id: string;
@@ -116,6 +123,8 @@ export function useCoworkSession({ clientId, connected, send }: UseCoworkSession
   const [loadingHistory, setLoadingHistory] = useState(false);
   /** 排队中的任务：AI 还在跑时提交的任务排在这里，本轮结束后自动依次发出 */
   const [queue, setQueue] = useState<QueuedTask[]>([]);
+  /** 等用户确认的连接器操作（如发送邮件） */
+  const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
 
   /** 当前进行中的任务 id。流式事件不带任务标识，靠它归属到正确的任务上。 */
   const activeTaskRef = useRef<string | null>(null);
@@ -187,6 +196,7 @@ export function useCoworkSession({ clientId, connected, send }: UseCoworkSession
       ? { ...t, status, phase: "", elapsedMs: Date.now() - t.startedAt, ...(error ? { error } : {}) }
       : t)));
     setRunning(false);
+    setConfirm(null);
   }, []);
 
   useSessionEvents(clientId, (msg: WsMessage) => {
@@ -361,12 +371,20 @@ export function useCoworkSession({ clientId, connected, send }: UseCoworkSession
         return;
       }
 
-      // Cowork 不展示开发者审批卡片。涉及 Relay / MCP 等开发者操作时安全拒绝，
-      // 避免 Agent 永久等待一个办公用户看不懂的确认框。
-      case AGENT_EVENT.CONFIRM_TOOL_REQUEST:
+      // 连接器（MCP）的写操作——发邮件、建 Issue 这类——交给用户确认：
+      // 这是办公场景真实需要的动作，一律拒绝会让连接器在 Cowork 里形同虚设。
+      // Relay 这类开发者工作流仍然安全拒绝，避免 Agent 等一个办公用户看不懂的确认框。
+      case AGENT_EVENT.CONFIRM_TOOL_REQUEST: {
+        const m = msg as { kind?: string; label?: string; toolName?: string; args?: Record<string, unknown> };
+        if (m.kind === "mcp") {
+          setConfirm({ label: m.label || m.toolName || "", args: m.args ?? {} });
+          patchActive({ phase: "等你确认" });
+          return;
+        }
         send({ type: "confirm_tool", clientId, confirmed: false });
         patchActive({ phase: "调整处理方式" });
         return;
+      }
 
       // 文档处理过程中如果 Agent 需要用户在选项中作答，采用协议提供的
       // “跳过，让你自己决定”，让任务继续；必要时 Agent 会在最终回复里说明假设。
@@ -564,6 +582,12 @@ export function useCoworkSession({ clientId, connected, send }: UseCoworkSession
     setQueue((prev) => prev.filter((q) => q.id !== id));
   }, []);
 
+  const answerConfirm = useCallback((confirmed: boolean) => {
+    send({ type: "confirm_tool", clientId, confirmed });
+    setConfirm(null);
+    patchActive({ phase: confirmed ? "继续处理" : "调整处理方式" });
+  }, [clientId, patchActive, send]);
+
   const cancel = useCallback(() => {
     if (!running) return;
     cancelledRef.current = true;
@@ -571,7 +595,7 @@ export function useCoworkSession({ clientId, connected, send }: UseCoworkSession
   }, [clientId, running, send, sessionId]);
 
   return {
-    tasks, running, tokenUsage, sessionId, loadingHistory, queue,
-    submit, cancel, startNewSession, openSession, removeFromQueue,
+    tasks, running, tokenUsage, sessionId, loadingHistory, queue, confirm,
+    submit, cancel, startNewSession, openSession, removeFromQueue, answerConfirm,
   };
 }

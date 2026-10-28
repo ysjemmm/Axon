@@ -34,6 +34,7 @@ import { CoworkHome } from "@/components/cowork/CoworkHome";
 import { FlowRunner, type FlowRunValues } from "@/components/cowork/FlowRunner";
 import { FlowEditor } from "@/components/cowork/FlowEditor";
 import { TaskThread } from "@/components/cowork/TaskThread";
+import { ConfirmCard } from "@/components/cowork/ConfirmCard";
 import { useStickToBottom } from "@/components/cowork/useStickToBottom";
 import type { CoworkFlow, CoworkFlowDraft } from "@/components/cowork/flowTypes";
 import { STORAGE, TIMEOUT } from "@/lib/constants";
@@ -111,7 +112,7 @@ export function CoworkPanel({ clientId, connected, send, onExit }: CoworkPanelPr
   }, [models]);
 
   // ── 会话 / 流程 / 文件选择 ─────────────────────────────────────────────
-  const { tasks, running, tokenUsage, sessionId, loadingHistory, queue, submit, cancel, startNewSession, openSession, removeFromQueue } = useCoworkSession({ clientId, connected, send });
+  const { tasks, running, tokenUsage, sessionId, loadingHistory, queue, confirm, submit, cancel, startNewSession, openSession, removeFromQueue, answerConfirm } = useCoworkSession({ clientId, connected, send });
   const { flows, save: saveFlow, remove: removeFlow, draftFromSession } = useCoworkFlows({ clientId, connected, send });
   const { pickFiles, pickDir } = useFilePicker(clientId);
   const { ref: scrollRef, showScrollButton, scrollToBottom } = useStickToBottom<HTMLDivElement>();
@@ -354,6 +355,7 @@ export function CoworkPanel({ clientId, connected, send, onExit }: CoworkPanelPr
       {!showRunner && (
         <div className="mx-auto flex w-full max-w-[max(640px,80%)] shrink-0 flex-col px-4 pb-4">
           {notice && <p className="mb-2 px-1 text-[12px] text-amber-600 dark:text-amber-500">{notice}</p>}
+          {confirm && <ConfirmCard confirm={confirm} onAnswer={answerConfirm} />}
           <div className="relative overflow-hidden rounded-xl border border-border bg-background shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-all focus-within:ring-1 focus-within:ring-ring">
             {/* 排队中的任务：必须看得见、能撤回，否则用户会以为消息丢了再提交一遍 */}
             {queue.length > 0 && (
