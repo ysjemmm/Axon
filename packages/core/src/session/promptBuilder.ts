@@ -473,13 +473,13 @@ export class PromptBuilder {
     }
 
     // 工作区 .axon：项目指令、路径规则与长期工作区知识。它和会话记忆分开：
-    // .axon 属于仓库/工作区共享上下文，会话记忆属于当前会话；两者都放尾部，避免配置变化
-    // 让历史前缀缓存整体失效。
+    // .axon 属于仓库/工作区共享上下文，会话记忆属于当前会话；两者都作为按轮注入，
+    // 避免配置变化让历史前缀缓存整体失效。
     if (this.s.workspaceAxonPromptCache) {
-      injections.push({ role: "system", content: this.s.workspaceAxonPromptCache, _tailInjected: true } as ChatCompletionMessageParam);
+      add("workspaceAxon", this.s.workspaceAxonPromptCache);
     }
 
-    // 会话记忆：整份文档作为一条尾部注入。
+    // 会话记忆：整份文档作为一条按轮注入。
     // 刻意不并进系统提示开头：它的内容随会话推进而变化，放前面会让整段前缀缓存
     // 从变化点起失效；作为按轮注入，变化的代价就只落在这一条自己身上。
     if (this.s.memory && this.s.memory.trim()) {
@@ -502,7 +502,7 @@ export class PromptBuilder {
 
 type InjectionKey =
   | "render" | "verbosity" | "workspaces" | "focus" | "terminal"
-  | "ide" | "skills" | "powers" | "wiki" | "memory" | "usage";
+  | "ide" | "skills" | "powers" | "wiki" | "workspaceAxon" | "memory" | "usage";
 
 /** 一项上下文注入的快照（挂在用户消息的 _contextInjections 上，随历史持久化） */
 export interface ContextInjection {
@@ -520,6 +520,7 @@ const RETIRED_NOTICE: Record<string, string> = {
   skills: "此前列出的 skill 清单已不再适用。",
   powers: "此前列出的 power 清单已不再适用。",
   wiki: "此前列出的 Wiki 索引已不再适用。",
+  workspaceAxon: "此前注入的工作区 .axon 指令已不再适用。",
   memory: "【会话记忆】已被清空，此前的记忆内容不再作为已确认前提。",
   usage: "此前的「上下文使用率」提醒已不再适用。",
 };
