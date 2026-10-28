@@ -75,3 +75,5 @@ export * from "./billing.js";
 export * from "./cowork/flows.js";
 export * from "./cowork/checks.js";
 export * from "./session/backgroundTasks.js";
+export * from "./connectors/catalog.js";
+export * from "./connectors/store.js";

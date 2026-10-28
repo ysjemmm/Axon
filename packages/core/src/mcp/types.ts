@@ -10,11 +10,14 @@
  *   · 编排（AgentSession，core）：把 MCP 工具并入工具集、路由调用、接审批门
  */
 
-/** MCP server 传输类型：stdio（本地子进程）/ http（Streamable HTTP 或 SSE 远程） */
-export type McpTransport = "stdio" | "http";
+/**
+ * MCP server 传输类型：stdio（本地子进程）/ http（Streamable HTTP 或 SSE 远程）/
+ * builtin（Axon 自带、在宿主进程内运行的 server，如邮箱连接器；配置走 env）
+ */
+export type McpTransport = "stdio" | "http" | "builtin";
 
-/** 配置来源：用户级 / 工作区级 / Power 内嵌 */
-export type McpSource = "user" | "workspace" | "power";
+/** 配置来源：用户级 / 工作区级 / Power 内嵌 / 连接器 */
+export type McpSource = "user" | "workspace" | "power" | "connector";
 
 /**
  * 归一化后的单个 MCP server 规格（多来源合并、命名空间去重后的统一形态）。
@@ -39,6 +42,8 @@ export interface McpServerSpec {
   url?: string;
   /** http：附加请求头（鉴权等） */
   headers?: Record<string, string>;
+  /** builtin：内置 server 名（如 "mail"） */
+  builtin?: string;
   /** 是否禁用（禁用的不连接、不暴露工具） */
   disabled?: boolean;
   /** 自动批准的工具名白名单（命中则跳过人工审批） */
@@ -88,6 +93,11 @@ export interface McpCapability {
   callTool(serverId: string, toolName: string, args: Record<string, unknown>): Promise<McpCallResult>;
   /** 关闭所有连接（会话销毁时调用，可选） */
   dispose?(): Promise<void>;
+  /**
+   * 试连一个 server 并列出工具，用完即断开，不影响已有连接（连接器「测试连接」用，可选）。
+   * 连不上时抛错，错误信息直接给用户看。
+   */
+  probe?(spec: McpServerSpec): Promise<{ tools: { name: string; description?: string }[] }>;
 }
 
 /** MCP 工具名命名空间前缀：模型看到的工具名为 `mcp__<serverId>__<toolName>` */

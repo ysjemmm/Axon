@@ -1,10 +1,11 @@
 /**
  * MCP 配置注册表 —— 聚合三来源的 server 配置，产出归一化的 McpServerSpec[]（零形态依赖）
  *
- * 三来源（同 id 后者覆盖前者，优先级 user < workspace < power）：
+ * 四来源（同 id 后者覆盖前者，优先级 user < workspace < power；连接器有自己的命名空间）：
  *   · 用户级：  ~/.axon/settings/mcp.json
  *   · 工作区级：<workspace>/.axon/settings/mcp.json（多根工作区逐个读）
  *   · Power 内嵌：各启用 Power 的 mcp.json（经 PowerRegistry.getActiveMcpServers 聚合）
+ *   · 连接器：  ~/.axon/settings/connectors.json + 密钥文件（见 connectors/store.ts）
  *
  * 只负责"读配置 + 归一化 + 去重 + 过滤禁用"，不负责连接（连接是 McpCapability 的事）。
  * 读文件走注入的 host.fs，保持形态无关。
@@ -14,6 +15,7 @@ import { join } from "node:path";
 import type { AgentHost } from "../host/index.js";
 import type { PowerRegistry } from "../powers/powerLoader.js";
 import type { McpServerSpec, McpSource } from "./types.js";
+import { resolveConnectorSpecs } from "../connectors/store.js";
 
 /** 单个 server 的原始配置（mcp.json 内的形态，stdio 与 http 字段共存，二选一填） */
 interface RawMcpServer {
@@ -78,6 +80,9 @@ export class McpRegistry {
         collected.push(this.toSpec(`power:${key}`, serverName, "power", server));
       }
     }
+
+    // 连接器（只在用户目录：工作区配置拿不到连接器的密钥）
+    collected.push(...await resolveConnectorSpecs(this.host.fs, this.homeDir, includeDisabled));
 
     // 去重（后者覆盖前者）+ 过滤禁用
     const byId = new Map<string, McpServerSpec>();

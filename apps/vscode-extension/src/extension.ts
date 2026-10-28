@@ -1056,6 +1056,11 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("axon.chatMode", () => provider.postToWebview({ type: "set_mode", mode: "quest" })),
     vscode.commands.registerCommand("axon.codeMode", () => provider.postToWebview({ type: "set_mode", mode: "agent" })),
     vscode.commands.registerCommand("axon.coworkMode", () => provider.postToWebview({ type: "set_mode", mode: "cowork" })),
+    // 连接器面板挂在聊天侧栏的 webview 里（它持有 Agent 通道）：先把侧栏亮出来再通知它打开
+    vscode.commands.registerCommand("axon.connectors", async () => {
+      await vscode.commands.executeCommand("axon.chat.focus");
+      provider.postToWebview({ type: "open_connectors" });
+    }),
     // 打开诊断输出面板：界面卡灰后可在此查看记录（含卡死时刻与当时的操作）
     vscode.commands.registerCommand("axon.showDiagnostics", () => showDiagLog()),
     // 预览浮层的「在编辑器中打开」：overlay 在 workbench 侧，不直接碰文件系统，

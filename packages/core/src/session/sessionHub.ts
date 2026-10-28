@@ -28,6 +28,8 @@ import type { SessionHubDeps } from "./types.js";
 import { filterPersistableMessages, filterTransientMessages, slimDiffBodies, findDiffBody } from "./persistable.js";
 import { buildForkMessages } from "./forkHistory.js";
 import { CoworkFlowStore, generateFlowDraft } from "../cowork/flows.js";
+import { ConnectorStore, type ConnectorDraft } from "../connectors/store.js";
+import { connectorCatalog } from "../connectors/catalog.js";
 import { getStrategy } from "../providers.js";
 import { backgroundNoticeLabel, formatBackgroundNotice, type BackgroundTaskInfo, type BackgroundTaskNotice } from "./backgroundTasks.js";
 
@@ -614,6 +616,26 @@ export class SessionHub {
         return this.emitFlows(clientId);
       case "cowork_draft_flow":
         return this.handleDraftFlow(cmd.sessionId, cmd.requestId, clientId);
+      case "connectors_list":
+        return this.emitConnectors(clientId);
+      case "connector_save": {
+        try {
+          const connector = await this.connectorStore().save(cmd.connector as ConnectorDraft);
+          this.emitResult(null, clientId, { type: "connector_saved", requestId: cmd.requestId, connector } as AgentEvent);
+        } catch (err) {
+          this.emitResult(null, clientId, { type: "connector_saved", requestId: cmd.requestId, error: (err as Error).message } as AgentEvent);
+          return;
+        }
+        return this.emitConnectors(clientId);
+      }
+      case "connector_set_enabled":
+        await this.connectorStore().setEnabled(String(cmd.id || ""), cmd.enabled === true);
+        return this.emitConnectors(clientId);
+      case "connector_delete":
+        await this.connectorStore().remove(String(cmd.id || ""));
+        return this.emitConnectors(clientId);
+      case "connector_test":
+        return this.handleConnectorTest(cmd.connector as ConnectorDraft, cmd.requestId, clientId);
       case "list_background_tasks":
         return this.emitBackgroundTasks(clientId);
       case "get_background_task_output": {
@@ -1276,6 +1298,34 @@ export class SessionHub {
    * 并剥离改动记录字段——改动/回滚记录只维护在内存，不随会话恢复堆积（实现见 persistable.ts） */
   private filterPersistable(messages: any[]): any[] {
     return filterPersistableMessages(messages);
+  }
+
+  // ── 连接器 ──
+
+  private connectorStoreInstance: ConnectorStore | null = null;
+
+  private connectorStore(): ConnectorStore {
+    if (!this.connectorStoreInstance) this.connectorStoreInstance = new ConnectorStore(this.deps.createHost().fs, this.deps.homeDir);
+    return this.connectorStoreInstance;
+  }
+
+  private async emitConnectors(clientId: string | undefined): Promise<void> {
+    const connectors = await this.connectorStore().list();
+    this.emitResult(null, clientId, { type: "connectors", catalog: connectorCatalog(), connectors } as AgentEvent);
+  }
+
+  /** 试连：用完即断，不影响会话里已有的 MCP 连接；保存后下一轮对话就会带上它的工具 */
+  private async handleConnectorTest(draft: ConnectorDraft, requestId: string | undefined, clientId: string | undefined): Promise<void> {
+    const reply = (data: Record<string, unknown>) =>
+      this.emitResult(null, clientId, { type: "connector_test_result", requestId, ...data } as AgentEvent);
+    try {
+      if (!this.deps.mcp?.probe) throw new Error("当前环境不支持测试连接");
+      const spec = await this.connectorStore().specFor(draft);
+      const { tools } = await this.deps.mcp.probe(spec);
+      reply({ ok: true, tools });
+    } catch (err) {
+      reply({ ok: false, error: (err as Error).message || "连接失败" });
+    }
   }
 
   // ── 后台任务 ──

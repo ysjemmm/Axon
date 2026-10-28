@@ -7,6 +7,7 @@ import { SkillStudio } from "./components/SkillStudio";
 import { RelayTabView } from "./components/RelayTabView";
 import { PowerStudio } from "./components/PowerStudio";
 import { McpStudio } from "./components/McpStudio";
+import { ConnectorsDialog, OPEN_CONNECTORS_EVENT } from "./components/ConnectorsDialog";
 import { ProviderStudio } from "./components/ProviderStudio";
 import { MarketplaceStudio } from "./components/MarketplaceStudio";
 import { X } from "lucide-react";
@@ -190,9 +191,21 @@ function App() {
     if (coworkOpen) setCoworkMounted(true);
   }, [coworkOpen]);
 
+  // 连接器面板：全局一个，输入框「+」菜单派发 OPEN_CONNECTORS_EVENT，IDE 命令发 open_connectors
+  const [connectorsOpen, setConnectorsOpen] = useState(false);
+  useEffect(() => {
+    const onOpen = () => setConnectorsOpen(true);
+    window.addEventListener(OPEN_CONNECTORS_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_CONNECTORS_EVENT, onOpen);
+  }, []);
+
   // App 级持有唯一 Agent 连接，所有面板共享；事件统一分发到 sessionEventBus 按 clientId 路由
   const { connected, send } = useWebSocket(WS_BASE, (msg) => {
     const m = msg as { type?: string; clientId?: string };
+    if (m.type === "open_connectors") {
+      setConnectorsOpen(true);
+      return;
+    }
     if (m.type === "set_mode") {
       const next = (m as any).mode;
       if (next === "cowork") {
@@ -559,6 +572,7 @@ function App() {
           />
         </div>
       )}
+      <ConnectorsDialog open={connectorsOpen} onClose={() => setConnectorsOpen(false)} connected={connected} send={send} />
     </div>
   );
 }

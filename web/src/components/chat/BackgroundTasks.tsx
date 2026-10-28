@@ -42,7 +42,7 @@ function formatDuration(ms: number): string {
   return `${Math.floor(min / 60)} 小时 ${min % 60} 分`;
 }
 
-export function useBackgroundTasks({ clientId, connected, send }: { clientId: string; connected: boolean; send: (cmd: Record<string, unknown>) => void }) {
+function useBackgroundTasks({ clientId, connected, send }: { clientId: string; connected: boolean; send: (cmd: Record<string, unknown>) => void }) {
   const [tasks, setTasks] = useState<BackgroundTask[]>([]);
   const [outputs, setOutputs] = useState<Record<string, TaskOutput>>({});
 

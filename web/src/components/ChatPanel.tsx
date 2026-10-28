@@ -11,7 +11,8 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { SESSION_HEADER_SLOT_ID } from "./SessionSwitcher";
 import { LiveSparkModeContext, type SparkMode } from "./AxonSpark";
-import { Loader2, ImagePlus, X, Paperclip, Plus, Camera, ChevronDown, ListChecks, Globe, NotebookPen, FolderOpen } from "lucide-react";
+import { Loader2, ImagePlus, X, Paperclip, Plus, Camera, ChevronDown, ListChecks, Globe, NotebookPen, FolderOpen, Plug } from "lucide-react";
+import { OPEN_CONNECTORS_EVENT } from "./ConnectorsDialog";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -2153,6 +2154,15 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                       >
                         <Camera className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
                         <span className="flex-1">截图</span>
+                      </button>
+
+                      <button
+                        onClick={() => { window.dispatchEvent(new Event(OPEN_CONNECTORS_EVENT)); setMenuOpen(false); }}
+                        className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs hover:bg-muted/60 transition-colors text-left"
+                        title="把 GitHub、邮箱、飞书等服务接给 Axon"
+                      >
+                        <Plug className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                        <span className="flex-1">连接器</span>
                       </button>
 
                       <div className="my-0.5 border-t border-border" />

@@ -344,6 +344,11 @@
         "enablement": "axon.chatMode != agent"
       },
       {
+        "command": "axon.connectors",
+        "title": "Axon: 连接器",
+        "icon": "$(plug)"
+      },
+      {
         "command": "axon.coworkMode",
         "title": "Axon: Cowork 模式",
         "icon": "$(table)",

@@ -10,6 +10,8 @@
 
 import type { CoworkCheck } from "../cowork/checks.js";
 import type { BackgroundTaskInfo } from "../session/backgroundTasks.js";
+import type { ConnectorTemplateInfo } from "../connectors/catalog.js";
+import type { ConnectorView } from "../connectors/store.js";
 import type { CoworkFlow, CoworkFlowInputDraft } from "../cowork/flows.js";
 import type { CreditDetail } from "../credits.js";
 import type { BillingMode, TurnCost, TurnUsage } from "../billing.js";
@@ -126,6 +128,10 @@ export type AgentEventPayload =
   | { type: "cowork_outputs"; paths: string[]; files?: { path: string; kind?: "created" | "edited"; snapshotDir?: string }[] }
   // ── Cowork 核对与流程 ──
   | { type: "cowork_checks"; checks: CoworkCheck[] }
+  // ── 连接器 ──
+  | { type: "connectors"; catalog: ConnectorTemplateInfo[]; connectors: ConnectorView[] }
+  | { type: "connector_saved"; requestId?: string; connector?: ConnectorView; error?: string }
+  | { type: "connector_test_result"; requestId?: string; ok: boolean; tools?: { name: string; description?: string }[]; error?: string }
   // ── 后台任务 ──
   | { type: "background_tasks"; tasks: (BackgroundTaskInfo & { sessionId: string; sessionTitle?: string })[] }
   | { type: "background_task_output"; requestId?: string; sessionId: string; terminalId: string; output: string; status: string; exitCode: number | null }

@@ -4,6 +4,7 @@
  * 用官方 @modelcontextprotocol/sdk 连接 MCP server：
  *   · stdio：本地子进程（command/args/env），用受控环境变量，避免把全部 env 泄给第三方 server
  *   · http：远程 Streamable HTTP（含 headers 鉴权）；URL 以 /sse 结尾时回退 SSE 传输
+ *   · builtin：Axon 内置 server（如邮箱），在本进程内经 InMemoryTransport 连接
  *
  * 设计要点（商业化健壮性）：
  *   · 错误隔离：单个 server 连接/列举失败只记日志、跳过，不抛、不拖垮其它 server 与主流程
@@ -14,6 +15,8 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { getBuiltinServer } from "./builtinMcp/index.js";
 import type { McpCapability, McpServerSpec, McpToolInfo, McpCallResult } from "@axon/core";
 
 /** 单个 server 的连接状态 */
@@ -47,6 +50,11 @@ function textifyContent(content: unknown): string {
   return parts.join("\n") || "(无输出)";
 }
 
+/** 免确认名单：精确名、"*"（全部）或前缀通配（如 "get_*"） */
+export function matchesAutoApprove(toolName: string, patterns: string[] | undefined): boolean {
+  return (patterns ?? []).some((p) => p === "*" || p === toolName || (p.endsWith("*") && toolName.startsWith(p.slice(0, -1))));
+}
+
 export class NodeMcpCapability implements McpCapability {
   private conns = new Map<string, McpConnection>();
 
@@ -75,14 +83,13 @@ export class NodeMcpCapability implements McpCapability {
     if (this.conns.has(spec.id)) return;
     const client = await this.connectClient(spec);
     const listed = await withTimeout(client.listTools(), CONNECT_TIMEOUT_MS, `列举 ${spec.id} 工具`);
-    const auto = new Set(spec.autoApprove ?? []);
     const tools: McpToolInfo[] = (listed.tools ?? []).map((t) => ({
       serverId: spec.id,
       serverName: spec.name,
       name: t.name,
       description: t.description,
       inputSchema: t.inputSchema as Record<string, unknown>,
-      autoApprove: auto.has(t.name) || auto.has("*"),
+      autoApprove: matchesAutoApprove(t.name, spec.autoApprove),
     }));
     this.conns.set(spec.id, { spec, client, tools });
     console.log(`[mcp] server "${spec.id}" 已连接，暴露 ${tools.length} 个工具`);
@@ -95,6 +102,14 @@ export class NodeMcpCapability implements McpCapability {
    *   回退必须用全新 Client——连接失败的 Client/transport 已被消费，不能复用。
    */
   private async connectClient(spec: McpServerSpec): Promise<Client> {
+    if (spec.transport === "builtin") {
+      const server = getBuiltinServer(spec.builtin).create(spec.env ?? {});
+      const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverSide);
+      const client = this.newClient();
+      await withTimeout(client.connect(clientSide), CONNECT_TIMEOUT_MS, `连接 ${spec.id}`);
+      return client;
+    }
     if (spec.transport === "stdio") {
       if (!spec.command) throw new Error(`server ${spec.id} 是 stdio 传输但缺少 command`);
       const client = this.newClient();
@@ -157,6 +172,18 @@ export class NodeMcpCapability implements McpCapability {
     const needsCmd = ["npx", "npm", "pnpm", "yarn", "uvx", "uv", "bunx"];
     if (needsCmd.includes(command.toLowerCase())) return `${command}.cmd`;
     return command;
+  }
+
+  /** 试连并列出工具，用完即断（连接器「测试连接」）。内置 server 额外真正验证一次凭证 */
+  async probe(spec: McpServerSpec): Promise<{ tools: { name: string; description?: string }[] }> {
+    if (spec.transport === "builtin") await getBuiltinServer(spec.builtin).verify?.(spec.env ?? {});
+    const client = await this.connectClient(spec);
+    try {
+      const listed = await withTimeout(client.listTools(), CONNECT_TIMEOUT_MS, `列举 ${spec.name} 工具`);
+      return { tools: (listed.tools ?? []).map((t) => ({ name: t.name, description: t.description })) };
+    } finally {
+      await client.close().catch(() => undefined);
+    }
   }
 
   /** 列出当前所有已连接 server 的工具 */

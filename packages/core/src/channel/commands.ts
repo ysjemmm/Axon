@@ -128,6 +128,13 @@ export type ControlCommandPayload =
   | { type: "cowork_delete_flow"; id: string }
   /** 把一个已完成的 Cowork 会话提炼成流程草稿（不保存，等用户确认） */
   | { type: "cowork_draft_flow"; sessionId: string; requestId?: string }
+  // 连接器（~/.axon/settings/connectors.json，密钥单独存放）
+  | { type: "connectors_list" }
+  | { type: "connector_save"; connector: unknown; requestId?: string }
+  | { type: "connector_set_enabled"; id: string; enabled: boolean }
+  | { type: "connector_delete"; id: string }
+  /** 试连：草稿（未保存）或已保存的连接器，列出它提供的工具 */
+  | { type: "connector_test"; connector: unknown; requestId?: string }
   // 后台任务（start_process 启动的进程），跨所有活跃会话
   | { type: "list_background_tasks" }
   | { type: "get_background_task_output"; sessionId: string; terminalId: string; requestId?: string }
