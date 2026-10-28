@@ -448,7 +448,14 @@ function App() {
     if (!trimmed || !tab || trimmed === tab.title) return;
     setTabs((prev) => prev.map((t) => t.key === key ? { ...t, title: trimmed } : t));
     if (tab.id) {
-      renameSession(tab.id!, trimmed).catch(() => {});
+      renameSession(tab.id!, trimmed)
+        .then((res) => {
+          // 重名时后端加了序号：以后端的最终标题为准
+          if (res?.title && res.title !== trimmed) {
+            setTabs((prev) => prev.map((t) => t.key === key ? { ...t, title: res.title! } : t));
+          }
+        })
+        .catch(() => {});
     }
   }, [tabs]);
 

@@ -19,7 +19,7 @@ import { registerMcpRoutes } from "./mcp/mcpRoutes.js";
 import { registerPowerRoutes } from "./powers/powerRoutes.js";
 import { registerMarketplaceRoutes } from "./marketplace/marketplaceRoutes.js";
 import { registerProviderRoutes } from "./providers/providerRoutes.js";
-import { RelayStore, SessionHub, AXON_PROVIDER, ProviderRegistry, refreshProviders, DEFAULT_COMPACTION_CONFIG, type AgentEvent, type ControlCommand, type CompactionUserConfig } from "@axon/core";
+import { RelayStore, SessionHub, renameSessionTitle, AXON_PROVIDER, ProviderRegistry, refreshProviders, DEFAULT_COMPACTION_CONFIG, type AgentEvent, type ControlCommand, type CompactionUserConfig } from "@axon/core";
 import { createNodeAgentHost, FileCommandTrustStore, createNodeMcpCapability } from "@axon/host-node";
 import { WsChannel } from "./wsChannel.js";
 import { webSearch, webFetch } from "./webSearch.js";
@@ -113,10 +113,12 @@ app.post("/api/sessions", async (req, res) => {
   res.json(session);
 });
 
-/** 更新会话标题 */
+/** 更新会话（目前只有重命名）：标题与其它会话去重，返回最终标题（可能带了「 (2)」序号） */
 app.patch("/api/sessions/:id", async (req, res) => {
-  await storage.updateSession(req.params.id, req.body);
-  res.json({ ok: true });
+  const { title, ...rest } = req.body || {};
+  if (Object.keys(rest).length > 0) await storage.updateSession(req.params.id, rest);
+  const finalTitle = typeof title === "string" ? await renameSessionTitle(storage, req.params.id, title) : null;
+  res.json({ ok: true, ...(finalTitle ? { title: finalTitle } : {}) });
 });
 
 /** 删除会话 */

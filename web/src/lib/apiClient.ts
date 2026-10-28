@@ -87,8 +87,8 @@ export function deleteSession(id: string): Promise<{ ok: boolean }> {
   return del(`/api/sessions/${id}`);
 }
 
-/** 重命名会话标题 */
-export function renameSession(id: string, title: string): Promise<{ ok: boolean }> {
+/** 重命名会话标题；与其它会话重名时后端会加「 (2)」序号，返回最终标题 */
+export function renameSession(id: string, title: string): Promise<{ ok: boolean; title?: string }> {
   return patch(`/api/sessions/${id}`, { title });
 }
 

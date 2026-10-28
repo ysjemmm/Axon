@@ -11,6 +11,7 @@
  * base，由 core 做三方合并。每次改写前的旧内容都留有历史版本，可以在「历史版本」里恢复。
  */
 
+import { displaySessionTitle } from "@/lib/sessionTitle";
 import { useEffect, useState } from "react";
 // 记忆用 NotebookPen（Brain 归「思考过程」独占，见 ToolCallItem 的 MemoryUpdatedRow 注释）
 import { NotebookPen, Download, History, Upload, X, RotateCcw } from "lucide-react";
@@ -230,7 +231,7 @@ export function MemoryPanel({ memory, history, onSave, onRequestHistory, onResto
                 onClick={() => pickSession(s.id)}
                 className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-left hover:bg-muted/60 transition-colors"
               >
-                <span className="flex-1 min-w-0 truncate text-[12.5px] text-foreground">{s.title || "未命名会话"}</span>
+                <span className="flex-1 min-w-0 truncate text-[12.5px] text-foreground">{displaySessionTitle(s.title) || "未命名会话"}</span>
                 <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/60">{s.memoryChars ?? 0} 字</span>
               </button>
             ))}

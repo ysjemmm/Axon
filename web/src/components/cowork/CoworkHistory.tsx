@@ -7,6 +7,7 @@
  * 它的运行时行为仍等同 agent，只是落盘时打了标记。
  */
 
+import { displaySessionTitle } from "@/lib/sessionTitle";
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, Trash2, X } from "lucide-react";
 import { deleteSession, listSessions, type SessionMeta } from "@/lib/apiClient";
@@ -113,7 +114,7 @@ export function CoworkHistory({ open, currentSessionId, onClose, onSelect }: Cow
               onClick={() => { onSelect(session.id); onClose(); }}
               className="min-w-0 flex-1 text-left"
             >
-              <span className="block truncate text-[13px] text-foreground">{session.title || "未命名任务"}</span>
+              <span className="block truncate text-[13px] text-foreground">{displaySessionTitle(session.title) || "未命名任务"}</span>
               <span className="mt-0.5 block text-[11px] text-muted-foreground">{relativeTime(session.updatedAt)}</span>
             </button>
             <button
