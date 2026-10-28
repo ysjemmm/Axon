@@ -315,6 +315,8 @@ export class PromptBuilder {
       if (isRealUserMessage(m)) userIndexes.push(i);
     });
     const reasoningBoundary = userIndexes[userIndexes.length - 1 - PromptBuilder.REASONING_KEEP_PREVIOUS_TURNS] ?? 0;
+    // 当前用户回合的起点：之后的工具轮叙述原样回传给模型（见 toRuntimeMessage）
+    const currentTurnStart = userIndexes[userIndexes.length - 1] ?? 0;
     const dropReasoning = (index: number): boolean => {
       if (index >= reasoningBoundary) return false;
       const r = (this.s.messages[index] as { reasoning_content?: unknown }).reasoning_content;
@@ -326,7 +328,15 @@ export class PromptBuilder {
       let out: ChatCompletionMessageParam = m;
       if (anyMsg.role === "assistant" && Array.isArray(anyMsg.tool_calls)) {
         const { displayContent, runtimeContent, ...rest } = anyMsg;
-        out = { ...rest, content: runtimeContent || null } as ChatCompletionMessageParam;
+        // 工具轮叙述：当前回合原样回传，之前回合不发（见 toolTurnMessage 文件头）。
+        // 一律不发时，模型在历史里看到的自己"只调工具、从不说话"，这比系统提示里的
+        // 叙述纪律更有说服力——一轮里越往后正文越少，最后只剩一串工具卡片。
+        // 之前回合仍然不发，避免过渡叙述跨轮成为照抄的范例；分界与思考清空是同一处，
+        // 新回合时前缀在同一个位置断开，不额外破费缓存。
+        const prose = index >= currentTurnStart && typeof displayContent === "string" && displayContent.trim()
+          ? displayContent
+          : null;
+        out = { ...rest, content: runtimeContent || prose } as ChatCompletionMessageParam;
       }
       if (anyMsg.role === "user" && anyMsg._contextInjections) {
         const { _contextInjections, ...rest } = anyMsg;

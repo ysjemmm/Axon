@@ -236,3 +236,40 @@ describe("当前用户回合的 reasoning_content：原样回传", () => {
     }
   });
 });
+
+describe("工具轮叙述（displayContent）：当前回合回传，之前回合不发", () => {
+  function toolTurn(id: string, prose: string | null): any {
+    return {
+      role: "assistant",
+      content: null,
+      reasoning_content: `思考${id}`,
+      displayContent: prose,
+      runtimeContent: null,
+      tool_calls: [{ id, type: "function", function: { name: "read_file", arguments: "{}" } }],
+    };
+  }
+
+  it("当前回合：叙述作为 content 回传；之前回合：content 仍为 null", () => {
+    const history = [
+      { role: "system", content: "system prompt" },
+      { role: "user", content: "第一轮" },
+      toolTurn("old", "先看下路由配置"),
+      { role: "tool", tool_call_id: "old", content: "ok" },
+      { role: "assistant", content: "完成" },
+      { role: "user", content: "按方向 A 实现" },
+      toolTurn("now1", "先定位历史会话面板的代码"),
+      { role: "tool", tool_call_id: "now1", content: "ok" },
+      toolTurn("now2", null),
+      { role: "tool", tool_call_id: "now2", content: "ok" },
+    ];
+    const s = new AgentSession("d:\\projects\\Axon", channelStub, minimalHost(), history as any);
+    s.compactionConfig.enabled = false;
+    const assistants = s.promptBuilder
+      .buildRequestMessages()
+      .filter((m: any) => m.role === "assistant" && Array.isArray(m.tool_calls));
+
+    expect(assistants.map((a: any) => a.content)).toEqual([null, "先定位历史会话面板的代码", null]);
+    // 内部字段不泄漏
+    for (const a of assistants) expect((a as any).displayContent).toBeUndefined();
+  });
+});
