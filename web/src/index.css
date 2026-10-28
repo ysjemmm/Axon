@@ -1091,19 +1091,6 @@ body.vscode-high-contrast {
     opacity: 0.85;
   }
 
-  /* Cowork 场景：全部停在"画完"的静态姿态。
-     对勾尤其要把 dashoffset 归零，否则停在起点等于整条线不可见。 */
-  .cowork-scene__paper-back,
-  .cowork-scene__paper-main,
-  .cowork-scene__pen,
-  .cowork-scene__row,
-  .cowork-scene__mote,
-  .cowork-scene__check {
-    animation: none;
-    transform: none;
-    opacity: 1;
-    stroke-dashoffset: 0;
-  }
 
   /* 退回纯色文字：连渐变一起撤掉，避免停在某个相位上留下一道静态亮斑 */
   .axon-text-shimmer {
@@ -1629,78 +1616,6 @@ body.vscode-high-contrast {
   .axon-send-stop-icon__trail {
     transition-duration: 0.01ms !important;
   }
-}
-
-/* ── Cowork 空态场景动画（CoworkScene）──
-   约束与 axon-spark / axon-bloom 同源：只动 transform 与 opacity，绝不动 stroke-width
-   （后者在小尺寸下落进次像素区间，抗锯齿覆盖率跳档 = 真实抖动）；
-   同组元素共用一个 duration，靠负 delay 错相，避免互质周期叠加产生节拍。 */
-
-/* 两张纸：极缓慢的轻微起伏，像纸面呼吸 */
-@keyframes cowork-paper-float {
-  0%, 100% { transform: translateY(0) rotate(0deg); }
-  50% { transform: translateY(-2.5px) rotate(-0.4deg); }
-}
-
-.cowork-scene__paper-back {
-  transform-origin: 86px 82px;
-  animation: cowork-paper-float 7s ease-in-out infinite;
-}
-
-.cowork-scene__paper-main {
-  transform-origin: 101px 95px;
-  /* 与后层同周期、反相（负延迟半个周期）：两张纸一上一下，层次感来自相位差而非不同速度 */
-  animation: cowork-paper-float 7s ease-in-out infinite;
-  animation-delay: -3.5s;
-}
-
-/* 数据条：逐行亮起并轻微右展，像正在被填入 */
-@keyframes cowork-row-fill {
-  0%, 12% { opacity: 0.25; transform: scaleX(0.55); }
-  40%, 68% { opacity: 1; transform: scaleX(1); }
-  100% { opacity: 0.25; transform: scaleX(0.55); }
-}
-
-.cowork-scene__row {
-  transform-origin: left center;
-  animation: cowork-row-fill 2.8s ease-in-out infinite;
-}
-
-/* 笔：极轻微的摆动，支点在笔尾 */
-@keyframes cowork-pen-sway {
-  0%, 100% { transform: rotate(0deg); }
-  50% { transform: rotate(-2.2deg); }
-}
-
-.cowork-scene__pen {
-  transform-origin: 175px 42px;
-  animation: cowork-pen-sway 5.5s ease-in-out infinite;
-}
-
-/* 数据碎片：缓慢上浮 + 明暗呼吸，到顶后淡出重来 */
-@keyframes cowork-mote-drift {
-  0% { opacity: 0; transform: translateY(6px) scale(0.7); }
-  25% { opacity: 0.7; }
-  70% { opacity: 0.55; }
-  100% { opacity: 0; transform: translateY(-12px) scale(1.1); }
-}
-
-.cowork-scene__mote {
-  animation: cowork-mote-drift 4.2s ease-in-out infinite;
-}
-
-/* 对勾：用 dash 偏移做"描画"效果，画完停一会儿再重来。
-   dasharray 是几何属性不参与逐像素抗锯齿跳档，与 stroke-width 不同，可以安全动画。 */
-@keyframes cowork-check-draw {
-  0%, 8% { stroke-dashoffset: 46; opacity: 0; }
-  26% { opacity: 1; }
-  52%, 82% { stroke-dashoffset: 0; opacity: 1; }
-  100% { stroke-dashoffset: 0; opacity: 0; }
-}
-
-.cowork-scene__check {
-  stroke-dasharray: 46;
-  animation: cowork-check-draw 5.6s ease-in-out infinite;
 }
 
 /* ── Chat / Code / Cowork 模式切换：一个胶囊 + 滑动的凸起指示块 ──
