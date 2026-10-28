@@ -327,7 +327,8 @@ export class PromptBuilder {
       const anyMsg = m as any;
       let out: ChatCompletionMessageParam = m;
       if (anyMsg.role === "assistant" && Array.isArray(anyMsg.tool_calls)) {
-        const { displayContent, runtimeContent, ...rest } = anyMsg;
+        // displayGroupSummary：前端折叠行标题，纯展示字段，不发给 provider
+        const { displayContent, runtimeContent, displayGroupSummary, ...rest } = anyMsg;
         // 工具轮叙述：当前回合原样回传，之前回合不发（见 toolTurnMessage 文件头）。
         // 一律不发时，模型在历史里看到的自己"只调工具、从不说话"，这比系统提示里的
         // 叙述纪律更有说服力——一轮里越往后正文越少，最后只剩一串工具卡片。

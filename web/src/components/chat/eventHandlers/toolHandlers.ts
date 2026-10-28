@@ -420,3 +420,27 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
     return prev;
   });
 }
+
+/**
+ * 折叠组摘要：后端在一组工具结束后异步生成（可能晚于下一段正文、甚至下一轮才到），
+ * 所以从最新消息往前找，把摘要挂到对应工具段上。找不到（会话已切走 / 段被压缩）就忽略。
+ */
+export function handleToolGroupSummary(msg: WsMessage, ctx: EventHandlerCtx): void {
+  const toolCallId = (msg as any).toolCallId as string | undefined;
+  const summary = (msg as any).summary as string | undefined;
+  if (!toolCallId || !summary) return;
+  ctx.setChatHistory((prev) => {
+    for (let m = prev.length - 1; m >= 0; m--) {
+      const segs = prev[m].segments;
+      if (!segs) continue;
+      const idx = segs.findIndex((s) => s.type === "tool" && s.id === toolCallId);
+      if (idx < 0) continue;
+      const nextSegs = [...segs];
+      nextSegs[idx] = { ...(segs[idx] as ToolSegment), groupSummary: summary };
+      const next = [...prev];
+      next[m] = { ...prev[m], segments: nextSegs };
+      return next;
+    }
+    return prev;
+  });
+}

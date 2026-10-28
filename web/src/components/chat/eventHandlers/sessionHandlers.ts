@@ -117,6 +117,9 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
         currentAssistant.turnStatus = persisted === "cancelled" || persisted === "error" ? persisted : "success";
       }
 
+      // 折叠组摘要落在组内第一条工具轮消息上（见后端 summarizeToolGroups）
+      const groupSummary = (m as any).displayGroupSummary as { toolCallId?: string; text?: string } | undefined;
+
       if (hasToolCalls) {
         for (const tc of m.tool_calls) {
           let tcArgs: Record<string, unknown> = {};
@@ -168,6 +171,7 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
             args: tcArgs,
             command: (toolName === "execute_command" || toolName === "start_process") ? (tcArgs.command as string) : undefined,
             query: isExplore ? exploreDisplayText(toolName, tcArgs) : undefined,
+            groupSummary: groupSummary?.toolCallId === tc.id ? groupSummary?.text || undefined : undefined,
           });
         }
       }

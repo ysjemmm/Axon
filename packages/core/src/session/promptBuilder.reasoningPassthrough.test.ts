@@ -273,3 +273,14 @@ describe("工具轮叙述（displayContent）：当前回合回传，之前回�
     for (const a of assistants) expect((a as any).displayContent).toBeUndefined();
   });
 });
+
+describe("displayGroupSummary 是纯展示字段", () => {
+  it("不发给 provider", () => {
+    const history = historyWithReasoningToolTurn();
+    history[2].displayGroupSummary = { toolCallId: "call_1", text: "查看了 a.ts" };
+    const s = new AgentSession("d:\\projects\\Axon", channelStub, minimalHost(), history);
+    s.compactionConfig.enabled = false;
+    const a = s.promptBuilder.buildRequestMessages().find((m: any) => m.role === "assistant" && Array.isArray(m.tool_calls));
+    expect((a as any).displayGroupSummary).toBeUndefined();
+  });
+});

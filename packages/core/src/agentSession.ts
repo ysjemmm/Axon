@@ -68,6 +68,7 @@ import { TokenAccountant } from "./session/tokenAccountant.js";
 import { ToolDefBuilder } from "./session/toolDefBuilder.js";
 import { McpController } from "./session/mcpController.js";
 import { buildToolTurnAssistantMessage } from "./session/toolTurnMessage.js";
+import { ToolGroupTracker, generateToolGroupSummary, type ClosedToolGroup } from "./session/toolGroupSummary.js";
 import { DelegateRunner } from "./session/delegateRunner.js";
 import { RelayToolRunner } from "./session/relayToolRunner.js";
 import { AskUserToolExecutor, type AskUserQuestion, type AskUserAnswer } from "./session/askUserToolExecutor.js";
@@ -348,6 +349,8 @@ export class AgentSession {
   private snapshotPaths: string[] = [];
   /** 本轮已生成的意图文案：作为阶段文案的上下文，让两者对得上同一个目标。 */
   private humanizedIntent = "";
+  /** 本轮连续工具调用的分组追踪：一组结束时用当前模型生成一句话摘要（见 toolGroupSummary） */
+  private toolGroupTracker = new ToolGroupTracker();
 
   constructor(cwd: string, channel: AgentChannel, host: AgentHost, existingMessages?: ChatCompletionMessageParam[], workspaces?: string[], homeDir?: string, web?: WebCapability, mode: "agent" | "quest" = "agent", mcp?: McpCapability, commandGate?: CommandGate) {
     this.mode = mode;
@@ -1721,6 +1724,43 @@ export class AgentSession {
    * 办公任务报错。也不复用 this.abortController 之外的信号 —— 用户点停止时这条
    * 请求要跟着一起断，否则会在任务已取消后又推一条状态上来。
    */
+  /**
+   * 为已结束的工具分组生成一句话摘要，推给前端并落盘到组内第一条工具轮消息上。
+   *
+   * 只对 Chat Completions 协议的模型生成（DeepSeek / Qwen / GLM 等）；Cowork 不展示工具调用，
+   * 不需要。fire-and-forget：失败、超时、用户取消都直接放弃，前端照常只显示统计。
+   */
+  private summarizeToolGroups(strategy: LLMStrategy, groups: ClosedToolGroup[]): void {
+    if (groups.length === 0 || strategy.name !== "chat_completions" || this.humanizedStatus) return;
+    const model = this.model;
+    const modelSupportsThinking = declaredThinkingFor(this.model, this.provider);
+    const request = this.lastUserInput?.content ?? "";
+    const signal = this.abortController?.signal;
+    for (const group of groups) {
+      void (async () => {
+        try {
+          const summary = await generateToolGroupSummary({
+            strategy, model, request, actions: group.actions, modelSupportsThinking, signal,
+          });
+          if (!summary) return;
+          const toolCallId = group.anchorToolCallId;
+          this.send("tool_group_summary", { toolCallId, summary });
+          // 落盘：重开会话时前端从这里还原折叠行标题。消息已被压缩掉就不必再记。
+          const owner = this.messages.find((m) => {
+            const calls = (m as { tool_calls?: Array<{ id: string }> }).tool_calls;
+            return m.role === "assistant" && Array.isArray(calls) && calls.some((tc) => tc.id === toolCallId);
+          });
+          if (owner) {
+            (owner as any).displayGroupSummary = { toolCallId, text: summary };
+            this.persistMessages();
+          }
+        } catch {
+          // 摘要只是锦上添花：任何失败都不影响主流程
+        }
+      })();
+    }
+  }
+
   private async emitHumanizedIntent(
     strategy: ReturnType<typeof getStrategy>,
     input: string,
@@ -2679,6 +2719,7 @@ export class AgentSession {
     this.send("status", { content: "思考中...", phase: "thinking" });
     this.humanizedState = createHumanizedStatusState();
     this.humanizedIntent = "";
+    this.toolGroupTracker = new ToolGroupTracker();
     if (this.humanizedStatus) {
       // 不 await：生成失败/超时都不该挡住主流程，用户宁可看到保底文案也不要干等。
       void this.emitHumanizedIntent(strategy, input, userMeta?.attachedFiles);
@@ -2877,6 +2918,8 @@ export class AgentSession {
           this.stampCancelledTurnStats(turnStartTime, streamedContentThisRound);
           return;
         }
+        // 出现可见正文 = 前端的折叠组到此结束（空回复 / 弱内容不切断，与前端口径一致）
+        this.summarizeToolGroups(strategy, this.toolGroupTracker.onRound(contentBuffer, []));
         const outcome = await this.handleNoToolCallTurn(contentBuffer, finishReason, guard, ts, mutatedFiles, turnStartTime, streamedContentThisRound, rounds, commitPendingText, turn.anthropicThinkingBlocks, turn.reasoningContent);
         if (outcome === "done") return;
         continue;
@@ -2931,6 +2974,7 @@ export class AgentSession {
         anthropicThinkingBlocks: turn.anthropicThinkingBlocks,
       });
       this.messages.push(assistantMsg);
+      this.summarizeToolGroups(strategy, this.toolGroupTracker.onRound(contentBuffer, toolCalls));
 
       // 工具轮执行：由新链路 DefaultToolDispatchHandler 编排（驱动 plan→execute→complete 状态机），
       // 每个工具的实际执行/门控/前端事件/落盘复用已验证的 executeSingleToolCall

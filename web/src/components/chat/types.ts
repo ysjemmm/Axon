@@ -33,6 +33,8 @@ export interface TextSegment {
 export interface ToolSegment {
   type: "tool";
   id: string;
+  /** 以本工具开头的折叠组的一句话摘要（模型生成，见 activityGroup.ts）；没有时折叠行只显示统计 */
+  groupSummary?: string;
   /** 是否已绑定后端真实工具调用 id（true 后不再被同名事件抢占匹配） */
   boundId?: boolean;
   name: string;
