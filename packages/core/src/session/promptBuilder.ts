@@ -68,24 +68,29 @@ export class PromptBuilder {
   private turnFrozen: FrozenInjections | null = null;
 
   /**
-   * 保留最近多少轮的 reasoning_content 原样回传，更早的【清空内容、保留字段】。
+   * 除当前用户回合外，再保留最近几个**用户回合**的 reasoning_content；更早的【清空内容、保留字段】。
    *
-   * ── 为什么是 0（全部清空）而不是"保留最近三轮" ──
+   * ── 边界是「用户回合」，不是「带思考的消息条数」 ──
+   * 当前回合（最后一条真实用户消息之后）的思考必须原样回传：做到第 5 步时，模型要看得到
+   * 自己前 4 步是怎么想的，否则只能凭 tool_calls 重新推一遍思路——每一步都从
+   * 「用户让我按方向 A……」重新起头，正是要消除的那种复述。DeepSeek 官方文档同样要求
+   * 带 tools 时本回合的 reasoning_content 完整回传（见 turnFinalizer），其服务端对更早回合
+   * 的思考本来也会丢弃。早先按条数清（值为 0 时连当前回合一起清空）就踩了这一点。
+   *
+   * ── 为什么之前的回合是 0（全部清空）而不是"保留最近三轮" ──
    * 先试过保留最近 3 轮，实测无效：那 3 轮本身就已经是同一种句式的复制品
    * （"用户选择了X，我先摸清Y"），保留下来等于把 3 个范例原样喂回去，模型照抄。
    * 这类重复只需要【一个】样本就足以形成 few-shot，所以「少留几轮」不解决问题，必须清零。
-   *
-   * ── 为什么必须清空的是历史，而不是指望系统提示 ──
-   * 重复发生在思考块（reasoning_content）里，系统提示只能约束可见正文，管不到模型的内部推理。
-   * 唯一能影响它的是它"看到自己上几轮是怎么想的"——不给它看，就没有可模仿的模板。
    *
    * ── 为什么清内容而不是删字段 ──
    * 部分端点对「带 tool_calls 却缺 reasoning_content」会直接报错，保留空字符串既满足
    * 字段存在性，又不引入任何语义。任务脉络仍由 tool_calls 与工具结果完整承载，不缺信息。
    *
-   * 想调回"保留最近 N 轮"就把这个值改成 N（N > 0），规则链无需改动。
+   * ── 缓存代价 ──
+   * 回合之内被清空的集合不变，每一步的前缀逐字节稳定；只有新回合开始时，上一回合的思考
+   * 从「有内容」变成「空」，前缀从上一回合的第一条思考处断开一次（每回合一次，不是每步一次）。
    */
-  private static readonly REASONING_KEEP_RECENT = 0;
+  private static readonly REASONING_KEEP_PREVIOUS_TURNS = 0;
 
   /** 每轮开头调用：按当前状态定格本轮的易变注入 */
   beginTurn(): void {
@@ -304,15 +309,17 @@ export class PromptBuilder {
     const ephemeralTail: ChatCompletionMessageParam[] = [];
     const preFiltered: ChatCompletionMessageParam[] = [];
 
-    // 找出所有带思考的消息位置：最老的若干条要清空内容
-    const reasoningIndexes: number[] = [];
+    // 清空边界：倒数第 (KEEP_PREVIOUS_TURNS + 1) 条真实用户消息。它之前的思考清空内容，之后的原样回传
+    const userIndexes: number[] = [];
     this.s.messages.forEach((m, i) => {
-      const r = (m as { reasoning_content?: unknown }).reasoning_content;
-      if (typeof r === "string" && r.length > 0) reasoningIndexes.push(i);
+      if (isRealUserMessage(m)) userIndexes.push(i);
     });
-    const dropReasoning = new Set(
-      reasoningIndexes.slice(0, Math.max(0, reasoningIndexes.length - PromptBuilder.REASONING_KEEP_RECENT)),
-    );
+    const reasoningBoundary = userIndexes[userIndexes.length - 1 - PromptBuilder.REASONING_KEEP_PREVIOUS_TURNS] ?? 0;
+    const dropReasoning = (index: number): boolean => {
+      if (index >= reasoningBoundary) return false;
+      const r = (this.s.messages[index] as { reasoning_content?: unknown }).reasoning_content;
+      return typeof r === "string" && r.length > 0;
+    };
 
     const toRuntimeMessage = (m: ChatCompletionMessageParam, index: number): ChatCompletionMessageParam => {
       const anyMsg = m as any;
@@ -325,8 +332,8 @@ export class PromptBuilder {
         const { _contextInjections, ...rest } = anyMsg;
         out = rest as ChatCompletionMessageParam;
       }
-      // 旧轮思考清空内容（字段保留）：防止历史里累积的同质思考把模型带向重复
-      if (dropReasoning.has(index)) {
+      // 之前回合的思考清空内容（字段保留）：防止历史里累积的同质思考把模型带向重复
+      if (dropReasoning(index)) {
         return {
           ...(out as unknown as Record<string, unknown>),
           reasoning_content: "",

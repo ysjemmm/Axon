@@ -84,7 +84,7 @@ describe("缓存友好模型：上下文注入锚在本轮用户消息之前", (
     }
   });
 
-  it("跨轮：上一轮的请求是新一轮首个请求的完整前缀，且只补发变化的注入", () => {
+  it("跨轮：上一轮的请求（思考清空后）是新一轮首个请求的完整前缀，且只补发变化的注入", () => {
     const s = makeSession({ ideContextCache: "IDE v1", skillsPromptCache: "SKILLS" });
     startTurn(s, "第一轮");
     toolStep(s);
@@ -95,9 +95,15 @@ describe("缓存友好模型：上下文注入锚在本轮用户消息之前", (
     startTurn(s, "第二轮");
     const firstOfTurn2 = s.promptBuilder.buildRequestMessages();
 
-    expect(json(firstOfTurn2).slice(0, lastOfTurn1.length)).toEqual(lastOfTurn1);
+    // 上一回合的思考在新回合里被清空内容（见 PromptBuilder.REASONING_KEEP_PREVIOUS_TURNS），
+    // 这是每回合一次的预期断点；除此之外，上一回合的请求原样是新回合的前缀
+    const clearedTurn1 = lastOfTurn1.map((m) => {
+      const msg = JSON.parse(m);
+      return JSON.stringify(msg.reasoning_content ? { ...msg, reasoning_content: "" } : msg);
+    });
+    expect(json(firstOfTurn2).slice(0, clearedTurn1.length)).toEqual(clearedTurn1);
     // 新增部分 = 变化的 IDE 上下文 + 第二轮用户消息；渲染协议、skills 没变，不重发
-    expect(firstOfTurn2.slice(lastOfTurn1.length).map((m: any) => m.content)).toEqual(["IDE v2", "第二轮"]);
+    expect(firstOfTurn2.slice(clearedTurn1.length).map((m: any) => m.content)).toEqual(["IDE v2", "第二轮"]);
   });
 
   it("某项注入在新一轮消失时，补一条作废说明", () => {
