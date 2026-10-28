@@ -10,6 +10,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { SESSION_HEADER_SLOT_ID } from "./SessionSwitcher";
+import { LiveSparkModeContext, type SparkMode } from "./AxonSpark";
 import { Loader2, ImagePlus, X, Paperclip, Plus, Camera, ChevronDown, ListChecks, Globe, NotebookPen, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -179,6 +180,18 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   const lastMessage = session.chatHistory[session.chatHistory.length - 1];
   const assistantTurnStarted = lastMessage?.role === "assistant" && !!lastMessage.streaming;
   const liveAssistantStatus = session.isLoading && assistantTurnStarted ? session.statusText : undefined;
+  // 回复头部星芒的动作：等用户 > 压缩 > 输出正文 > 执行工具 > 思考
+  const sparkMode: SparkMode =
+    session.askUser || session.formRequest || session.toolConfirm || session.compactionNeeded
+      || session.creditBudgetPaused || Object.keys(session.commandApprovals).length > 0
+      ? "wait"
+      : session.isCompacting
+        ? "compact"
+        : session.statusPhase === "responding"
+          ? "write"
+          : ["tool", "acting", "executing", "running"].includes(session.statusPhase)
+            ? "tool"
+            : "think";
   /**
    * 本轮（末尾往前数、遇到第一条 user 消息为止）是否已建出 assistant 消息、它是否仍在流式。
    *
@@ -1575,6 +1588,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
 
   return (
     <PanelClientIdContext.Provider value={clientId}>
+    <LiveSparkModeContext.Provider value={sparkMode}>
     <div className="flex flex-col h-full overflow-hidden">
       {/* 消息列表。
           空态时不吃满剩余高度（flex-none + 内容自适应），把空间让给下方的输入区，
@@ -2362,6 +2376,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
         onClose={() => setMemoryOpen(false)}
       />
     )}
+    </LiveSparkModeContext.Provider>
     </PanelClientIdContext.Provider>
   );
 }

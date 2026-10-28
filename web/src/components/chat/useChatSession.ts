@@ -803,7 +803,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
   return {
     // 状态
     chatHistory, isLoading, isLoadingSession,
-    tokenUsage, reasoning, statusText,
+    tokenUsage, reasoning, statusText, statusPhase,
     turnStartTime: turnStartedAt,
     isCompacting, compactingMessage, compactSession, compactionNeeded, compactionMigrated, chooseCompaction, navigateToMigratedSession,
     creditBudgetPaused, chooseCreditBudget,
