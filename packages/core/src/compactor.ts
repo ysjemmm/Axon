@@ -13,6 +13,7 @@
 
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { DEFAULT_CONTEXT_WINDOW } from "./llm/modelContext.js";
+import { estimateChatMessagesTokens } from "./llm/tokenEstimator.js";
 import type { LLMStrategy } from "./llm/types.js";
 import { NO_TRUNCATE_TOOLS } from "./tools/catalog.js";
 import { parseMemoryUpdates, renderMemoryForModel, type MemoryUpdate } from "./session/memoryStore.js";
@@ -53,6 +54,42 @@ export interface CompactionUserConfig {
    * 仅为兼容旧的宿主注入保留。工具结果改为写入历史时按单次上限一次裁到位（capToolContent）。
    */
   toolResultKeepTurns: number;
+  /**
+   * 自动压缩线：auto = 按窗口留出余量（见 autoCompactThreshold，约 75%~85%）；
+   * early = 不超过窗口一半就压，换更稳的回复质量与更低的单轮成本。
+   */
+  autoCompactAt: AutoCompactMode;
+}
+
+export type AutoCompactMode = "auto" | "early";
+
+/**
+ * 余量 = 窗口 15%，夹在 [32k, 160k]：
+ * - 下限 32k：一次回答里连读十几个文件、跑几条命令就能涨这么多，小窗口模型按比例算会不够；
+ * - 上限 160k：1M 窗口按比例要留 150k，再多就是白白空着。
+ */
+const AUTO_COMPACT_RESERVE_RATIO = 0.15;
+const AUTO_COMPACT_RESERVE_MIN = 32_000;
+const AUTO_COMPACT_RESERVE_MAX = 160_000;
+/** 无论窗口多小，自动压缩线都不低于窗口一半（否则小窗口模型几乎每轮都在压） */
+const AUTO_COMPACT_FLOOR_RATIO = 0.5;
+/** early 模式的压缩线 */
+const EARLY_COMPACT_RATIO = 0.5;
+
+/**
+ * 自动压缩线（token）。按「窗口 − 余量」算，而不是固定比例：
+ * 固定 75% 在 128k 模型上只剩 32k 余量，一次长回答就能撞上限；在 1M 模型上却空着 250k。
+ *   128k → 96k（75%）· 200k → 168k（84%）· 1M → 850k（85%）
+ * 前后端（上下文面板的刻度与「距自动压缩还剩」）都以这里为准。
+ */
+export function autoCompactThreshold(contextWindow: number, mode: AutoCompactMode = "auto"): number {
+  if (!(contextWindow > 0)) return 0;
+  const reserve = Math.min(
+    AUTO_COMPACT_RESERVE_MAX,
+    Math.max(AUTO_COMPACT_RESERVE_MIN, Math.round(contextWindow * AUTO_COMPACT_RESERVE_RATIO)),
+  );
+  const auto = Math.max(Math.round(contextWindow * AUTO_COMPACT_FLOOR_RATIO), contextWindow - reserve);
+  return mode === "early" ? Math.min(auto, Math.round(contextWindow * EARLY_COMPACT_RATIO)) : auto;
 }
 
 /**
@@ -69,13 +106,14 @@ export const DEFAULT_COMPACTION_CONFIG: CompactionUserConfig = {
   keepRecentMessages: 8,
   toolResultPruneChars: 800,
   toolResultKeepTurns: 2,
+  autoCompactAt: "auto",
 };
 
 /**
  * 检查是否需要压缩。
  * @param totalTokens 当前累计 token（优先传 API 返回的真实值）
  * @param maxTokens 当前模型的真实上下文窗口
- * @param thresholdPercent 触发阈值百分比，默认 0.35（手动压缩用）。auto 压缩用 0.75
+ * @param thresholdPercent 触发阈值百分比，默认 0.35（手动压缩用）。自动压缩线见 autoCompactThreshold
  */
 export function needsCompaction(totalTokens: number, maxTokens = DEFAULT_CONTEXT_WINDOW, thresholdPercent = DEFAULT_CONFIG.triggerPercent): boolean {
   return totalTokens > maxTokens * thresholdPercent;
@@ -176,6 +214,87 @@ export async function compactMessages(
     { role: "assistant" as const, content: "明白，我已了解之前的对话内容。" },
     ...recentMessages,
   ];
+}
+
+/**
+ * 回答进行中的压缩（两轮工具调用之间触发）：当前这条用户请求必须原样留在上下文里。
+ *
+ * compactMessages 按「最近 N 条」切：一次回答里连着十几轮工具调用时，最近 N 条全是工具轮，
+ * 用户这一轮问了什么反而被压进摘要——模型接着干活却看不到原始要求。这里改成：
+ *
+ * ① 本轮（当前用户消息起）不大：只压更早的对话，本轮原样保留，与回合间压缩效果一样；
+ * ② 本轮自己就很大（读了一堆大文件）：本轮前面的工具轮也进摘要，但用户消息原样钉在摘要之后，
+ *    后面接着最近几轮工具调用（按 token 预算保留，至少保留最后一整轮）。
+ *
+ * 切割点同样不拆散 assistant(tool_calls) 与其 tool 结果。压不出东西时原样返回（调用方据此判断）。
+ *
+ * @param turnStart 当前用户消息在 messages 里的下标（≥1）
+ * @param keepTokens 保留部分的 token 预算（本地估算口径）
+ */
+export async function compactKeepingCurrentTurn(
+  messages: ChatCompletionMessageParam[],
+  strategy: LLMStrategy,
+  model: string,
+  turnStart: number,
+  keepTokens: number,
+  opts: SummaryOptions = {},
+): Promise<ChatCompletionMessageParam[]> {
+  if (turnStart < 1 || turnStart >= messages.length) return messages;
+  const systemMsg = messages[0];
+  const before = messages.slice(1, turnStart);
+  const userMsg = messages[turnStart];
+  const turn = messages.slice(turnStart + 1);
+  // 本轮之前只剩上次压缩留下的「摘要 + 确认」：再摘一遍省不出空间
+  const beforeHasContent = before.some((m) => !isSummaryMessage(m) && !isSummaryAck(m) && !isEphemeral(m));
+
+  let old: ChatCompletionMessageParam[];
+  let kept: ChatCompletionMessageParam[];
+  let pinned = false;
+  if (beforeHasContent && estimateChatMessagesTokens([userMsg, ...turn]) <= keepTokens) {
+    old = before;
+    kept = [userMsg, ...turn];
+  } else {
+    // 从末尾往前按预算保留，再对齐到完整回合边界
+    let keepCount = 0;
+    let used = 0;
+    for (let i = turn.length - 1; i >= 0; i--) {
+      used += estimateChatMessagesTokens([turn[i]]);
+      if (keepCount > 0 && used > keepTokens) break;
+      keepCount++;
+    }
+    const split = alignSplitIndex(turn, keepCount);
+    if (split <= 0) {
+      if (!beforeHasContent) return messages;
+      old = before;
+      kept = [userMsg, ...turn];
+    } else {
+      old = [...before, userMsg, ...turn.slice(0, split)];
+      kept = [userMsg, ...turn.slice(split)];
+      pinned = true;
+    }
+  }
+
+  const prevSummary = old.find(isSummaryMessage);
+  const prevSummaryText = typeof prevSummary?.content === "string" ? prevSummary.content.replace("[对话历史摘要]\n", "") : "";
+  let summary = await generateMergedSummary(prevSummaryText, old.filter((m) => !isEphemeral(m)), strategy, model, opts);
+  if (pinned) {
+    summary += "\n\n（摘要末尾是当前这条请求下已经完成的步骤。请求原文见下一条消息，在已完成的基础上继续，不要重做。）";
+  }
+  return [
+    systemMsg,
+    { role: "user" as const, content: `[对话历史摘要]\n${summary}` },
+    { role: "assistant" as const, content: "明白，我已了解之前的对话内容。" },
+    ...kept,
+  ];
+}
+
+function isSummaryAck(msg: ChatCompletionMessageParam): boolean {
+  return msg?.role === "assistant" && typeof msg.content === "string" && msg.content.startsWith("明白，我已了解");
+}
+
+/** 单轮临时注入（反思引导等）：不属于对话事实，不进摘要 */
+function isEphemeral(msg: ChatCompletionMessageParam): boolean {
+  return !!(msg as { _ephemeralInjected?: boolean })._ephemeralInjected;
 }
 
 /** 工具调用 → 一行「工具名 + 关键参数」：摘要要知道改了哪个文件、跑了什么命令，而不只是「(工具调用)」 */
@@ -454,7 +573,7 @@ export function buildFallbackSummary(prevSummary: string, messages: ChatCompleti
 // 滚动摘要（rolling summary）—— 每累计一定量新 token 后，异步把"旧消息"压成摘要
 //
 // 与 compactMessages 的区别：
-// - compactMessages：一次性大压缩（手动 / 75% / 溢出触发），保留最近 8 条
+// - compactMessages：一次性大压缩（手动 / 自动压缩线 / 溢出触发），保留最近 12 条
 // - rollingSummary：增量式小压缩（每累计 ~30K token 触发），保留最近 N 条，
 //   把上一段摘要 + 中间消息合并成新的摘要，保持上下文体积始终稳定在低位
 //

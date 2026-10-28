@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PromptBuilder } from "./promptBuilder.js";
+import { autoCompactThreshold } from "../compactor.js";
 
 /**
  * 回归：缓存友好模型（DeepSeek / Qwen / GLM 等）的上下文注入锚在本轮用户消息之前。
@@ -24,6 +25,8 @@ function makeSession(overrides: Record<string, unknown> = {}) {
     memory: "",
     lastTotalTokens: 0,
     getContextWindow: () => 1_000_000,
+    // 与 AgentSession.getAutoCompactAt 同一算法（1M 窗口 → 850k）
+    getAutoCompactAt(this: any) { return autoCompactThreshold(this.getContextWindow()); },
     // 产物目录注入会读它；默认给空串（等于「还没定下来」），需要它的用例自己覆盖
     getArtifactDir: () => "",
     ...overrides,
@@ -222,7 +225,7 @@ describe("运行环境与未开启能力的注入", () => {
 });
 
 describe("上下文使用率提醒只在当前这一轮发", () => {
-  const busy = () => makeSession({ lastTotalTokens: 800_000, getContextWindow: () => 1_000_000 });
+  const busy = () => makeSession({ lastTotalTokens: 880_000, getContextWindow: () => 1_000_000 });
 
   it("不进落盘的快照", () => {
     const s = busy();

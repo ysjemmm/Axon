@@ -173,6 +173,17 @@
           "scope": "resource",
           "markdownDescription": "压缩时保留最近多少条消息的原文不压缩。\n\n- **值越大**：AI 能看到更多近期原文上下文，理解更连贯；但上下文体积更大\n- **值越小**：压缩更激进，体积更小，但可能丢失近期上下文细节\n\n默认 8（约 3-4 轮完整对话）。"
         },
+        "axon.compaction.autoCompactAt": {
+          "type": "string",
+          "enum": ["auto", "early"],
+          "enumDescriptions": [
+            "按模型窗口留出余量再压缩（128k≈75%、200k≈84%、1M≈85%）",
+            "用到窗口一半就压缩：回复更稳、单轮更省，代价是压缩更频繁"
+          ],
+          "default": "auto",
+          "scope": "resource",
+          "markdownDescription": "**自动压缩线**：上下文用到这条线时压缩早期对话。\n\n- **auto（默认）**：按窗口留出余量（窗口 15%，夹在 32k–160k），留给一次长回答继续读文件、跑命令\n- **early**：用到窗口一半就压缩。长上下文里模型对早期细节的召回会变差，每轮重发的上下文也更贵；更看重质量和成本时选它\n\n用户发消息前达到这条线会询问「压缩 / 迁移到新会话」；回答进行中越过则自动压缩（保留当前请求原文），不打断回答。"
+        },
         "axon.creditBudget.enabled": {
           "type": "boolean",
           "default": true,

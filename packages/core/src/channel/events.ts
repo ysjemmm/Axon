@@ -53,8 +53,9 @@ export type AgentEventPayload =
   | { type: "retry"; attempt: number; maxRetries: number; error: string; status: "retrying" | "failed" }
   | { type: "context_overflow" }
   | { type: "compacted"; message: string }
-  | { type: "compacting_start" }
-  | { type: "compacting_end"; success: boolean; message: string }
+  /** inline：回答进行中的自动压缩（两轮工具调用之间），前端不插分隔线、不打断当前回复 */
+  | { type: "compacting_start"; inline?: boolean }
+  | { type: "compacting_end"; success: boolean; message: string; inline?: boolean }
   | { type: "compaction_needed"; currentTokens: number; maxTokens: number; percent: number }
   | { type: "compaction_migrated"; newSessionId?: string; parentSessionId?: string; migratedToNewSession?: boolean }
   // Wiki 生成进度（规划完成 / 逐页落盘 / 收尾）。

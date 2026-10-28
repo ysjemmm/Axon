@@ -1931,7 +1931,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             </div>
           )}
           {/* 撤销失败 / 工具格式不兼容都属于「提示类」，已上移到输入框上方的状态条 */}
-          {/* 压缩选择弹窗：自动压缩触发时（>=75%），给用户选择继续或新会话。
+          {/* 压缩选择弹窗：发消息前达到自动压缩线时，给用户选择继续或新会话。
               决策类，留在输入框内；仅把配色/圆角对齐到状态条的 ask 蓝。 */}
           {session.compactionNeeded && (
             <div className="flex flex-col gap-2 px-3 py-3 bg-blue-50 dark:bg-blue-950/25 border border-blue-200 dark:border-blue-900/60 rounded-xl mb-2">
@@ -1940,7 +1940,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-medium text-foreground">上下文已使用 {session.compactionNeeded.percent}%</p>
                   <p className="text-[11px] text-muted-foreground mt-0.5">
-                    当前会话上下文已超过模型窗口的 75%，为保证回复质量建议压缩。请选择：
+                    当前会话上下文已到自动压缩线，为保证回复质量建议压缩。请选择：
                   </p>
                 </div>
               </div>

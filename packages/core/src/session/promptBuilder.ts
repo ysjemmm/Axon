@@ -97,16 +97,12 @@ export class PromptBuilder {
   }
 
   /**
-   * 触发「上下文较满」提醒的占用比例。
+   * 上下文使用率提醒（达到自动压缩线才出现）。
    *
-   * 与 compactor 的一次性大压缩线（75%）对齐：早先是 60%，于是在系统自己都还判定
+   * 与自动压缩线（session.getAutoCompactAt）对齐：早先是固定 60%，于是在系统自己都还判定
    * 「不需要压缩」的时候，模型就先替用户下了「别在这个会话继续做」的结论——而这句话
    * 会被写进可见回复、随历史长期留存，压缩完之后还在继续说。
-   */
-  private static readonly USAGE_NOTICE_THRESHOLD = 0.75;
-
-  /**
-   * 上下文使用率提醒（≥75% 才出现）。百分比随每次请求的 token 占用逐步上涨，
+   * 百分比随每次请求的 token 占用逐步上涨，
    * 实时取的话同一轮里每涨 1% 就改一次注入，同样会断前缀缓存；但占用**回落**（压缩）
    * 时必须立刻作废它，见 frozen()。
    */
@@ -115,8 +111,9 @@ export class PromptBuilder {
     // 后者经中转网关后与真实上下文能差 3.5 倍。另外 TokenAccountant 算占用时会调用 buildInjections，
     // 读一个由它自己写入的字段（上一次的值）而非同步重算，才不会形成循环。
     if (!(this.s.lastTotalTokens > 0 && this.s.getContextWindow() > 0)) return null;
+    const autoAt = this.s.getAutoCompactAt();
+    if (!(autoAt > 0) || this.s.lastTotalTokens < autoAt) return null;
     const usagePercent = this.s.lastTotalTokens / this.s.getContextWindow();
-    if (usagePercent < PromptBuilder.USAGE_NOTICE_THRESHOLD) return null;
     const pct = Math.round(usagePercent * 100);
     return (
       `【上下文使用率】当前已用 ${pct}%（这是此刻的实际占用）。如果用户接下来要求做一个较大的功能（需要读写多个文件、多轮工具调用），` +

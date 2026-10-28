@@ -5,6 +5,8 @@ vi.mock("../providers.js", () => ({ getStrategy: () => ({}), declaredThinkingFor
 vi.mock("../compactor.js", () => ({
   needsCompaction: (total: number, max = 1_000_000, pct = 0.35) => total > max * pct,
   compactMessages: async (messages: any[]) => [messages[0], { role: "user", content: "摘要" }],
+  compactKeepingCurrentTurn: vi.fn(async (messages: any[], _s: any, _m: any, turnStart: number) =>
+    [messages[0], { role: "user", content: "[对话历史摘要]\n摘要" }, { role: "assistant", content: "明白" }, ...messages.slice(turnStart)]),
   rollingCompact: async (messages: any[]) => [[messages[0], { role: "user", content: "摘要" }], true],
   generateSessionMemory: vi.fn(async () => [{
     action: "upsert",
@@ -16,7 +18,7 @@ vi.mock("../compactor.js", () => ({
 }));
 
 import { CompactionController } from "./compactionController.js";
-import { generateSessionMemory } from "../compactor.js";
+import { generateSessionMemory, compactKeepingCurrentTurn } from "../compactor.js";
 
 /** 用字符数当作"占用估算"，只为区分压缩前后的量级 */
 const estimate = (messages: any[]) =>
@@ -168,5 +170,38 @@ describe("后台记忆整理的时机", () => {
     await controller.maybeRefreshMemoryAfterTurn(1000);
     const next = vi.mocked(generateSessionMemory).mock.calls[1][1] as any[];
     expect(next.map((m) => m.content)).toEqual(["新问题", "新回答"]);
+  });
+});
+
+describe("回答进行中的自动压缩", () => {
+  const history = () => [
+    { role: "system", content: "system" },
+    { role: "user", content: "旧问题" },
+    { role: "assistant", content: "旧回答" },
+    { role: "user", content: "当前问题" },
+    { role: "assistant", content: null, tool_calls: [{ id: "t1", type: "function", function: { name: "read_file", arguments: "{}" } }] },
+    { role: "tool", tool_call_id: "t1", content: "结果" },
+  ];
+
+  it("没到自动压缩线：不压缩", async () => {
+    const { s } = makeSession(history());
+    s.getAutoCompactAt = () => 850_000;
+    s.lastTotalTokens = 800_000;
+    expect(await new CompactionController(s).maybeCompactMidTurn({} as any)).toBe(false);
+    expect(compactKeepingCurrentTurn).not.toHaveBeenCalled();
+  });
+
+  it("越过自动压缩线：无感压缩，以当前用户消息为界，事件带 inline", async () => {
+    const messages = history();
+    const { s, persisted } = makeSession(messages);
+    s.getAutoCompactAt = () => 850_000;
+    s.lastTotalTokens = 900_000;
+    expect(await new CompactionController(s).maybeCompactMidTurn({} as any)).toBe(true);
+    expect((compactKeepingCurrentTurn as any).mock.calls[0][3]).toBe(3);
+    expect(s.messages.at(-3).content).toBe("当前问题");
+    expect(s.send).toHaveBeenCalledWith("compacting_start", { inline: true });
+    expect(s.send).toHaveBeenCalledWith("compacting_end", expect.objectContaining({ success: true, inline: true }));
+    expect(s.isCompacting).toBe(false);
+    expect(persisted).toHaveLength(1);
   });
 });

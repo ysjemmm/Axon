@@ -319,10 +319,10 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
   }
 }
 
-export function handleCompactingStart(_msg: WsMessage, ctx: EventHandlerCtx): void {
+export function handleCompactingStart(msg: WsMessage, ctx: EventHandlerCtx): void {
   ctx.setIsCompacting(true);
   ctx.setCompactingMessage("整理上下文...");
-  ctx.setStatusText("正在压缩上下文...");
+  ctx.setStatusText((msg as any).inline ? "上下文接近上限，正在整理..." : "正在压缩上下文...");
 }
 
 export function handleCompactionNeeded(msg: WsMessage, ctx: EventHandlerCtx): void {
@@ -350,6 +350,13 @@ export function handleCompactingEnd(msg: WsMessage, ctx: EventHandlerCtx): void 
   ctx.setCompactingMessage(null);
   const ok = (msg as any).success as boolean;
   const endMsg = (msg as any).message as string || (ok ? "上下文已压缩" : "压缩失败");
+  // 回答进行中的自动压缩：当前回复还在流式输出，往历史末尾插分隔线会把它截成两段。
+  // 只更新状态行；重新打开会话时，摘要照常显示成「早期对话已压缩」分隔。
+  if ((msg as any).inline) {
+    if (!ok) ctx.setUndoNotice({ id: Date.now(), text: endMsg });
+    ctx.setStatusText(ok && (msg as any).message ? endMsg : "思考中...");
+    return;
+  }
   if (!ok) {
     ctx.setUndoNotice({ id: Date.now(), text: endMsg });
   } else {

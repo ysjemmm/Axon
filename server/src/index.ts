@@ -46,6 +46,8 @@ function readCompactionConfig(): CompactionUserConfig {
     keepRecentMessages: parseInt(process.env.AXON_COMPACTION_KEEP_RECENT || "", 10) || DEFAULT_COMPACTION_CONFIG.keepRecentMessages,
     toolResultPruneChars: DEFAULT_COMPACTION_CONFIG.toolResultPruneChars,
     toolResultKeepTurns: DEFAULT_COMPACTION_CONFIG.toolResultKeepTurns,
+    // 自动压缩线：AXON_AUTO_COMPACT_AT=early 时用到窗口一半就压缩（默认 auto，按窗口留余量）
+    autoCompactAt: process.env.AXON_AUTO_COMPACT_AT === "early" ? "early" : "auto",
   };
 }
 

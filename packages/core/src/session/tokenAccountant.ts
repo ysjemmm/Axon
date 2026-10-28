@@ -134,7 +134,7 @@ export class TokenAccountant {
       mcpTools: mcpTools
         .map((t) => ({ ...t, tokens: Math.round(t.tokens * scale) }))
         .sort((a, b) => b.tokens - a.tokens),
-      autoCompactAt: Math.round(window * AUTO_COMPACT_RATIO),
+      autoCompactAt: this.s.getAutoCompactAt(),
       manualCompactAt: Math.round(window * MANUAL_COMPACT_RATIO),
     };
   }
@@ -311,8 +311,6 @@ export class TokenAccountant {
 export type ContextCategoryKey = "messages" | "systemTools" | "mcpTools" | "skills" | "memory" | "systemPrompt" | "injections";
 const CONTEXT_CATEGORY_ORDER: ContextCategoryKey[] = ["messages", "systemTools", "mcpTools", "skills", "memory", "systemPrompt", "injections"];
 
-/** 自动压缩（询问用户）的触发比例，与 compactionController.maybeAutoCompactBeforeTurn 一致 */
-const AUTO_COMPACT_RATIO = 0.75;
 /** 手动压缩的最低比例，与 compactionController.compactSession 一致 */
 const MANUAL_COMPACT_RATIO = 0.35;
 
@@ -321,7 +319,7 @@ export interface ContextBreakdown {
   categories: Array<{ key: ContextCategoryKey; tokens: number }>;
   /** 每个 MCP 工具定义的占用（降序） */
   mcpTools: Array<{ name: string; server: string; tool: string; tokens: number }>;
-  /** 达到这个占用时自动压缩（询问用户） */
+  /** 自动压缩线（session.getAutoCompactAt）：回合开始前达到则询问用户，回答中途达到则无感压缩 */
   autoCompactAt: number;
   /** 达到这个占用才允许手动压缩 */
   manualCompactAt: number;

@@ -30,6 +30,12 @@ const CATEGORY_META: Record<ContextCategoryKey, { label: string; color: string; 
 const MARK_COLOR = "color-mix(in oklab, var(--muted-foreground) 70%, transparent)";
 const FREE_COLOR = "var(--muted)";
 
+/** 旧后端没下发 autoCompactAt 时的兜底：与后端 autoCompactThreshold 同一算法（窗口 − 余量，余量 = 15% 夹在 32k–160k） */
+function fallbackAutoCompactAt(max: number): number {
+  const reserve = Math.min(160_000, Math.max(32_000, Math.round(max * 0.15)));
+  return Math.max(Math.round(max * 0.5), max - reserve);
+}
+
 function pct(tokens: number, max: number): string {
   return max > 0 ? `${((tokens / max) * 100).toFixed(1)}%` : "—";
 }
@@ -67,7 +73,7 @@ export function ContextUsagePanel({ used, max, breakdown, canCompact, compacting
   const percent = hasMax ? Math.min(used / max, 1) * 100 : 0;
 
   const categories = (breakdown?.categories ?? []).filter((c) => c.key === "messages" || c.tokens > 0);
-  const autoAt = breakdown?.autoCompactAt ?? (hasMax ? Math.round(max * 0.75) : 0);
+  const autoAt = breakdown?.autoCompactAt ?? (hasMax ? fallbackAutoCompactAt(max) : 0);
   const free = hasMax ? Math.max(0, max - used) : 0;
   const untilAuto = autoAt - used;
   const mcpTools = breakdown?.mcpTools ?? [];

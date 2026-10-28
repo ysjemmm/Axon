@@ -10,7 +10,7 @@ import { ToolCallStatus, type ToolMeta, type WebCapability, type ApprovalDecisio
 import { calculateCredits, buildCreditDetail } from "./credits.js";
 import type { AgentHost } from "./host/index.js";
 import type { AgentChannel, AgentEvent } from "./channel/index.js";
-import { isSummaryMessage, DEFAULT_COMPACTION_CONFIG, setPruneKeepChars } from "./compactor.js";
+import { isSummaryMessage, DEFAULT_COMPACTION_CONFIG, setPruneKeepChars, autoCompactThreshold } from "./compactor.js";
 import type { CompactionUserConfig } from "./compactor.js";
 import type { CreditBudgetUserConfig } from "./credits.js";
 import type { SerializedPendingEdit } from "./storage/types.js";
@@ -1256,6 +1256,11 @@ export class AgentSession {
   /** 获取最近一次的累计 token 数（委托 TokenAccountant） */
   getLastTotalTokens(): number {
     return this.tokenAccountant.getLastTotalTokens();
+  }
+
+  /** 自动压缩线（token）：按窗口留余量算，用户可在设置里选更早压缩（见 autoCompactThreshold） */
+  getAutoCompactAt(): number {
+    return autoCompactThreshold(this.getContextWindow(), this.compactionConfig.autoCompactAt);
   }
 
   /** 当前上下文的来源拆分（上下文面板明细）；拆分失败返回 undefined，只少一块明细 */
@@ -2847,7 +2852,7 @@ export class AgentSession {
     // 界面显示 10%，判定和提醒却还按旧的 80% 走。
     this.updateAndSendTokenUsage();
 
-    // 自动压缩（溢出强制无感 / 达 75% 阈值询问用户）；用户选择迁移到新会话时本轮中止
+    // 自动压缩（溢出强制无感 / 达自动压缩线询问用户）；用户选择迁移到新会话时本轮中止
     if (await this.maybeAutoCompactBeforeTurn(strategy)) return;
 
     // 每轮状态文案。
@@ -3150,6 +3155,10 @@ export class AgentSession {
       this.updateAndSendTokenUsage();
       // 本轮工具结果已并入 messages，增量落盘：即便此刻切走，已完成的工具轮次也不丢
       this.persistMessages();
+
+      // 回答进行中越过自动压缩线 → 无感压缩（保留当前请求原文），再发下一次请求。
+      // 回合开始前那道门只查一次，一次长回答足以从 80% 涨过窗口上限。
+      if (!this.cancelled) await this.compactionController.maybeCompactMidTurn(strategy);
 
       // 取消检查：如果用户在工具执行期间取消了（如子 agent 被 abort），主 agent 也应立即停止
       if (this.cancelled) {

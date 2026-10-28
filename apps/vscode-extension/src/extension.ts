@@ -57,6 +57,7 @@ function readCompactionConfig(): CompactionUserConfig {
     keepRecentMessages: cfg.get<number>("keepRecentMessages", DEFAULT_COMPACTION_CONFIG.keepRecentMessages),
     toolResultPruneChars: cfg.get<number>("toolResultPruneChars", DEFAULT_COMPACTION_CONFIG.toolResultPruneChars),
     toolResultKeepTurns: cfg.get<number>("toolResultKeepTurns", DEFAULT_COMPACTION_CONFIG.toolResultKeepTurns),
+    autoCompactAt: cfg.get<string>("autoCompactAt", DEFAULT_COMPACTION_CONFIG.autoCompactAt) === "early" ? "early" : "auto",
   };
 }
 

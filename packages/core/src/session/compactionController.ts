@@ -12,7 +12,7 @@
 
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { getStrategy, declaredThinkingFor } from "../providers.js";
-import { needsCompaction, compactMessages, rollingCompact, generateSessionMemory } from "../compactor.js";
+import { needsCompaction, compactMessages, compactKeepingCurrentTurn, rollingCompact, generateSessionMemory } from "../compactor.js";
 import type { LLMStrategy } from "../llm/types.js";
 import type { AgentSession } from "../agentSession.js";
 import { isRealUserMessage } from "./promptBuilder.js";
@@ -317,7 +317,7 @@ export class CompactionController {
   /**
    * 本轮请求前的自动压缩门：
    * - 溢出（lastTotalTokens > 窗口，通常是切换到更小窗口模型）-> 强制无感压缩；
-   * - 达到窗口 75% -> 暂停询问用户「继续压缩 / 迁移到新会话」。
+   * - 达到自动压缩线（session.getAutoCompactAt）-> 暂停询问用户「继续压缩 / 迁移到新会话」。
    * @returns true 表示用户选择迁移到新会话、本轮应中止；false 表示可继续本轮。
    */
   async maybeAutoCompactBeforeTurn(strategy: LLMStrategy): Promise<boolean> {
@@ -346,8 +346,9 @@ export class CompactionController {
       }
       return false;
     }
-    if (this.s.lastTotalTokens > 0 && needsCompaction(this.s.lastTotalTokens, ctxWindow, 0.75)) {
-      // >=75% 自动压缩阈值：暂停，让用户选择
+    const autoAt = this.s.getAutoCompactAt();
+    if (this.s.lastTotalTokens > 0 && autoAt > 0 && this.s.lastTotalTokens >= autoAt) {
+      // 达到自动压缩线：暂停，让用户选择
       const choice = await this.waitForCompactionChoice(this.s.lastTotalTokens, ctxWindow);
       if (choice === "continue") {
         // 用户选择继续：压缩当前会话
@@ -377,6 +378,57 @@ export class CompactionController {
       return true;
     }
     return false;
+  }
+
+  /**
+   * 回答进行中的压缩门：每轮工具结果并入之后、下一次请求之前调用。
+   *
+   * 回合开始前的那道门（maybeAutoCompactBeforeTurn）只在用户发消息时检查一次，而一次回答里
+   * 连读十几个文件、跑几条命令就能涨几十上百 k——开头 80%、中途撞上窗口上限直接报错。
+   * 这里越过自动压缩线就无感压缩（不弹窗：用户正在等回答，此刻打断问「要不要压缩」没有意义），
+   * 当前用户请求原样保留，见 compactKeepingCurrentTurn。
+   *
+   * @returns 是否压缩了
+   */
+  async maybeCompactMidTurn(strategy: LLMStrategy): Promise<boolean> {
+    if (this.s.isCompacting || this.s.rollingSummaryInProgress) return false;
+    const autoAt = this.s.getAutoCompactAt();
+    if (!(autoAt > 0) || this.s.lastTotalTokens < autoAt) return false;
+    let turnStart = -1;
+    for (let i = this.s.messages.length - 1; i >= 1; i--) {
+      if (isRealUserMessage(this.s.messages[i])) { turnStart = i; break; }
+    }
+    if (turnStart < 1) return false;
+
+    const snapshot = this.takeForCompaction();
+    this.s.isCompacting = true;
+    this.s.send("compacting_start", { inline: true });
+    try {
+      this.s.send("status", { content: "上下文接近上限，正在整理..." });
+      const before = this.s.messages;
+      // 保留部分控制在压缩线的 40%：压完之后还要留出接着干活的空间，不然没几轮又要压
+      const keepTokens = Math.round(autoAt * 0.4);
+      const next = await compactKeepingCurrentTurn(before, strategy, this.s.model, turnStart, keepTokens, this.summaryOptions());
+      this.s.isCompacting = false;
+      if (next === before) {
+        this.s.send("compacting_end", { success: true, inline: true, message: "" });
+        return false;
+      }
+      this.s.messages = next;
+      this.s.lastPromptTokens = 0;
+      this.s.send("compacting_end", { success: true, inline: true, message: "上下文已自动压缩，继续当前任务" });
+      this.s.updateAndSendTokenUsage();
+      this.s.persistMessages();
+      this.resetCursorAfterCompaction();
+      // 记忆整理不阻塞本轮：用户在等回答
+      void this.refreshMemory(snapshot, strategy);
+      return true;
+    } catch (err) {
+      this.s.isCompacting = false;
+      // 失败不中断本轮：真撞上限时由请求报错走 context_overflow 引导
+      this.s.send("compacting_end", { success: false, inline: true, message: `自动压缩失败：${(err as Error).message}` });
+      return false;
+    }
   }
 }
 

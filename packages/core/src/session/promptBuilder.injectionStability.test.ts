@@ -12,6 +12,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { PromptBuilder } from "./promptBuilder.js";
+import { autoCompactThreshold } from "../compactor.js";
 
 function makeSession(overrides: Record<string, unknown> = {}) {
   const s: any = {
@@ -27,6 +28,8 @@ function makeSession(overrides: Record<string, unknown> = {}) {
     wikiPromptCache: null,
     lastTotalTokens: 0,
     getContextWindow: () => 1_000_000,
+    // 与 AgentSession.getAutoCompactAt 同一算法（1M 窗口 → 850k）
+    getAutoCompactAt(this: any) { return autoCompactThreshold(this.getContextWindow()); },
     // 产物目录注入会读它；默认空串表示「还没定下来」，需要它的用例自己覆盖
     getArtifactDir: () => "",
     ...overrides,
@@ -91,27 +94,27 @@ describe("尾部注入在一轮内保持稳定", () => {
   });
 
   it("同一轮中上下文使用率上涨，提醒里的百分比不变", () => {
-    const s = makeSession({ lastTotalTokens: 800_000 });
+    const s = makeSession({ lastTotalTokens: 880_000 });
     s.promptBuilder.beginTurn();
     const first = systemPrefix(s);
-    expect(first).toContain("80%");
+    expect(first).toContain("88%");
 
-    s.lastTotalTokens = 840_000;
+    s.lastTotalTokens = 920_000;
     expect(systemPrefix(s)).toBe(first);
   });
 
-  it("占用未到提醒线（75%）时不出现提醒", () => {
-    const s = makeSession({ lastTotalTokens: 610_000 });
+  it("占用未到提醒线（自动压缩线）时不出现提醒", () => {
+    const s = makeSession({ lastTotalTokens: 800_000 });
     s.promptBuilder.beginTurn();
     expect(systemPrefix(s)).not.toContain("【上下文使用率】");
   });
 
   it("本轮中途占用回落（压缩）后，冻结的提醒立即作废", () => {
-    const s = makeSession({ lastTotalTokens: 800_000 });
+    const s = makeSession({ lastTotalTokens: 880_000 });
     s.promptBuilder.beginTurn();
-    expect(systemPrefix(s)).toContain("当前已用 80%");
+    expect(systemPrefix(s)).toContain("当前已用 88%");
 
-    // 模拟本轮中途自动压缩：占用从 80% 掉到 10%
+    // 模拟本轮中途自动压缩：占用从 88% 掉到 10%
     s.lastTotalTokens = 100_000;
     expect(systemPrefix(s)).not.toContain("【上下文使用率】");
   });
