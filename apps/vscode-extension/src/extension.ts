@@ -733,15 +733,29 @@ export function activate(context: vscode.ExtensionContext): void {
    * 列出所有 relay。
    *
    * Agent 创建 relay 时写入的是【会话工作区】的 .axon/relays/（见 AgentSession.relayStore），
-   * 主目录 .axon/relays/ 下则可能有历史遗留产物。两个位置都作为根交给 RelayStore 合并读取，
-   * 避免只认一个根导致左侧面板看不到 AI 刚创建的 relay。
+   * 而会话工作区可以是 Axon 里另选的文件夹（不开文件夹启动 VS Code、或在面板里换了工作区），
+   * 不一定是 VS Code 打开的那个。早先只扫 VS Code 文件夹 + 主目录，这种会话建的 relay
+   * 在侧边栏里永远看不到。现在的根：
+   *   · VS Code 当前打开的文件夹（现取，不用激活时的快照——中途增删文件夹也跟得上）
+   *   · 活跃会话 / 面板选好的工作区（hub.getKnownWorkspaces）
+   *   · 历史会话落盘的工作区（重启后活跃会话没了，靠它找回）
+   *   · 主目录（历史遗留产物）
    */
-  async function listAllRelays(): Promise<Array<{ id: string; title: string; phase: string }>> {
+  async function listAllRelays(): Promise<Array<{ id: string; title: string; phase: string; root?: string }>> {
     const { RelayStore } = await import("@axon/core");
     const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
-    const store = new RelayStore([...allWorkspaces, homedir()], createHost());
+    const sessionWorkspaces = await storage.listSessions()
+      .then((list) => list.map((s) => s.workspace))
+      .catch(() => [] as string[]);
+    const roots = [
+      ...(vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath) ?? allWorkspaces),
+      ...hub.getKnownWorkspaces(),
+      ...sessionWorkspaces,
+      homedir(),
+    ].filter(Boolean);
+    const store = new RelayStore(roots, createHost());
     const relays = await store.list();
-    return relays.map((r) => ({ id: r.id, title: r.title, phase: r.phase }));
+    return relays.map((r) => ({ id: r.id, title: r.title, phase: r.phase, root: r.root }));
   }
 
   /**
@@ -1139,9 +1153,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("axon.quickRefactor", async (payload?: { text?: string; fileName?: string; startLine?: number; startColumn?: number; endLine?: number; endColumn?: number }) => {
       await quickAction("refactor", payload, provider);
     }),
-    vscode.commands.registerCommand("axon.openRelay", (relayId: string) => {
-      // 点击 Relay 树节点：在编辑器 Tab 打开 Relay 详情面板
-      const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "";
+    vscode.commands.registerCommand("axon.openRelay", (relayId: string, root?: string) => {
+      // 点击 Relay 树节点：在编辑器 Tab 打开 Relay 详情面板。
+      // 优先用树节点带来的所在根（Relay 可能在 Axon 另选的工作区里），没有才退回 VS Code 首个文件夹
+      const workspace = root || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "";
       openOrFocusPanel({
         id: `relay-${relayId}`,
         title: `Relay: ${relayId}`,
@@ -1154,6 +1169,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("axon.deleteRelay", async (item: vscode.TreeItem) => {
       // 右键删除 Relay
       const relayId = item.command?.arguments?.[0] as string | undefined;
+      const relayRoot = item.command?.arguments?.[1] as string | undefined;
       if (!relayId) return;
       const confirm = await vscode.window.showWarningMessage(
         `确定删除 Relay「${item.label}」？正在执行的任务会被中断，文档与进度将一并移除。此操作不可撤销。`,
@@ -1163,7 +1179,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (confirm !== "删除") return;
       try {
         // 通过 SessionHub dispatch 走 session 层删除：会取消正在运行的子 Agent，让 AI 感知
-        await hub.dispatch({ type: "delete_relay", relayId, workspace: defaultWorkspace } as any);
+        await hub.dispatch({ type: "delete_relay", relayId, workspace: relayRoot || defaultWorkspace } as any);
         // 刷新树（relay_deleted 事件也会触发刷新，这里兜底）
         const relays = await listAllRelays();
         relayTree.refresh(relays);

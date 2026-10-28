@@ -1188,6 +1188,22 @@ export class SessionHub {
     });
   }
 
+  /**
+   * 当前已知的所有工作区：宿主打开的文件夹、活跃会话的工作区、尚未建会话的面板选好的工作区组。
+   * Relay 落在【会话工作区】下，而会话工作区可以是 Axon 里另选的文件夹，不一定是宿主打开的那个——
+   * 列 Relay 只看宿主文件夹，就会出现「AI 说建好了、侧边栏里没有」。
+   */
+  getKnownWorkspaces(): string[] {
+    const out = new Set<string>(this.deps.workspaces ?? []);
+    for (const s of this.activeSessions.values()) {
+      out.add(s.getWorkspace());
+      for (const w of s.getWorkspaces()) out.add(w);
+    }
+    for (const paths of this.pendingWorkspaces.values()) for (const w of paths) out.add(w);
+    out.delete("");
+    return [...out];
+  }
+
   /** 删除 relay */
   private async handleDeleteRelay(
     cmd: Extract<ControlCommand, { type: "delete_relay" }>,
@@ -1203,7 +1219,7 @@ export class SessionHub {
     } else {
       const ws_dir = (typeof cmd.workspace === "string" && cmd.workspace) ? cmd.workspace : primaryWorkspace;
       // relay 可能落在工作区或主目录，跨根定位后再删
-      const relayRoots = [ws_dir, ...(this.deps.workspaces ?? []), this.deps.homeDir].filter((r): r is string => !!r);
+      const relayRoots = [ws_dir, ...this.getKnownWorkspaces(), this.deps.homeDir].filter((r): r is string => !!r);
       await new RelayStore(relayRoots, this.deps.createHost()).remove(relayId);
       this.emitResult(sid, clientId, { type: "relay_deleted", relayId } as AgentEvent);
     }

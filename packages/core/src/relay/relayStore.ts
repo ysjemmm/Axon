@@ -116,7 +116,7 @@ export class RelayStore {
     for (const entry of entries) {
       if (!entry.isDir) continue;
       const meta = await this.readMetaInRoot(root, entry.name);
-      if (meta) summaries.push(toRelaySummary(meta));
+      if (meta) summaries.push({ ...toRelaySummary(meta), root });
     }
     return summaries;
   }

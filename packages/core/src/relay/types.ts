@@ -146,6 +146,8 @@ export interface RelaySummary {
   taskTotal: number;
   taskDone: number;
   updatedAt: string;
+  /** 所在的根目录（<root>/.axon/relays/<id>）：列表跨多个根合并，打开 / 删除时据此直接定位 */
+  root?: string;
 }
 
 /** 把完整 RelayData 压成列表摘要 */

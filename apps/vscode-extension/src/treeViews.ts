@@ -35,11 +35,14 @@ export class RelayTreeProvider implements vscode.TreeDataProvider<SimpleItem> {
 
   private items: SimpleItem[] = [];
 
-  refresh(relays: { id: string; title: string; phase: string }[]): void {
+  refresh(relays: { id: string; title: string; phase: string; root?: string }[]): void {
     this.items = relays.length > 0
       ? relays.map((r) => {
           const phaseIcon = r.phase === "done" ? "check" : r.phase === "executing" ? "play" : "edit";
-          return new SimpleItem(r.title, r.phase, phaseIcon, "axon.openRelay", [r.id], "relayItem");
+          // 带上所在根：Relay 可能落在 Axon 另选的工作区里，打开 / 删除时直接定位，不再只认宿主文件夹
+          const item = new SimpleItem(r.title, r.phase, phaseIcon, "axon.openRelay", [r.id, r.root], "relayItem");
+          if (r.root) item.tooltip = `${r.title}\n${r.root}`;
+          return item;
         })
       : [new SimpleItem("暂无 Relay 工作流", "在对话中创建", "add")];
     this._onDidChange.fire();
