@@ -2789,6 +2789,11 @@ export class AgentSession {
     // fire-and-forget 让主流程不等磁盘 IO 直接进入 LLM 请求阶段。
     void this.persistMessages();
 
+    // 先按当前消息重算一次占用并推给界面：下面的自动压缩判定、本轮的使用率提醒都读它。
+    // 不重算的话读到的是上一轮结束时、甚至从磁盘恢复的旧值——压缩、换模型、编辑消息之后
+    // 界面显示 10%，判定和提醒却还按旧的 80% 走。
+    this.updateAndSendTokenUsage();
+
     // 自动压缩（溢出强制无感 / 达 75% 阈值询问用户）；用户选择迁移到新会话时本轮中止
     if (await this.maybeAutoCompactBeforeTurn(strategy)) return;
 

@@ -101,17 +101,17 @@ describe("尾部注入在一轮内保持稳定", () => {
   it("占用未到提醒线（75%）时不出现提醒", () => {
     const s = makeSession({ lastTotalTokens: 610_000 });
     s.promptBuilder.beginTurn();
-    expect(systemPrefix(s)).not.toContain("上下文使用率已达");
+    expect(systemPrefix(s)).not.toContain("【上下文使用率】");
   });
 
   it("本轮中途占用回落（压缩）后，冻结的提醒立即作废", () => {
     const s = makeSession({ lastTotalTokens: 800_000 });
     s.promptBuilder.beginTurn();
-    expect(systemPrefix(s)).toContain("上下文使用率已达 80%");
+    expect(systemPrefix(s)).toContain("当前已用 80%");
 
     // 模拟本轮中途自动压缩：占用从 80% 掉到 10%
     s.lastTotalTokens = 100_000;
-    expect(systemPrefix(s)).not.toContain("上下文使用率已达");
+    expect(systemPrefix(s)).not.toContain("【上下文使用率】");
   });
 
   it("chat 链路（非缓存友好模型）注入紧跟系统提示词：一轮内整条请求的前缀不变", () => {

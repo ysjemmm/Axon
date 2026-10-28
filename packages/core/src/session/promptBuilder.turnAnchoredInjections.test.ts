@@ -218,3 +218,38 @@ describe("运行环境与未开启能力的注入", () => {
     expect(notice?.content).toContain("以系统提示中的「图表渲染」为准");
   });
 });
+
+describe("上下文使用率提醒只在当前这一轮发", () => {
+  const busy = () => makeSession({ lastTotalTokens: 800_000, getContextWindow: () => 1_000_000 });
+
+  it("不进落盘的快照", () => {
+    const s = busy();
+    startTurn(s, "第一轮");
+    expect(s.messages.at(-1)._contextInjections.map((i: any) => i.key)).not.toContain("usage");
+  });
+
+  it("挂在当前用户消息之前；进入下一轮后，上一轮那条不再发", () => {
+    const s = busy();
+    startTurn(s, "第一轮");
+    s.messages.push({ role: "assistant", content: "好" });
+    startTurn(s, "第二轮");
+    const req = s.promptBuilder.buildRequestMessages();
+    const notices = req.filter((m: any) => typeof m.content === "string" && m.content.includes("【上下文使用率】"));
+    expect(notices).toHaveLength(1);
+    expect(req[req.indexOf(notices[0]) + 1].content).toBe("第二轮");
+  });
+
+  it("压缩后占用回落：不再提醒，旧快照里存着的过期提醒也不发", () => {
+    const s = makeSession({ lastTotalTokens: 100_000, getContextWindow: () => 1_000_000 });
+    // 旧版本落盘的快照里还带着 80% 的提醒
+    s.messages.push({
+      role: "user", content: "压缩前的问题",
+      _contextInjections: [{ key: "usage", content: "⚠️ 上下文使用率已达 80%。" }],
+    });
+    s.messages.push({ role: "assistant", content: "回答" });
+    startTurn(s, "压缩后的新问题");
+    const text = JSON.stringify(s.promptBuilder.buildRequestMessages());
+    expect(text).not.toContain("80%");
+    expect(text).not.toContain("上下文使用率");
+  });
+});

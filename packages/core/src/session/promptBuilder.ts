@@ -119,7 +119,7 @@ export class PromptBuilder {
     if (usagePercent < PromptBuilder.USAGE_NOTICE_THRESHOLD) return null;
     const pct = Math.round(usagePercent * 100);
     return (
-      `⚠️ 上下文使用率已达 ${pct}%。如果用户接下来要求做一个较大的功能（需要读写多个文件、多轮工具调用），` +
+      `【上下文使用率】当前已用 ${pct}%（这是此刻的实际占用）。如果用户接下来要求做一个较大的功能（需要读写多个文件、多轮工具调用），` +
       `可以简短提一句「会话已较长，必要时可另开一个新会话」，一句话带过即可。` +
       `不要把它说成「这个任务做不完 / 做不了」，也不要每轮重复；用户选择继续就正常执行、不再提及。`
     );
@@ -382,7 +382,8 @@ export class PromptBuilder {
     for (const m of original) {
       if (!isRealUserMessage(m)) continue;
       const snap = (m as any)._contextInjections;
-      if (Array.isArray(snap)) snapshots.set(userOrdinal, snap);
+      // 旧快照里可能还存着使用率提醒（见 snapshotContextInjections），过期的数字不能再发
+      if (Array.isArray(snap)) snapshots.set(userOrdinal, snap.filter((i: ContextInjection) => i?.key !== "usage"));
       userOrdinal++;
     }
 
@@ -395,11 +396,15 @@ export class PromptBuilder {
 
     const emitted = new Map<string, string>();
     const result: ChatCompletionMessageParam[] = [];
+    // 使用率提醒只挂在当前这一轮（最后一条用户消息）之前，取本轮定格值，一轮之内不变
+    const usageNotice = this.frozen().usageNotice;
     let ordinal = 0;
     for (const m of runtime) {
       if (isRealUserMessage(m)) {
+        const current = ordinal === userCount - 1;
         const snap = snapshots.get(ordinal++);
         if (snap) result.push(...diffInjections(emitted, snap));
+        if (current && usageNotice) result.push({ role: "system", content: usageNotice });
       }
       result.push(m);
     }
@@ -434,7 +439,12 @@ export class PromptBuilder {
    * AgentSession 在 beginTurn() 之后把它挂到本轮用户消息上，本轮之内不再变化。
    */
   snapshotContextInjections(): ContextInjection[] {
-    return this.buildKeyedInjections().map(({ key, message }) => ({ key, content: messageText(message) }));
+    return this.buildKeyedInjections()
+      // 使用率提醒不进快照：快照随用户消息落盘、之后每次请求都会再发，一条「80%」会在压缩后、
+      // 重开会话后一直留在历史里，模型据此说「上下文不够」，而界面上只用了 10%。
+      // 它只在当前这一轮发，见 anchorContextInjections。
+      .filter(({ key }) => key !== "usage")
+      .map(({ key, message }) => ({ key, content: messageText(message) }));
   }
 
   /** 构建本轮要注入的 system 消息（长度校准/验证/多工作区/IDE/skill/power），供请求组装与 token 估算复用 */

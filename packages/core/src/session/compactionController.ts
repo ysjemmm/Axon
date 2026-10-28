@@ -325,8 +325,8 @@ export class CompactionController {
     const overflowing = this.s.lastTotalTokens > ctxWindow;
     if (overflowing) {
       // 模型切换溢出：强制无感压缩
-      // 压缩前留原文快照，供记忆更新使用
-      const snapshot = this.s.messages;
+      // 压缩前取出尚未整理进记忆的原文，供记忆更新使用
+      const snapshot = this.takeForCompaction();
       this.s.isCompacting = true;
       this.s.send("compacting_start", {});
       try {
@@ -338,6 +338,7 @@ export class CompactionController {
         // 先重算再落盘（同 doCompact）：这条路径原先完全不落盘，磁盘会一直停在压缩前的占用
         this.s.updateAndSendTokenUsage();
         this.s.persistMessages();
+        this.resetCursorAfterCompaction();
         await this.refreshMemory(snapshot, strategy);
       } catch (err) {
         this.s.isCompacting = false;
@@ -350,8 +351,8 @@ export class CompactionController {
       const choice = await this.waitForCompactionChoice(this.s.lastTotalTokens, ctxWindow);
       if (choice === "continue") {
         // 用户选择继续：压缩当前会话
-        // 压缩前留原文快照，供记忆更新使用
-        const snapshot = this.s.messages;
+        // 压缩前取出尚未整理进记忆的原文，供记忆更新使用
+        const snapshot = this.takeForCompaction();
         this.s.isCompacting = true;
         this.s.send("compacting_start", {});
         try {
@@ -363,6 +364,7 @@ export class CompactionController {
           // 先重算再落盘（同 doCompact），否则磁盘留着压缩前旧占用
           this.s.updateAndSendTokenUsage();
           this.s.persistMessages();
+          this.resetCursorAfterCompaction();
           await this.refreshMemory(snapshot, strategy);
         } catch (err) {
           this.s.isCompacting = false;
