@@ -297,7 +297,7 @@ code:not(.hljs):not(.prose code) {
   flex-shrink: 0;
 }
 .axon-path-name {
-  font-family: var(--font-mono);
+  font-family: var(--font-mono-inline);
   color: var(--foreground);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -330,10 +330,9 @@ code:not(.hljs):not(.prose code) {
        上游还在 className 里额外写了 0.9em。正文 14px，代码只有 12.6px。
      · 字重：同一插件又把 code 设成 600。正文是 400。
 
-     两者叠在一起，最刺眼的是**中文**：`--font-mono` 队列里前面那些等宽字体
-     都没有汉字，中文最终仍然回退到 Microsoft YaHei / PingFang —— 和正文
-     **是同一个中文字族**，只是被渲染成 12.6px + 600，于是"又小又粗"，
-     观感上就成了"另一个字体"。
+     两者叠在一起，最刺眼的是**中文**：被渲染成 12.6px + 600，"又小又粗"，
+     观感上就成了"另一个字体"。（字族本身也曾不一致：`--font-mono` 给中文优先排了
+     更纱黑体等等宽中文字体，本机装了就和正文不是同一款，见下方 font-family。）
 
      所以中文这一侧本来就不该有差异，把它按回 1em / inherit 即可。
      font-weight 用 inherit 而不是写死 400：正文里的 code 落在 <strong>/<b>
@@ -345,6 +344,8 @@ code:not(.hljs):not(.prose code) {
         px 会在那些更小的上下文里保持原尺寸、比正文还大。 */
   font-size: 1em !important;
   font-weight: inherit !important;
+  /* 中文与正文同一字族（见 :root 的 --font-mono-inline） */
+  font-family: var(--font-mono-inline) !important;
 }
 
 /* Markdown 表格：轻量横线结构。
@@ -1058,6 +1059,12 @@ body.vscode-high-contrast {
   /* ⚠️ 必须与上方 @theme inline 里的 --font-mono 保持一致（这里会覆盖那一份，
      漏改就会出现"Tailwind 工具类一个字体、直接 var() 引用另一个字体"的割裂）。 */
   --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, 'SF Mono', Menlo, "Sarasa Mono SC", "等距更纱黑体 SC", "Sarasa Nerd", "Sarasa Term SC", "Sarasa Term SC Nerd", "Noto Sans Mono CJK SC", "Source Han Mono SC", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", monospace;
+  /* 行内代码 / 路径标签：拉丁用等宽，【中文队列与 --font-sans 完全一致】。
+     --font-mono 给中文优先排了更纱黑体、Noto Sans Mono CJK 这些等宽中文字体——代码块里
+     要对齐，这样是对的；但行内代码夹在正文中间，本机装了这些字体时，反引号里的中文就和
+     旁边正文不是同一款黑体，看着像换了字体（加粗时尤其明显）。行内不需要等宽对齐，
+     中文直接跟正文走。拉丁部分的 JetBrains Mono 随 Web 资源打包，不会落到后面的中文字体上。 */
+  --font-mono-inline: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, 'SF Mono', Menlo, "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
 }
 
 
