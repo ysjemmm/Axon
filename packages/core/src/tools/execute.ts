@@ -500,13 +500,19 @@ export async function executeToolCall(
       const procCwd = typeof args.cwd === "string" && args.cwd.trim()
         ? await resolveInWorkspaces(args.cwd, cwd, host, workspaces)
         : cwd;
-      const started = await host.processes.start(args.command as string, { cwd: procCwd });
+      const notify = args.notify === true;
+      const started = await host.processes.start(args.command as string, { cwd: procCwd, notify });
       const reuseNote = started.reused
         ? "（复用了已在运行的相同进程，未重复启动）"
         : "";
+      const notifyNote = !notify
+        ? ""
+        : host.processes.onExit
+          ? "\n它结束时系统会自动通知你（带退出码和最后的输出）。不用轮询：可以先做别的事，没有别的事就向用户说明正在后台运行、结束了再汇报，然后结束本轮。"
+          : "\n（当前环境不支持结束通知，请用 get_process_output 查看进度。）";
       return (
         `已在后台启动：${args.command}${reuseNote}\n` +
-        `terminalId: ${started.terminalId}`
+        `terminalId: ${started.terminalId}${notifyNote}`
       );
     }
     case "get_process_output": {

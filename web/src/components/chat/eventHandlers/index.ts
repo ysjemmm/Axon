@@ -13,7 +13,7 @@ import { handleToolCall, handleToolResult, handleToolGroupSummary } from "./tool
 import {
   handleSessionCreated, handleSessionLoaded, handleSessionError,
   handleCompactingStart, handleCompactionNeeded, handleCompactionMigrated, handleCompactingEnd,
-  handleCreditBudgetPaused,
+  handleCreditBudgetPaused, handleBackgroundTurn,
 } from "./sessionHandlers";
 import {
   handleStatus, handleRetry, handleContextOverflow, handleTokenUsage, handleReasoningDelta,
@@ -191,6 +191,11 @@ export function createEventHandler(ctx: EventHandlerCtx): (msg: WsMessage) => vo
         return;
       case AGENT_EVENT.SUB_AGENT_END:
         handleSubAgentEnd(msg, ctx);
+        return;
+
+      // ── 后台任务结束通知发起的一轮 ──
+      case "background_turn":
+        handleBackgroundTurn(msg, ctx);
         return;
 
       // ── 错误 ──

@@ -38,6 +38,7 @@ import {
 } from "./session/humanizedStatus.js";
 import { CoworkSnapshotter } from "./cowork/snapshotter.js";
 import { parseChecks, checksResult } from "./cowork/checks.js";
+import { BackgroundTaskTracker } from "./session/backgroundTasks.js";
 import { resolveArtifactDir } from "./session/artifactDir.js";
 import { artifactExtension, parseArtifactArgs, parseGenerateImageArgs, parseRenderMediaArgs, pickVersionedPath, sanitizeStem } from "./session/artifactFile.js";
 /**
@@ -106,6 +107,8 @@ export class AgentSession {
   /** @internal */ workspaces: string[]; // 所有工作区路径列表
   private channel: AgentChannel;
   /** @internal */ host: AgentHost;
+  /** 后台任务（start_process 启动的进程）；宿主不支持后台进程时为 null */
+  backgroundTasks: BackgroundTaskTracker | null = null;
   private homeDir: string;
   /** @internal */ web?: WebCapability;
   // MCP（Model Context Protocol）：可选注入的运行时能力（host 实现连接/调用），注入方式同 web。
@@ -388,6 +391,11 @@ export class AgentSession {
     this.workspaces = workspaces && workspaces.length > 0 ? workspaces : [cwd];
     this.channel = channel;
     this.host = host;
+    // 后台任务追踪：记住哪些进程要求结束时通知（见 session/backgroundTasks.ts）
+    if (host.processes) {
+      this.backgroundTasks = new BackgroundTaskTracker(host.processes);
+      this.host = { ...host, processes: this.backgroundTasks.wrap() };
+    }
     this.homeDir = homeDir ?? "";
     this.web = web;
     const powerRegistry = new PowerRegistry(this.workspaces, this.host, this.homeDir);
@@ -2795,7 +2803,7 @@ export class AgentSession {
     model?: string,
     images?: string[],
     provider?: string,
-    userMeta?: { displayText?: string; attachedFiles?: { name: string; size: number }[]; effort?: string; userSegments?: unknown[]; clientMessageId?: string },
+    userMeta?: { displayText?: string; attachedFiles?: { name: string; size: number }[]; effort?: string; userSegments?: unknown[]; clientMessageId?: string; backgroundNotice?: Record<string, unknown> },
   ): Promise<void> {
     this.turnCount++;
     this.trace("turn.start", { input: truncateForTrace(input, 2000), model: model || this.model, provider: provider || this.provider }, this.turnCount);
@@ -2857,6 +2865,8 @@ export class AgentSession {
     this.currentTurnClientMessageId = userMeta?.clientMessageId ?? null;
     if (userMeta?.attachedFiles && userMeta.attachedFiles.length > 0) userExtra.attachedFiles = userMeta.attachedFiles;
     if (userMeta?.userSegments && userMeta.userSegments.length > 0) userExtra.userSegments = userMeta.userSegments;
+    // 后台任务结束通知发起的一轮：前端据此把这条「用户消息」画成一行系统通知
+    if (userMeta?.backgroundNotice) userExtra.backgroundNotice = userMeta.backgroundNotice;
     if (this.effort) userExtra.effort = this.effort;
 
     // Cowork：轮开始时对本轮附件做原稿快照。失败不阻塞任务（快照是保障能力，

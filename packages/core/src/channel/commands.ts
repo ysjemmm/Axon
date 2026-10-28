@@ -30,6 +30,8 @@ export interface UserMessageCommand {
   mode?: "agent" | "quest" | "cowork";
   /** Cowork：本轮是在运行哪个流程（记一次运行，历史列表据此标出来源） */
   flowId?: string;
+  /** 由后台任务结束通知发起的一轮（后端内部生成，前端不会发） */
+  backgroundNotice?: Record<string, unknown>;
   /**
    * 是否启用思考（缺省视为开启）。
    *
@@ -126,6 +128,10 @@ export type ControlCommandPayload =
   | { type: "cowork_delete_flow"; id: string }
   /** 把一个已完成的 Cowork 会话提炼成流程草稿（不保存，等用户确认） */
   | { type: "cowork_draft_flow"; sessionId: string; requestId?: string }
+  // 后台任务（start_process 启动的进程），跨所有活跃会话
+  | { type: "list_background_tasks" }
+  | { type: "get_background_task_output"; sessionId: string; terminalId: string; requestId?: string }
+  | { type: "stop_background_task"; sessionId: string; terminalId: string }
   // 工作区
   | { type: "set_workspace"; workspace: string; workspaces?: string[] }
   | { type: "set_workspace_group"; groupId: string }

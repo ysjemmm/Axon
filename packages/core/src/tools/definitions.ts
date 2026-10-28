@@ -120,23 +120,20 @@ export function getToolDefinitions() {
       function: {
         name: "start_process",
         description:
-          "启动一个【常驻/长时间运行】的后台进程，立即返回不阻塞——专用于开发服务器、watch、构建监听等不会自己结束的命令。\n\n" +
-          "【何时必须用它而不是 execute_command】\n" +
-          "- 开发服务器：npm run dev / pnpm dev / yarn start / vite / next dev\n" +
-          "- 监听/守护：webpack --watch / tsc --watch / nodemon / jest --watch\n" +
-          "- 任何不会自动退出、需要持续运行的进程\n" +
-          "⚠️ 这类命令绝不能用 execute_command——它会同步等进程退出，导致卡死直到超时。\n\n" +
-          "【不要用它跑会结束的长命令】构建、编译、测试、安装（mvn / gradle / npm install / tsc 等）" +
-          "即使耗时很久，也仍然用 execute_command：它超时后命令会继续在终端里跑，用 " +
-          "get_process_output(terminalId) 轮询进度即可。用 start_process 跑这类命令会多留一个终端，" +
-          "而且容易把同一条命令跑第二遍。\n\n" +
-          "【返回】立即返回 terminalId（进程句柄）。之后用 get_process_output 看启动日志/报错，用 stop_process 停止。\n" +
-          "若已有相同命令+目录的进程在跑，会复用它并提示（不重复起服务）。",
+          "在后台启动一个进程，立即返回不阻塞。两种用法：\n\n" +
+          "【1. 常驻进程】开发服务器（npm run dev / vite / next dev）、监听（tsc --watch / nodemon / jest --watch）等不会自己结束的命令。" +
+          "这类命令绝不能用 execute_command——它会同步等进程退出，卡到超时。不要设 notify。\n\n" +
+          "【2. 会结束、但要跑很久的后台任务】确定要几分钟以上的完整测试、大型构建、批量数据处理、长时间脚本，设 notify=true：" +
+          "进程结束时系统会自动发一条通知给你（退出码 + 最后的输出），你不用轮询，可以先做别的事；没有别的事就告诉用户在后台跑、结束后汇报，然后结束本轮。" +
+          "一两分钟内能跑完的普通构建、测试、安装仍然用 execute_command。\n\n" +
+          "【返回】立即返回 terminalId。之后用 get_process_output 看日志/报错，用 stop_process 停止。\n" +
+          "若已有相同命令+目录的进程在跑，会复用它并提示（不重复启动）。",
         parameters: {
           type: "object",
           properties: {
             command: { type: "string", description: "要在后台启动的命令" },
             cwd: { type: "string", description: "工作目录（绝对路径），默认终端当前目录" },
+            notify: { type: "boolean", description: "进程结束时自动通知你（只用于会结束的长任务；开发服务器、watch 不要设）" },
           },
           required: ["command"],
         },

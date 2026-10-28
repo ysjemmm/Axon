@@ -291,7 +291,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     setFormRequest,
     setMemory,
     setMemoryHistory,
-    setContextOverflow, setToolHistoryMismatch,
+    setContextOverflow, setToolHistoryMismatch, setTurnStartedAt,
     cancelled, cancelledTurnMsgId, cancelledTurnGeneration, turnGeneration,
     turnStartTime,
     modelRef, statusPhaseRef, toolResultResetTimer,

@@ -9,7 +9,7 @@ import {
   isRelayTool, relayToolLabel, firstLine, OUTPUT_TOOLS,
 } from "../utils";
 import type { ToolStatus } from "@/components/ToolCallItem";
-import type { AttachedFile, ChatMessage, ContextBreakdown, UserSegment } from "../types";
+import type { AttachedFile, BackgroundNoticeInfo, ChatMessage, ContextBreakdown, UserSegment } from "../types";
 import type { EventHandlerCtx, WsMessage } from "./types";
 import { finalizeStreamingTurnAsError } from "./turnHandlers";
 import { artifactReadDescription } from "../artifactMeta";
@@ -100,7 +100,14 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
       const restoredSegments = (m as any).userSegments as UserSegment[] | undefined;
       const clientMessageId = (m as any).clientMessageId as string | undefined;
       const effort = typeof (m as any).effort === "string" ? (m as any).effort : undefined;
-      restored.push({ id: clientMessageId || `hist-u-${seq++}`, role: "user", timestamp: (m as any).timestamp as number | undefined, content: bodyText, images, attachedFiles, userSegments: restoredSegments, effort });
+      const backgroundNotice = (m as any).backgroundNotice as BackgroundNoticeInfo | undefined;
+      restored.push({
+        id: clientMessageId || `hist-u-${seq++}`, role: "user", timestamp: (m as any).timestamp as number | undefined,
+        // 后台任务通知：content 是给模型的长文本，界面只显示那一行标签
+        content: backgroundNotice ? (displayText ?? backgroundNotice.label) : bodyText,
+        images, attachedFiles, userSegments: restoredSegments, effort,
+        ...(backgroundNotice ? { backgroundNotice } : {}),
+      });
     } else if (m.role === "assistant") {
       // 正文来源分两种，必须都读：
       // · 正常回复：content 就是正文。
@@ -377,4 +384,31 @@ export function handleCreditBudgetPaused(msg: WsMessage, ctx: EventHandlerCtx): 
     usage: (msg as any).usage as string | undefined,
   });
   ctx.setStatusText("任务花费较高，等待确认...");
+}
+
+/**
+ * 后台任务结束，后端替 Agent 发起了一轮：插入一行通知（作为本轮的「用户消息」），进入回复中。
+ * 和 useChatSession.sendNow 做同样的轮次准备，只是不向后端发消息——这一轮是后端自己开的。
+ */
+export function handleBackgroundTurn(msg: WsMessage, ctx: EventHandlerCtx): void {
+  const m = msg as WsMessage & { clientMessageId?: string; label?: string; notice?: BackgroundNoticeInfo };
+  const id = m.clientMessageId || `bg-notice-${Date.now()}`;
+  const gen = ++ctx.turnGeneration.current;
+  ctx.currentTurnClientMessageId.current = id;
+  ctx.cancelled.current = false;
+  ctx.setChatHistory((prev) => [...prev, {
+    id,
+    role: "user",
+    timestamp: Date.now(),
+    content: m.label || "后台任务结束",
+    backgroundNotice: m.notice ?? { label: m.label || "后台任务结束", tasks: [] },
+    turnGen: gen,
+  }]);
+  ctx.setIsLoading(true);
+  ctx.setReasoning("");
+  ctx.setStatusText("查看后台任务结果...");
+  ctx.setStatusPhase("thinking");
+  const startedAt = Date.now();
+  ctx.turnStartTime.current = startedAt;
+  ctx.setTurnStartedAt(startedAt);
 }

@@ -21,6 +21,11 @@ export type BackgroundProcessStatus = "running" | "exited" | "stopped";
 export interface StartProcessOptions {
   /** 工作目录（绝对路径） */
   cwd: string;
+  /**
+   * 进程结束时通知 Agent（由会话层处理，宿主实现忽略即可）。
+   * 用于会结束的长任务：Agent 启动后可以去做别的事或结束本轮，任务结束时系统会自动把结果交给它。
+   */
+  notify?: boolean;
 }
 
 /** 启动结果 */
@@ -47,6 +52,18 @@ export interface BackgroundProcessInfo {
   command: string;
   cwd: string;
   status: BackgroundProcessStatus;
+  /** 退出码（exited 时） */
+  exitCode?: number | null;
+  /** 启动 / 结束时刻（毫秒） */
+  startedAt?: number;
+  endedAt?: number;
+}
+
+/** 进程结束事件（自己退出或被停止） */
+export interface ProcessExitEvent {
+  terminalId: string;
+  status: Exclude<BackgroundProcessStatus, "running">;
+  exitCode: number | null;
 }
 
 /** Agent 可用的后台进程管理能力 */
@@ -72,4 +89,10 @@ export interface HostProcessManager {
 
   /** 列出当前由本管理器维护的所有后台进程（含已退出但尚未清理的）。 */
   list(): Promise<BackgroundProcessInfo[]>;
+
+  /**
+   * 订阅进程结束（退出或被停止）。返回取消订阅函数。
+   * 可选：不支持的实现不提供，会话层就不会发「任务结束」通知（Agent 仍可轮询 get_process_output）。
+   */
+  onExit?(listener: (event: ProcessExitEvent) => void): () => void;
 }

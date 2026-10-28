@@ -29,6 +29,7 @@ import { filterPersistableMessages, filterTransientMessages, slimDiffBodies, fin
 import { buildForkMessages } from "./forkHistory.js";
 import { CoworkFlowStore, generateFlowDraft } from "../cowork/flows.js";
 import { getStrategy } from "../providers.js";
+import { backgroundNoticeLabel, formatBackgroundNotice, type BackgroundTaskInfo, type BackgroundTaskNotice } from "./backgroundTasks.js";
 
 /**
  * 每个 session 的代理 channel：拦截该 session emit 的所有事件，
@@ -355,6 +356,11 @@ export class SessionHub {
       this.sharedCommandGate,
     );
     this.wireCommandTrust(session, workspaces?.[0] ?? cwd);
+    // 后台任务：结束通知交给 hub 调度（会话忙就等这一轮结束），列表变化广播给所有面板
+    if (session.backgroundTasks) {
+      session.backgroundTasks.onNotice = (notice) => this.queueBackgroundNotice(sessionId, notice);
+      session.backgroundTasks.onChange = () => { void this.emitBackgroundTasks(); };
+    }
     // 回填该面板期望的编辑模式（auto/manual）：解决 reload 后 set_edit_mode 与会话创建的时序竞态
     if (clientId) {
       const desiredMode = this.clientEditModes.get(clientId);
@@ -608,6 +614,25 @@ export class SessionHub {
         return this.emitFlows(clientId);
       case "cowork_draft_flow":
         return this.handleDraftFlow(cmd.sessionId, cmd.requestId, clientId);
+      case "list_background_tasks":
+        return this.emitBackgroundTasks(clientId);
+      case "get_background_task_output": {
+        const tracker = this.activeSessions.get(cmd.sessionId)?.backgroundTasks;
+        const out = tracker ? await tracker.getOutput(cmd.terminalId, 400) : null;
+        this.emitResult(null, clientId, {
+          type: "background_task_output",
+          requestId: cmd.requestId,
+          sessionId: cmd.sessionId,
+          terminalId: cmd.terminalId,
+          output: out?.output ?? "",
+          status: out?.status ?? "stopped",
+          exitCode: out?.exitCode ?? null,
+        } as AgentEvent);
+        return;
+      }
+      case "stop_background_task":
+        await this.activeSessions.get(cmd.sessionId)?.backgroundTasks?.stop(cmd.terminalId);
+        return this.emitBackgroundTasks(clientId);
       case "focus_browser": {
         // 聚焦浏览器：无 clientId 也能用——对所有活跃会话尝试聚焦（通常只有一个浏览器）
         const sid = this.resolveSessionId(cmd);
@@ -1253,6 +1278,73 @@ export class SessionHub {
     return filterPersistableMessages(messages);
   }
 
+  // ── 后台任务 ──
+
+  /** 等待投递的后台任务结束通知（会话正忙时先攒着） */
+  private readonly pendingNotices = new Map<string, BackgroundTaskNotice[]>();
+
+  /**
+   * 列出所有活跃会话的后台任务。带 clientId 时只回给请求的面板，否则广播（列表变化时）。
+   */
+  private async emitBackgroundTasks(clientId?: string): Promise<void> {
+    const tasks: (BackgroundTaskInfo & { sessionId: string; sessionTitle?: string })[] = [];
+    for (const [sid, session] of this.activeSessions) {
+      if (!session.backgroundTasks) continue;
+      const list = await session.backgroundTasks.list().catch(() => []);
+      if (list.length === 0) continue;
+      const title = (await this.storage.getSession(sid).catch(() => null))?.title;
+      for (const task of list) tasks.push({ ...task, sessionId: sid, ...(title ? { sessionTitle: title } : {}) });
+    }
+    tasks.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
+    const event = { type: "background_tasks", tasks } as AgentEvent;
+    if (clientId) this.sendToClient(clientId, event);
+    else this.channel.emit(event);
+  }
+
+  private queueBackgroundNotice(sessionId: string, notice: BackgroundTaskNotice): void {
+    const list = this.pendingNotices.get(sessionId) ?? [];
+    list.push(notice);
+    this.pendingNotices.set(sessionId, list);
+    // 稍等片刻再投递：几个任务前后脚结束时合并成一轮
+    setTimeout(() => { void this.flushBackgroundNotices(sessionId); }, 500);
+  }
+
+  /**
+   * 投递攒下的通知：替 Agent 发起一轮，内容是任务结果。
+   * 会话正在跑就什么都不做——这一轮结束时会再调用一次（见 handleUserMessage 收尾）。
+   */
+  private async flushBackgroundNotices(sessionId: string): Promise<void> {
+    if (this.runningSessions.has(sessionId)) return;
+    const notices = this.pendingNotices.get(sessionId);
+    const session = this.activeSessions.get(sessionId);
+    if (!notices?.length || !session) return;
+    this.pendingNotices.delete(sessionId);
+    const saved = await this.storage.getSession(sessionId).catch(() => null);
+    const model = session.model || saved?.model;
+    const provider = session.provider || saved?.provider;
+    if (!model || !provider) return;
+    const label = notices.length === 1 ? backgroundNoticeLabel(notices[0]) : `${notices.length} 个后台任务结束`;
+    const notice = {
+      label,
+      tasks: notices.map((n) => ({ terminalId: n.terminalId, command: n.command, exitCode: n.exitCode, startedAt: n.startedAt, endedAt: n.endedAt })),
+    };
+    const clientMessageId = `bg-notice-${Date.now()}`;
+    this.sendTo(sessionId, undefined, { type: "background_turn", clientMessageId, label, notice } as AgentEvent);
+    // 不带 clientId：按 sessionId 定位会话。面板此刻可能已切到别的会话，带上 clientId 会被解析到那条会话上。
+    await this.handleUserMessage({
+      type: "user_message",
+      sessionId,
+      content: notices.map(formatBackgroundNotice).join("\n\n---\n\n"),
+      displayText: label,
+      model,
+      provider,
+      mode: saved?.mode ?? "agent",
+      clientMessageId,
+      backgroundNotice: notice,
+      ...(session.effort ? { effort: session.effort } : {}),
+    } as UserMessageCommand & { sessionId: string }, undefined);
+  }
+
   // ── Cowork 流程 ──
 
   private flowStoreInstance: CoworkFlowStore | null = null;
@@ -1394,6 +1486,7 @@ export class SessionHub {
         attachedFiles: cmd.attachedFiles as { name: string; size: number }[] | undefined,
         effort: typeof cmd.effort === "string" ? cmd.effort : undefined,
         userSegments: cmd.userSegments as unknown[] | undefined,
+        ...(cmd.backgroundNotice ? { backgroundNotice: cmd.backgroundNotice } : {}),
       });
     } catch (err) {
       // 非取消异常（如 LLM 403/网络错误）：agentSession 内部已经推送了完整错误信息
@@ -1432,6 +1525,12 @@ export class SessionHub {
         this.sendTo(turnSid, clientId, { type: "session_title_updated", title } as AgentEvent);
         execSession.appendTrace("session.title_updated", { title });
       }
+    }
+
+    // 这一轮跑着的时候有后台任务结束了：现在投递。稍等一下，让前端排队的用户消息先发出来——
+    // 用户刚说的话优先，通知等那一轮结束再说。
+    if (this.pendingNotices.has(execSessionId)) {
+      setTimeout(() => { void this.flushBackgroundNotices(execSessionId); }, 1500);
     }
   }
 

@@ -168,12 +168,20 @@ export interface ChatMessage {
   userSegments?: UserSegment[];
   /** 本轮实际发给模型的思考强度值（如 high / xhigh）；未选则缺省 */
   effort?: string;
+  /** user 用：这一轮不是用户发的，而是后台任务结束时系统替 Agent 发起的（画成一行通知） */
+  backgroundNotice?: BackgroundNoticeInfo;
   streaming?: boolean;
   /** 本轮状态：pending=等待响应 / running=执行中 / success=正常完成 / cancelled=用户取消 / error=异常中断 */
   turnStatus?: "pending" | "running" | "success" | "cancelled" | "error";
   turnStats?: { elapsed: number; tokens: number; model?: string; modelName?: string; providerName?: string; effort?: string; credits?: number; creditDetail?: CreditDetail } & TurnBillingInfo;
   /** turn 代数：取消后启动新轮时递增，防止陈旧事件穿透到新轮 */
   turnGen?: number;
+}
+
+/** 后台任务结束通知（后端 sessionHub.flushBackgroundNotices） */
+export interface BackgroundNoticeInfo {
+  label: string;
+  tasks: { terminalId: string; command: string; exitCode: number | null; startedAt?: number; endedAt?: number }[];
 }
 
 /**

@@ -52,6 +52,8 @@ export interface EventHandlerCtx {
   setCommandApprovals: (c: Record<string, CommandApproval> | ((prev: Record<string, CommandApproval>) => Record<string, CommandApproval>)) => void;
   setCommandRiskNotice: (c: { id?: string; command: string; reason: string } | null) => void;
   setContextOverflow: (b: boolean) => void;
+  /** 本轮开始时间（驱动「已用时」计时器） */
+  setTurnStartedAt: (n: number) => void;
   setToolHistoryMismatch: (m: { model: string } | null) => void;
 
   // ── refs（跨事件共享的可变状态） ──

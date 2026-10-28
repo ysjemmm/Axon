@@ -40,6 +40,7 @@ import { MemoryPanel } from "./chat/MemoryPanel";
 import { MentionEditor, type MentionEditorHandle } from "./chat/MentionEditor";
 import { EmptyStateGreeting } from "./chat/EmptyStateGreeting";
 import { TokenIndicator } from "./chat/TokenIndicator";
+import { BackgroundTasksButton } from "./chat/BackgroundTasks";
 import { attachmentTypeLabel, imageTypeLabel } from "./chat/attachmentType";
 import { SendStopIcon } from "./chat/SendStopIcon";
 import { ProcessingAttachmentCard, type ProcessingAttachment } from "./chat/ProcessingAttachmentCard";
@@ -2259,6 +2260,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                     onCompact={() => session.compactSession()}
                     breakdown={session.tokenUsage.breakdown}
                   />
+                  {/* 后台任务（AI 启动的服务器 / 长任务）：有任务时才出现 */}
+                  <BackgroundTasksButton clientId={clientId} connected={connected} send={send} />
 
                   <input
                     ref={fileInputRef}

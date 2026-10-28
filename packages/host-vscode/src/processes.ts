@@ -18,6 +18,7 @@ import type {
   ProcessOutputResult,
   BackgroundProcessInfo,
   BackgroundProcessStatus,
+  ProcessExitEvent,
 } from "@axon/core";
 import { interruptTimedOutTask, timedOutRegistry } from "./terminalDisplay.js";
 import { processTerminalEnv } from "./terminalIdentity.js";
@@ -32,6 +33,8 @@ interface ProcEntry {
   exitCode: number | null;
   /** AI 是否已读过它的输出：决定这个「已退出」的终端能否在下次新建终端时被回收 */
   readByAgent: boolean;
+  startedAt: number;
+  endedAt?: number;
 }
 
 /** 单进程输出缓冲上限（字符）：约 256KB，超出后保留尾部 */
@@ -41,17 +44,34 @@ export class VSCodeProcessManager implements HostProcessManager {
   private readonly procs = new Map<string, ProcEntry>();
   private counter = 0;
   private closeDisposable: vscode.Disposable | null = null;
+  private readonly exitListeners = new Set<(event: ProcessExitEvent) => void>();
 
   constructor() {
     // 用户手动关闭终端时，把对应进程标记为 stopped
     this.closeDisposable = vscode.window.onDidCloseTerminal((t) => {
       for (const entry of this.procs.values()) {
         if (entry.terminal === t && entry.status === "running") {
-          entry.status = "stopped";
-          entry.exitCode = t.exitStatus?.code ?? null;
+          this.finish(entry, "stopped", t.exitStatus?.code ?? null);
         }
       }
     });
+  }
+
+  onExit(listener: (event: ProcessExitEvent) => void): () => void {
+    this.exitListeners.add(listener);
+    return () => { this.exitListeners.delete(listener); };
+  }
+
+  /** 进程结束只通知一次（结束事件和关闭终端可能先后到达） */
+  private finish(entry: ProcEntry, status: "exited" | "stopped", exitCode: number | null): void {
+    if (entry.endedAt) return;
+    entry.endedAt = Date.now();
+    if (entry.status === "running") entry.status = status;
+    entry.exitCode = exitCode;
+    const event: ProcessExitEvent = { terminalId: entry.terminalId, status: entry.status === "stopped" ? "stopped" : "exited", exitCode };
+    for (const listener of this.exitListeners) {
+      try { listener(event); } catch { /* 订阅方的异常不影响进程管理 */ }
+    }
   }
 
   async start(command: string, opts: StartProcessOptions): Promise<StartProcessResult> {
@@ -88,6 +108,7 @@ export class VSCodeProcessManager implements HostProcessManager {
       status: "running",
       exitCode: null,
       readByAgent: false,
+      startedAt: Date.now(),
     };
     this.procs.set(terminalId, entry);
 
@@ -111,11 +132,15 @@ export class VSCodeProcessManager implements HostProcessManager {
     }
     const execution = t.shellIntegration.executeCommand(command);
     // 监听结束（常驻进程通常不触发；触发即说明进程退出/被杀）
+    // 结束事件可能早于输出流读完：等流读完再通知，通知里带的最后几行才完整
+    let ended: number | null | undefined;
+    let drained = false;
     const endDisposable = vscode.window.onDidEndTerminalShellExecution((e) => {
       if (e.execution === execution) {
-        if (entry.status === "running") entry.status = "exited";
-        entry.exitCode = e.exitCode ?? null;
+        ended = e.exitCode ?? null;
         endDisposable.dispose();
+        if (drained) this.finish(entry, "exited", ended ?? null);
+        else setTimeout(() => this.finish(entry, "exited", ended ?? null), 1500);
       }
     });
     try {
@@ -128,6 +153,8 @@ export class VSCodeProcessManager implements HostProcessManager {
     } catch {
       /* 读流异常忽略，已收集输出仍保留 */
     }
+    drained = true;
+    if (ended !== undefined) this.finish(entry, "exited", ended);
   }
 
   /**
@@ -185,6 +212,7 @@ export class VSCodeProcessManager implements HostProcessManager {
     const entry = this.procs.get(terminalId);
     if (entry) {
       entry.status = "stopped";
+      this.finish(entry, "stopped", null);
       try {
         entry.terminal.dispose();
       } catch {
@@ -201,6 +229,9 @@ export class VSCodeProcessManager implements HostProcessManager {
       command: e.command,
       cwd: e.cwd,
       status: e.status,
+      exitCode: e.exitCode,
+      startedAt: e.startedAt,
+      endedAt: e.endedAt,
     }));
   }
 }

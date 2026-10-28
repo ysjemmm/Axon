@@ -9,6 +9,7 @@
  */
 
 import type { CoworkCheck } from "../cowork/checks.js";
+import type { BackgroundTaskInfo } from "../session/backgroundTasks.js";
 import type { CoworkFlow, CoworkFlowInputDraft } from "../cowork/flows.js";
 import type { CreditDetail } from "../credits.js";
 import type { BillingMode, TurnCost, TurnUsage } from "../billing.js";
@@ -125,6 +126,11 @@ export type AgentEventPayload =
   | { type: "cowork_outputs"; paths: string[]; files?: { path: string; kind?: "created" | "edited"; snapshotDir?: string }[] }
   // ── Cowork 核对与流程 ──
   | { type: "cowork_checks"; checks: CoworkCheck[] }
+  // ── 后台任务 ──
+  | { type: "background_tasks"; tasks: (BackgroundTaskInfo & { sessionId: string; sessionTitle?: string })[] }
+  | { type: "background_task_output"; requestId?: string; sessionId: string; terminalId: string; output: string; status: string; exitCode: number | null }
+  /** 后台任务结束，系统替 Agent 发起了一轮：前端据此插入一行通知并进入「回复中」 */
+  | { type: "background_turn"; clientMessageId: string; label: string; notice: Record<string, unknown> }
   | { type: "cowork_flows"; flows: CoworkFlow[] }
   | { type: "cowork_flow_saved"; requestId?: string; flow?: CoworkFlow; error?: string }
   | { type: "cowork_flow_draft"; requestId?: string; draft?: Omit<CoworkFlowInputDraft, "id">; error?: string }

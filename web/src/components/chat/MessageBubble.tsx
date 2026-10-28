@@ -4,7 +4,7 @@
  */
 
 import { memo, useState } from "react";
-import { Check, ChevronDown, Copy, Feather, FileText, Pencil, X } from "lucide-react";
+import { Bell, Check, ChevronDown, Copy, Feather, FileText, Pencil, X } from "lucide-react";
 import type { AttachedFile, ChatMessage } from "./types";
 import { formatFileSize } from "./format";
 import { AssistantTurn } from "./AssistantTurn";
@@ -96,6 +96,22 @@ function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRej
       <div className="flex justify-center py-1">
         <span className="text-[11px] text-muted-foreground/60 bg-muted/30 px-3 py-0.5 rounded-full">
           {message.content}
+        </span>
+      </div>
+    );
+  }
+
+  // 后台任务结束通知：这一轮由系统发起，不是用户说的话，画成一行通知而不是右侧气泡
+  if (message.role === "user" && message.backgroundNotice) {
+    const failed = message.backgroundNotice.tasks.some((t) => t.exitCode !== null && t.exitCode !== 0);
+    return (
+      <div className="flex justify-center py-1">
+        <span
+          className={`inline-flex max-w-full items-center gap-1.5 truncate rounded-full px-3 py-0.5 text-[11px] ${failed ? "bg-red-500/10 text-red-600 dark:text-red-400" : "bg-muted/40 text-muted-foreground"}`}
+          title={message.backgroundNotice.tasks.map((t) => t.command).join("\n")}
+        >
+          <Bell className="h-3 w-3 shrink-0" />
+          <span className="truncate">{message.backgroundNotice.label}</span>
         </span>
       </div>
     );
