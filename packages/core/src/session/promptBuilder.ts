@@ -15,14 +15,7 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 import { sanitizeToolPairing } from "../messageSanitizer.js";
 import type { AgentSession } from "../agentSession.js";
 import { workspaceOfPath } from "./focusWorkspace.js";
-
-const ENHANCED_RENDERING_PROTOCOL =
-  "增强渲染协议（覆盖任何旧规则）：只要你的意图是画一张图——流程图、状态图、时序图、类图、ER 图、架构图或关系图——" +
-  "或者是要交付一个可预览的 SVG / HTML 原型，就必须使用 ```svg axon-render / ```mermaid axon-render / ```html axon-render。" +
-  "判定标准是意图，不是语言：想给用户看图，就必须带 axon-render。漏带会被前端当成普通代码块、只显示源码，" +
-  "用户看到的是一段代码而不是图，等于这张图没画出来。" +
-  "唯一不带 axon-render 的场景是展示源码本身——代码示例、历史片段、讲解 HTML/SVG/Mermaid 语法，" +
-  "此时必须使用普通 ```svg / ```mermaid / ```html。";
+import { buildEnvironmentNotice } from "../environment.js";
 
 /*
  * 关于「不要给注入块加说明」—— 这里曾有过一条自我介绍的说明文字（先后两版），
@@ -156,7 +149,8 @@ export class PromptBuilder {
 
   /**
    * 模型冗长度校准：GPT 系模型默认输出比 GLM/Claude 啰嗦得多，需要额外约束才能拉回相近颗粒度。
-   * 仅对 GPT 系生效。
+   * 仅对 GPT 系生效。排版规则（段落优先、不插空行、不稀疏断行）对所有模型都适用，
+   * 已并入系统提示的「回复排版」，这里只留冗长度本身。
    */
   getVerbosityCalibration(): string | null {
     const isGpt = /^gpt/i.test(this.s.model);
@@ -166,11 +160,7 @@ export class PromptBuilder {
       "- 结论先行，直接说重点；不要长篇铺垫、不要复述用户问题、不要逐条罗列你做过的每一步\n" +
       "- 能用一句说清就不要展开成一段；能用一段就不要拆成多个小标题\n" +
       "- 只在用户明确问【为什么/原理/细节】时才展开背景与推理，否则默认给精炼版\n" +
-      "- 实现类任务的收尾总结控制在 5 句以内（用户能看到工具卡片，无需复述过程）\n" +
-      "- 不要用大量分级标题、编号清单把短答案撑长；段落和要点都从简\n" +
-      "- 排版要紧凑：不要在每个要点/句子之间插空行，连续的短句优先合并成自然段\n" +
-      "- 默认优先用连贯段落而不是项目符号列表；只有并列项达到 3 条以上且确实需要逐项区分时才用列表\n" +
-      "- 不要为了可读性把每句话单独断行；除代码块、真正的多层列表、或用户明确要求外，避免稀疏排版"
+      "- 不要用大量分级标题、编号清单把短答案撑长；段落和要点都从简"
     );
   }
 
@@ -417,6 +407,29 @@ export class PromptBuilder {
   }
 
   /**
+   * 动画 / 图片生成未开启时的提示。
+   *
+   * 用户问「能不能做视频 / 画张图」时，模型手里没有工具就容易答「不支持」——其实只是没开。
+   * 这段原本常驻系统提示，开着工具时也占着位置；现在只在缺工具时注入。
+   */
+  private buildCapabilityHint(): string | null {
+    const lines: string[] = [];
+    if (!(this.s.mediaEnabled && this.s.host?.mediaRenderer)) {
+      lines.push(
+        "动画 / 视频：本产品能把 HTML 动画渲染成 GIF / MP4，但用户还没开启。用户问能不能生成视频、做动画时，" +
+        "不要说不支持，告诉他去「设置 → 搜索 axon.media.enabled（Axon 分类下的「允许 AI 生成动画 / 视频」）」打开；开启前可以先用 html 产物交出能播放的页面动画。",
+      );
+    }
+    if (!(this.s.imageEnabled && this.s.host?.imageGenerator)) {
+      lines.push(
+        "图片生成：本产品支持文生图，但用户还没开启或没配置生图服务。用户要插画、封面、写实画面时，" +
+        "不要说不能生成图片，告诉他去「设置 → Axon → 图片生成」打开 axon.image.enabled 并填写服务地址、API Key、模型名。",
+      );
+    }
+    return lines.length > 0 ? `【未开启的能力】\n${lines.map((l) => `- ${l}`).join("\n")}` : null;
+  }
+
+  /**
    * 本轮上下文注入的快照（每项带 key，用于跨轮比较只发变化项）。
    * AgentSession 在 beginTurn() 之后把它挂到本轮用户消息上，本轮之内不再变化。
    */
@@ -433,7 +446,12 @@ export class PromptBuilder {
     const injections: Array<{ key: InjectionKey; message: ChatCompletionMessageParam }> = [];
     const add = (key: InjectionKey, content: string) => injections.push({ key, message: { role: "system", content } });
 
-    add("render", ENHANCED_RENDERING_PROTOCOL);
+    // 运行环境（操作系统 / shell / 日期）：同一天之内不变，按轮快照只在跨天时补发一次
+    add("env", buildEnvironmentNotice({ commands: this.s.mode !== "quest" }));
+
+    // 动画 / 图片生成没开时告诉模型怎么开；开着时用法与对外保密要求都在各自的工具描述里
+    const capabilityHint = this.buildCapabilityHint();
+    if (capabilityHint) add("capabilities", capabilityHint);
 
     const verbosityCalibration = this.getVerbosityCalibration();
     if (verbosityCalibration) {
@@ -519,7 +537,7 @@ export class PromptBuilder {
 }
 
 type InjectionKey =
-  | "render" | "verbosity" | "workspaces" | "focus" | "terminal"
+  | "env" | "capabilities" | "verbosity" | "workspaces" | "focus" | "terminal"
   | "ide" | "skills" | "powers" | "wiki" | "workspaceAxon" | "memory" | "usage";
 
 /** 一项上下文注入的快照（挂在用户消息的 _contextInjections 上，随历史持久化） */
@@ -530,6 +548,9 @@ export interface ContextInjection {
 
 /** 某项注入在新一轮里消失时的作废说明，避免模型继续按历史里的旧版本行事 */
 const RETIRED_NOTICE: Record<string, string> = {
+  // 旧会话的快照里可能还有 render：渲染规则已并入系统提示，不能说成「不再适用」
+  render: "图表渲染规则以系统提示中的「图表渲染」为准。",
+  capabilities: "此前关于「如何开启动画 / 图片生成」的提示已不再适用：对应能力现已开启，用法见工具说明。",
   verbosity: "此前的「输出长度校准」已不再适用。",
   workspaces: "此前的「多工作区规则」已不再适用：当前会话只绑定了一个工作区。",
   focus: "此前的「工作区聚焦」提示已不再适用。",

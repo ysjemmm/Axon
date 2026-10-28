@@ -284,3 +284,22 @@ describe("displayGroupSummary 是纯展示字段", () => {
     expect((a as any).displayGroupSummary).toBeUndefined();
   });
 });
+
+describe("旧会话的系统提示换成当前版本", () => {
+  it("历史里的旧版系统提示被替换，其它消息不动", () => {
+    const history = [
+      { role: "system", content: "你是 Axon，一个 AI 编程助手（旧版提示）……PowerShell 语法" },
+      { role: "user", content: "你好" },
+    ];
+    const s = new AgentSession("d:\\projects\\Axon", channelStub, minimalHost(), history as any);
+    expect((s.messages[0] as any).content).not.toContain("旧版提示");
+    expect((s.messages[0] as any).content).toContain("## 回复排版");
+    expect((s.messages[1] as any).content).toBe("你好");
+  });
+
+  it("不是 Axon 系统提示的 system 消息不替换", () => {
+    const history = [{ role: "system", content: "自定义系统提示" }, { role: "user", content: "你好" }];
+    const s = new AgentSession("d:\\projects\\Axon", channelStub, minimalHost(), history as any);
+    expect((s.messages[0] as any).content).toBe("自定义系统提示");
+  });
+});

@@ -178,3 +178,43 @@ describe("工作区 .axon 注入", () => {
     expect(s.promptBuilder.buildRequestMessages().every((m: any) => m)).toBe(true);
   });
 });
+
+describe("运行环境与未开启能力的注入", () => {
+  it("注入运行环境；问答模式只给日期", () => {
+    const agent = makeSession({ mode: "agent" });
+    const quest = makeSession({ mode: "quest" });
+    const envOf = (s: any) => s.promptBuilder.snapshotContextInjections().find((i: any) => i.key === "env")?.content;
+    expect(envOf(agent)).toMatch(/操作系统 .*今天是/);
+    expect(envOf(quest)).toMatch(/^【运行环境】今天是/);
+  });
+
+  it("渲染协议不再作为注入发送（已并入系统提示）", () => {
+    const keys = makeSession().promptBuilder.snapshotContextInjections().map((i: any) => i.key);
+    expect(keys).not.toContain("render");
+  });
+
+  it("动画 / 图片生成没开时提示怎么开，开了就不提", () => {
+    const off = makeSession();
+    const hint = off.promptBuilder.snapshotContextInjections().find((i: any) => i.key === "capabilities")?.content;
+    expect(hint).toContain("axon.media.enabled");
+    expect(hint).toContain("axon.image.enabled");
+
+    const on = makeSession({
+      mediaEnabled: true, imageEnabled: true, host: { mediaRenderer: {}, imageGenerator: {} },
+    });
+    expect(on.promptBuilder.snapshotContextInjections().map((i: any) => i.key)).not.toContain("capabilities");
+  });
+
+  it("旧会话快照里的 render 项消失时，不能说成「不再适用」", () => {
+    const s = makeSession();
+    s.messages.push({
+      role: "user", content: "旧问题",
+      _contextInjections: [{ key: "render", content: "增强渲染协议（旧）" }],
+    });
+    s.messages.push({ role: "assistant", content: "旧回答" });
+    startTurn(s, "新问题");
+    const req = s.promptBuilder.buildRequestMessages();
+    const notice = req.find((m: any) => typeof m.content === "string" && m.content.includes("图表渲染"));
+    expect(notice?.content).toContain("以系统提示中的「图表渲染」为准");
+  });
+});
