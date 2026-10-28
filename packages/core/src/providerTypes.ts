@@ -84,6 +84,29 @@ export interface ProviderModel {
   disabled?: boolean;
 }
 
+/** 单个模型的单价（每 100 万 token） */
+export interface ModelPrice {
+  /** 输入（未命中缓存） */
+  input?: number;
+  /** 输出 */
+  output?: number;
+  /** 命中缓存的输入；不填按 input 计 */
+  cacheRead?: number;
+}
+
+/**
+ * Provider 计费单价：配置后每轮回复底部显示估算花费，不配置只显示 Token 数。
+ * 只用于本地展示，不会发给任何接口。
+ */
+export interface ProviderPricing {
+  /** 货币符号，例如 "¥"、"$"，默认 "¥" */
+  currency?: string;
+  /** 按模型 id 的单价 */
+  models?: Record<string, ModelPrice>;
+  /** 没单独配置的模型用这一档 */
+  default?: ModelPrice;
+}
+
 /** 归一化后的 provider（registry 产出，运行时与 UI 都用它） */
 export interface ResolvedProvider {
   /** provider key */
@@ -104,6 +127,8 @@ export interface ResolvedProvider {
    * 防止仓库里的配置把用户保存的额度凭证带到别处。
    */
   quotaTrusted?: boolean;
+  /** 计费单价（仅用于回复底部的花费估算） */
+  pricing?: ProviderPricing;
   /** 是否内置 Provider */
   builtin: boolean;
   /** 仅 esign：除 apiKey 外（baseUrl / 协议 / 模型目录）均锁定不可改 */
@@ -123,6 +148,8 @@ export interface RawProviderEntry {
   apiKey?: string;
   /** 可选的额度查询规则；实际请求由宿主执行，避免向网页暴露 API Key */
   quota?: ProviderQuotaConfig;
+  /** 计费单价（仅用于回复底部的花费估算） */
+  pricing?: ProviderPricing;
   /** 认证头格式：bearer（默认）= Authorization: Bearer / x-api-key（Anthropic 等） */
   apiKeyHeader?: ApiKeyHeader;
   protocol?: ProviderProtocol;

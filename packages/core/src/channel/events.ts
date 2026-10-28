@@ -9,6 +9,7 @@
  */
 
 import type { CreditDetail } from "../credits.js";
+import type { BillingMode, TurnCost, TurnUsage } from "../billing.js";
 import type { WikiGenerationEvent } from "../wiki/wikiController.js";
 import type { WorkspaceAxonStatus } from "../session/workspaceConfig.js";
 
@@ -34,13 +35,13 @@ export type AgentEventPayload =
   | { type: "stream_start" }
   | { type: "stream_delta"; content: string }
   | { type: "stream_pause" }
-  | { type: "stream_end"; elapsed: number; tokens: number; model?: string; modelName?: string; providerName?: string; effort?: string; credits?: number; creditDetail?: CreditDetail }
+  | { type: "stream_end"; elapsed: number; tokens: number; model?: string; modelName?: string; providerName?: string; effort?: string; credits?: number; creditDetail?: CreditDetail; billing?: BillingMode; usage?: TurnUsage; cost?: TurnCost }
   /**
    * 本轮非正常结束。reason 区分"用户主动取消"与"provider/网关异常"——
    * 两者都走这个事件，但对用户的含义完全不同（"我停的" vs "它挂了"）。
    * 可选是为了向后兼容：缺省时呈现端按 cancelled 处理，行为与该字段引入前一致。
    */
-  | { type: "turn_cancelled"; elapsed: number; tokens: number; model?: string; modelName?: string; providerName?: string; effort?: string; credits?: number; creditDetail?: CreditDetail; reason?: "cancelled" | "error" }
+  | { type: "turn_cancelled"; elapsed: number; tokens: number; model?: string; modelName?: string; providerName?: string; effort?: string; credits?: number; creditDetail?: CreditDetail; billing?: BillingMode; usage?: TurnUsage; cost?: TurnCost; reason?: "cancelled" | "error" }
   | { type: "reasoning_delta"; content: string; partIndex?: number; itemId?: string }
   /**
    * 状态文案。
@@ -73,7 +74,7 @@ export type AgentEventPayload =
   | { type: "error"; content: string }
 
   // ── Credits 预算门（成本护栏：本轮花费达到硬暂停阈值，等待用户选择继续/停止） ──
-  | { type: "credit_budget_paused"; spent: number; threshold: number; model?: string }
+  | { type: "credit_budget_paused"; spent: number; threshold: number; model?: string; usage?: string }
 
   // ── 工具调用 ──
   | {

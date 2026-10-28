@@ -161,7 +161,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const compactionMigratedRef = useRef<{ newSessionId: string; parentSessionId?: string } | null>(null);
   compactionMigratedRef.current = compactionMigrated;
   /** Credits 预算门硬暂停触发时后端暂停等待用户选择（继续/停止） */
-  const [creditBudgetPaused, setCreditBudgetPaused] = useState<{ spent: number; threshold: number } | null>(null);
+  const [creditBudgetPaused, setCreditBudgetPaused] = useState<{ spent: number; threshold: number; usage?: string } | null>(null);
   const [pendingPaths, setPendingPaths] = useState<string[]>([]);
   const [pendingDiffs, setPendingDiffs] = useState<Record<string, { oldContent: string; newContent: string }>>({});
   const [pendingExpanded, setPendingExpanded] = useState(false);

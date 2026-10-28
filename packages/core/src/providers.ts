@@ -14,7 +14,7 @@ import { ChatCompletionsStrategy } from "./llm/chatCompletionsStrategy.js";
 import { ResponsesStrategy } from "./llm/responsesStrategy.js";
 import { AnthropicMessagesStrategy } from "./llm/anthropicMessagesStrategy.js";
 import type { LLMStrategy } from "./llm/types.js";
-import { type ProviderProtocol, type ResolvedProvider, type ApiKeyHeader } from "./providerTypes.js";
+import { type ProviderProtocol, type ResolvedProvider, type ApiKeyHeader, type ProviderPricing } from "./providerTypes.js";
 import type { ProviderRegistry } from "./providerRegistry.js";
 
 /** Provider 运行时配置（client 创建所需的最小信息） */
@@ -105,6 +105,12 @@ export function getModelDisplayName(modelId: string, preferredProvider?: string)
   const provider = preferredProvider ? _resolved.get(normalizeProvider(preferredProvider)) : undefined;
   const model = provider?.models.find((item) => item.id === modelId);
   return model?.name?.trim() || undefined;
+}
+
+/** provider 配置的计费单价（未配置返回 undefined） */
+export function getProviderPricing(providerName?: string): ProviderPricing | undefined {
+  if (!providerName) return undefined;
+  return _resolved?.get(normalizeProvider(providerName))?.pricing;
 }
 
 /** 获取 provider 的展示名称；找不到时回退 provider key。 */

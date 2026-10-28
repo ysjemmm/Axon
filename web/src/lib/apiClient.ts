@@ -541,6 +541,7 @@ export interface ResolvedProviderInfo {
   protocol: ProviderProtocol;
   models: ProviderModelInfo[];
   quota?: ProviderQuotaConfig;
+  pricing?: ProviderPricing;
   builtin: boolean;
   locked: boolean;
   configured: boolean;
@@ -574,6 +575,16 @@ export interface RawProviderEntry {
   apiKeyHeader?: string;
   protocol?: ProviderProtocol;
   models?: ProviderModelInfo[];
+}
+
+/** 单个模型的单价（每 100 万 token），与 core/providerTypes.ts 同构 */
+export interface ModelPrice { input?: number; output?: number; cacheRead?: number }
+
+/** Provider 计费单价：配置后回复底部显示估算花费，不配置只显示 Token 数 */
+export interface ProviderPricing {
+  currency?: string;
+  models?: Record<string, ModelPrice>;
+  default?: ModelPrice;
 }
 
 /** 用量查询规则（与 core/quota/types.ts 的 QuotaRule 同构；旧版 url + fields 规则仍兼容） */
@@ -766,6 +777,11 @@ export function setProviderQuota(level: ProviderLevel, name: string, quota: Prov
 }
 
 /** 在扩展进程中测试额度规则，响应预览已脱敏并截断。 */
+/** 保存计费单价；传 null 删除 */
+export function setProviderPricing(level: ProviderLevel, name: string, pricing: ProviderPricing | null, workspace?: string): Promise<{ ok: boolean }> {
+  return put(`/api/providers/${level}/${encodeURIComponent(name)}/pricing${providerQuery(workspace)}`, { pricing });
+}
+
 export function testProviderQuota(name: string, quota: ProviderQuotaConfig, workspace?: string): Promise<ProviderQuotaResult> {
   return post(`/api/providers/${encodeURIComponent(name)}/quota/test${providerQuery(workspace)}`, { quota });
 }

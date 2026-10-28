@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2, RefreshCw, Wand2, Save, Play, KeyRound, ChevronRight, WalletCards, Trash2, Power, Gauge } from "lucide-react";
+import { Loader2, RefreshCw, Wand2, Save, Play, KeyRound, ChevronRight, WalletCards, Trash2, Power, Gauge, Coins } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -21,6 +21,9 @@ import {
   type QuotaPresetInfo,
   type QuotaDetectResponse,
   type QuotaOverviewEntry,
+  type ModelPrice,
+  type ProviderPricing,
+  setProviderPricing,
   setProviderQuota,
   testProviderQuota,
   setProviderQuotaTokens,
@@ -383,6 +386,161 @@ export function QuotaConfigPanel({ provider, level, workspace, onChanged }: {
               </div>
             )}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 计费单价 ──────────────────────────────────────────────────────────────
+
+type PriceField = keyof ModelPrice;
+type PriceDraft = Record<PriceField, string>;
+const PRICE_FIELDS: { key: PriceField; label: string }[] = [
+  { key: "input", label: "输入" },
+  { key: "cacheRead", label: "缓存命中" },
+  { key: "output", label: "输出" },
+];
+/** 「其他模型」那一行在草稿里的键，避开真实模型 id */
+const DEFAULT_ROW = "\u0000default";
+
+const toDraft = (price?: ModelPrice): PriceDraft => ({
+  input: price?.input?.toString() ?? "",
+  cacheRead: price?.cacheRead?.toString() ?? "",
+  output: price?.output?.toString() ?? "",
+});
+
+function fromDraft(draft: PriceDraft | undefined): ModelPrice | undefined {
+  if (!draft) return undefined;
+  const out: ModelPrice = {};
+  for (const { key } of PRICE_FIELDS) {
+    const text = draft[key].trim();
+    if (!text) continue;
+    const n = Number(text);
+    if (!Number.isFinite(n) || n < 0) throw new Error(`「${text}」不是有效的单价`);
+    out[key] = n;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * 计费单价：配置后回复底部显示估算花费（按端点实报的 token 数计算），不配置只显示 Token 数。
+ * 单价按每 100 万 token 填写，和各家价目表的写法一致。
+ */
+export function PricingPanel({ provider, level, workspace, onChanged }: {
+  provider: ResolvedProviderInfo;
+  level: ProviderLevel;
+  workspace?: string;
+  onChanged: () => void;
+}) {
+  const pricing = provider.pricing;
+  const [open, setOpen] = useState(false);
+  const [currency, setCurrency] = useState(pricing?.currency ?? "¥");
+  const [rows, setRows] = useState<Record<string, PriceDraft>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  // 每次展开都从当前配置重建草稿，避免保存后再打开看到旧值
+  useEffect(() => {
+    if (!open) return;
+    const next: Record<string, PriceDraft> = { [DEFAULT_ROW]: toDraft(pricing?.default) };
+    for (const m of provider.models) next[m.id] = toDraft(pricing?.models?.[m.id]);
+    // 已配置但模型目录里已经没有的 id 也保留，免得保存时被悄悄删掉
+    for (const [id, price] of Object.entries(pricing?.models ?? {})) if (!next[id]) next[id] = toDraft(price);
+    setRows(next);
+    setCurrency(pricing?.currency ?? "¥");
+  }, [open, pricing, provider.models]);
+
+  const configuredCount = Object.keys(pricing?.models ?? {}).length + (pricing?.default ? 1 : 0);
+  const statusLabel = configuredCount ? `已配置 ${configuredCount} 项` : "未配置 · 只显示 Token 数";
+  const nameOf = (id: string) => provider.models.find((m) => m.id === id)?.name || id;
+
+  const save = async (next: ProviderPricing | null, message: string) => {
+    setError(""); setNotice(""); setBusy(true);
+    try {
+      await setProviderPricing(level, provider.name, next, workspace);
+      setNotice(message);
+      onChanged();
+    } catch (e) { setError(`保存失败：${(e as Error).message}`); }
+    setBusy(false);
+  };
+
+  const submit = () => {
+    let next: ProviderPricing;
+    try {
+      const models: Record<string, ModelPrice> = {};
+      for (const [id, draft] of Object.entries(rows)) {
+        if (id === DEFAULT_ROW) continue;
+        const price = fromDraft(draft);
+        if (price) models[id] = price;
+      }
+      const fallback = fromDraft(rows[DEFAULT_ROW]);
+      next = { currency: currency.trim() || "¥", ...(fallback ? { default: fallback } : {}), ...(Object.keys(models).length ? { models } : {}) };
+      if (!fallback && !Object.keys(models).length) { void save(null, "没有填写单价，回复底部只显示 Token 数。"); return; }
+    } catch (e) { setError((e as Error).message); return; }
+    void save(next, "已保存，之后的回复底部会显示估算花费。");
+  };
+
+  const ids = Object.keys(rows).filter((id) => id !== DEFAULT_ROW);
+
+  return (
+    <div className="mt-3 pt-2 border-t border-border/60">
+      <button onClick={() => setOpen((v) => !v)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+        <Coins className="w-3.5 h-3.5" />计费单价 · {statusLabel}
+        <ChevronRight className={`w-3.5 h-3.5 transition-transform ${open ? "rotate-90" : ""}`} />
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2.5">
+          <p className="text-[11px] text-muted-foreground">
+            填了单价，回复底部按端点实际返回的 token 数估算本轮花费；不填只显示 Token 数。单价按每 100 万 token 填写，缓存命中不填时按输入价计算。
+          </p>
+          <div className="flex items-center gap-2">
+            <label className="text-xs">货币符号</label>
+            <Input value={currency} onChange={(e) => setCurrency(e.target.value)} className="h-7 w-16 text-xs" maxLength={8} />
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-[11px] text-muted-foreground">
+                  <th className="py-1 pr-2 text-left font-normal">模型</th>
+                  {PRICE_FIELDS.map((f) => <th key={f.key} className="py-1 px-1 text-left font-normal">{f.label}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {[...ids, DEFAULT_ROW].map((id) => (
+                  <tr key={id}>
+                    <td className="py-1 pr-2 max-w-[10rem] truncate" title={id === DEFAULT_ROW ? undefined : id}>
+                      {id === DEFAULT_ROW ? <span className="text-muted-foreground">其他模型</span> : nameOf(id)}
+                    </td>
+                    {PRICE_FIELDS.map((f) => (
+                      <td key={f.key} className="py-1 px-1">
+                        <Input
+                          inputMode="decimal"
+                          value={rows[id]?.[f.key] ?? ""}
+                          placeholder={f.key === "cacheRead" ? "同输入" : "—"}
+                          onChange={(e) => setRows((prev) => ({ ...prev, [id]: { ...(prev[id] ?? toDraft()), [f.key]: e.target.value } }))}
+                          className="h-7 w-20 text-xs"
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={submit} disabled={busy}>
+              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Save className="w-3.5 h-3.5 mr-1" />}保存单价
+            </Button>
+            {pricing && (
+              <Button size="sm" variant="ghost" onClick={() => void save(null, "已清除单价，回复底部只显示 Token 数。")} disabled={busy}>
+                <Trash2 className="w-3.5 h-3.5 mr-1" />清除
+              </Button>
+            )}
+          </div>
+          {error && <p className="text-xs text-destructive break-all">{error}</p>}
+          {notice && <p className="text-xs text-muted-foreground">{notice}</p>}
         </div>
       )}
     </div>

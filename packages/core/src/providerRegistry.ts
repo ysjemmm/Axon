@@ -178,6 +178,7 @@ export class ProviderRegistry {
       protocol: entry.protocol === "responses" || entry.protocol === "anthropic" ? entry.protocol : "chat",
       models: dedupeModelsById(Array.isArray(entry.models) ? entry.models : []),
       quota: entry.quota,
+      pricing: entry.pricing,
       // 工作区里定义的 provider：额度请求只允许发往它自己的域名（见 quota/engine 的 host 校验）
       quotaTrusted: entry.quota ? level !== "workspace" : undefined,
       builtin: false,

@@ -374,6 +374,7 @@ export function handleCreditBudgetPaused(msg: WsMessage, ctx: EventHandlerCtx): 
   ctx.setCreditBudgetPaused({
     spent: (msg as any).spent as number,
     threshold: (msg as any).threshold as number,
+    usage: (msg as any).usage as string | undefined,
   });
   ctx.setStatusText("任务花费较高，等待确认...");
 }

@@ -101,6 +101,9 @@ export function handleStreamEnd(msg: WsMessage, ctx: EventHandlerCtx): void {
     effort: (msg as any).effort as string | undefined,
     credits: (msg as any).credits as number | undefined,
     creditDetail: (msg as any).creditDetail as any | undefined,
+    billing: (msg as any).billing,
+    usage: (msg as any).usage,
+    cost: (msg as any).cost,
   };
   // stream_end 意味着整轮结束，标记所有还在 streaming 的 reasoning segment 完结
   ctx.setChatHistory((prev) => {

@@ -218,6 +218,11 @@ export class TokenAccountant {
     }
     // 缓存命中 token：每轮独立记录（用于本轮 credits 计算的折扣）
     this.s.lastCachedTokens = usage?.cachedTokens ?? 0;
+    // 本轮累计：花费估算按端点实报口径（每次请求的 prompt 都计费）
+    if (usage && usage.promptTokens > 0) {
+      this.s.turnInputTokens += usage.promptTokens;
+      this.s.turnCachedTokens += Math.min(usage.cachedTokens ?? 0, usage.promptTokens);
+    }
     if (usage) {
       const turnTotal = usage.totalTokens || (usage.promptTokens + usage.completionTokens);
       if (turnTotal > 0) {

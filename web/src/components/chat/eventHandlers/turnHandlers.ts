@@ -117,6 +117,9 @@ export function handleTurnCancelled(msg: WsMessage, ctx: EventHandlerCtx): void 
     effort: (msg as any).effort as string | undefined,
     credits: (msg as any).credits as number | undefined,
     creditDetail: (msg as any).creditDetail as CreditDetail | undefined,
+    billing: (msg as any).billing,
+    usage: (msg as any).usage,
+    cost: (msg as any).cost,
   };
   const targetMsgId = ctx.cancelledTurnMsgId.current;
   ctx.cancelledTurnMsgId.current = null;

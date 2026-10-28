@@ -34,7 +34,7 @@ import {
   type ProviderModelInfo,
   type ProbedModelInfo,
 } from "@/lib/apiClient";
-import { QuotaConfigPanel, QuotaOverviewCard } from "@/components/QuotaPanels";
+import { PricingPanel, QuotaConfigPanel, QuotaOverviewCard } from "@/components/QuotaPanels";
 import { BUILTIN_MODELS, protocolForVendor, type BuiltinModel, type BuiltinModelTag } from "@/lib/builtinModels";
 
 function isInVSCode(): boolean {
@@ -264,7 +264,7 @@ function BuiltinCard({ provider, level, workspace, onChanged }: { provider: Reso
             {provider.locked && <Tag variant="outline" title="该 provider 仅允许修改 API Key">仅可改 Key</Tag>}
           </div>
           <div className="text-xs text-muted-foreground truncate">
-            {provider.baseUrl || "默认 Base URL"} · {provider.models.length} 模型 · {provider.protocol}
+            {provider.baseUrl || "默认 Base URL"} · {provider.models.length} 模型
           </div>
         </div>
       </div>
@@ -448,7 +448,7 @@ function CustomCard({ provider, level, workspace, onChanged }: { provider: Resol
               <Tag variant="outline" title="来自环境变量（~/.axon/.env），不在 providers.json 中">环境变量</Tag>
             )}
           </div>
-          <div className="text-xs text-muted-foreground truncate">{provider.baseUrl} · {provider.models.length} 模型 · {provider.protocol}</div>
+          <div className="text-xs text-muted-foreground truncate">{provider.baseUrl} · {provider.models.length} 模型</div>
         </div>
         {/* env 来源没有 providers.json 条目，编辑会凭空造一条新记录，故不提供 */}
         {!isEnvSource && (
@@ -515,6 +515,7 @@ function CustomCard({ provider, level, workspace, onChanged }: { provider: Resol
             <>
               <ModelManager models={provider.models} editable onSave={saveModels} providerName={provider.name} level={level} workspace={workspace} />
               <QuotaConfigPanel provider={provider} level={level} workspace={workspace} onChanged={onChanged} />
+              <PricingPanel provider={provider} level={level} workspace={workspace} onChanged={onChanged} />
             </>
           )}
         </div>
@@ -679,7 +680,7 @@ function ModelRow({ model, editable, confirmDelete, onToggle, onEdit, onDelete }
       <div className="min-w-0 flex-1">
         <span className={`text-xs font-medium ${model.disabled ? "line-through" : ""}`}>{model.name || model.id}</span>
         {model.vendor && <Tag className="ml-1">{model.vendor}</Tag>}
-        {model.protocol && <Tag variant="outline" className="ml-1">{model.protocol}</Tag>}
+        {model.protocol && model.protocol !== "chat" && <Tag variant="outline" className="ml-1">{model.protocol}</Tag>}
         {model.vision && <Tag variant="primary" className="ml-1">多模态</Tag>}
         {model.thinking && <Tag variant="outline" className="ml-1">思考</Tag>}
         {model.cacheControl && <Tag className="ml-1">缓存</Tag>}

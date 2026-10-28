@@ -1,3 +1,4 @@
+import { TurnUsageLabel } from "./TurnUsageLabel";
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Code } from "lucide-react";
 import { AxonSpark } from "@/components/AxonSpark";
@@ -155,42 +156,7 @@ function AssistantTurnImpl({
 
         {!message.streaming && message.turnStats && (
           <div className="mt-3 text-[11px] text-muted-foreground animate-rise-in">
-            {message.turnStats.creditDetail ? (
-              <span className="relative inline-flex cursor-default border-b border-dotted border-muted-foreground/40 group/credits">
-                Credits: {(message.turnStats.credits ?? 0).toFixed(2)}
-                {uncertain ? "(?)" : ""}
-                <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 hidden rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs leading-relaxed text-white shadow-xl group-hover/credits:block">
-                  <span className="flex flex-col">
-                    <span className="grid grid-cols-[auto_auto] gap-x-3 gap-y-0.5 whitespace-nowrap">
-                      <span className="text-white/70">Memory</span>
-                      <span className="text-right">
-                        {(message.turnStats.creditDetail.memoryTokens ?? 0).toLocaleString()} tokens
-                      </span>
-                      <span className="text-white/70">System</span>
-                      <span className="text-right">
-                        {(message.turnStats.creditDetail.systemTokens ?? 0).toLocaleString()} tokens
-                      </span>
-                      <span className="text-white/70">Question</span>
-                      <span className="text-right">
-                        {(message.turnStats.creditDetail.questionTokens ?? message.turnStats.creditDetail.inputTokens).toLocaleString()} tokens
-                      </span>
-                      <span className="text-white/70">Output</span>
-                      <span className="text-right">
-                        {message.turnStats.creditDetail.outputTokens.toLocaleString()} tokens
-                      </span>
-                    </span>
-                    <span className="mt-1 text-center text-[9px] text-white/50">
-                      Token split is approximate.
-                    </span>
-                  </span>
-                </span>
-              </span>
-            ) : (
-              <span>
-                Credits: {(message.turnStats.credits ?? 0).toFixed(2)}
-                {uncertain ? "(?)" : ""}
-              </span>
-            )}
+            <TurnUsageLabel stats={message.turnStats} uncertain={uncertain} />
             {message.turnStats.modelName || message.turnStats.model ? (
               <>
                 {" · "}

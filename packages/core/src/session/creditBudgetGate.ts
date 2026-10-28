@@ -7,7 +7,8 @@
  */
 
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { calculateCredits, formatCredits, DEFAULT_CREDIT_BUDGET_CONFIG } from "../credits.js";
+import { calculateCredits, DEFAULT_CREDIT_BUDGET_CONFIG } from "../credits.js";
+import { describeTurnUsage } from "../billing.js";
 import type { CreditBudgetUserConfig } from "../credits.js";
 import type { AgentSession } from "../agentSession.js";
 
@@ -47,12 +48,15 @@ export class CreditBudgetGate {
     const estimatedOutput = this.s.lastTurnOutputTokens || this.s.lastCompletionTokens || 0;
     const spent = calculateCredits(this.s.model, { ...breakdown, outputTokens: estimatedOutput });
 
+    // 阈值仍按 Credits 指数判断（只是失控循环的护栏），展示给用户和模型的是花费 / Token 数
+    const usageText = () => describeTurnUsage(this.s.buildTurnBilling(estimatedOutput), spent);
+
     if (spent >= this.pauseThreshold) {
-      const choice = await this.waitForChoice(spent);
+      const choice = await this.waitForChoice(spent, usageText());
       if (choice === "stop") {
         this.s.messages.push({
           role: "assistant",
-          content: `本轮任务已消耗 ${formatCredits(spent)} credits，用户选择在此暂停。已完成的部分保留，需要继续时请告诉我下一步。`,
+          content: `本轮任务已消耗 ${usageText()}，用户选择在此暂停。已完成的部分保留，需要继续时请告诉我下一步。`,
         } as ChatCompletionMessageParam);
         this.s.stampCancelledTurnStats(turnStartTime, streamedContentThisRound);
         return true;
@@ -67,7 +71,7 @@ export class CreditBudgetGate {
       this.s.messages.push({
         role: "system",
         content:
-          `⚠️ 本轮任务已消耗 ${formatCredits(spent)} credits，成本较高。如果当前目标已经基本达成或还差不多的收尾工作，` +
+          `⚠️ 本轮任务已消耗 ${usageText()}，成本较高。如果当前目标已经基本达成或还差不多的收尾工作，` +
           `请尽快用文字给用户一个结论性回复，不要为了"更完美"继续做非必要的额外探索/验证。` +
           `如果任务确实还没做完（用户明确要求的核心工作尚未完成），仍应继续把它做完，不要半途而废。`,
         _tailInjected: true,
@@ -81,8 +85,8 @@ export class CreditBudgetGate {
    * 等待用户对预算暂停做出选择。发送 credit_budget_paused 事件给前端，
    * 阻塞直到用户选择"继续"或"停止"。120 秒超时自动选"继续"（防死锁）。
    */
-  private waitForChoice(spent: number): Promise<"continue" | "stop"> {
-    this.s.send("credit_budget_paused", { spent, threshold: this.pauseThreshold, model: this.s.model });
+  private waitForChoice(spent: number, usage: string): Promise<"continue" | "stop"> {
+    this.s.send("credit_budget_paused", { spent, threshold: this.pauseThreshold, model: this.s.model, usage });
     return new Promise<"continue" | "stop">((resolve) => {
       this.choiceResolve = resolve;
       const cancelCheck = setInterval(() => {

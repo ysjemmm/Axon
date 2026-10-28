@@ -17,6 +17,7 @@ function makeSession(messages: any[]) {
     cumulativeTokens: 0,
     lastTotalTokens: 0,
     buildTokenBreakdown: () => ({ memoryTokens: 0, systemTokens: 0, questionTokens: 0, outputTokens: 0 }),
+    buildTurnBilling: () => ({ billing: "tokens", usage: { input: 0, cached: 0, output: 0 } }),
     persistMessages,
     send,
   };

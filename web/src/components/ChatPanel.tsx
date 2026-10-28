@@ -2028,9 +2028,9 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               <div className="flex items-start gap-2">
                 <span className="text-sm">💰</span>
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-foreground">本轮任务已花费 {session.creditBudgetPaused.spent.toFixed(2)} credits</p>
+                  <p className="text-xs font-medium text-foreground">本轮任务已消耗 {session.creditBudgetPaused.usage ?? `${session.creditBudgetPaused.spent.toFixed(2)} credits`}</p>
                   <p className="text-[11px] text-muted-foreground mt-0.5">
-                    花费已超过 {session.creditBudgetPaused.threshold.toFixed(0)} credits，是否继续当前任务？
+                    消耗明显偏高，是否继续当前任务？
                   </p>
                 </div>
               </div>

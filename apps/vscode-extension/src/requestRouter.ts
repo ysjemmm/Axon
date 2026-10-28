@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { resolve, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { RelayStore, renameSessionTitle, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, assertUniqueModelIds, supportsThinking, providerEnvKeys, stripProviderEnvLines, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry, type ProviderQuotaConfig, validateQuotaRule, presetsForBaseUrl, detectQuota } from "@axon/core";
+import { RelayStore, renameSessionTitle, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, assertUniqueModelIds, supportsThinking, providerEnvKeys, stripProviderEnvLines, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry, type ProviderQuotaConfig, type ProviderPricing, type ModelPrice, validateQuotaRule, presetsForBaseUrl, detectQuota } from "@axon/core";
 import { createVSCodeAgentHost } from "@axon/host-vscode";
 import { queryProvider, quotaSecrets, clearQuotaSecrets, quotaOverview, invalidateQuotaOverview } from "./quotaService.js";
 import { createMarketplaceRegistry, persistSourcesToSettings } from "./marketplaceBridge.js";
@@ -802,6 +802,21 @@ export class RequestRouter {
       invalidateQuotaOverview(name);
       return { ok: true };
     }
+    // 计费单价：只用于回复底部的花费估算，不参与任何请求
+    const providerPricingMatch = path.match(/^\/api\/providers\/(user|workspace)\/([^/]+)\/pricing$/);
+    if (providerPricingMatch && method === "PUT") {
+      const level = providerPricingMatch[1] as "user" | "workspace";
+      const name = decodeURIComponent(providerPricingMatch[2]);
+      if (RESERVED_PROVIDER_NAMES.includes(name)) throw new Error("官方 Provider 按 Credits 计费，不支持自定义单价");
+      const pricing = normalizePricing((body as { pricing?: unknown } | undefined)?.pricing);
+      const config = await readProviderConfig(level, query.get("workspace") || d.defaultWorkspace);
+      const entry = config.providers?.[name];
+      if (!entry) throw new Error(`provider 不存在：${name}`);
+      if (pricing) entry.pricing = pricing;
+      else delete entry.pricing;
+      await writeProviderConfig(level, config, query.get("workspace") || d.defaultWorkspace);
+      return { ok: true };
+    }
     const providerQuotaPresetsMatch = path.match(/^\/api\/providers\/([^/]+)\/quota\/presets$/);
     if (providerQuotaPresetsMatch && method === "GET") {
       const provider = await findProvider(decodeURIComponent(providerQuotaPresetsMatch[1]));
@@ -1141,4 +1156,32 @@ function flattenProviderModels(providers: ResolvedProvider[]) {
           defaultEffort: m.defaultEffort,
         })),
     );
+}
+
+/** 校验并清理计费单价：只保留非负数字；什么都没填返回 undefined（即删除配置） */
+function normalizePricing(raw: unknown): ProviderPricing | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const input = raw as { currency?: unknown; default?: unknown; models?: unknown };
+  const cleanPrice = (value: unknown): ModelPrice | undefined => {
+    if (!value || typeof value !== "object") return undefined;
+    const out: ModelPrice = {};
+    for (const key of ["input", "output", "cacheRead"] as const) {
+      const n = (value as Record<string, unknown>)[key];
+      if (n === undefined || n === null || n === "") continue;
+      if (typeof n !== "number" || !Number.isFinite(n) || n < 0) throw new Error(`单价必须是非负数字：${key}`);
+      out[key] = n;
+    }
+    return Object.keys(out).length ? out : undefined;
+  };
+  const models: Record<string, ModelPrice> = {};
+  if (input.models && typeof input.models === "object") {
+    for (const [id, value] of Object.entries(input.models as Record<string, unknown>)) {
+      const price = cleanPrice(value);
+      if (price) models[id] = price;
+    }
+  }
+  const fallback = cleanPrice(input.default);
+  if (!fallback && Object.keys(models).length === 0) return undefined;
+  const currency = typeof input.currency === "string" ? input.currency.trim().slice(0, 8) : "";
+  return { ...(currency ? { currency } : {}), ...(fallback ? { default: fallback } : {}), ...(Object.keys(models).length ? { models } : {}) };
 }

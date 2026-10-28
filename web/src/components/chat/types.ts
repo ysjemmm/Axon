@@ -171,9 +171,20 @@ export interface ChatMessage {
   streaming?: boolean;
   /** 本轮状态：pending=等待响应 / running=执行中 / success=正常完成 / cancelled=用户取消 / error=异常中断 */
   turnStatus?: "pending" | "running" | "success" | "cancelled" | "error";
-  turnStats?: { elapsed: number; tokens: number; model?: string; modelName?: string; providerName?: string; effort?: string; credits?: number; creditDetail?: CreditDetail };
+  turnStats?: { elapsed: number; tokens: number; model?: string; modelName?: string; providerName?: string; effort?: string; credits?: number; creditDetail?: CreditDetail } & TurnBillingInfo;
   /** turn 代数：取消后启动新轮时递增，防止陈旧事件穿透到新轮 */
   turnGen?: number;
+}
+
+/**
+ * 本轮用量展示方式（后端 billing.ts 决定）：
+ * credits = 官方 provider 的 Credits；cost = 按 provider 配置的单价估算花费；tokens = 未配置单价，只显示 Token 数。
+ * 旧历史没有这些字段，按 credits 展示。
+ */
+export interface TurnBillingInfo {
+  billing?: "credits" | "cost" | "tokens";
+  usage?: { input: number; cached: number; output: number; estimated?: boolean };
+  cost?: { amount: number; currency: string };
 }
 
 /** Credits 明细（hover 展示） */

@@ -1,4 +1,5 @@
 import { calculateCredits, buildCreditDetail } from "../credits.js";
+import type { TurnBilling } from "../billing.js";
 import { estimateTokensFromText } from "../llm/tokenEstimator.js";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 
@@ -24,6 +25,8 @@ export interface TurnFinalizerInput {
   lastTurnOutputTokens: number;
   lastCompletionTokens: number;
   buildTokenBreakdown: () => { memoryTokens: number; systemTokens: number; questionTokens: number; cachedTokens?: number };
+  /** 本轮用量展示；测试等场景可不传 */
+  buildTurnBilling?: (estimatedOutput: number) => TurnBilling;
   rollingSummaryAccumulated: number;
   triggerTokens: number;
 }
@@ -35,6 +38,7 @@ export interface TurnFinalizerOutput {
   turnTokens: number;
   credits: number;
   creditDetail: unknown;
+  billing?: TurnBilling;
   nextRollingSummaryAccumulated: number;
   shouldTriggerRollingSummary: boolean;
 }
@@ -60,6 +64,7 @@ export class TurnFinalizer {
     const breakdown = { ...input.buildTokenBreakdown(), outputTokens: estimatedOutput };
     const credits = calculateCredits(input.model, breakdown);
     const creditDetail = buildCreditDetail(input.model, breakdown);
+    const billing = input.buildTurnBilling?.(estimatedOutput);
 
     const nextMessages = [...input.messages, {
       role: "assistant",
@@ -68,7 +73,7 @@ export class TurnFinalizer {
       ...(input.anthropicThinkingBlocks?.length
         ? { anthropic_thinking_blocks: input.anthropicThinkingBlocks }
         : {}),
-      turnStats: { elapsed, tokens: turnTokens, model: input.model, providerName: input.providerName, effort: input.effort, credits, creditDetail },
+      turnStats: { elapsed, tokens: turnTokens, model: input.model, providerName: input.providerName, effort: input.effort, credits, creditDetail, ...billing },
     } as any];
 
     // ⚠️ 这里【不再】在回合结束时裁剪旧工具结果（曾经调用 pruneOldToolResults）。
@@ -91,6 +96,7 @@ export class TurnFinalizer {
       turnTokens,
       credits,
       creditDetail,
+      billing,
       nextRollingSummaryAccumulated,
       shouldTriggerRollingSummary,
     };

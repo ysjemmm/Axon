@@ -25,7 +25,8 @@ import { LoopGuard, policyForModel, type StuckTarget, type LoopGuardSnapshot } f
 import { McpRegistry } from "./mcp/mcpRegistry.js";
 import { modelContextWindow } from "./llm/modelContext.js";
 import { SYSTEM_PROMPT, QUEST_SYSTEM_PROMPT, isAxonSystemPrompt } from "./systemPrompt.js";
-import { getStrategy, findProviderForModel, declaredThinkingFor, declaredEffortValuesFor, declaredCacheControlFor, declaredVisionFor, getVisionFallbackModel, getModelDisplayName, getProviderDisplayName } from "./providers.js";
+import { getStrategy, findProviderForModel, declaredThinkingFor, declaredEffortValuesFor, declaredCacheControlFor, declaredVisionFor, getVisionFallbackModel, getModelDisplayName, getProviderDisplayName, getProviderPricing } from "./providers.js";
+import { resolveTurnBilling, type TurnBilling } from "./billing.js";
 import { PromptBuilder, isRealUserMessage } from "./session/promptBuilder.js";
 import {
   createHumanizedStatusState,
@@ -169,6 +170,10 @@ export class AgentSession {
    *  注意：一次用户输入可能触发多回合（每次工具调用都是一回合），
    *  lastCompletionTokens 只保留最后一回合，会漏掉中间回合生成 tool_call 的输出。 */
   /** @internal */ lastTurnOutputTokens = 0;
+  /** 本轮所有请求端点实报的输入 token 合计（含缓存命中），turn 开始时清零；用于花费估算 */
+  /** @internal */ turnInputTokens = 0;
+  /** 本轮所有请求端点实报的缓存命中 token 合计 */
+  /** @internal */ turnCachedTokens = 0;
   /** 本轮开始前的消息条数快照（push 本轮用户消息之前记录）。
    *  收尾时 messages[turnStartMsgCount..] 即本轮新增内容（用户消息 + 工具结果 + 中间 assistant 回填）。 */
   /** @internal */ turnStartMsgCount = 0;
@@ -2141,6 +2146,22 @@ export class AgentSession {
     this.tokenAccountant.updateAndSendTokenUsage();
   }
 
+  /**
+   * 本轮用量展示（花费 / Token 数 / 官方 Credits，见 billing.ts）。
+   * 端点没报 usage 时用本地估算的 prompt 规模兜底，并标记 estimated。
+   */
+  /** @internal */ buildTurnBilling(estimatedOutput?: number): TurnBilling {
+    const reported = this.turnInputTokens > 0;
+    const output = this.lastTurnOutputTokens || estimatedOutput || this.lastCompletionTokens || 0;
+    let input = this.turnInputTokens;
+    if (!reported) {
+      const b = this.buildTokenBreakdown();
+      input = b.memoryTokens + b.systemTokens + b.questionTokens;
+    }
+    const usage = { input, cached: reported ? this.turnCachedTokens : 0, output, ...(reported ? {} : { estimated: true }) };
+    return resolveTurnBilling(this.provider, getProviderPricing(this.provider), this.model, usage);
+  }
+
   /** 记录某回合 API 返回的真实 token 用量（委托 TokenAccountant） */
   private recordTurnUsage(usage?: { promptTokens: number; completionTokens: number; totalTokens: number; cachedTokens?: number }): void {
     this.tokenAccountant.recordTurnUsage(usage);
@@ -2296,12 +2317,13 @@ export class AgentSession {
       lastTurnOutputTokens: this.lastTurnOutputTokens,
       lastCompletionTokens: this.lastCompletionTokens,
       buildTokenBreakdown: () => this.buildTokenBreakdown(),
+      buildTurnBilling: (estimatedOutput) => this.buildTurnBilling(estimatedOutput),
       rollingSummaryAccumulated: this.rollingSummaryAccumulated,
       triggerTokens: this.compactionConfig.triggerTokens,
     });
     this.messages = out.messages;
     this.persistMessages(); // 最终回复落盘，切走也保留
-    this.send("stream_end", { elapsed: out.elapsed, tokens: out.turnTokens, model: this.model, modelName: getModelDisplayName(this.model, this.provider), providerName: getProviderDisplayName(this.provider), effort: this.effort, credits: out.credits, creditDetail: out.creditDetail });
+    this.send("stream_end", { elapsed: out.elapsed, tokens: out.turnTokens, model: this.model, modelName: getModelDisplayName(this.model, this.provider), providerName: getProviderDisplayName(this.provider), effort: this.effort, credits: out.credits, creditDetail: out.creditDetail, ...out.billing });
     this.rollingSummaryAccumulated = out.nextRollingSummaryAccumulated;
     if (out.shouldTriggerRollingSummary) this.maybeRollingSummary();
     // 混合记忆策略：每轮都登记；若滚动压缩已启动，入口会等待它完成后再决定是否后台更新，
@@ -2804,6 +2826,8 @@ export class AgentSession {
     this.cancelled = false; // 新一轮用户输入，重置取消标志
     this.lastSubAgentTokens = 0; // 新一轮用户输入，重置本轮 subagent 用量统计
     this.lastTurnOutputTokens = 0; // 新一轮用户输入，重置本轮输出 token 累计
+    this.turnInputTokens = 0;
+    this.turnCachedTokens = 0;
     // 新一轮用户输入，重置「单轮探索预算」（read_file / search / list_dir 的本轮累计上限）。
     // 放在这里而不是别处：用户再次发消息就是新的对话边界，预算必须跟着重置，
     // 否则它会跨轮累积、把后续每一轮都限死。
@@ -3326,7 +3350,7 @@ export class AgentSession {
     };
     const summaryCredits = calculateCredits(this.model, summaryBreakdown);
     const summaryCreditDetail = buildCreditDetail(this.model, summaryBreakdown);
-    this.send("stream_end", { elapsed: Date.now() - turnStartTime, tokens: summaryTokens, model: this.model, modelName: getModelDisplayName(this.model, this.provider), providerName: getProviderDisplayName(this.provider), effort: this.effort, credits: summaryCredits, creditDetail: summaryCreditDetail });
+    this.send("stream_end", { elapsed: Date.now() - turnStartTime, tokens: summaryTokens, model: this.model, modelName: getModelDisplayName(this.model, this.provider), providerName: getProviderDisplayName(this.provider), effort: this.effort, credits: summaryCredits, creditDetail: summaryCreditDetail, ...this.buildTurnBilling(summaryBreakdown.outputTokens) });
   }
 }
 
