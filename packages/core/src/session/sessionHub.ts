@@ -880,7 +880,7 @@ export class SessionHub {
    * · 会话列表 / 顶栏「分叉」（不带截断参数）—— 只继承记忆（SessionData.memory），
    *   不复制对话历史。用户要继承的是结论，不是过程：新会话 messages 留空，交给
    *   AgentSession 构造函数按 mode 播种 system prompt；记忆随后由 hydrateMemory 回填，
-   *   作为尾部注入每轮发出（见 PromptBuilder.buildInjections），于是分叉出来的会话
+   *   作为按轮注入每轮发出（见 PromptBuilder.buildInjections），于是分叉出来的会话
    *   一开口就带着此前沉淀的结论。⚠️ 这个入口的语义是既有契约，不要改。
    *
    * · 某条 AI 回复上的「从这里分叉」（带截断参数）—— 额外把截至那一轮为止的消息
@@ -971,7 +971,7 @@ export class SessionHub {
       mode.runtime,
     );
     session.setSessionId(created.id);
-    // 回填记忆：新实例的 memory 默认为空，不回填的话尾部注入拿不到结论，分叉就白做了。
+    // 回填记忆：新实例的 memory 默认为空，不回填的话按轮注入拿不到结论，分叉就白做了。
     session.hydrateMemory(source.memory);
     this.lastActiveSessionId = created.id;
     this.registerPersistence(session, created.id);

@@ -316,7 +316,7 @@ export const TOOL_CATALOG: Record<ToolName, ToolSpec> = {
   [ToolName.ReportOutputs]: { status: S("正在整理产出文件...", "editing"), requiresArgs: true, transient: true },
   // 会话记忆：入参是整份 md（可能不短），标 transient 让工具的【结果】跨轮被裁掉。
   // 调用本身仍留在历史的 assistant 消息里，故只在值得记的时候调用。
-  // 记忆的正式落点是 SessionData.memory，随后由 PromptBuilder 作为尾部注入。
+  // 记忆的正式落点是 SessionData.memory，随后由 PromptBuilder 作为按轮注入。
   [ToolName.UpdateMemory]: { status: S("正在更新会话记忆...", "thinking"), requiresArgs: true, transient: true },
   // 产物：入参 content 就是整份成品（可能很大），调用本身会留在 assistant 消息里；
   // 标 transient 让工具【结果】那条短回执跨轮被裁掉，不占上下文。
