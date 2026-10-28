@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { applyArtifactEdits, artifactTypeOf, editArtifact, isInsideDir, readArtifact, readSkillFile } from "./artifactTools.js";
 
 /** 内存文件系统：只实现这几个工具用到的方法 */
@@ -8,14 +8,21 @@ function memHost(files: Record<string, string>, dirs: string[] = []) {
     read: async (p: string) => (p in files ? files[p] : null),
     write: async (p: string, c: string) => { files[p] = c; },
     stat: async (p: string) => (p in files ? { isFile: true, isDir: false, size: files[p].length } : dirs.includes(p) ? { isFile: false, isDir: true } : null),
+    // 用 dirname / basename 而不是字符串拼 "/"：实现在 Windows 上会把这些路径 resolve 成
+    // D:\... 形式，父目录分隔符是反斜杠，按正斜杠比较会一个都匹配不上。
     readdir: async (d: string) => Object.keys(files)
-      .filter((p) => p.startsWith(d + "/") && !p.slice(d.length + 1).includes("/"))
-      .map((p) => ({ name: p.slice(d.length + 1), isFile: true, isDir: false })),
+      .filter((p) => dirname(p) === d)
+      .map((p) => ({ name: basename(p), isFile: true, isDir: false })),
   };
   return { fs } as any;
 }
 
-const DIR = "/home/u/.axon/artifacts/s1";
+/**
+ * ⚠️ 必须过一遍 resolve：实现内部用 resolve/join 把路径规范成绝对路径，
+ * Windows 上 `/home/u/...` 会变成 `D:\home\u\...`。fixture 里若用原始 POSIX 串作键，
+ * 与实现查找的路径永远对不上，测试在 Windows 上必然失败。
+ */
+const DIR = resolve("/home/u/.axon/artifacts/s1");
 
 describe("产物路径与类型", () => {
   it("只认产物目录之内的路径", () => {
@@ -75,8 +82,10 @@ describe("read_artifact / read_skill_file", () => {
   });
 
   it("只能读技能 / Power 目录，相对路径按最近加载的技能目录解析", async () => {
-    const skill = "/home/u/.axon/skills/design";
-    const host = memHost({ [`${skill}/templates/card.html`]: "<div>card</div>", "/repo/secret.env": "KEY=1" });
+    // 同 DIR：过 resolve 才与实现解析出的形式一致（Windows 下带盘符）
+    const skill = resolve("/home/u/.axon/skills/design");
+    // 用 join 而不是手拼 "/"：Windows 上 skill 带反斜杠，混拼出来的键与实现解析结果不一致
+    const host = memHost({ [join(skill, "templates/card.html")]: "<div>card</div>", "/repo/secret.env": "KEY=1" });
     expect((await readSkillFile(host, [skill], { path: "templates/card.html" }, skill)).result).toBe("<div>card</div>");
     expect((await readSkillFile(host, [skill], { path: "/repo/secret.env" }, skill)).ok).toBe(false);
     expect((await readSkillFile(host, [skill], { path: "../../../../repo/secret.env" }, skill)).ok).toBe(false);
