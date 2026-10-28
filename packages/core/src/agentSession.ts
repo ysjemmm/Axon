@@ -68,7 +68,7 @@ import { TokenAccountant } from "./session/tokenAccountant.js";
 import { ToolDefBuilder } from "./session/toolDefBuilder.js";
 import { McpController } from "./session/mcpController.js";
 import { buildToolTurnAssistantMessage } from "./session/toolTurnMessage.js";
-import { ToolGroupTracker, generateToolGroupSummary, type ClosedToolGroup } from "./session/toolGroupSummary.js";
+import { ToolGroupTracker, generateToolGroupSummary, isVisibleProse, type ClosedToolGroup } from "./session/toolGroupSummary.js";
 import { DelegateRunner } from "./session/delegateRunner.js";
 import { RelayToolRunner } from "./session/relayToolRunner.js";
 import { AskUserToolExecutor, type AskUserQuestion, type AskUserAnswer } from "./session/askUserToolExecutor.js";
@@ -2859,6 +2859,12 @@ export class AgentSession {
           pendingTextBuffer += text;
           // 实时流式发送：确保前端打字机有内容可逐帧消化。
           commitPendingText();
+          // 可见正文一出现，前端的折叠组就到此结束：立刻生成摘要，不等这一轮输出完——
+          // 这段正文若是最终回复，等它写完摘要要晚出来十几秒。之后的 onRound 再遇到
+          // 这段正文时分组已关闭，不会重复生成。
+          if (isVisibleProse(streamedContentThisRound)) {
+            this.summarizeToolGroups(strategy, this.toolGroupTracker.close());
+          }
           },
         onToolCallDetected: (name, id) => {
           this.trace("tool.detected", { name, id }, this.turnCount);
