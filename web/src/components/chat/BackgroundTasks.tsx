@@ -3,7 +3,8 @@
  *   · Agent 任务：用户「交给后台执行」的大任务，每个是一条独立会话，可打开看过程、停止；
  *   · 进程：AI 用 start_process 启动的进程（开发服务器、长时间测试 / 构建 / 数据处理）。
  *
- * 输入区工具栏上的一个小按钮，有后台任务时才出现；运行中的数量直接写在按钮上。
+ * 输入区工具栏上的一个小按钮，有任务在跑（或有做完还没看的 Agent 任务）时才出现；运行中的数量直接写在按钮上。
+ * 已经结束的（成功 / 失败 / 停止）不列出来：结果已经交给 AI 或通知过你了。
  * 点开是任务列表：状态、命令、所属会话、用时、是否「结束时通知 AI」，可以看输出、停止。
  * 列表跨所有活跃会话 —— 切到别的会话时，之前会话启动的服务器还在跑，也要看得见、停得掉。
  */
@@ -38,8 +39,6 @@ interface TaskOutput {
 
 const taskKey = (t: Pick<BackgroundTask, "sessionId" | "terminalId">) => `${t.sessionId}:${t.terminalId}`;
 
-/** 任务结束后按钮再保留多久 */
-const RECENT_MS = 30 * 60 * 1000;
 
 function formatDuration(ms: number): string {
   const sec = Math.max(0, Math.round(ms / 1000));
@@ -222,13 +221,6 @@ export function BackgroundTasksButton({ clientId, connected, send }: { clientId:
     setPos({ left, bottom: window.innerHeight - rect.top + 8, width });
   }, []);
 
-  // 关着的时候每分钟刷新一次「现在」，让早已结束的任务按时把按钮收起来
-  const hasTasks = tasks.length > 0 || agentTasks.length > 0;
-  useEffect(() => {
-    if (open || !hasTasks) return;
-    const timer = setInterval(() => setNow(Date.now()), 60_000);
-    return () => clearInterval(timer);
-  }, [open, hasTasks]);
 
   // 打开时每秒刷新用时；点外面关闭；窗口尺寸变化时跟着按钮重新定位
   useEffect(() => {
@@ -245,9 +237,11 @@ export function BackgroundTasksButton({ clientId, connected, send }: { clientId:
   }, [open, place]);
 
   // 有任务在跑、或最近 30 分钟内有任务结束（可能还想看输出）才显示；早就结束的不常驻占位
-  const recent = tasks.some((t) => t.status === "running" || (t.endedAt !== undefined && now - t.endedAt < RECENT_MS))
-    || agentTasks.some((t) => t.status === "running" || t.unread || (t.endedAt !== undefined && now - t.endedAt < RECENT_MS));
-  if (!recent && !open) return null;
+  // 只列还在跑的：结束了的（成功 / 失败 / 停止）不再展示——结果已经交给 AI 或通知过你了。
+  // Agent 任务例外：做完但你还没看过结果的留着（带红点），看过就收起
+  const liveTasks = tasks.filter((t) => t.status === "running");
+  const liveAgents = agentTasks.filter((t) => t.status === "running" || t.unread);
+  if (liveTasks.length === 0 && liveAgents.length === 0) return null;
 
   return (
     <div ref={rootRef} className="relative">
@@ -267,21 +261,21 @@ export function BackgroundTasksButton({ clientId, connected, send }: { clientId:
         <div ref={panelRef} style={{ left: pos.left, bottom: pos.bottom, width: pos.width }} className="fixed z-[70] overflow-hidden rounded-xl border border-border bg-background shadow-xl">
           <div className="flex items-center justify-between border-b border-border px-3 py-2">
             <span className="text-[12px] font-medium text-foreground">后台任务</span>
-            <span className="text-[11px] text-muted-foreground">{running > 0 ? `${running} 个运行中` : "都已结束"}</span>
+            <span className="text-[11px] text-muted-foreground">{running > 0 ? `${running} 个运行中` : "有任务完成了"}</span>
           </div>
           <div className="max-h-[420px] overflow-y-auto">
-            {agentTasks.length > 0 && (
+            {liveAgents.length > 0 && (
               <>
                 <div className="bg-muted/30 px-3 py-1 text-[10.5px] font-medium text-muted-foreground">Agent 任务</div>
-                {agentTasks.slice(0, 20).map((task) => (
+                {liveAgents.slice(0, 20).map((task) => (
                   <AgentTaskRow key={task.id} task={task} now={now} onOpen={() => { agent.open(task); setOpen(false); }} onStop={() => agent.stop(task)} onRemove={() => agent.remove(task)} />
                 ))}
               </>
             )}
-            {tasks.length > 0 && (
+            {liveTasks.length > 0 && (
               <>
-                {agentTasks.length > 0 && <div className="bg-muted/30 px-3 py-1 text-[10.5px] font-medium text-muted-foreground">进程</div>}
-                {tasks.map((task) => (
+                {liveAgents.length > 0 && <div className="bg-muted/30 px-3 py-1 text-[10.5px] font-medium text-muted-foreground">进程</div>}
+                {liveTasks.map((task) => (
                   <TaskRow key={taskKey(task)} task={task} now={now} output={outputs[taskKey(task)]} onLoad={() => loadOutput(task)} onStop={() => stop(task)} />
                 ))}
               </>
