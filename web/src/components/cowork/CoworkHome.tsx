@@ -53,8 +53,22 @@ function FlowCard({ flow, onRun, onEdit, onDelete, onShare }: { flow: CoworkFlow
   );
 }
 
+const ROLE_KEY = "axon.cowork.templateRole";
+
 export function CoworkHome({ flows, onRunFlow, onEditFlow, onDeleteFlow, onUseTemplate, onNewFlow, onShareFlow }: CoworkHomeProps) {
-  const [role, setRole] = useState<FlowRole>("finance");
+  // 记住上次选的角色：HR、面试官每次打开都要先点一下自己的分类太烦了
+  const [role, setRoleState] = useState<FlowRole>(() => {
+    try {
+      const saved = localStorage.getItem(ROLE_KEY) as FlowRole | null;
+      return saved && FLOW_ROLES.some((r) => r.id === saved) ? saved : "finance";
+    } catch {
+      return "finance";
+    }
+  });
+  const setRole = (next: FlowRole) => {
+    setRoleState(next);
+    try { localStorage.setItem(ROLE_KEY, next); } catch { /* 存不了就只在本次生效 */ }
+  };
   const templates = FLOW_TEMPLATES.filter((t) => t.role === role);
   return (
     <div className="mx-auto w-full max-w-[max(640px,80%)] py-6">
@@ -79,7 +93,7 @@ export function CoworkHome({ flows, onRunFlow, onEditFlow, onDeleteFlow, onUseTe
       <section className="mt-6">
         <div className="mb-2 flex items-center gap-3">
           <h3 className="text-[12px] font-medium text-muted-foreground">从模板开始</h3>
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1">
             {FLOW_ROLES.map((r) => (
               <button
                 key={r.id}
@@ -98,7 +112,7 @@ export function CoworkHome({ flows, onRunFlow, onEditFlow, onDeleteFlow, onUseTe
                 <Play className="h-3 w-3 shrink-0 text-muted-foreground" />{t.name}
               </span>
               <span className="mt-1 line-clamp-2 text-[12px] leading-snug text-muted-foreground">{t.description}</span>
-              <span className="mt-2 text-[11px] text-muted-foreground/80">需要：{t.inputs.map((i) => i.label).join("、")}</span>
+              <span className="mt-2 text-[11px] text-muted-foreground/80">需要：{t.inputs.map((i) => (i.optional ? `${i.label}（可选）` : i.label)).join("、")}</span>
             </button>
           ))}
         </div>
