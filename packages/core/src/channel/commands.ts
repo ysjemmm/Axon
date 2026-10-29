@@ -136,6 +136,9 @@ export type ControlCommandPayload =
   | { type: "connector_delete"; id: string }
   /** 试连：草稿（未保存）或已保存的连接器，列出它提供的工具 */
   | { type: "connector_test"; connector: unknown; requestId?: string }
+  // 插话：回复进行中追加消息（字段同 user_message）；会话空闲时等同于发一条普通消息
+  | (Omit<UserMessageCommand, "type"> & { type: "steer_message" })
+  | { type: "steer_cancel"; clientMessageId: string }
   // 后台任务（start_process 启动的进程），跨所有活跃会话
   | { type: "list_background_tasks" }
   | { type: "get_background_task_output"; sessionId: string; terminalId: string; requestId?: string }

@@ -5,6 +5,7 @@
  * 主 hook 构建 ctx 后传给 createEventHandler，再分发到各 handler 函数。
  */
 
+import type { PendingSteer } from "../useChatSession";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { WsMessage } from "@/hooks/useWebSocket";
 import type { TokenUsageState,
@@ -54,6 +55,9 @@ export interface EventHandlerCtx {
   setContextOverflow: (b: boolean) => void;
   /** 本轮开始时间（驱动「已用时」计时器） */
   setTurnStartedAt: (n: number) => void;
+  /** 已发出、还没被模型看到的插话 */
+  pendingSteersRef: MutableRefObject<PendingSteer[]>;
+  setPendingSteers: Dispatch<SetStateAction<PendingSteer[]>>;
   setToolHistoryMismatch: (m: { model: string } | null) => void;
 
   // ── refs（跨事件共享的可变状态） ──

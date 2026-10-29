@@ -11,6 +11,8 @@ import {
 import type { ToolStatus } from "@/components/ToolCallItem";
 import type { AttachedFile, BackgroundNoticeInfo, ChatMessage, ContextBreakdown, UserSegment } from "../types";
 import type { EventHandlerCtx, WsMessage } from "./types";
+import type { PendingSteer } from "../useChatSession";
+import { sealReasoning } from "../reasoningPlacement";
 import { finalizeStreamingTurnAsError } from "./turnHandlers";
 import { artifactReadDescription } from "../artifactMeta";
 
@@ -411,4 +413,74 @@ export function handleBackgroundTurn(msg: WsMessage, ctx: EventHandlerCtx): void
   const startedAt = Date.now();
   ctx.turnStartTime.current = startedAt;
   ctx.setTurnStartedAt(startedAt);
+}
+
+/** 插话对应的用户气泡（和 useChatSession.sendNow 里用户消息的形状一致） */
+function steerBubble(steer: PendingSteer, gen: number): ChatMessage {
+  const ub = steer.payload.userBubble;
+  return {
+    id: steer.id,
+    role: "user",
+    timestamp: Date.now(),
+    content: ub.content,
+    images: ub.images && ub.images.length > 0 ? [...ub.images] : undefined,
+    attachedFiles: ub.attachedFiles && ub.attachedFiles.length > 0 ? ub.attachedFiles : undefined,
+    userSegments: ub.segments && ub.segments.length > 0 ? ub.segments : undefined,
+    effort: ub.effort,
+    turnGen: gen,
+  };
+}
+
+function takeSteers(ctx: EventHandlerCtx, ids: string[]): PendingSteer[] {
+  const picked = ctx.pendingSteersRef.current.filter((s) => ids.includes(s.id));
+  ctx.setPendingSteers((prev) => prev.filter((s) => !ids.includes(s.id)));
+  return picked;
+}
+
+/**
+ * 插话已经插进对话：在时间线上把它放到此刻的位置——收起当前这段回复，插入用户气泡，
+ * 后面的输出接在一段新的回复里（重开会话时历史也是这个形状）。
+ */
+export function handleSteerAbsorbed(msg: WsMessage, ctx: EventHandlerCtx): void {
+  const ids = ((msg as { clientMessageIds?: string[] }).clientMessageIds ?? []);
+  const steers = takeSteers(ctx, ids);
+  if (steers.length === 0) return;
+  // 打字机里还没出完的字先落到当前这段回复里，再插气泡，顺序才对
+  ctx.typewriter.flush(ctx);
+  const gen = ctx.turnGeneration.current;
+  ctx.setChatHistory((prev) => {
+    const updated = [...prev];
+    const last = updated[updated.length - 1];
+    if (last?.role === "assistant" && last.streaming) {
+      updated[updated.length - 1] = { ...last, segments: sealReasoning(last.segments || []) ?? last.segments, streaming: false };
+    }
+    updated.push(...steers.map((s) => steerBubble(s, gen)));
+    updated.push({ id: `assistant-${Date.now()}`, role: "assistant", segments: [], streaming: true, turnStatus: "running", turnGen: gen });
+    return updated;
+  });
+  ctx.currentTurnClientMessageId.current = steers[steers.length - 1].id;
+  ctx.setStatusText("看到你的补充，继续处理...");
+}
+
+/** 这一轮没来得及插入：后端拿插话开了新一轮。和 sendNow 一样准备新一轮，只是不再发消息 */
+export function handleSteerTurn(msg: WsMessage, ctx: EventHandlerCtx): void {
+  const ids = ((msg as { clientMessageIds?: string[] }).clientMessageIds ?? []);
+  const steers = takeSteers(ctx, ids);
+  const gen = ++ctx.turnGeneration.current;
+  ctx.currentTurnClientMessageId.current = ids[0] ?? null;
+  ctx.cancelled.current = false;
+  if (steers.length > 0) ctx.setChatHistory((prev) => [...prev, ...steers.map((s) => steerBubble(s, gen))]);
+  ctx.setIsLoading(true);
+  ctx.setReasoning("");
+  ctx.setStatusText("思考中...");
+  ctx.setStatusPhase("thinking");
+  const startedAt = Date.now();
+  ctx.turnStartTime.current = startedAt;
+  ctx.setTurnStartedAt(startedAt);
+}
+
+/** 撤回结果：撤回成功就把它从待发里去掉；已经被模型看到的撤不回，保持原样等它出现在时间线上 */
+export function handleSteerCancelled(msg: WsMessage, ctx: EventHandlerCtx): void {
+  const m = msg as { clientMessageId?: string; ok?: boolean };
+  if (m.ok && m.clientMessageId) ctx.setPendingSteers((prev) => prev.filter((s) => s.id !== m.clientMessageId));
 }

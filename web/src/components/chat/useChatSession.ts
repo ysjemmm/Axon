@@ -29,6 +29,12 @@ function readStoredModelId(): string {
   }
 }
 
+/** 已发出、还没被模型看到的插话 */
+export interface PendingSteer {
+  id: string;
+  payload: SubmitPayload;
+}
+
 export interface SubmitPayload {
   /** 加入聊天时间线的用户气泡 */
   userBubble: { content: string; images?: string[]; attachedFiles?: AttachedFile[]; segments?: UserSegment[]; effort?: string };
@@ -183,6 +189,14 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const [contextOverflow, setContextOverflow] = useState(false);
   const [toolHistoryMismatch, setToolHistoryMismatch] = useState<{ model: string } | null>(null);
   const [messageQueue, setMessageQueue] = useState<Array<{ id: string; payload: SubmitPayload }>>([]);
+  /**
+   * 插话：回复进行中发出的消息。已经发给后端，等模型下一次请求时插进对话（steer_absorbed），
+   * 或者这一轮结束后被拿去开新一轮（steer_turn）。在那之前显示在输入框上方，可以撤回。
+   */
+  const [pendingSteers, setPendingSteers] = useState<PendingSteer[]>([]);
+  // 事件处理器是稳定闭包，读最新的待发插话要走 ref
+  const pendingSteersRef = useRef<PendingSteer[]>([]);
+  useEffect(() => { pendingSteersRef.current = pendingSteers; }, [pendingSteers]);
 
   // ── refs ───────────────────────────────────────────────────────────
   const cancelled = useRef(false);
@@ -292,6 +306,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     setMemory,
     setMemoryHistory,
     setContextOverflow, setToolHistoryMismatch, setTurnStartedAt,
+    pendingSteersRef, setPendingSteers,
     cancelled, cancelledTurnMsgId, cancelledTurnGeneration, turnGeneration,
     turnStartTime,
     modelRef, statusPhaseRef, toolResultResetTimer,
@@ -506,14 +521,30 @@ export function useChatSession(opts: UseChatSessionOptions) {
     setTurnStartedAt(startedAt);
   }, [send, providerState]);
 
+  /**
+   * 发消息。回复进行中不再排队等这一轮结束，而是「插话」：立刻发给后端，模型下一步就能看到，
+   * 手上的动作照常继续。只有压缩进行中（会话正在被改写）才排队。
+   */
   const submit = useCallback((payload: SubmitPayload): boolean => {
-    if (isLoading || isCompacting) {
+    if (isCompacting) {
       setMessageQueue((prev) => [...prev, { id: `q-${Date.now()}`, payload }]);
+      return true;
+    }
+    if (isLoading) {
+      const id = `user-${Date.now()}`;
+      setPendingSteers((prev) => [...prev, { id, payload }]);
+      const finalProvider = payload.send.provider ?? providerState;
+      send({ type: "steer_message", ...payload.send, clientMessageId: id, provider: finalProvider });
       return true;
     }
     sendNow(payload);
     return false;
-  }, [isLoading, isCompacting, sendNow]);
+  }, [isLoading, isCompacting, sendNow, send, providerState]);
+
+  /** 撤回还没被模型看到的插话 */
+  const cancelSteer = useCallback((id: string) => {
+    send({ type: "steer_cancel", clientMessageId: id });
+  }, [send]);
 
   /**
    * 手动压缩上下文。带上当前选中的 model/provider——用户可能刚切换了模型选择器
@@ -826,6 +857,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     mode, think, effort, setEffort, questWebSearch, setQuestWebSearch,
     // 动作
     submit, removeFromQueue, cancelTurn,
+    pendingSteers, cancelSteer,
     setEditModePreference, acceptEdits, rejectEdits, undoEdits, editUserMessage, confirmTool,
     /** 从某条 AI 回复分叉：新会话带截至那一轮为止的历史前缀 */
     forkFromMessage,

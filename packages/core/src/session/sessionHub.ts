@@ -768,6 +768,14 @@ export class SessionHub {
       case "user_message":
         if (cmd.content || cmd.images) await this.handleUserMessage(cmd, clientId);
         return;
+      case "steer_message":
+        return this.handleSteer(cmd, clientId);
+      case "steer_cancel": {
+        const sid = this.resolveSessionId(cmd);
+        const ok = this.getActiveSession(sid)?.cancelSteer(cmd.clientMessageId) ?? false;
+        this.emitResult(sid, clientId, { type: "steer_cancelled", clientMessageId: cmd.clientMessageId, ok } as AgentEvent);
+        return;
+      }
     }
   }
 
@@ -1328,6 +1336,59 @@ export class SessionHub {
     }
   }
 
+  // ── 插话 ──
+
+  /**
+   * 回复进行中追加的消息：挂到会话上，下一次请求模型前插进对话（AgentSession.absorbSteers）。
+   * 会话没在跑（刚好结束了）就直接当一条普通消息开新一轮。
+   */
+  private async handleSteer(cmd: Extract<ControlCommand, { type: "steer_message" }>, clientId: string | undefined): Promise<void> {
+    if (!cmd.content && !cmd.images) return;
+    const sid = this.resolveSessionId(cmd);
+    const session = this.getActiveSession(sid);
+    const command = { ...cmd, type: "user_message" } as UserMessageCommand & { clientId?: string; sessionId?: string };
+    if (!sid || !session || !this.runningSessions.has(sid)) {
+      if (cmd.clientMessageId) this.emitResult(sid, clientId, { type: "steer_turn", clientMessageIds: [cmd.clientMessageId] } as AgentEvent);
+      await this.handleUserMessage(command, clientId);
+      return;
+    }
+    const images = Array.isArray(cmd.images) ? (cmd.images as string[]) : [];
+    const text = cmd.content || "";
+    session.enqueueSteer({
+      clientMessageId: cmd.clientMessageId || `steer-${Date.now()}`,
+      content: images.length > 0
+        ? [{ type: "text", text }, ...images.map((url) => ({ type: "image_url", image_url: { url } }))]
+        : text,
+      displayText: cmd.displayText ?? text,
+      attachedFiles: cmd.attachedFiles,
+      userSegments: cmd.userSegments,
+      command: command as unknown as Record<string, unknown>,
+    });
+  }
+
+  /** 这一轮结束时还没插进去的插话：合成一条消息开新一轮 */
+  private async flushSteers(sessionId: string): Promise<void> {
+    if (this.runningSessions.has(sessionId)) return;
+    const session = this.activeSessions.get(sessionId);
+    const steers = session?.takeSteers() ?? [];
+    if (steers.length === 0) return;
+    const { clientId: _clientId, ...base } = steers[0].command as Record<string, unknown> & { clientId?: string };
+    const commands = steers.map((s) => s.command as unknown as UserMessageCommand);
+    const join = (values: (string | undefined)[]) => values.filter((v): v is string => !!v).join("\n\n");
+    this.sendTo(sessionId, undefined, { type: "steer_turn", clientMessageIds: steers.map((s) => s.clientMessageId) } as AgentEvent);
+    // 不带 clientId：按 sessionId 定位（面板可能已经切到别的会话）
+    await this.handleUserMessage({
+      ...(base as unknown as UserMessageCommand),
+      type: "user_message",
+      sessionId,
+      content: join(commands.map((c) => c.content)),
+      displayText: join(commands.map((c) => c.displayText ?? c.content)),
+      images: commands.flatMap((c) => (Array.isArray(c.images) ? c.images : [])),
+      attachedFiles: commands.flatMap((c) => (Array.isArray(c.attachedFiles) ? c.attachedFiles : [])),
+      clientMessageId: steers[0].clientMessageId,
+    } as UserMessageCommand & { sessionId: string }, undefined);
+  }
+
   // ── 后台任务 ──
 
   /** 等待投递的后台任务结束通知（会话正忙时先攒着） */
@@ -1582,6 +1643,11 @@ export class SessionHub {
         this.sendTo(turnSid, clientId, { type: "session_title_updated", title } as AgentEvent);
         execSession.appendTrace("session.title_updated", { title });
       }
+    }
+
+    // 这一轮结束时还有没插进去的插话（模型在写最终回答、或被停止）：用户的话优先，马上开新一轮
+    if (execSession.pendingSteers.length > 0) {
+      setTimeout(() => { void this.flushSteers(execSessionId); }, 0);
     }
 
     // 这一轮跑着的时候有后台任务结束了：现在投递。稍等一下，让前端排队的用户消息先发出来——

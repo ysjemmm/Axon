@@ -132,6 +132,12 @@ export type AgentEventPayload =
   | { type: "connectors"; catalog: ConnectorTemplateInfo[]; connectors: ConnectorView[] }
   | { type: "connector_saved"; requestId?: string; connector?: ConnectorView; error?: string }
   | { type: "connector_test_result"; requestId?: string; ok: boolean; tools?: { name: string; description?: string }[]; error?: string }
+  // ── 插话 ──
+  /** 这些插话已经插进对话（模型下一次请求就能看到） */
+  | { type: "steer_absorbed"; clientMessageIds: string[] }
+  /** 这一轮没来得及插入，系统拿这些插话开了新一轮 */
+  | { type: "steer_turn"; clientMessageIds: string[] }
+  | { type: "steer_cancelled"; clientMessageId: string; ok: boolean }
   // ── 后台任务 ──
   | { type: "background_tasks"; tasks: (BackgroundTaskInfo & { sessionId: string; sessionTitle?: string })[] }
   | { type: "background_task_output"; requestId?: string; sessionId: string; terminalId: string; output: string; status: string; exitCode: number | null }

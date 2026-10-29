@@ -1555,13 +1555,45 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
       actions: [{ label: "跳转到新会话", onClick: () => session.navigateToMigratedSession(migratedSessionId) }],
     });
   }
-  // 7) 排队消息：当前回复结束后自动发送。条上只显示条数，逐条明细与「移除」进浮层。
+  // 7) 插话：回复进行中发出的消息，模型下一步就会看到；看到之前可以撤回
+  if (session.pendingSteers.length > 0) {
+    const labelOf = (ub: SubmitPayload["userBubble"]) => ub.content || (ub.attachedFiles && ub.attachedFiles.length > 0 ? `[${ub.attachedFiles.length} 个文件]` : "[图片]");
+    noticeItems.push({
+      id: "pending-steers",
+      tone: "info",
+      title: "已发送",
+      detail: session.pendingSteers.length === 1
+        ? `「${labelOf(session.pendingSteers[0].payload.userBubble).slice(0, 40)}」AI 下一步就会看到`
+        : `${session.pendingSteers.length} 条，AI 下一步就会看到`,
+      overlayExtra: (
+        <div className="mt-1.5 max-h-[200px] space-y-1 overflow-y-auto">
+          {session.pendingSteers.map((q) => {
+            const label = labelOf(q.payload.userBubble);
+            return (
+              <div key={q.id} className="flex items-center gap-2 rounded bg-muted/40 px-2 py-1 text-foreground/80">
+                <span className="flex-1 truncate" title={label}>{label}</span>
+                <button
+                  type="button"
+                  onClick={() => session.cancelSteer(q.id)}
+                  className="px-1.5 py-0.5 rounded text-[10px] text-muted-foreground hover:text-red-500 hover:bg-muted/60 shrink-0"
+                  title="AI 还没看到时可以撤回"
+                >
+                  撤回
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      ),
+    });
+  }
+  // 8) 排队消息（只在压缩进行中出现）：压缩结束后自动发送。条上只显示条数，逐条明细与「移除」进浮层。
   if (session.messageQueue.length > 0) {
     noticeItems.push({
       id: "message-queue",
       tone: "info",
       title: "排队中",
-      detail: `${session.messageQueue.length} 条（当前回复结束后自动发送）`,
+      detail: `${session.messageQueue.length} 条（压缩完成后自动发送）`,
       overlayExtra: (
         <div className="mt-1.5 max-h-[200px] space-y-1 overflow-y-auto">
           {session.messageQueue.map((q) => {
@@ -2280,26 +2312,6 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                   ) : null}
                   {/* 后台任务（AI 启动的服务器 / 长任务）：有任务时才出现 */}
                   <BackgroundTasksButton clientId={clientId} connected={connected} send={send} />
-                  {/* 会话记忆：有记忆时才在工具栏出现（着色图标 + 小状态点）；空的时候从「+」菜单进入，
-                      不让一个灰色图标常驻挤占工具栏。 */}
-                  {hasMemory && <button
-                    type="button"
-                    onClick={() => setMemoryOpen(true)}
-                    className="relative inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
-                    title={
-                      hasMemory
-                        ? `会话记忆 · 已沉淀 ${session.memory.length} 字（点击查看 / 编辑 / 导出 / 导入）`
-                        : "会话记忆 · 空（模型会在会话里自动沉淀，也可导入 .md）"
-                    }
-                    aria-label="会话记忆"
-                  >
-                    {/* 记忆用 NotebookPen、思考过程用 Brain：两者此前共用 Brain，
-                        同一屏里「思考过程」和「已更新记忆」长得一模一样，用户分不开。 */}
-                    <NotebookPen className={`h-4 w-4 ${hasMemory ? "text-primary" : ""}`} />
-                    {hasMemory && (
-                      <span className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-primary" />
-                    )}
-                  </button>}
                   {/* 右组：状态类控件（后台任务 / 记忆 / 上下文）靠近发送按钮，左组只留「+」和模型。圆环同时是手动压缩入口。 */}
                   <TokenIndicator
                     used={session.tokenUsage.used}
@@ -2314,18 +2326,25 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                   />
                   {/* 发送/停止与辅助控件之间多留一点距离：主操作单独成组，不和开关挤在一起 */}
                   <span className="w-1" aria-hidden />
-                  <Button
-                    size="sm"
-                    onClick={session.isLoading ? () => session.cancelTurn(session.model) : handleSend}
-                    disabled={session.isLoading
-                      ? session.isCompacting
-                      : !connected || !hasConfiguredSelection || processingAttachments.length > 0 || (composerEmpty && images.length === 0) || !!session.compactionMigrated || session.isCompacting || session.contextOverflow}
-                    title={session.isLoading ? "停止生成" : "发送消息"}
-                    aria-label={session.isLoading ? "停止生成" : "发送消息"}
-                    className={`axon-send-stop-button h-7 w-7 rounded-full shrink-0 disabled:opacity-40 ${session.isLoading ? "is-stopping" : "is-ready"}`}
-                  >
-                    <SendStopIcon stopping={session.isLoading} />
-                  </Button>
+                  {/* 回复进行中：输入框是空的就是「停止」；打了字就变回「发送」——发出去 AI 下一步就能看到（插话），
+                      手上的动作不停。想停下来换方向，清空输入框点停止，或者直接说「停一下」。 */}
+                  {(() => {
+                    const stopping = session.isLoading && composerEmpty && images.length === 0;
+                    return (
+                      <Button
+                        size="sm"
+                        onClick={stopping ? () => session.cancelTurn(session.model) : handleSend}
+                        disabled={stopping
+                          ? session.isCompacting
+                          : !connected || !hasConfiguredSelection || processingAttachments.length > 0 || (composerEmpty && images.length === 0) || !!session.compactionMigrated || session.isCompacting || session.contextOverflow}
+                        title={stopping ? "停止生成" : session.isLoading ? "发送（AI 下一步就会看到）" : "发送消息"}
+                        aria-label={stopping ? "停止生成" : "发送消息"}
+                        className={`axon-send-stop-button h-7 w-7 rounded-full shrink-0 disabled:opacity-40 ${stopping ? "is-stopping" : "is-ready"}`}
+                      >
+                        <SendStopIcon stopping={stopping} />
+                      </Button>
+                    );
+                  })()}
                 </div>
               </div>
             </div>

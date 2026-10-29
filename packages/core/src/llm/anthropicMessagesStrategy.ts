@@ -442,20 +442,26 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
       }
 
       if (role === "user") {
+        const blocks: AnthropicContentBlock[] = [];
         if (Array.isArray(msg.content)) {
-          const parts = msg.content as any[];
-          const blocks: AnthropicContentBlock[] = [];
-          for (const part of parts) {
+          for (const part of msg.content as any[]) {
             if (part.type === "text") {
               blocks.push({ type: "text", text: part.text || "" });
             } else if (part.type === "image_url" && part.image_url?.url) {
               blocks.push(this.convertImage(part.image_url.url));
             }
           }
+        }
+        // 紧跟在另一条 user 消息后面（典型：工具结果之后用户插话）：并进同一条，保持 user / assistant 交替
+        const prev = result[result.length - 1];
+        if (prev?.role === "user") {
+          const prevBlocks: AnthropicContentBlock[] = typeof prev.content === "string" ? [{ type: "text", text: prev.content }] : prev.content as AnthropicContentBlock[];
+          const added: AnthropicContentBlock[] = Array.isArray(msg.content) ? blocks : [{ type: "text", text: this.extractText(msg.content) }];
+          prev.content = [...prevBlocks, ...added];
+        } else if (Array.isArray(msg.content)) {
           result.push({ role: "user", content: blocks });
         } else {
-          const text = this.extractText(msg.content);
-          result.push({ role: "user", content: text });
+          result.push({ role: "user", content: this.extractText(msg.content) });
         }
         continue;
       }

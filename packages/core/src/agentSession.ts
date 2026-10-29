@@ -98,6 +98,19 @@ import { SnapshotManager } from "./snapshot/index.js";
 import type { McpCapability } from "./mcp/types.js";
 
 
+/** 回复进行中用户追加的一条消息（插话） */
+export interface SteerMessage {
+  clientMessageId: string;
+  /** 给模型的正文（带附件内容 / 图片时为多段） */
+  content: string | Array<Record<string, unknown>>;
+  /** 界面上显示的原话 */
+  displayText: string;
+  attachedFiles?: unknown[];
+  userSegments?: unknown[];
+  /** 这一轮来不及插入时，用它原样开新一轮 */
+  command: Record<string, unknown>;
+}
+
 export class AgentSession {
   /** @internal 提示构建/Token 计量等协作者按 @internal 约定只读访问以下会话状态 */
   model: string;
@@ -108,6 +121,12 @@ export class AgentSession {
   /** @internal */ workspaces: string[]; // 所有工作区路径列表
   private channel: AgentChannel;
   /** @internal */ host: AgentHost;
+  /**
+   * 回复进行中用户追加的消息（插话）。不开新一轮：在下一次请求模型之前插进对话（见 absorbSteers），
+   * 模型能看到，手上的动作照常继续。这一轮已经没有下一次请求了（正在写最终回答、或被停止），
+   * 就由 SessionHub 在这一轮结束后拿它们开新一轮。
+   */
+  /** @internal */ pendingSteers: SteerMessage[] = [];
   /** 工具按需加载状态（哪些不常用的工具组已加载） */
   /** @internal */ readonly toolLoadout = new ToolLoadout();
   /** 后台任务（start_process 启动的进程）；宿主不支持后台进程时为 null */
@@ -1753,6 +1772,51 @@ export class AgentSession {
     return this.toolDefBuilder.getToolDefs();
   }
 
+  /** 回复进行中追加一条消息（插话） */
+  enqueueSteer(steer: SteerMessage): void {
+    this.pendingSteers.push(steer);
+  }
+
+  /** 撤回还没被模型看到的插话；已经插进对话的撤不回，返回 false */
+  cancelSteer(clientMessageId: string): boolean {
+    const before = this.pendingSteers.length;
+    this.pendingSteers = this.pendingSteers.filter((s) => s.clientMessageId !== clientMessageId);
+    return this.pendingSteers.length < before;
+  }
+
+  /** 取走所有未插入的插话（这一轮结束后由 SessionHub 开新一轮） */
+  takeSteers(): SteerMessage[] {
+    const steers = this.pendingSteers;
+    this.pendingSteers = [];
+    return steers;
+  }
+
+  /**
+   * 把插话作为用户消息插进对话：每次请求模型之前调用。
+   * 正文前加一句说明，让模型知道这是做到一半时用户补充的——优先照顾，但别把手上的事丢掉，除非用户就是要它停。
+   */
+  private absorbSteers(): void {
+    if (this.pendingSteers.length === 0) return;
+    const steers = this.takeSteers();
+    const preface = "【用户在你工作过程中发来的消息】请结合它调整接下来的做法；除非用户要求停下或换方向，已经在做的事继续完成。\n\n";
+    for (const steer of steers) {
+      const content = typeof steer.content === "string"
+        ? preface + steer.content
+        : [{ type: "text", text: preface }, ...steer.content];
+      this.messages.push({
+        role: "user",
+        content,
+        displayText: steer.displayText,
+        clientMessageId: steer.clientMessageId,
+        ...(steer.attachedFiles?.length ? { attachedFiles: steer.attachedFiles } : {}),
+        ...(steer.userSegments?.length ? { userSegments: steer.userSegments } : {}),
+        _steer: true,
+      } as unknown as ChatCompletionMessageParam);
+    }
+    this.send("steer_absorbed", { clientMessageIds: steers.map((s) => s.clientMessageId) });
+    this.persistMessages();
+  }
+
   /** load_tools 工具实现：按组名加载不常用的工具组，下一次请求起生效 */
   /** @internal */ loadTools(toolArgs: Record<string, unknown>): { result: string; status: "success" | "error" } {
     const groups = this.toolDefBuilder.toolGroups();
@@ -3042,6 +3106,9 @@ export class AgentSession {
         this.stampCancelledTurnStats(turnStartTime, streamedContentThisRound);
         return;
       }
+
+      // 用户在回复进行中追加的消息：在这次请求模型之前插进对话
+      this.absorbSteers();
 
       // 通过策略执行一个回合（策略负责调 API + 解析流式响应，产出标准化结果）
       // 每轮独立：本轮是否已发 stream_start（控制打字机启动）
