@@ -37,6 +37,28 @@ export async function closeAllBrowsers(): Promise<void> {
   await Promise.all([...liveBrowsers].map((b) => b.close().catch(() => false)));
 }
 
+/** 开发服务器刚启动、端口还没监听时 goto 报的错：等一会儿再试，而不是直接判失败 */
+const NOT_READY = /ERR_CONNECTION_REFUSED|ERR_CONNECTION_RESET|ERR_EMPTY_RESPONSE|ERR_SOCKET_NOT_CONNECTED/;
+/** 最多为「服务还没起来」多等这么久 */
+const SERVER_WAIT_MS = 30_000;
+
+/**
+ * 打开页面；连接被拒（典型场景：刚 start_process 了 npm run dev，端口还没起来）就每秒重试，最多等 30 秒。
+ * 早先直接失败，模型紧接着的截图打在 Chrome 的报错页上，或者整组浏览器操作都标红。
+ */
+async function gotoWhenReady(page: Page, url: string): Promise<void> {
+  const deadline = Date.now() + SERVER_WAIT_MS;
+  for (;;) {
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      return;
+    } catch (err) {
+      if (!NOT_READY.test((err as Error)?.message ?? "") || Date.now() >= deadline || page.isClosed()) throw err;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+}
+
 export class PlaywrightBrowser implements HostWebBrowser {
   constructor() {
     liveBrowsers.add(this);
@@ -58,7 +80,7 @@ export class PlaywrightBrowser implements HostWebBrowser {
   async open(url: string): Promise<OpenBrowserResult> {
     const reused = this.isOpen();
     const page = await this.ensurePage();
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    await gotoWhenReady(page, url);
     let title: string | undefined;
     try { title = await page.title(); } catch { /* 忽略 */ }
     return { url, title, reused };

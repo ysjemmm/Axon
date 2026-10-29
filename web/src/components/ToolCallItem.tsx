@@ -766,7 +766,7 @@ function BrowserStepRow({ step, shots }: { step: ToolCallData; shots: string[] }
         <span className="ml-auto flex shrink-0 items-center gap-2">
           {hasOutput && (
             <button onClick={() => setShowOutput(!showOutput)} className="text-[10px] text-blue-600 dark:text-blue-400 hover:underline shrink-0">
-              {showOutput ? "收起" : "输出"}
+              {showOutput ? "收起" : step.status === "error" ? "原因" : "输出"}
             </button>
           )}
           {/* 截图在这一步的最右侧；点开后可以左右切换这组里的其它截图 */}

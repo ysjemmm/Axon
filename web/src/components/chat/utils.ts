@@ -21,6 +21,15 @@ export const OUTPUT_TOOLS = new Set([
   "get_browser_storage", "browser_eval", "browser_get_html", "open_browser",
 ]);
 
+/**
+ * 工具卡片要不要保留结果原文（「输出」按钮）。
+ * 浏览器动作类工具（截图、点击……）成功时结果只是一句「已截图」，不用留；
+ * 失败时得留着 —— 否则分组里只看到一个红叉，看不出截图为什么没截成。
+ */
+export function keepsToolOutput(name: string, isError: boolean): boolean {
+  return OUTPUT_TOOLS.has(name) || (isError && /^(browser_|screenshot_page$|close_browser$)/.test(name));
+}
+
 /** 工具名 → 底部状态指示器文案（后端 status 事件可能滞后/缺失时按工具名兜底） */
 export function toolPhaseText(name: string): string {
   switch (name) {

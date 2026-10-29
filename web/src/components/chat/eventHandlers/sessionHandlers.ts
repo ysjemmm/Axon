@@ -6,7 +6,7 @@
 
 import {
   exploreDisplayText, formatLineSuffix,
-  isRelayTool, relayToolLabel, firstLine, OUTPUT_TOOLS,
+  isRelayTool, relayToolLabel, firstLine, keepsToolOutput,
 } from "../utils";
 import type { ToolStatus } from "@/components/ToolCallItem";
 import type { AttachedFile, BackgroundNoticeInfo, ChatMessage, ContextBreakdown, UserSegment } from "../types";
@@ -265,7 +265,7 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
             if (seg.name === "execute_command") {
               seg.output = (m as any).displayContent || toolContent;
               if ((m as any).displayCommand) seg.command = (m as any).displayCommand;
-            } else if (OUTPUT_TOOLS.has(seg.name)) {
+            } else if (keepsToolOutput(seg.name, toolStatus === "error")) {
               seg.output = toolContent;
             }
             if ((m as any).fileDiff) {

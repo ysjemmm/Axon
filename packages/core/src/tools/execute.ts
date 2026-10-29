@@ -661,7 +661,7 @@ export async function executeToolCall(
       }
       const shot = await host.webBrowser.screenshot(args.fullPage === true);
       if (!shot) {
-        throw new Error("screenshot_page 失败：当前没有打开的浏览器。请先用 open_browser 打开页面。");
+        throw new Error("screenshot_page 失败：当前没有打开的浏览器（还没 open_browser 成功，或浏览器窗口已被关掉）。请先用 open_browser 打开页面。");
       }
       // 把截图挂到 meta，agent loop 会在工具结果后追加一条带图片的 user 消息喂给多模态模型
       if (meta) meta.screenshotDataUrl = shot.dataUrl;

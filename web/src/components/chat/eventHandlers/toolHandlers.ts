@@ -7,7 +7,7 @@
 
 import {
   formatToolDescription, exploreDisplayText, formatLineSuffix,
-  isRelayTool, relayToolLabel, firstLine, OUTPUT_TOOLS, toolPhaseText, extractBasename,
+  isRelayTool, relayToolLabel, firstLine, keepsToolOutput, toolPhaseText, extractBasename,
 } from "../utils";
 import { isToolInFlight, type ToolStatus } from "@/components/ToolCallItem";
 import type { ToolSegment } from "../types";
@@ -233,7 +233,7 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
         query: isExplore ? exploreDisplayText(noMatchName, noMatchArgs) : undefined,
         mcpServer: (msg as any).mcpServer,
         mcpTool: (msg as any).mcpTool,
-        output: (noMatchName === TOOL.EXECUTE_COMMAND || OUTPUT_TOOLS.has(noMatchName)) ? (toolStatus === "error" && (msg as any).userMessage ? (msg as any).userMessage : (msg.result || "")) : undefined,
+        output: (noMatchName === TOOL.EXECUTE_COMMAND || keepsToolOutput(noMatchName, toolStatus === "error")) ? (toolStatus === "error" && (msg as any).userMessage ? (msg as any).userMessage : (msg.result || "")) : undefined,
         diff: (msg as any).fileDiff,
         diffs: (msg as any).fileDiffs,
         noopEdit: !!(msg as any).noopEdit,
@@ -296,7 +296,7 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
           if (!lineSuffix && parts && parts[3]) {
             lineSuffix = ` ${parts[3]}`;
           }
-          const hasOutput = seg.name === TOOL.EXECUTE_COMMAND || OUTPUT_TOOLS.has(seg.name);
+          const hasOutput = seg.name === TOOL.EXECUTE_COMMAND || keepsToolOutput(seg.name, isError);
           let finalDesc: string;
           if (isError && !isExplore && seg.name !== TOOL.CHECK_DIAGNOSTICS) {
             if (seg.name === TOOL.STR_REPLACE || seg.name === TOOL.CREATE_FILE) {
@@ -402,7 +402,7 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
           query: isExplore ? exploreDisplayText(noMatchName, noMatchArgs) : undefined,
           mcpServer: (msg as any).mcpServer,
           mcpTool: (msg as any).mcpTool,
-          output: (noMatchName === TOOL.EXECUTE_COMMAND || OUTPUT_TOOLS.has(noMatchName)) ? (toolStatus === "error" && (msg as any).userMessage ? (msg as any).userMessage : (msg.result || "")) : undefined,
+          output: (noMatchName === TOOL.EXECUTE_COMMAND || keepsToolOutput(noMatchName, toolStatus === "error")) ? (toolStatus === "error" && (msg as any).userMessage ? (msg as any).userMessage : (msg.result || "")) : undefined,
           diff: (msg as any).fileDiff,
           diffs: (msg as any).fileDiffs,
           noopEdit: !!(msg as any).noopEdit,
