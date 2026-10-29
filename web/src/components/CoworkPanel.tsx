@@ -19,7 +19,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { ArrowDown, FolderOpen, History, Home, Loader2, Plus, Send, Square } from "lucide-react";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
-import { EffortSelector, ModelSelector, normalizeStoredModelId, useModels } from "@/components/ModelSelector";
+import { ModelSelector, normalizeStoredModelId, useModels } from "@/components/ModelSelector";
 import { TokenIndicator } from "@/components/chat/TokenIndicator";
 import { useModelEffort, resolveEffortForModel, resolveModel } from "@/components/chat/useModelEffort";
 import { MentionEditor, type MentionEditorHandle } from "@/components/chat/MentionEditor";
@@ -132,8 +132,8 @@ export function CoworkPanel({ clientId, connected, send, onExit }: CoworkPanelPr
 
   const modelControls = (
     <>
-      <ModelSelector value={model} provider={provider} onChange={handleModelChange} />
-      <EffortSelector levels={effortLevels} value={effort} defaultValue={defaultEffort} onChange={handleEffortChange} />
+      <ModelSelector value={model} provider={provider} onChange={handleModelChange}
+        effort={{ levels: effortLevels, value: effort, defaultValue: defaultEffort, onChange: handleEffortChange }} />
     </>
   );
 

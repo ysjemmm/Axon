@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Settings, Image as ImageIcon } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Search, Settings, Image as ImageIcon } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { getProviders, type ProviderModelInfo, type ResolvedProviderInfo } from "@/lib/apiClient";
@@ -176,69 +176,18 @@ interface ModelSelectorProps {
   /** 整个选择器禁用（如压缩期间） */
   disabled?: boolean;
   disabledTooltip?: string;
+  /**
+   * 思考强度：和模型合在同一个按钮 / 面板里（按钮显示「模型 · 强度」，面板底部是一排分段按钮）。
+   * 选项完全来自当前模型 Provider 配置的 effortLevels，不猜厂商；没有档位时不显示。
+   */
+  effort?: EffortConfig;
 }
 
-interface EffortSelectorProps {
+export interface EffortConfig {
   levels: { label: string; value: string }[];
   value: string | null;
   defaultValue?: string | null;
   onChange: (value: string | null) => void;
-  disabled?: boolean;
-}
-
-/**
- * 独立的思考强度选择器，显示在模型选择器右侧。
- *
- * 默认关闭；选项完全来自当前模型 Provider 配置的 effortLevels，不猜厂商、不做档位映射。
- * UI 显示 label，请求与消息气泡使用实际 value（如 high / xhigh）。
- */
-export function EffortSelector({ levels, value, defaultValue, onChange, disabled = false }: EffortSelectorProps) {
-  const [open, setOpen] = useState(false);
-  if (levels.length === 0) return null;
-  const current = levels.find((x) => x.value === value);
-
-  return (
-    <Popover open={open} onOpenChange={(next) => { if (!disabled) setOpen(next); }}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          disabled={disabled}
-          className="inline-flex h-7 items-center px-0.5 text-xs font-medium text-muted-foreground/75 transition-colors hover:text-muted-foreground data-[state=open]:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
-          title={current ? `思考强度：${current.label}（${current.value}）` : "思考强度：关闭"}
-        >
-          <span>{current?.label || "关闭"}</span>
-        </button>
-      </PopoverTrigger>
-      <PopoverContent side="top" align="start" sideOffset={4} className="w-[220px] p-2 rounded-xl ring-1 ring-border/70 shadow-xl">
-        <div className="px-2 pb-2 text-[11px] leading-4 text-muted-foreground/75">
-          思考强度越高，回答越全面，但耗时和用量也会增加。
-        </div>
-        <div className="space-y-1">
-          <button
-            onClick={() => { onChange(null); setOpen(false); }}
-            className={`flex items-center w-full h-7 gap-1.5 px-2 rounded-lg text-xs text-left transition-colors ${value === null ? "bg-primary/[0.08] text-foreground font-medium" : "text-muted-foreground hover:text-foreground hover:bg-muted/70"}`}
-          >
-            <span className="flex-1">关闭</span>
-            <Check className={`w-3 h-3 text-primary ${value === null ? "" : "invisible"}`} />
-          </button>
-        {levels.map((level) => (
-          <button
-            key={level.value}
-            onClick={() => { onChange(level.value); setOpen(false); }}
-            className={`flex items-center w-full h-7 gap-1.5 px-2 rounded-lg text-xs text-left transition-colors ${value === level.value ? "bg-primary/[0.08] text-foreground font-medium" : "text-foreground/85 hover:text-foreground hover:bg-muted/70"}`}
-          >
-            <span className="min-w-0 flex-1 truncate">{level.label}</span>
-            {defaultValue === level.value && (
-              <span className="shrink-0 rounded bg-muted px-1.5 py-px text-[10px] font-normal text-muted-foreground">默认</span>
-            )}
-            <span className="text-[9px] font-mono text-muted-foreground/55">{level.value}</span>
-            <Check className={`w-3 h-3 text-primary ${value === level.value ? "" : "invisible"}`} />
-          </button>
-        ))}
-        </div>
-      </PopoverContent>
-    </Popover>
-  );
 }
 
 /** 把上下文窗口格式化为紧凑标记（1M / 256K）；无窗口信息返回空串 */
@@ -254,27 +203,22 @@ const THIN_SCROLL =
   "[&::-webkit-scrollbar-track]:bg-transparent hover:[&::-webkit-scrollbar-thumb]:bg-muted-foreground/25 " +
   "[scrollbar-width:thin] [scrollbar-color:transparent_transparent] hover:[scrollbar-color:rgba(128,128,128,0.25)_transparent]";
 
-/** 弹层外壳 */
-const PANEL_CLS = `w-[264px] max-h-[70vh] overflow-y-auto p-1.5 gap-0 rounded-xl ring-1 ring-border/70 shadow-xl ${THIN_SCROLL}`;
+/** 弹层外壳：字号与正文一致（13px），留足内边距 */
+const PANEL_CLS = "w-[300px] p-0 gap-0 overflow-hidden rounded-xl ring-1 ring-border/70 shadow-xl";
 
-/** 展开后的模型列表：缩进 16px，让模型名与组名文字左对齐（组名前有 12px 箭头 + 间距） */
-const MODEL_LIST_CLS = `pl-4 pb-1 max-h-[232px] overflow-y-auto ${THIN_SCROLL}`;
+/** 列表滚动区 */
+const LIST_CLS = `max-h-[min(52vh,420px)] overflow-y-auto p-1.5 ${THIN_SCROLL}`;
 
-/** 底部操作行（深度思考 / 配置 Provider）：与模型行同高，次级字号 */
+/** 底部操作行 */
 const FOOTER_ROW_CLS =
-  "flex items-center gap-2 w-full h-8 px-2 rounded-md text-[12.5px] text-muted-foreground " +
+  "flex items-center gap-2 w-full h-8 px-2.5 rounded-lg text-[13px] text-muted-foreground " +
   "hover:text-foreground hover:bg-muted/60 transition-colors";
 
-/** 分隔线 */
-function Divider() {
-  return <div className="h-px mx-1 my-1.5 bg-border/60" />;
-}
+/** 模型多到这个数才显示搜索框 */
+const SEARCH_THRESHOLD = 8;
 
 /**
- * provider 分组行（一级，可展开）。
- *
- * 视觉上是"小标题"而不是"选项"：字号比模型名小一档、中等字重、次级色，
- * 这样一眼就能分出层级——早先组名和模型名都是 13px 半粗，挤在一起分不清谁是谁。
+ * provider 分组行（可展开）：比模型名小一档的次级色小标题，右侧是模型数。
  */
 function ProviderHeader({ label, count, expanded, configured = true, onToggle }: {
   label: string;
@@ -290,42 +234,38 @@ function ProviderHeader({ label, count, expanded, configured = true, onToggle }:
       aria-expanded={expanded}
       onClick={onToggle}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
-      className={`flex items-center gap-1.5 h-7 pl-1.5 pr-2 rounded-md text-[12px] cursor-pointer select-none transition-colors ${expanded ? "text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
+      className={`flex items-center gap-1.5 h-8 px-2 rounded-lg text-[12px] cursor-pointer select-none transition-colors ${expanded ? "text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
     >
-      <ChevronRight className={`w-3 h-3 shrink-0 opacity-60 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`} />
+      <ChevronRight className={`w-3.5 h-3.5 shrink-0 opacity-50 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`} />
       <span className="font-medium truncate flex-1 min-w-0">{label}</span>
       {configured
-        ? <span className="shrink-0 text-[10.5px] tabular-nums text-muted-foreground/50">{count}</span>
+        ? <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/60">{count}</span>
         : <span className="shrink-0 px-1.5 rounded-full text-[10px] leading-4 bg-amber-500/10 text-amber-600 dark:text-amber-400">未配置</span>}
     </div>
   );
 }
 
 /**
- * 单个模型行（菜单项）——单行紧凑布局。
- *
- * 一行放下：模型名 + 多模态图标 + 上下文窗口 + 选中对勾。
- * 描述不再单独占一行，移到原生 title：中转站类 provider 的模型普遍没有描述，
- * 为它留一行等于给每个模型白付一行高度（截图里 7 个模型就撑满了整个弹层）。
- *
- * 选中态用"浅底 + 右侧对勾"：对勾位置在未选中行也占位（invisible），
- * 所以上下文窗口那一列在所有行里都是右对齐的一条竖线，扫读时不跳。
+ * 单个模型行：模型名 + 右侧淡色元信息（多模态图标、上下文窗口）+ 选中对勾。
+ * 对勾在未选中行也占位（invisible），窗口一列在所有行里右对齐。
  */
-function ModelRow({ model, selected, disabled, disabledHint, onPick }: { model: ModelOption; selected: boolean; disabled: boolean; disabledHint?: string; onPick: () => void }) {
+function ModelRow({ model, selected, disabled, disabledHint, onPick, subtitle }: { model: ModelOption; selected: boolean; disabled: boolean; disabledHint?: string; onPick: () => void; subtitle?: string }) {
   const win = formatContextWindow(model.contextWindow);
-  // hover 提示：把被折叠掉的信息（描述/多模态/窗口）都并进来，紧凑不等于丢信息
-  const title = [model.name, model.description, model.vision ? "多模态" : "", win].filter(Boolean).join(" · ");
+  const title = [model.name, model.description, model.vision ? "支持图片" : "", win].filter(Boolean).join(" · ");
   const btn = (
     <button
       data-selected={selected ? "true" : undefined}
       disabled={disabled}
       onClick={onPick}
       title={title}
-      className={`flex items-center w-full h-8 gap-2 px-2 rounded-md text-[13px] text-left transition-colors ${selected ? "bg-primary/[0.08] text-foreground" : "text-foreground/85 hover:bg-muted/70 hover:text-foreground"} disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent`}
+      className={`flex items-center w-full min-h-8 gap-2 py-1 pl-7 pr-2 rounded-lg text-[13px] text-left transition-colors ${selected ? "bg-primary/[0.08] text-foreground" : "text-foreground/85 hover:bg-muted/70 hover:text-foreground"} disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent`}
     >
-      <span className={`truncate min-w-0 flex-1 ${selected ? "font-medium" : ""}`}>{model.name}</span>
-      {model.vision && <ImageIcon className="w-3 h-3 shrink-0 text-muted-foreground/50" aria-label="多模态" />}
-      {win && <span className="shrink-0 min-w-[26px] text-right text-[11px] tabular-nums text-muted-foreground/60">{win}</span>}
+      <span className="min-w-0 flex-1">
+        <span className={`block truncate ${selected ? "font-medium" : ""}`}>{model.name}</span>
+        {subtitle && <span className="block truncate text-[11px] text-muted-foreground">{subtitle}</span>}
+      </span>
+      {model.vision && <ImageIcon className="w-3.5 h-3.5 shrink-0 text-muted-foreground/45" aria-label="支持图片" />}
+      {win && <span className="shrink-0 min-w-[28px] text-right text-[11px] tabular-nums text-muted-foreground/60">{win}</span>}
       <Check className={`w-3.5 h-3.5 shrink-0 text-primary ${selected ? "" : "invisible"}`} aria-hidden={!selected} />
     </button>
   );
@@ -346,9 +286,55 @@ function ModelRow({ model, selected, disabled, disabledHint, onPick }: { model: 
   return btn;
 }
 
-export function ModelSelector({ value, provider, onChange, disabledModels = [], disabled = false, disabledTooltip }: ModelSelectorProps) {
+/** 面板顶部的搜索框 */
+function SearchBox({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+      <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="搜索模型"
+        className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground/60"
+      />
+    </div>
+  );
+}
+
+/** 思考强度：一排分段按钮（关闭 + Provider 配置的档位） */
+function EffortSegment({ effort }: { effort: EffortConfig }) {
+  const options = [{ label: "关闭", value: null as string | null }, ...effort.levels];
+  return (
+    <div className="border-t border-border/60 px-3 py-2.5">
+      <div className="mb-1.5 flex items-center justify-between text-[12px] text-muted-foreground">
+        <span>思考强度</span>
+        <span className="text-[11px] text-muted-foreground/70">越高越全面，也越慢、越费</span>
+      </div>
+      <div className="flex rounded-lg bg-muted/60 p-0.5">
+        {options.map((o) => {
+          const active = effort.value === o.value;
+          return (
+            <button
+              key={o.value ?? "__off__"}
+              type="button"
+              onClick={() => effort.onChange(o.value)}
+              title={o.value ? `${o.label}（${o.value}）${effort.defaultValue === o.value ? " · 默认" : ""}` : "不请求思考"}
+              className={`h-7 min-w-0 flex-1 truncate rounded-md px-1.5 text-[12px] transition-colors ${active ? "bg-background font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              {o.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export function ModelSelector({ value, provider, onChange, disabledModels = [], disabled = false, disabledTooltip, effort }: ModelSelectorProps) {
   const groups = useProviderGroups();
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   // 当前展开的 provider；打开时默认展开当前所选模型所属 provider
   const [expanded, setExpanded] = useState<string | null>(null);
   // 记住最后选择的 provider，同名模型优先匹配它；初始值取外部传入的会话 provider，
@@ -359,27 +345,26 @@ export function ModelSelector({ value, provider, onChange, disabledModels = [], 
     if (provider) setLastProvider(provider);
   }, [provider]);
 
-  // 展开 provider 时自动滚动到当前选中模型
-  const scrollRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  // 打开 / 展开 provider 时把当前选中模型滚到视野里
+  const listRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (!expanded) return;
+    if (!open || !expanded) return;
     // Radix Popover 有 ~150ms 入场动画，容器尺寸稳定后才能滚。
     const timer = setTimeout(() => {
-      const el = scrollRefs.current[expanded];
-      if (!el) return;
-      const selected = el.querySelector('[data-selected="true"]') as HTMLElement | null;
-      if (selected && el.scrollHeight > el.clientHeight) {
-        el.scrollTop = selected.offsetTop - el.clientHeight / 3;
-      }
+      const el = listRef.current;
+      const selected = el?.querySelector('[data-selected="true"]') as HTMLElement | null;
+      if (el && selected && el.scrollHeight > el.clientHeight) el.scrollTop = selected.offsetTop - el.clientHeight / 2;
     }, 200);
     return () => clearTimeout(timer);
-  }, [expanded]);
+  }, [open, expanded]);
 
   /** 按 value 找模型：优先 lastProvider，回退到任意匹配 */
   const allModels = getModels();
   const current = lastProvider
     ? allModels.find((m) => m.id === value && m.provider === lastProvider) ?? allModels.find((m) => m.id === value)
     : allModels.find((m) => m.id === value);
+  const effortLevels = effort?.levels ?? [];
+  const currentEffort = effortLevels.find((x) => x.value === effort?.value);
 
   const onOpenChange = (next: boolean) => {
     if (disabled) return;
@@ -387,6 +372,7 @@ export function ModelSelector({ value, provider, onChange, disabledModels = [], 
     if (next) {
       void refreshModels(); // 打开即拉最新，配置改动即时反映
       setExpanded(current?.provider ?? null);
+      setQuery("");
     }
   };
 
@@ -395,10 +381,15 @@ export function ModelSelector({ value, provider, onChange, disabledModels = [], 
   const trigger = (
     <button
       type="button"
-      className={`inline-flex h-7 min-w-0 items-center px-1 text-xs font-medium text-foreground transition-colors hover:text-foreground/75 data-[state=open]:text-foreground/75 ${disabled ? "cursor-not-allowed opacity-30" : ""}`}
+      className={`inline-flex h-7 min-w-0 items-center gap-1 rounded-md px-2 text-[13px] text-foreground/80 transition-colors hover:bg-muted/60 hover:text-foreground data-[state=open]:bg-muted/60 data-[state=open]:text-foreground ${disabled ? "cursor-not-allowed opacity-40" : ""}`}
       onClick={() => { if (!disabled) setOpen(!open); }}
+      title={currentEffort ? `${current?.name || value} · 思考强度 ${currentEffort.label}` : undefined}
     >
-      <span className="truncate max-w-[160px]">{current?.name || value || "选择模型"}</span>
+      <span className="truncate max-w-[150px]">{current?.name || value || "选择模型"}</span>
+      {effortLevels.length > 0 && (
+        <span className="shrink-0 text-muted-foreground">· {currentEffort?.label ?? "不思考"}</span>
+      )}
+      <ChevronDown className={`h-3 w-3 shrink-0 text-muted-foreground transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
     </button>
   );
 
@@ -417,44 +408,60 @@ export function ModelSelector({ value, provider, onChange, disabledModels = [], 
     );
   }
 
+  const q = query.trim().toLowerCase();
+  const searchable = allModels.length >= SEARCH_THRESHOLD;
+  // side="top" 向上弹出时，底部离按钮最近：当前选中的 provider 排到最后，减少鼠标移动
+  const ordered = [...groups].sort((a, b) => {
+    const aCurrent = current && a.name === current.provider ? 1 : 0;
+    const bCurrent = current && b.name === current.provider ? 1 : 0;
+    return aCurrent - bCurrent;
+  });
+  const matches = q
+    ? ordered.flatMap((g) => g.models.filter((m) => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)).map((m) => ({ g, m })))
+    : [];
+
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         {trigger}
       </PopoverTrigger>
-      <PopoverContent
-        side="top"
-        align="start"
-        sideOffset={6}
-        collisionPadding={8}
-        className={PANEL_CLS}
-      >
+      <PopoverContent side="top" align="start" sideOffset={6} collisionPadding={8} className={PANEL_CLS}>
         {groups.length === 0 ? (
-          <button onClick={openProviderPanel} className={FOOTER_ROW_CLS}>
-            <Settings className="w-3.5 h-3.5 shrink-0 opacity-70" />
-            配置自定义 Provider
-          </button>
+          <div className="p-1.5">
+            <button onClick={openProviderPanel} className={FOOTER_ROW_CLS}>
+              <Settings className="w-3.5 h-3.5 shrink-0 opacity-70" />
+              添加模型 Provider
+            </button>
+          </div>
         ) : <>
-        {/* provider 一级 + 点击内联展开二级模型（同时只展开一个） */}
-        {/* side="top" 向上弹出时，底部离按钮最近。将当前选中的 provider 排到最后（最靠近按钮）以减少误触 */}
-        {[...groups].sort((a, b) => {
-          const aCurrent = current && a.name === current.provider ? 1 : 0;
-          const bCurrent = current && b.name === current.provider ? 1 : 0;
-          return aCurrent - bCurrent;
-        }).map((g) => {
-          const isExpanded = expanded === g.name;
-          return (
-            <div key={g.name}>
-              <ProviderHeader
-                label={g.label}
-                count={g.models.length}
-                expanded={isExpanded}
-                configured={g.configured}
-                onToggle={() => setExpanded(isExpanded ? null : g.name)}
-              />
-              {isExpanded && (
-                <div ref={(el) => { scrollRefs.current[g.name] = el; }} className={MODEL_LIST_CLS}>
-                  {g.models.map((m) => (
+          {searchable && <SearchBox value={query} onChange={setQuery} />}
+          <div ref={listRef} className={LIST_CLS}>
+            {q ? (
+              matches.length === 0
+                ? <div className="px-3 py-6 text-center text-[12px] text-muted-foreground">没有匹配「{query}」的模型</div>
+                : matches.map(({ g, m }) => (
+                  <ModelRow
+                    key={`${g.name}:${m.id}`}
+                    model={m}
+                    subtitle={g.label}
+                    selected={m.id === current?.id && m.provider === current?.provider}
+                    disabled={!g.configured || disabledModels.includes(m.id)}
+                    disabledHint={!g.configured ? "请先配置 API Key" : undefined}
+                    onPick={() => { if (g.configured) pick(m.id, m.provider); }}
+                  />
+                ))
+            ) : ordered.map((g) => {
+              const isExpanded = expanded === g.name;
+              return (
+                <div key={g.name}>
+                  <ProviderHeader
+                    label={g.label}
+                    count={g.models.length}
+                    expanded={isExpanded}
+                    configured={g.configured}
+                    onToggle={() => setExpanded(isExpanded ? null : g.name)}
+                  />
+                  {isExpanded && g.models.map((m) => (
                     <ModelRow
                       key={m.id}
                       model={m}
@@ -465,17 +472,16 @@ export function ModelSelector({ value, provider, onChange, disabledModels = [], 
                     />
                   ))}
                 </div>
-              )}
-            </div>
-          );
-        })}
-
-        {/* 底部操作栏 */}
-        <Divider />
-        <button onClick={openProviderPanel} className={FOOTER_ROW_CLS}>
-          <Settings className="w-3.5 h-3.5 shrink-0 opacity-70" />
-          配置自定义 Provider
-        </button>
+              );
+            })}
+          </div>
+          {effort && effortLevels.length > 0 && <EffortSegment effort={effort} />}
+          <div className="border-t border-border/60 p-1.5">
+            <button onClick={openProviderPanel} className={FOOTER_ROW_CLS}>
+              <Settings className="w-3.5 h-3.5 shrink-0 opacity-70" />
+              管理模型 Provider
+            </button>
+          </div>
         </>}
       </PopoverContent>
     </Popover>
@@ -548,16 +554,17 @@ export function VisionFallbackSelector({ value, onChange }: { value: string | nu
         collisionPadding={8}
         className={PANEL_CLS}
       >
+        <div className={LIST_CLS}>
         {/* 「不启用」空态行：与模型行同构（同高、同样的对勾位），固定在顶部 */}
         <button
           data-selected={value === null ? "true" : undefined}
           onClick={() => { onChange(null); setOpen(false); }}
-          className={`flex items-center w-full h-8 gap-2 px-2 rounded-md text-[13px] text-left transition-colors ${value === null ? "bg-primary/[0.08] text-foreground font-medium" : "text-muted-foreground hover:text-foreground hover:bg-muted/70"}`}
+          className={`flex items-center w-full h-8 gap-2 px-2 rounded-lg text-[13px] text-left transition-colors ${value === null ? "bg-primary/[0.08] text-foreground font-medium" : "text-muted-foreground hover:text-foreground hover:bg-muted/70"}`}
         >
           <span className="truncate flex-1 min-w-0">不启用（留空）</span>
           <Check className={`w-3.5 h-3.5 shrink-0 text-primary ${value === null ? "" : "invisible"}`} />
         </button>
-        <Divider />
+        <div className="h-px mx-1 my-1.5 bg-border/60" />
 
         {/* provider 一级 + 点击内联展开二级模型（同时只展开一个） */}
         {[...visionGroups].sort((a, b) => {
@@ -575,7 +582,7 @@ export function VisionFallbackSelector({ value, onChange }: { value: string | nu
                 onToggle={() => setExpanded(isExpanded ? null : g.name)}
               />
               {isExpanded && (
-                <div ref={(el) => { scrollRefs.current[g.name] = el; }} className={MODEL_LIST_CLS}>
+                <div ref={(el) => { scrollRefs.current[g.name] = el; }}>
                   {g.models.map((m) => (
                     <ModelRow
                       key={m.id}
@@ -594,6 +601,7 @@ export function VisionFallbackSelector({ value, onChange }: { value: string | nu
         {visionGroups.length === 0 && (
           <div className="px-2 py-2 text-[12.5px] text-muted-foreground/60">没有已配置的支持图片的模型</div>
         )}
+        </div>
       </PopoverContent>
     </Popover>
   );

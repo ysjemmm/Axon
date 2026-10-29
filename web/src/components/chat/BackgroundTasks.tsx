@@ -35,6 +35,9 @@ interface TaskOutput {
 
 const taskKey = (t: Pick<BackgroundTask, "sessionId" | "terminalId">) => `${t.sessionId}:${t.terminalId}`;
 
+/** 任务结束后按钮再保留多久 */
+const RECENT_MS = 30 * 60 * 1000;
+
 function formatDuration(ms: number): string {
   const sec = Math.max(0, Math.round(ms / 1000));
   if (sec < 60) return `${sec} 秒`;
@@ -148,6 +151,14 @@ export function BackgroundTasksButton({ clientId, connected, send }: { clientId:
     setPos({ left, bottom: window.innerHeight - rect.top + 8, width });
   }, []);
 
+  // 关着的时候每分钟刷新一次「现在」，让早已结束的任务按时把按钮收起来
+  const hasTasks = tasks.length > 0;
+  useEffect(() => {
+    if (open || !hasTasks) return;
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, [open, hasTasks]);
+
   // 打开时每秒刷新用时；点外面关闭；窗口尺寸变化时跟着按钮重新定位
   useEffect(() => {
     if (!open) return;
@@ -162,7 +173,9 @@ export function BackgroundTasksButton({ clientId, connected, send }: { clientId:
     return () => { clearInterval(timer); document.removeEventListener("mousedown", onDown); window.removeEventListener("resize", place); };
   }, [open, place]);
 
-  if (tasks.length === 0) return null;
+  // 有任务在跑、或最近 30 分钟内有任务结束（可能还想看输出）才显示；早就结束的不常驻占位
+  const recent = tasks.some((t) => t.status === "running" || (t.endedAt !== undefined && now - t.endedAt < RECENT_MS));
+  if (!recent && !open) return null;
 
   return (
     <div ref={rootRef} className="relative">

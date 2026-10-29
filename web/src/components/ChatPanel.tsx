@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ImageViewer } from "./chat/ImageViewer";
-import { EffortSelector, ModelSelector, useModels, findModel, getModels } from "@/components/ModelSelector";
+import { ModelSelector, useModels, findModel, getModels } from "@/components/ModelSelector";
 import { useModelEffort, resolveEffortForModel } from "./chat/useModelEffort";
 import { getVisionFallbackModel } from "@/lib/apiClient";
 import { updateDiagState } from "@/lib/diagnostics";
@@ -2164,6 +2164,15 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                         <Plug className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
                         <span className="flex-1">连接器</span>
                       </button>
+                      <button
+                        onClick={() => { setMemoryOpen(true); setMenuOpen(false); }}
+                        className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs hover:bg-muted/60 transition-colors text-left"
+                        title="查看 / 编辑 / 导入这个会话的记忆"
+                      >
+                        <NotebookPen className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                        <span className="flex-1">会话记忆</span>
+                        {hasMemory && <span className="text-[10px] text-muted-foreground/60">{session.memory.length} 字</span>}
+                      </button>
 
                       <div className="my-0.5 border-t border-border" />
 
@@ -2229,49 +2238,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                     disabledModels={images.length > 0 && !visionFallbackModel ? models.filter((m) => !m.vision).map((m) => m.id) : []}
                     disabled={session.isCompacting || session.contextOverflow}
                     disabledTooltip={session.contextOverflow ? "上下文超限，请先压缩" : "压缩期间不可切换模型"}
+                    effort={{ levels: selectedEffortLevels, value: session.effort, defaultValue: selectedDefaultEffort, onChange: handleEffortChange }}
                   />
-                  {/* 会话记忆入口：早先是输入框最上沿的整行文字按钮，空态白占一行高度。
-                      现在收成工具栏里的一个图标（紧挨模型选择）：有记忆时图标着色 + 右上角
-                      一个小状态点，字数放进 title 里悬停可见；没有记忆时保持中性灰。 */}
-                  <button
-                    type="button"
-                    onClick={() => setMemoryOpen(true)}
-                    className="relative inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
-                    title={
-                      hasMemory
-                        ? `会话记忆 · 已沉淀 ${session.memory.length} 字（点击查看 / 编辑 / 导出 / 导入）`
-                        : "会话记忆 · 空（模型会在会话里自动沉淀，也可导入 .md）"
-                    }
-                    aria-label="会话记忆"
-                  >
-                    {/* 记忆用 NotebookPen、思考过程用 Brain：两者此前共用 Brain，
-                        同一屏里「思考过程」和「已更新记忆」长得一模一样，用户分不开。 */}
-                    <NotebookPen className={`h-4 w-4 ${hasMemory ? "text-primary" : ""}`} />
-                    {hasMemory && (
-                      <span className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-primary" />
-                    )}
-                  </button>
-                  <EffortSelector
-                    levels={selectedEffortLevels}
-                    value={session.effort}
-                    defaultValue={selectedDefaultEffort}
-                    onChange={handleEffortChange}
-                    disabled={session.isCompacting || session.contextOverflow}
-                  />
-                  {/* 上下文占比紧跟模型强度；圆环本身同时作为手动压缩入口。 */}
-                  <TokenIndicator
-                    used={session.tokenUsage.used}
-                    max={session.tokenUsage.max}
-                    cumulative={session.tokenUsage.cumulative}
-                    compacting={session.isCompacting}
-                    compactingMessage={session.compactingMessage}
-                    overflow={session.contextOverflow}
-                    replying={session.isLoading}
-                    onCompact={() => session.compactSession()}
-                    breakdown={session.tokenUsage.breakdown}
-                  />
-                  {/* 后台任务（AI 启动的服务器 / 长任务）：有任务时才出现 */}
-                  <BackgroundTasksButton clientId={clientId} connected={connected} send={send} />
 
                   <input
                     ref={fileInputRef}
@@ -2310,6 +2278,40 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                       </Tooltip>
                     </TooltipProvider>
                   ) : null}
+                  {/* 后台任务（AI 启动的服务器 / 长任务）：有任务时才出现 */}
+                  <BackgroundTasksButton clientId={clientId} connected={connected} send={send} />
+                  {/* 会话记忆：有记忆时才在工具栏出现（着色图标 + 小状态点）；空的时候从「+」菜单进入，
+                      不让一个灰色图标常驻挤占工具栏。 */}
+                  {hasMemory && <button
+                    type="button"
+                    onClick={() => setMemoryOpen(true)}
+                    className="relative inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+                    title={
+                      hasMemory
+                        ? `会话记忆 · 已沉淀 ${session.memory.length} 字（点击查看 / 编辑 / 导出 / 导入）`
+                        : "会话记忆 · 空（模型会在会话里自动沉淀，也可导入 .md）"
+                    }
+                    aria-label="会话记忆"
+                  >
+                    {/* 记忆用 NotebookPen、思考过程用 Brain：两者此前共用 Brain，
+                        同一屏里「思考过程」和「已更新记忆」长得一模一样，用户分不开。 */}
+                    <NotebookPen className={`h-4 w-4 ${hasMemory ? "text-primary" : ""}`} />
+                    {hasMemory && (
+                      <span className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-primary" />
+                    )}
+                  </button>}
+                  {/* 右组：状态类控件（后台任务 / 记忆 / 上下文）靠近发送按钮，左组只留「+」和模型。圆环同时是手动压缩入口。 */}
+                  <TokenIndicator
+                    used={session.tokenUsage.used}
+                    max={session.tokenUsage.max}
+                    cumulative={session.tokenUsage.cumulative}
+                    compacting={session.isCompacting}
+                    compactingMessage={session.compactingMessage}
+                    overflow={session.contextOverflow}
+                    replying={session.isLoading}
+                    onCompact={() => session.compactSession()}
+                    breakdown={session.tokenUsage.breakdown}
+                  />
                   {/* 发送/停止与辅助控件之间多留一点距离：主操作单独成组，不和开关挤在一起 */}
                   <span className="w-1" aria-hidden />
                   <Button
