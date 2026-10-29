@@ -95,6 +95,7 @@ import { initializeWorkspaceAxon, inspectWorkspacesAxon, loadWorkspaceAxonConfig
 import { CreditBudgetGate } from "./session/creditBudgetGate.js";
 import { RelayStore } from "./relay/relayStore.js";
 import { WikiStore, wikiRecallSignature, type WikiRecall } from "./wiki/wikiStore.js";
+import { abortableSleep, backoffDelay, classifyLLMError, createStreamWatchdog } from "./llm/retryPolicy.js";
 import { isSensitivePath } from "./wiki/wikiSecrets.js";
 import { WikiController, resolveWikiModel, type WikiGenerationResult, type WikiGenerationOptions } from "./wiki/wikiController.js";
 import { SubAgentRunner } from "./skills/subAgentRunner.js";
@@ -2663,24 +2664,28 @@ export class AgentSession {
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      // 这一次尝试有没有已经吐出内容：吐过就不能再重试，否则前端会看到同一段文字 / 工具卡片出现两遍
+      let emitted = false;
+      // 流式看门狗：网关中途卡住时不再无限挂着，过一段时间没有任何数据就断开并按可重试处理
+      const watchdog = createStreamWatchdog(this.abortController?.signal);
       try {
         const turnSource = new StrategyTurnSource({
           strategy,
           model: this.model,
           tools: this.getToolDefs(),
           temperature: 0.2,
-          signal: this.abortController?.signal,
+          signal: watchdog.signal,
           think: this.think,
           effort: this.effort,
           modelSupportsThinking: declaredThinkingFor(this.model, this.provider),
           modelSupportsCacheControl: declaredCacheControlFor(this.model, this.provider),
           modelSupportsVision: declaredVisionFor(this.model, this.provider),
           // 关键：把新链路的流式增量实时接到主循环 callbacks 上，让前端看到正常的思考/打字效果。
-          onReasoningDelta: (text, partIndex, itemId) => callbacks.onReasoningDelta(text, partIndex, itemId),
-          onTextDelta: (text) => callbacks.onTextDelta(text),
+          onReasoningDelta: (text, partIndex, itemId) => { emitted = true; watchdog.touch(); callbacks.onReasoningDelta(text, partIndex, itemId); },
+          onTextDelta: (text) => { emitted = true; watchdog.touch(); callbacks.onTextDelta(text); },
           // 工具检测信号也要接上：否则主循环的 onToolCallDetected 永远收不到调用，
           // 卡片只能等整条 SSE 流消费完才发得出来（工具参数体常常就是模型输出的主体）。
-          onToolCallDetected: (name, id) => callbacks.onToolCallDetected(name, id),
+          onToolCallDetected: (name, id) => { emitted = true; watchdog.touch(); callbacks.onToolCallDetected(name, id); },
         });
         const handler = new DefaultLLMHandler(turnSource);
         const draft = await handler.handle({
@@ -2708,29 +2713,29 @@ export class AgentSession {
           anthropicThinkingBlocks: draft.anthropicThinkingBlocks,
         };
       } catch (err) {
-        const error = err as Error;
+        // 看门狗断开的流：底层报的是 AbortError，换成可重试的「流式无响应」
+        const error = (watchdog.idleError() ?? err) as Error;
         // 取消/中止：不重试，直接上抛
-        if (error.name === "AbortError" || error.message?.includes("aborted") || this.cancelled) {
+        if (!watchdog.idleError() && (error.name === "AbortError" || error.message?.includes("aborted") || this.cancelled)) {
           throw err;
         }
-        // 判断是否为可重试的瞬态错误（网络错误、429 限流、5xx 服务端错误）
-        if (!this.isRetryableError(error) || attempt >= MAX_RETRIES) {
-          if (this.isRetryableError(error)) {
-            // 重试耗尽
-            this.send("retry", { attempt: MAX_RETRIES, maxRetries: MAX_RETRIES, error: this.formatUserFacingError(error), status: "failed" });
+        const decision = classifyLLMError(error);
+        // 不可重试、重试次数用完，或者这一次已经吐出过内容（重试会重复输出）：上抛
+        if (!decision.retryable || attempt >= MAX_RETRIES || emitted) {
+          if (decision.retryable) {
+            this.send("retry", { attempt: Math.min(attempt, MAX_RETRIES), maxRetries: MAX_RETRIES, error: this.formatUserFacingError(error), status: "failed" });
           }
-          throw err;
+          throw error;
         }
         lastError = error;
-        // 指数退避：1s, 2s, 4s, 8s, 16s
-        const delay = Math.min(1000 * Math.pow(2, attempt), 16000);
-        console.warn(`[pipeline] 接口失败（${error.message}），${delay / 1000}s 后第 ${attempt + 1} 次重试...`);
+        const delay = backoffDelay(attempt, decision.retryAfterMs);
+        console.warn(`[pipeline] 接口失败（${error.message}），${(delay / 1000).toFixed(1)}s 后第 ${attempt + 1} 次重试...`);
         this.send("retry", { attempt: attempt + 1, maxRetries: MAX_RETRIES, error: this.formatUserFacingError(error), status: "retrying" });
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        // 等待期间检查取消
-        if (this.cancelled) {
-          throw lastError;
-        }
+        // 等待期间点「停止」立即结束，不再干等退避时间走完
+        await abortableSleep(delay, this.abortController?.signal);
+        if (this.cancelled) throw lastError;
+      } finally {
+        watchdog.dispose();
       }
     }
     // 不应到达这里（循环内已 return 或 throw），兜底上抛最后一个错误
@@ -2792,35 +2797,6 @@ export class AgentSession {
       504: "Gateway Timeout",
     };
     return map[code] || "";
-  }
-
-  /** 判断错误是否为可重试的瞬态错误 */
-  private isRetryableError(error: Error): boolean {
-    const msg = error.message || "";
-    // 网络错误
-    if (/ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|socket hang up|network|fetch failed/i.test(msg)) {
-      return true;
-    }
-    // HTTP 状态码判断（OpenAI SDK 的错误通常包含 status code）
-    const statusMatch = msg.match(/\b(\d{3})\b/);
-    if (statusMatch) {
-      const status = parseInt(statusMatch[1], 10);
-      // 429 限流、5xx 服务端错误可重试
-      if (status === 429 || (status >= 500 && status <= 599)) return true;
-    }
-    // 限流 / 过载
-    if (/rate.?limit|too many requests|overloaded|capacity|temporarily unavailable/i.test(msg)) {
-      return true;
-    }
-    // 服务端错误
-    if (/server error|internal error|bad gateway|service unavailable|gateway timeout/i.test(msg)) {
-      return true;
-    }
-    // 连接错误
-    if (/connection.*(?:reset|refused|error)|recv failure/i.test(msg)) {
-      return true;
-    }
-    return false;
   }
 
   /** 判断错误是否为上下文窗口超限 */

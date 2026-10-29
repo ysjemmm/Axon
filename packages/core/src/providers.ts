@@ -309,6 +309,8 @@ export function getClient(provider: string, model?: string): OpenAI {
       baseURL: conf.baseUrl,
       defaultHeaders: Object.keys(defaultHeaders).length ? defaultHeaders : undefined,
       fetch: globalThis.fetch as any,
+      // 重试统一由上层（llm/retryPolicy）负责：SDK 默认再重试 2 次，叠在一起一次请求能发出 18 次
+      maxRetries: 0,
     });
   }
   return clients[cacheKey];

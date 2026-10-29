@@ -11,6 +11,7 @@
  * 返回值：子 agent 的最终文本回复，作为工具结果回填给父 agent。
  */
 
+import { abortableSleep, backoffDelay, classifyLLMError } from "../llm/retryPolicy.js";
 import { coerceToolArgs, schemaForTool } from "../tools/argCoercion.js";
 import { preNormalizeArgs } from "../tools/argPreNormalize.js";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
@@ -162,22 +163,8 @@ function sanitizeSubAgentFinalText(text: string): string {
   return "子 Agent 已完成执行，但最终结论格式异常，混入了内部调试/工具调用痕迹；请以过程卡片中的实际调研步骤为准，由主 Agent 重新整理结论。";
 }
 
-/** 网络/网关层瞬时错误：值得重试（DNS/连接失败、超时、429、网关 5xx 等） */
-function isTransientNetworkError(err: unknown): boolean {
-  const msg = ((err as Error)?.message || "").toLowerCase();
-  if (!msg) return false;
-  return (
-    /\b429\b/.test(msg) ||
-    /rate limit|quota|too many requests/.test(msg) ||
-    /gateway|upstream|proxy|service unavailable/.test(msg) ||
-    /unexpected eof|connection reset|socket hang up|network error|fetch failed|timeout|timed out|econnreset|econnrefused|enotfound/.test(msg)
-  );
-}
-
 /** 子 Agent 单轮 LLM 调用的最大重试次数（不含首次尝试） */
 const SUBAGENT_TURN_MAX_RETRIES = 5;
-/** 重试退避基础间隔（ms），指数递增：500 / 1000 / 2000 */
-const SUBAGENT_RETRY_BASE_DELAY_MS = 500;
 
 export class SubAgentRunner {
   // 累计本子 Agent 所有回合消耗的 token，run() 返回时上报给父 Agent
@@ -392,14 +379,16 @@ export class SubAgentRunner {
         return await this._doRunTurn(messages);
       } catch (err) {
         lastErr = err;
-        if (!isTransientNetworkError(err) || attempt === SUBAGENT_TURN_MAX_RETRIES) {
+        // 与主会话同一套判断（llm/retryPolicy）：额度用完不重试、5xx 重试、尊重 retry-after
+        const decision = classifyLLMError(err);
+        if (!decision.retryable || attempt === SUBAGENT_TURN_MAX_RETRIES || this.deps.signal?.aborted) {
           throw err;
         }
-        const delay = SUBAGENT_RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+        const delay = backoffDelay(attempt, decision.retryAfterMs);
         this.deps.emit("status", {
-          content: `请求失败（${(err as Error).message}），${delay}ms 后重试（第 ${attempt + 1}/${SUBAGENT_TURN_MAX_RETRIES} 次）...`,
+          content: `请求失败（${(err as Error).message}），${Math.round(delay / 100) / 10}s 后重试（第 ${attempt + 1}/${SUBAGENT_TURN_MAX_RETRIES} 次）...`,
         });
-        await new Promise((r) => setTimeout(r, delay));
+        await abortableSleep(delay, this.deps.signal);
       }
     }
     // 理论上不可达（循环内已 return 或 throw），仅为满足类型检查

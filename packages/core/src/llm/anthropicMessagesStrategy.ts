@@ -238,7 +238,11 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
 
     if (!res.ok || !res.body) {
       const errText = await res.text().catch(() => "");
-      throw new Error(`Anthropic Messages API 请求失败：HTTP ${res.status} ${res.statusText}${errText ? ` - ${errText}` : ""}`);
+      // 带上状态码与响应头：重试策略按状态码分类、读 retry-after（见 llm/retryPolicy）
+      throw Object.assign(
+        new Error(`Anthropic Messages API 请求失败：HTTP ${res.status} ${res.statusText}${errText ? ` - ${errText}` : ""}`),
+        { status: res.status, headers: res.headers },
+      );
     }
 
     return this.parseStream(res.body, callbacks, estimatedPromptTokens);
