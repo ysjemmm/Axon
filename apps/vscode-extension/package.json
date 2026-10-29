@@ -25,6 +25,13 @@
   },
   "categories": ["AI", "Programming Languages", "Other"],
   "activationEvents": ["*"],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "未信任的工作区里，工作区设置中的命令信任白名单（axon.trustedCommands）与插件市场来源不生效。",
+      "restrictedConfigurations": ["axon.trustedCommands", "axon.marketplace.sources"]
+    }
+  },
   "main": "./dist/extension.js",
   "contributes": {
     "configuration": {

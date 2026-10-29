@@ -7,6 +7,7 @@
  * 回传。路径与返回结构与 server Express 路由保持一致，使前端 apiClient 零改动复用。
  */
 
+import { readJsonConfig, writeJsonConfig } from "./safeConfigFile.js";
 import * as vscode from "vscode";
 import { homedir } from "node:os";
 import { resolve, sep } from "node:path";
@@ -959,9 +960,10 @@ function providerConfigPath(level: "user" | "workspace", workspace?: string): st
 
 /** 读某 level 的 providers.json（不存在/损坏返回空配置） */
 async function readProviderConfig(level: "user" | "workspace", workspace?: string): Promise<ProviderConfigFile> {
-  const { readFile } = await import("node:fs/promises");
-  try {
-    const parsed = JSON.parse(await readFile(providerConfigPath(level, workspace), "utf-8")) as ProviderConfigFile;
+  // 文件不存在 → 空配置；存在但损坏 → 抛错（不能当成空配置，否则下一次保存会把它整个覆盖掉）
+  const parsed = await readJsonConfig<ProviderConfigFile>(providerConfigPath(level, workspace));
+  if (!parsed) return { providers: {}, builtinApiKeys: {}, builtinBaseUrls: {}, builtinQuota: {} };
+  {
     return {
       providers: parsed.providers || {},
       builtinApiKeys: parsed.builtinApiKeys || {},
@@ -970,15 +972,11 @@ async function readProviderConfig(level: "user" | "workspace", workspace?: strin
       builtinQuota: parsed.builtinQuota || {},
       ...(parsed.visionFallbackModel ? { visionFallbackModel: parsed.visionFallbackModel } : {}),
     };
-  } catch {
-    return { providers: {}, builtinApiKeys: {}, builtinBaseUrls: {}, builtinQuota: {} };
   }
 }
 
 /** 覆盖写某 level 的 providers.json */
 async function writeProviderConfig(level: "user" | "workspace", config: ProviderConfigFile, workspace?: string): Promise<void> {
-  const { mkdir, writeFile } = await import("node:fs/promises");
-  const { dirname } = await import("node:path");
   const normalized: ProviderConfigFile = {
     providers: config.providers || {},
     builtinApiKeys: config.builtinApiKeys || {},
@@ -987,9 +985,8 @@ async function writeProviderConfig(level: "user" | "workspace", config: Provider
     builtinQuota: config.builtinQuota || {},
     ...(config.visionFallbackModel ? { visionFallbackModel: config.visionFallbackModel } : {}),
   };
-  const p = providerConfigPath(level, workspace);
-  await mkdir(dirname(p), { recursive: true });
-  await writeFile(p, JSON.stringify(normalized, null, 2), "utf-8");
+  // 原子写 + 仅本人可读：文件里有 API Key
+  await writeJsonConfig(providerConfigPath(level, workspace), normalized);
 }
 
 /** 新增/覆盖自定义 provider */

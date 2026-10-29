@@ -472,6 +472,30 @@ export class SessionHub {
     primaryWorkspace: string,
     clientId?: string,
   ): Promise<{ session: AgentSession; savedSession: Awaited<ReturnType<SessionStorage["getSession"]>> }> {
+    // 同一会话同时被加载两次（切会话与发消息几乎同时）：共用一次加载。
+    // 否则会建出两个实例，后建的占住 activeSessions，这一轮却跑在先建的那个「孤儿」上，结果写不回去
+    const inflight = this.loadingSessions.get(sid);
+    if (inflight) {
+      const loaded = await inflight;
+      this.setSessionOwner(sid, clientId);
+      return loaded;
+    }
+    const load = this.loadSessionOnce(sid, primaryWorkspace, clientId);
+    this.loadingSessions.set(sid, load);
+    try {
+      return await load;
+    } finally {
+      this.loadingSessions.delete(sid);
+    }
+  }
+
+  private readonly loadingSessions = new Map<string, Promise<{ session: AgentSession; savedSession: Awaited<ReturnType<SessionStorage["getSession"]>> }>>();
+
+  private async loadSessionOnce(
+    sid: string,
+    primaryWorkspace: string,
+    clientId?: string,
+  ): Promise<{ session: AgentSession; savedSession: Awaited<ReturnType<SessionStorage["getSession"]>> }> {
     const cached = this.activeSessions.get(sid);
     if (cached) {
       // 更新该会话的归属面板，确保后续事件路由到当前面板
@@ -481,6 +505,9 @@ export class SessionHub {
     }
 
     const savedSession = await this.storage.getSession(sid);
+    // 读盘期间别处已经把它建好了（比如新建会话）：用那个，不再另建
+    const raced = this.activeSessions.get(sid);
+    if (raced) return { session: raced, savedSession };
     const ws_dir = savedSession?.workspace || primaryWorkspace;
     const ws_dirs = (this.deps.workspaces && this.deps.workspaces.length > 0)
       ? this.deps.workspaces
@@ -1780,6 +1807,14 @@ export class SessionHub {
 
     if (!cmd.model?.trim() || !cmd.provider?.trim()) {
       throw new Error("请先在模型菜单中选择已配置的 Provider 和模型");
+    }
+
+    // 内存里没有、但磁盘上有（重启后第一次发消息、或 load_session 还没跑完）：先加载，绝不新建 ——
+    // 新建会写一个空会话，把磁盘上的整段历史冲掉
+    if (!session && cmd.sessionId && (await this.storage.getSession(cmd.sessionId))) {
+      session = (await this.getOrLoadSession(cmd.sessionId, primaryWorkspace, clientId)).session;
+      sid = cmd.sessionId;
+      if (clientId) this.clientSessions.set(clientId, sid);
     }
 
     // 会话不存在：惰性创建（采用前端传入的 sessionId，若无则由存储生成）

@@ -155,8 +155,14 @@ export class JsonFileStorage implements SessionStorage {
       updatedAt: now,
     };
     const filePath = this.sessionPath(session.id);
-    await this.withWriteLock(filePath, () => this.safeWrite(filePath, session));
-    return session;
+    // 指定了 id 且文件已存在：绝不覆盖，原样返回已有的会话。
+    // 调用方以为会话不存在（还没加载进内存、或两处同时创建）时，覆盖会把整段历史冲成空。
+    let existing: SessionData | null = null;
+    await this.withWriteLock(filePath, async () => {
+      if (data.id) existing = await this.getSession(session.id);
+      if (!existing) await this.safeWrite(filePath, session);
+    });
+    return existing ?? session;
   }
 
   async updateSession(

@@ -14,6 +14,7 @@
 import * as vscode from "vscode";
 import { homedir } from "node:os";
 import { join, basename, dirname } from "node:path";
+import { readJsonConfig, writeJsonConfig } from "./safeConfigFile.js";
 import { SessionHub, type ControlCommand, type WorkspaceGroup, type CompactionUserConfig, type CreditBudgetUserConfig, webSearch, webFetch, setBuiltinPowersDir } from "@axon/core";
 import { DEFAULT_COMPACTION_CONFIG, DEFAULT_CREDIT_BUDGET_CONFIG, DEFAULT_TRACE_CONFIG, type TraceConfig } from "@axon/core";
 import { createVSCodeAgentHost, VSCodeCommandTrustStore } from "@axon/host-vscode";
@@ -2349,18 +2350,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // 用户级 providers.json 路径助手（树发起的增删改默认写用户级，工作区级由 Studio 管理）
   const userProvidersJson = () => join(homedir(), ".axon", "settings", "providers.json");
-  const readProvidersJson = async (): Promise<{ providers: Record<string, unknown>; builtinApiKeys: Record<string, string> }> => {
-    const { readFile } = await import("node:fs/promises");
-    try {
-      const p = JSON.parse(await readFile(userProvidersJson(), "utf-8"));
-      return { providers: p.providers || {}, builtinApiKeys: p.builtinApiKeys || {} };
-    } catch { return { providers: {}, builtinApiKeys: {} }; }
+  // 读写都保留文件里的其它字段（builtinBaseUrls、builtinModels…）：只改树上动到的那部分。
+  // 文件损坏时读取直接报错，不会拿空配置把它覆盖掉（见 safeConfigFile）。
+  const readProvidersJson = async (): Promise<Record<string, unknown> & { providers: Record<string, unknown>; builtinApiKeys: Record<string, string> }> => {
+    const p = (await readJsonConfig<Record<string, unknown>>(userProvidersJson())) ?? {};
+    return { ...p, providers: (p.providers as Record<string, unknown>) || {}, builtinApiKeys: (p.builtinApiKeys as Record<string, string>) || {} };
   };
-  const writeProvidersJson = async (cfg: { providers: Record<string, unknown>; builtinApiKeys: Record<string, string> }): Promise<void> => {
-    const { mkdir, writeFile } = await import("node:fs/promises");
-    const { dirname } = await import("node:path");
-    await mkdir(dirname(userProvidersJson()), { recursive: true });
-    await writeFile(userProvidersJson(), JSON.stringify(cfg, null, 2), "utf-8");
+  const writeProvidersJson = async (cfg: Record<string, unknown>): Promise<void> => {
+    await writeJsonConfig(userProvidersJson(), cfg);
   };
 
   const providersWatcher = vscode.workspace.createFileSystemWatcher("**/.axon/settings/providers.json");

@@ -25,7 +25,12 @@ export class VSCodeCommandTrustStore implements CommandTrustStore {
     // 必须分别读 globalValue 和 workspaceValue 再手动 union。
     const inspected = cfg.inspect<string[]>(CONFIG_KEY);
     const globalPatterns = Array.isArray(inspected?.globalValue) ? inspected!.globalValue! : [];
-    const workspacePatterns = Array.isArray(inspected?.workspaceValue) ? inspected!.workspaceValue! : [];
+    // 工作区层的规则来自仓库里的 .vscode/settings.json —— 克隆一个陌生仓库，它就能替你写好
+    // `"axon.trustedCommands": ["*"]`，让 Agent 执行任何命令都不再问你（配合提示注入就是在你机器上跑任意代码）。
+    // 所以：未信任的工作区一条都不认；信任的工作区也不认过宽的规则（见 isTooBroadForWorkspace）。
+    const workspacePatterns = vscode.workspace.isTrusted && Array.isArray(inspected?.workspaceValue)
+      ? inspected!.workspaceValue!.filter((p) => typeof p === "string" && !isTooBroadForWorkspace(p))
+      : [];
     const merged = [...new Set([...globalPatterns, ...workspacePatterns])].filter((p): p is string => typeof p === "string");
     return merged;
   }
@@ -47,4 +52,20 @@ export class VSCodeCommandTrustStore implements CommandTrustStore {
       console.warn("[trust] 写回失败:", (err as Error).message);
     });
   }
+}
+
+/** 能执行任意代码的命令：工作区里只写一个「node *」「bash *」就等于放行一切 */
+const CODE_RUNNERS = new Set(["node", "npx", "pnpm", "yarn", "npm", "bun", "deno", "python", "python3", "py", "bash", "sh", "zsh", "pwsh", "powershell", "cmd", "ruby", "perl", "php", "curl", "wget", "iex", "invoke-expression", "start-process", "sudo"]);
+
+/**
+ * 工作区层不接受的规则：全部放行（*），以及「命令名 + *」这种只固定了一个词的前缀
+ * 且这个命令本身就能执行任意代码（node *、bash *、npx * …）。
+ * 精确的整条命令（npm run build）、多词前缀（git status *）照常生效。
+ */
+export function isTooBroadForWorkspace(pattern: string): boolean {
+  const p = pattern.trim();
+  if (!p || p === "*") return true;
+  if (!p.endsWith(" *")) return false;
+  const words = p.slice(0, -2).trim().split(/\s+/);
+  return words.length <= 1 && CODE_RUNNERS.has((words[0] ?? "").toLowerCase());
 }
