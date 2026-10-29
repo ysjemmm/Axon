@@ -17,6 +17,7 @@ import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotoc
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { getBuiltinServer } from "./builtinMcp/index.js";
+import { OAuthCredentialStore, OAuthReauthRequired, StoredOAuthProvider, authorizeInteractive, oauthStatus } from "./mcpOAuth.js";
 import type { McpCapability, McpServerSpec, McpToolInfo, McpCallResult } from "@axon/core";
 
 /** 单个 server 的连接状态 */
@@ -57,6 +58,11 @@ export function matchesAutoApprove(toolName: string, patterns: string[] | undefi
 
 export class NodeMcpCapability implements McpCapability {
   private conns = new Map<string, McpConnection>();
+  private readonly oauth: OAuthCredentialStore;
+
+  constructor(opts: { oauthStorePath?: string } = {}) {
+    this.oauth = new OAuthCredentialStore(opts.oauthStorePath);
+  }
 
   /** 幂等同步目标 server：断开已移除/禁用/变更的，连接新增/变更的（并发 + 错误隔离） */
   async syncServers(specs: McpServerSpec[]): Promise<void> {
@@ -128,6 +134,17 @@ export class NodeMcpCapability implements McpCapability {
     if (!spec.url) throw new Error(`server ${spec.id} 是 http 传输但缺少 url`);
     const url = new URL(spec.url);
     const requestInit = spec.headers ? { headers: spec.headers } : undefined;
+    if (spec.oauth) {
+      // OAuth 授权的远程 server：令牌由 provider 提供并自动续期；后台连接不弹浏览器，需要授权就报错
+      if (!this.oauth.get(spec.oauth.key).tokens) throw new OAuthReauthRequired();
+      const client = this.newClient();
+      const authProvider = new StoredOAuthProvider(this.oauth, spec.oauth.key, undefined);
+      await withTimeout(
+        client.connect(new StreamableHTTPClientTransport(url, { requestInit, authProvider })),
+        CONNECT_TIMEOUT_MS, `连接 ${spec.id}`,
+      );
+      return client;
+    }
     try {
       const client = this.newClient();
       await withTimeout(
@@ -186,6 +203,22 @@ export class NodeMcpCapability implements McpCapability {
     }
   }
 
+  async authorize(spec: McpServerSpec, openUrl: (url: string) => void, signal?: AbortSignal): Promise<void> {
+    if (!spec.oauth || !spec.url) throw new Error("这个连接器不使用 OAuth 授权");
+    await authorizeInteractive({ store: this.oauth, key: spec.oauth.key, serverUrl: spec.url, openUrl, signal });
+    // 令牌更新了：之前因为没授权而连不上的，下次同步时重连
+    await this.close(spec.id);
+  }
+
+  oauthStatus(key: string): { connected: boolean; expiresAt?: number; refreshable: boolean } {
+    return oauthStatus(this.oauth, key);
+  }
+
+  signOut(key: string): void {
+    this.oauth.remove(key);
+    for (const [id, conn] of this.conns) if (conn.spec.oauth?.key === key) void this.close(id);
+  }
+
   /** 列出当前所有已连接 server 的工具 */
   async listTools(): Promise<McpToolInfo[]> {
     return [...this.conns.values()].flatMap((c) => c.tools);
@@ -220,6 +253,6 @@ export class NodeMcpCapability implements McpCapability {
 }
 
 /** 工厂：创建 NodeMcpCapability（注入给 SessionHub.mcp） */
-export function createNodeMcpCapability(): NodeMcpCapability {
-  return new NodeMcpCapability();
+export function createNodeMcpCapability(opts: { oauthStorePath?: string } = {}): NodeMcpCapability {
+  return new NodeMcpCapability(opts);
 }

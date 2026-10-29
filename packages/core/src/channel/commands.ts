@@ -136,6 +136,14 @@ export type ControlCommandPayload =
   | { type: "connector_delete"; id: string }
   /** 试连：草稿（未保存）或已保存的连接器，列出它提供的工具 */
   | { type: "connector_test"; connector: unknown; requestId?: string }
+  /** 一键连接：OAuth 连接器去浏览器授权；GitHub 走设备码登录。connector 是要保存的草稿（新建时没有 id） */
+  | { type: "connector_connect"; connector: unknown; requestId?: string }
+  /** 取消正在进行的授权 / 登录 */
+  | { type: "connector_connect_cancel"; requestId?: string }
+  /** 断开授权（删掉 OAuth 凭据，连接器保留） */
+  | { type: "connector_sign_out"; id: string }
+  /** 连接器全局设置：GitHub OAuth App 的 Client ID */
+  | { type: "connector_app_settings"; githubClientId?: string }
   // 插话：回复进行中追加消息（字段同 user_message）；会话空闲时等同于发一条普通消息
   | (Omit<UserMessageCommand, "type"> & { type: "steer_message" })
   | { type: "steer_cancel"; clientMessageId: string }

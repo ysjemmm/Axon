@@ -45,8 +45,14 @@ export interface ConnectorTemplate {
   setup?: string;
   docsUrl?: string;
   fields: ConnectorField[];
-  /** values 已合并默认值与密钥 */
-  build: (values: Record<string, string>) => ConnectorSpec;
+  /**
+   * 授权方式（缺省 = 填字段）：
+   *   · oauth：远程 MCP 标准授权，点「连接」去浏览器授权，不用填令牌
+   *   · github-device：GitHub 设备码登录（用 Axon 自己的 GitHub OAuth App），登录后令牌自动填进 token 字段
+   */
+  auth?: "oauth" | "github-device";
+  /** values 已合并默认值与密钥；ctx.id 是连接器 id（OAuth 凭据按它存放） */
+  build: (values: Record<string, string>, ctx: { id: string }) => ConnectorSpec;
 }
 
 /** 给前端的目录（不含 build） */
@@ -111,6 +117,25 @@ function mailTemplate(id: string, name: string, preset: { imapHost: string; smtp
   };
 }
 
+/**
+ * 远程 MCP + OAuth 的连接器：服务方托管 MCP，支持动态注册客户端，点「连接」去浏览器授权即可。
+ * autoApprove 只放查询类工具（名字按各家公开的工具命名，猜不中的就是每次确认，不会多放行）。
+ */
+function oauthTemplate(t: { id: string; name: string; category: ConnectorCategory; description: string; icon: string; url: string; autoApprove: string[]; docsUrl?: string }): ConnectorTemplate {
+  return {
+    id: t.id,
+    name: t.name,
+    category: t.category,
+    description: t.description,
+    icon: t.icon,
+    docsUrl: t.docsUrl,
+    auth: "oauth",
+    setup: `点「连接」会打开浏览器，登录 ${t.name} 并同意授权后自动回到 Axon，不需要复制令牌。`,
+    fields: [],
+    build: (_v, ctx) => ({ transport: "http", url: t.url, oauth: { key: ctx.id }, autoApprove: t.autoApprove }),
+  };
+}
+
 export const CONNECTOR_TEMPLATES: ConnectorTemplate[] = [
   {
     id: "github",
@@ -118,7 +143,8 @@ export const CONNECTOR_TEMPLATES: ConnectorTemplate[] = [
     category: "dev",
     description: "查仓库、代码、Issue、PR、Actions，创建 Issue 和 PR",
     icon: "github",
-    setup: "在 GitHub → Settings → Developer settings → Personal access tokens 生成一个令牌（Fine-grained，勾选需要的仓库权限）。",
+    auth: "github-device",
+    setup: "点「使用 GitHub 登录」，在打开的页面输入显示的验证码并授权即可。也可以手动填一个个人访问令牌（Settings → Developer settings → Personal access tokens）。",
     docsUrl: "https://github.com/settings/personal-access-tokens",
     fields: [
       { key: "token", label: "个人访问令牌", type: "secret", placeholder: "github_pat_…", required: true },
@@ -203,9 +229,39 @@ export const CONNECTOR_TEMPLATES: ConnectorTemplate[] = [
       args: ["-y", "@larksuiteoapi/lark-mcp", "mcp", "-a", v.appId, "-s", v.appSecret, ...(v.domain === "lark" ? ["--domain", "https://open.larksuite.com"] : [])],
     }),
   },
+  oauthTemplate({
+    id: "notion-oauth", name: "Notion", category: "office", icon: "notion",
+    description: "搜索、读取和编辑 Notion 页面与数据库（按你的 Notion 账号权限）",
+    url: "https://mcp.notion.com/mcp",
+    autoApprove: ["notion-search", "notion-fetch", "notion-get-*"],
+  }),
+  oauthTemplate({
+    id: "linear", name: "Linear", category: "dev", icon: "linear",
+    description: "查看和管理 Linear 的 Issue、项目、周期与评论",
+    url: "https://mcp.linear.app/mcp",
+    autoApprove: ["list_*", "get_*", "search_*"],
+  }),
+  oauthTemplate({
+    id: "atlassian", name: "Jira / Confluence", category: "office", icon: "atlassian",
+    description: "搜索和编辑 Jira 工单、Confluence 页面（Atlassian Cloud）",
+    url: "https://mcp.atlassian.com/v1/mcp",
+    autoApprove: ["get*", "search*", "lookup*", "atlassianUserInfo"],
+  }),
+  oauthTemplate({
+    id: "sentry", name: "Sentry", category: "dev", icon: "sentry",
+    description: "查看 Sentry 的报错、Issue 详情和发布情况，定位线上问题",
+    url: "https://mcp.sentry.dev/mcp",
+    autoApprove: ["find_*", "get_*", "search_*", "whoami"],
+  }),
+  oauthTemplate({
+    id: "stripe", name: "Stripe", category: "data", icon: "stripe",
+    description: "查询 Stripe 的客户、订单、支付与订阅",
+    url: "https://mcp.stripe.com",
+    autoApprove: ["list_*", "retrieve_*", "search_*", "get_*"],
+  }),
   {
     id: "notion",
-    name: "Notion",
+    name: "Notion（集成令牌）",
     category: "office",
     description: "搜索、读取和编辑 Notion 页面与数据库",
     icon: "notion",
@@ -252,6 +308,24 @@ export const CONNECTOR_TEMPLATES: ConnectorTemplate[] = [
       command: "npx",
       args: ["-y", "@modelcontextprotocol/server-postgres", v.url],
       autoApprove: ["query"],
+    }),
+  },
+  {
+    id: "custom-remote-oauth",
+    name: "自定义（远程 · 浏览器授权）",
+    category: "custom",
+    description: "连接支持 MCP 标准 OAuth 授权的远程服务，点「连接」去浏览器授权",
+    icon: "globe",
+    auth: "oauth",
+    fields: [
+      { key: "url", label: "服务地址", type: "text", placeholder: "https://example.com/mcp", required: true },
+      { key: "autoApprove", label: "免确认的工具", type: "text", placeholder: "如 get_*, list_*（逗号分隔，留空表示每次都确认）" },
+    ],
+    build: (v, ctx) => ({
+      transport: "http",
+      url: v.url,
+      oauth: { key: ctx.id },
+      autoApprove: (v.autoApprove || "").split(/[,，\s]+/).filter(Boolean),
     }),
   },
   {

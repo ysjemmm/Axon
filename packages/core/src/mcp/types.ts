@@ -48,6 +48,11 @@ export interface McpServerSpec {
   disabled?: boolean;
   /** 自动批准的工具名白名单（命中则跳过人工审批） */
   autoApprove?: string[];
+  /**
+   * http：用 OAuth 授权（远程 MCP 标准授权）。key 是凭据存放的键（连接器 id）。
+   * 令牌由宿主保存与续期；没有令牌或续期失败时连接报「需要重新授权」，由用户在连接器里点「连接」。
+   */
+  oauth?: { key: string };
 }
 
 /** 一个 MCP 工具（来自某 server 的 tools/list） */
@@ -98,6 +103,15 @@ export interface McpCapability {
    * 连不上时抛错，错误信息直接给用户看。
    */
   probe?(spec: McpServerSpec): Promise<{ tools: { name: string; description?: string }[] }>;
+  /**
+   * OAuth 授权（spec.oauth 的远程 server）：打开浏览器让用户授权，拿到令牌后返回。
+   * 已有有效令牌时直接返回。openUrl 由调用方决定怎么打开授权页（可选能力）。
+   */
+  authorize?(spec: McpServerSpec, openUrl: (url: string) => void, signal?: AbortSignal): Promise<void>;
+  /** 某个 OAuth 凭据的状态（界面显示「已连接」） */
+  oauthStatus?(key: string): { connected: boolean; expiresAt?: number; refreshable: boolean };
+  /** 删除某个 OAuth 凭据（断开 / 删除连接器） */
+  signOut?(key: string): void;
 }
 
 /** MCP 工具名命名空间前缀：模型看到的工具名为 `mcp__<serverId>__<toolName>` */

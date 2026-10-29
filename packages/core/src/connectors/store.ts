@@ -92,7 +92,7 @@ export function buildConnectorSpec(record: ConnectorRecord, secrets: Record<stri
   if (!template) return null;
   const values = mergedValues(template, record, secrets);
   if (missingFields(template, values).length > 0) return null;
-  return { id: `connector:${record.id}`, name: record.name, source: "connector", ...template.build(values), disabled: !record.enabled };
+  return { id: `connector:${record.id}`, name: record.name, source: "connector", ...template.build(values, { id: record.id }), disabled: !record.enabled };
 }
 
 /** 运行时用：所有启用且字段齐全的连接器 → MCP server 规格 */
@@ -122,7 +122,9 @@ export class ConnectorStore {
   }
 
   private async persist(records: ConnectorRecord[], secrets: SecretFile): Promise<void> {
-    await this.fs.write(connectorConfigPath(this.homeDir), JSON.stringify({ connectors: records }, null, 2));
+    // 保留同文件里的其它设置（apps 等）
+    const config = await readJson<Record<string, unknown>>(this.fs, connectorConfigPath(this.homeDir), {});
+    await this.fs.write(connectorConfigPath(this.homeDir), JSON.stringify({ ...config, connectors: records }, null, 2));
     const secretsPath = connectorSecretsPath(this.homeDir);
     await this.fs.write(secretsPath, JSON.stringify(secrets, null, 2));
     await restrictPermissions(secretsPath);
@@ -135,6 +137,23 @@ export class ConnectorStore {
       const result = fn(records, secrets);
       await this.persist(records, secrets);
       return result;
+    });
+    this.chain = run.catch(() => undefined);
+    return run;
+  }
+
+  /** 连接器的全局设置（目前只有 GitHub OAuth App 的 Client ID）；环境变量 AXON_GITHUB_CLIENT_ID 优先 */
+  async appSettings(): Promise<{ githubClientId: string; githubClientIdFromEnv: boolean }> {
+    const env = (typeof process !== "undefined" ? process.env.AXON_GITHUB_CLIENT_ID : "") || "";
+    const config = await readJson<{ apps?: { githubClientId?: string } }>(this.fs, connectorConfigPath(this.homeDir), {});
+    return { githubClientId: env || config.apps?.githubClientId || "", githubClientIdFromEnv: !!env };
+  }
+
+  setAppSettings(patch: { githubClientId?: string }): Promise<void> {
+    const run = this.chain.then(async () => {
+      const config = await readJson<Record<string, unknown>>(this.fs, connectorConfigPath(this.homeDir), {});
+      const apps = { ...((config.apps as Record<string, unknown>) ?? {}), ...(patch.githubClientId !== undefined ? { githubClientId: patch.githubClientId.trim() } : {}) };
+      await this.fs.write(connectorConfigPath(this.homeDir), JSON.stringify({ ...config, apps }, null, 2));
     });
     this.chain = run.catch(() => undefined);
     return run;
@@ -155,7 +174,7 @@ export class ConnectorStore {
     const values = mergedValues(template, { values: draft.values ?? {} }, merged);
     const missing = missingFields(template, values);
     if (missing.length) throw new Error(`还没填：${missing.join("、")}`);
-    return { id: `connector-probe:${draft.id ?? template.id}`, name: draft.name || template.name, source: "connector", ...template.build(values) };
+    return { id: `connector-probe:${draft.id ?? template.id}`, name: draft.name || template.name, source: "connector", ...template.build(values, { id: draft.id ?? template.id }) };
   }
 
   save(draft: ConnectorDraft, now = Date.now()): Promise<ConnectorView> {

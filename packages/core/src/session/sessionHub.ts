@@ -30,7 +30,8 @@ import { filterPersistableMessages, filterTransientMessages, slimDiffBodies, fin
 import { buildForkMessages } from "./forkHistory.js";
 import { CoworkFlowStore, generateFlowDraft, generateFlowDraftFromDescription } from "../cowork/flows.js";
 import { ConnectorStore, type ConnectorDraft } from "../connectors/store.js";
-import { connectorCatalog } from "../connectors/catalog.js";
+import { connectorCatalog, getConnectorTemplate } from "../connectors/catalog.js";
+import { githubLogin, pollGithubDeviceToken, startGithubDeviceFlow } from "../connectors/githubDevice.js";
 import { getStrategy } from "../providers.js";
 import { AGENT_TASK_PREFACE, AgentTaskStore, stepFromEvent, type AgentTask } from "./agentTasks.js";
 import { backgroundNoticeLabel, formatBackgroundNotice, type BackgroundTaskInfo, type BackgroundTaskNotice } from "./backgroundTasks.js";
@@ -647,6 +648,18 @@ export class SessionHub {
         return this.emitConnectors(clientId);
       case "connector_delete":
         await this.connectorStore().remove(String(cmd.id || ""));
+        this.deps.mcp?.signOut?.(String(cmd.id || ""));
+        return this.emitConnectors(clientId);
+      case "connector_connect":
+        return this.handleConnectorConnect(cmd.connector as ConnectorDraft, cmd.requestId, clientId);
+      case "connector_connect_cancel":
+        this.connectAborts.get(cmd.requestId ?? "")?.abort();
+        return;
+      case "connector_sign_out":
+        this.deps.mcp?.signOut?.(String(cmd.id || ""));
+        return this.emitConnectors(clientId);
+      case "connector_app_settings":
+        await this.connectorStore().setAppSettings({ githubClientId: cmd.githubClientId });
         return this.emitConnectors(clientId);
       case "connector_test":
         return this.handleConnectorTest(cmd.connector as ConnectorDraft, cmd.requestId, clientId);
@@ -1363,8 +1376,59 @@ export class SessionHub {
   }
 
   private async emitConnectors(clientId: string | undefined): Promise<void> {
-    const connectors = await this.connectorStore().list();
-    this.emitResult(null, clientId, { type: "connectors", catalog: connectorCatalog(), connectors } as AgentEvent);
+    const list = await this.connectorStore().list();
+    // OAuth 连接器带上授权状态（「已连接」/「需要授权」）
+    const connectors = list.map((c) => getConnectorTemplate(c.templateId)?.auth === "oauth" && this.deps.mcp?.oauthStatus
+      ? { ...c, oauth: this.deps.mcp.oauthStatus(c.id) }
+      : c);
+    const apps = await this.connectorStore().appSettings();
+    this.emitResult(null, clientId, { type: "connectors", catalog: connectorCatalog(), connectors, apps } as AgentEvent);
+  }
+
+  /** 进行中的一键连接（按 requestId），用于取消 */
+  private readonly connectAborts = new Map<string, AbortController>();
+
+  /**
+   * 一键连接：
+   *   · OAuth 连接器：先保存（新建拿到 id），再打开浏览器授权，回调拿到令牌
+   *   · GitHub：设备码登录，拿到令牌后存进连接器的 token 字段，名字补上 GitHub 用户名
+   */
+  private async handleConnectorConnect(draft: ConnectorDraft, requestId: string | undefined, clientId: string | undefined): Promise<void> {
+    const progress = (data: Record<string, unknown>) =>
+      this.emitResult(null, clientId, { type: "connector_connect_progress", requestId, ...data } as AgentEvent);
+    const abort = new AbortController();
+    if (requestId) this.connectAborts.set(requestId, abort);
+    try {
+      const template = getConnectorTemplate(draft.templateId);
+      if (!template?.auth) throw new Error("这个连接器不支持一键连接");
+      const store = this.connectorStore();
+
+      if (template.auth === "github-device") {
+        const { githubClientId } = await store.appSettings();
+        if (!githubClientId) throw new Error("还没有配置 GitHub OAuth App 的 Client ID（在下方「OAuth 应用」里填写）");
+        const code = await startGithubDeviceFlow(githubClientId);
+        progress({ stage: "github_code", userCode: code.userCode, verificationUri: code.verificationUri, expiresIn: code.expiresIn });
+        const token = await pollGithubDeviceToken(githubClientId, code, { signal: abort.signal });
+        const login = await githubLogin(token);
+        const saved = await store.save({
+          ...draft,
+          name: draft.name && draft.name !== template.name ? draft.name : login ? `GitHub（${login}）` : template.name,
+          secrets: { ...(draft.secrets ?? {}), token },
+        });
+        progress({ stage: "done", connector: saved });
+      } else {
+        if (!this.deps.mcp?.authorize) throw new Error("当前环境不支持浏览器授权");
+        const saved = await store.save(draft);
+        const spec = await store.specFor({ ...draft, id: saved.id });
+        await this.deps.mcp.authorize(spec, (url) => progress({ stage: "open_url", url }), abort.signal);
+        progress({ stage: "done", connector: saved });
+      }
+    } catch (err) {
+      progress({ stage: "error", error: (err as Error).message || "连接失败" });
+    } finally {
+      if (requestId) this.connectAborts.delete(requestId);
+    }
+    await this.emitConnectors(clientId);
   }
 
   /** 试连：用完即断，不影响会话里已有的 MCP 连接；保存后下一轮对话就会带上它的工具 */

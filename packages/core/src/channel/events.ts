@@ -130,7 +130,9 @@ export type AgentEventPayload =
   // ── Cowork 核对与流程 ──
   | { type: "cowork_checks"; checks: CoworkCheck[] }
   // ── 连接器 ──
-  | { type: "connectors"; catalog: ConnectorTemplateInfo[]; connectors: ConnectorView[] }
+  | { type: "connectors"; catalog: ConnectorTemplateInfo[]; connectors: (ConnectorView & { oauth?: { connected: boolean; expiresAt?: number; refreshable: boolean } })[]; apps?: { githubClientId: string; githubClientIdFromEnv: boolean } }
+  /** 一键连接的进度：open_url 请打开授权页；github_code 给用户看验证码；done / error 结束 */
+  | { type: "connector_connect_progress"; requestId?: string; stage: "open_url" | "github_code" | "done" | "error"; url?: string; userCode?: string; verificationUri?: string; expiresIn?: number; connector?: ConnectorView; error?: string }
   | { type: "connector_saved"; requestId?: string; connector?: ConnectorView; error?: string }
   | { type: "connector_test_result"; requestId?: string; ok: boolean; tools?: { name: string; description?: string }[]; error?: string }
   // ── 插话 ──
