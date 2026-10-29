@@ -80,19 +80,62 @@ function formatUpdatedAt(updatedAt: number | null, now = Date.now()): string {
 }
 
 /** 一条指标的简短文案：有总额显示「已用 / 总额」，只有余额显示「余额」，只有百分比显示「已用 x%」 */
+/** 金额带单位：$ / ¥ / € 这类符号放前面，其它（Credits 等）放后面 */
+function withUnit(value: number, unit?: string): string {
+	const n = formatCredits(value);
+	if (!unit) return n;
+	return /^[$¥€£]$/.test(unit) ? `${unit}${n}` : `${n} ${unit}`;
+}
+
+/** 距离重置还有多久：「7 小时后重置」 */
+function resetText(resetAt: number, now = Date.now()): string {
+	const diff = resetAt - now;
+	if (diff <= 0) return `已于 ${new Date(resetAt).toLocaleString()} 重置`;
+	const minutes = Math.round(diff / 60_000);
+	const text = minutes < 60 ? `${Math.max(1, minutes)} 分钟` : minutes < 48 * 60 ? `${Math.round(minutes / 60)} 小时` : `${Math.round(minutes / 1440)} 天`;
+	return `${text}后重置`;
+}
+
 function metricText(metric: QuotaMetric): string {
-	const unit = metric.unit ? ` ${metric.unit}` : "";
-	if (metric.total !== undefined && metric.used !== undefined) return `${formatCredits(metric.used)} / ${formatCreditLimit(metric.total)}${unit}`;
-	if (metric.remaining !== undefined) return `余额 ${formatCredits(metric.remaining)}${unit}`;
+	if (metric.total !== undefined && metric.used !== undefined) return `${withUnit(metric.used, metric.unit)} / ${withUnit(metric.total, metric.unit)}`;
+	if (metric.remaining !== undefined) return `剩余 ${withUnit(metric.remaining, metric.unit)}`;
 	if (metric.percent !== undefined) return `已用 ${metric.percent}%`;
-	return metric.used !== undefined ? `已用 ${formatCredits(metric.used)}${unit}` : "—";
+	return metric.used !== undefined ? `已用 ${withUnit(metric.used, metric.unit)}` : "—";
+}
+
+/** 主数值之外的补充：有总额补「剩余」，余额补「累计已用」，再加重置时间 */
+function metricExtra(metric: QuotaMetric): string {
+	const parts: string[] = [];
+	if (metric.total !== undefined && metric.remaining !== undefined) parts.push(`剩余 ${withUnit(metric.remaining, metric.unit)}`);
+	else if (metric.total === undefined && metric.remaining !== undefined && metric.used !== undefined) parts.push(`累计已用 ${withUnit(metric.used, metric.unit)}`);
+	if (metric.resetAt) parts.push(resetText(metric.resetAt));
+	return parts.join(" · ");
 }
 
 function metricDetail(metric: QuotaMetric): string {
 	const parts = [metricText(metric)];
 	if (metric.percent !== undefined && metric.total !== undefined) parts.push(`${metric.percent}%`);
-	if (metric.resetAt) parts.push(`${new Date(metric.resetAt).toLocaleString()} 重置`);
+	const extra = metricExtra(metric);
+	if (extra) parts.push(extra);
 	return `${metric.label}：${parts.join(" · ")}`;
+}
+
+/** 账户用量弹窗的一行（已格式化好，弹窗只管排版） */
+interface UsageModalRow {
+	label: string;
+	value: string;
+	detail?: string;
+	percent?: number;
+}
+
+function modalRows(usage: AxonUsageStats): UsageModalRow[] | undefined {
+	if (!usage.metrics?.length) return undefined;
+	return usage.metrics.map((m) => ({
+		label: m.label,
+		value: metricText(m),
+		detail: metricExtra(m) || undefined,
+		percent: m.total !== undefined ? m.percent : undefined,
+	}));
 }
 
 function usageText(usage: AxonUsageStats, label: string, unit = "Credits"): string {
@@ -279,20 +322,21 @@ export function registerAxonUsageStatusBar(context: vscode.ExtensionContext, wor
 		},
 	};
 
+	// title / rows：弹窗显示当前 Provider 的名字和全部指标（余额、订阅额度……）；
+	// usage 保留给还不认识 rows 的旧版弹窗
+	const modalPayload = (loading: boolean) => ({
+		apiKey: "",
+		title: activeLabel,
+		rows: modalRows(currentUsageSnapshot),
+		updatedText: formatUpdatedAt(currentUsageSnapshot.updatedAt),
+		usage: currentUsageSnapshot,
+		errorMessage: currentUsageSnapshot.errorMessage,
+		loading,
+	});
 	context.subscriptions.push(vscode.commands.registerCommand("axon.usage.openModal", async () => {
-		await vscode.commands.executeCommand("axon.showAccountUsageModal", {
-			apiKey: "",
-			usage: currentUsageSnapshot,
-			errorMessage: currentUsageSnapshot.errorMessage,
-			loading: true,
-		});
+		await vscode.commands.executeCommand("axon.showAccountUsageModal", modalPayload(true));
 		await controller.refresh();
-		await vscode.commands.executeCommand("axon.updateAccountUsageModal", {
-			apiKey: "",
-			usage: currentUsageSnapshot,
-			errorMessage: currentUsageSnapshot.errorMessage,
-			loading: false,
-		});
+		await vscode.commands.executeCommand("axon.updateAccountUsageModal", modalPayload(false));
 	}));
 
 	void controller.refresh();
