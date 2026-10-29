@@ -1340,6 +1340,21 @@ body.vscode-high-contrast {
   .animate-collapse-in { animation: none; }
 }
 
+/* 发送消息：气泡从右下角（输入框方向）弹出来，带一点点回弹，像 IM 里发出的消息。
+   只动 transform / opacity，不影响排版，虚拟列表量到的高度从第一帧就是最终值。 */
+@keyframes axon-bubble-send {
+  0% { opacity: 0; transform: translate(10px, 14px) scale(0.86); }
+  60% { opacity: 1; transform: translate(0, -2px) scale(1.015); }
+  100% { opacity: 1; transform: none; }
+}
+.animate-bubble-send {
+  transform-origin: 100% 100%;
+  animation: axon-bubble-send 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-bubble-send { animation: none; }
+}
+
 /* 翻牌切换（折叠组的阶段摘要）：旧的一行向上翻走，新的从下面翻到中间 */
 @keyframes axon-flip-in {
   from { transform: translateY(100%); opacity: 0; }

@@ -67,8 +67,17 @@ async function copyMessage(text: string, images: string[]): Promise<void> {
   await navigator.clipboard.writeText(text);
 }
 
+/** 已经播过发送动画的消息 id（模块级：组件卸载重挂也记得） */
+const playedSendAnim = new Set<string>();
+
 function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRejectEdit, onUndoEdit, onQuoteToInput, onEditUserMessage, onImagePreview, onForkFromMessage, replyingToMessageId }: { message: ChatMessage; liveStatus?: string; /** 当前运行任务起点；仅流式回复传入 */ startedAt?: number; onAcceptEdit?: (path: string) => void; onRejectEdit?: (path: string) => void; onUndoEdit?: (path: string) => void; onQuoteToInput?: (message: ChatMessage) => void; onEditUserMessage?: (messageId: string, content: string, images?: string[], attachedFiles?: AttachedFile[]) => void; onImagePreview?: (images: string[], index: number) => void; /** 从这条 AI 回复分叉（带上此前的对话） */ onForkFromMessage?: (message: ChatMessage) => void; replyingToMessageId?: string }) {
   const [userExpanded, setUserExpanded] = useState(false);
+  // 刚发出的消息播一次「发送」动画；加载的历史、虚拟列表滚回来重新挂载的都不播
+  const [sendAnim] = useState(() => {
+    if (message.role !== "user" || playedSendAnim.has(message.id)) return false;
+    playedSendAnim.add(message.id);
+    return Date.now() - (message.timestamp ?? 0) < 2000;
+  });
   const [editingUser, setEditingUser] = useState(false);
   const [draftUserText, setDraftUserText] = useState("");
   const [draftImages, setDraftImages] = useState<string[]>([]);
@@ -130,7 +139,7 @@ function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRej
     if (!message.content && (!message.images || message.images.length === 0) && !hasFiles && !hasSegments) return null;
     return (
       <div className="group/user flex items-start flex-row-reverse">
-        <div className="axon-chat-user-bubble relative max-w-[82%] rounded-2xl rounded-br-md px-3.5 py-2 text-foreground">
+        <div className={`axon-chat-user-bubble relative max-w-[82%] rounded-2xl rounded-br-md px-3.5 py-2 text-foreground ${sendAnim ? "animate-bubble-send" : ""}`}>
           {/* 悬停工具条：浮在气泡左下角外侧，带发送时间；不占布局，出现时内容不跳 */}
           {!editingUser && (message.content || hasSegments || (message.images && message.images.length > 0)) && (
             <div className="absolute right-full bottom-0 mr-1.5 flex items-center gap-0.5 whitespace-nowrap rounded-lg border border-border/60 bg-background/95 px-1 py-0.5 shadow-sm opacity-0 translate-x-1 pointer-events-none transition-all duration-150 group-hover/user:opacity-100 group-hover/user:translate-x-0 group-hover/user:pointer-events-auto">
