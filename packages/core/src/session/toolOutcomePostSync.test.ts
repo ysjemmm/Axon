@@ -27,10 +27,10 @@ describe("ToolOutcomePostSync", () => {
     expect(meta.__markTransientApplied).toBeUndefined();
   });
 
-  it("有 screenshotDataUrl 时入队", () => {
+  it("有 screenshotDataUrl 时入队（带上工具调用 id，界面据此把图挂回工具行）", () => {
     const { sync, enqueueScreenshot } = makeSync();
     sync.run({ toolName: "screenshot_page", toolCallId: "c1", status: "success", result: "ok", meta: { screenshotDataUrl: "data:image/png;base64,abc" } as any, isPending: false, turnCount: 1 });
-    expect(enqueueScreenshot).toHaveBeenCalledWith("data:image/png;base64,abc");
+    expect(enqueueScreenshot).toHaveBeenCalledWith("data:image/png;base64,abc", "c1");
   });
 
   it("pending 编辑时同步 edits_updated 并触发 onPendingChanged", () => {
