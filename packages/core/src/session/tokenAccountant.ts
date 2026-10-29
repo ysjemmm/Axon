@@ -220,6 +220,7 @@ export class TokenAccountant {
     this.s.lastCachedTokens = usage?.cachedTokens ?? 0;
     // 本轮累计：花费估算按端点实报口径（每次请求的 prompt 都计费）
     if (usage && usage.promptTokens > 0) {
+      this.s.turnRequestCount += 1;
       this.s.turnInputTokens += usage.promptTokens;
       this.s.turnCachedTokens += Math.min(usage.cachedTokens ?? 0, usage.promptTokens);
     }

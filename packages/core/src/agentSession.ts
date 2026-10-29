@@ -181,6 +181,8 @@ export class AgentSession {
   /** @internal */ turnInputTokens = 0;
   /** 本轮所有请求端点实报的缓存命中 token 合计 */
   /** @internal */ turnCachedTokens = 0;
+  /** 本轮请求模型的次数（端点报了 usage 的） */
+  /** @internal */ turnRequestCount = 0;
   /** 本轮开始前的消息条数快照（push 本轮用户消息之前记录）。
    *  收尾时 messages[turnStartMsgCount..] 即本轮新增内容（用户消息 + 工具结果 + 中间 assistant 回填）。 */
   /** @internal */ turnStartMsgCount = 0;
@@ -2190,7 +2192,7 @@ export class AgentSession {
       const b = this.buildTokenBreakdown();
       input = b.memoryTokens + b.systemTokens + b.questionTokens;
     }
-    const usage = { input, cached: reported ? this.turnCachedTokens : 0, output, ...(reported ? {} : { estimated: true }) };
+    const usage = { input, cached: reported ? this.turnCachedTokens : 0, output, ...(reported ? { requests: this.turnRequestCount } : { estimated: true }) };
     return resolveTurnBilling(this.provider, getProviderPricing(this.provider), this.model, usage);
   }
 
@@ -2860,6 +2862,7 @@ export class AgentSession {
     this.lastTurnOutputTokens = 0; // 新一轮用户输入，重置本轮输出 token 累计
     this.turnInputTokens = 0;
     this.turnCachedTokens = 0;
+    this.turnRequestCount = 0;
     // 新一轮用户输入，重置「单轮探索预算」（read_file / search / list_dir 的本轮累计上限）。
     // 放在这里而不是别处：用户再次发消息就是新的对话边界，预算必须跟着重置，
     // 否则它会跨轮累积、把后续每一轮都限死。

@@ -19,8 +19,20 @@ export interface TurnUsage {
   cached: number;
   /** 本轮所有请求的输出 token 合计 */
   output: number;
+  /** 本轮请求了几次模型（每次工具调用后都要再请求一次，每次都重发整段上下文） */
+  requests?: number;
   /** true 表示端点没报 usage，数字是本地估算 */
   estimated?: boolean;
+}
+
+/**
+ * 标题上显示的 token 数：没命中缓存的输入 + 输出。
+ *
+ * 不用「累计输入」：一轮里每次工具调用都会把整段上下文重发一遍，十几次请求下来累计输入轻松上百万，
+ * 其中大部分命中提示缓存、按很低的价格计费。把它当标题既吓人又不反映真实开销。
+ */
+export function headlineTokens(usage: TurnUsage): number {
+  return Math.max(0, usage.input - Math.min(usage.cached, usage.input)) + usage.output;
 }
 
 export interface TurnCost {
@@ -80,7 +92,7 @@ export function formatCost(cost: TurnCost): string {
 export function describeTurnUsage(b: TurnBilling, credits: number): string {
   if (b.billing === "cost" && b.cost) return `约 ${formatCost(b.cost)}`;
   if (b.billing === "credits") return `${credits.toFixed(2)} credits`;
-  return `${formatTokenCount(b.usage.input + b.usage.output)} tokens`;
+  return `${formatTokenCount(headlineTokens(b.usage))} tokens`;
 }
 
 /** 校验并清理计费单价：只保留非负数字；什么都没填返回 undefined（即删除配置） */

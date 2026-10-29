@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeTurnCost, formatTokenCount, resolveTurnBilling } from "./billing.js";
+import { computeTurnCost, describeTurnUsage, formatTokenCount, headlineTokens, resolveTurnBilling } from "./billing.js";
 
 describe("回复底部的用量展示", () => {
   const usage = { input: 2_000_000, cached: 1_500_000, output: 100_000 };
@@ -23,5 +23,11 @@ describe("回复底部的用量展示", () => {
 
   it("token 数格式", () => {
     expect([999, 1234, 12_345, 1_234_567, 23_456_789].map(formatTokenCount)).toEqual(["999", "1.2K", "12K", "1.23M", "23.5M"]);
+  });
+
+  it("标题 token 数不含命中缓存的输入（十几次请求的累计输入不当标题）", () => {
+    const turn = { input: 1_432_284, cached: 1_125_504, output: 8_040, requests: 17 };
+    expect(headlineTokens(turn)).toBe(314_820);
+    expect(describeTurnUsage({ billing: "tokens", usage: turn }, 0)).toBe("315K tokens");
   });
 });

@@ -191,7 +191,7 @@ export interface BackgroundNoticeInfo {
  */
 export interface TurnBillingInfo {
   billing?: "credits" | "cost" | "tokens";
-  usage?: { input: number; cached: number; output: number; estimated?: boolean };
+  usage?: { input: number; cached: number; output: number; requests?: number; estimated?: boolean };
   cost?: { amount: number; currency: string };
 }
 
