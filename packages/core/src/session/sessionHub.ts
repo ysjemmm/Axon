@@ -1522,6 +1522,12 @@ export class SessionHub {
   }
 
   private queueBackgroundNotice(sessionId: string, notice: BackgroundTaskNotice): void {
+    // AI 正在回复：结果直接并进这一轮（下一次请求模型前插入），不打断、不另起一轮
+    const running = this.runningSessions.has(sessionId) ? this.activeSessions.get(sessionId) : undefined;
+    if (running) {
+      running.enqueueBackgroundNotice(formatBackgroundNotice(notice, { inline: true }));
+      return;
+    }
     const list = this.pendingNotices.get(sessionId) ?? [];
     list.push(notice);
     this.pendingNotices.set(sessionId, list);
@@ -1534,11 +1540,15 @@ export class SessionHub {
    * 会话正在跑就什么都不做——这一轮结束时会再调用一次（见 handleUserMessage 收尾）。
    */
   private async flushBackgroundNotices(sessionId: string): Promise<void> {
-    if (this.runningSessions.has(sessionId)) return;
     const notices = this.pendingNotices.get(sessionId);
     const session = this.activeSessions.get(sessionId);
     if (!notices?.length || !session) return;
     this.pendingNotices.delete(sessionId);
+    // 攒着的这段时间里用户发了新消息、AI 已经在回复：并进那一轮，不再单独开一轮
+    if (this.runningSessions.has(sessionId)) {
+      for (const n of notices) session.enqueueBackgroundNotice(formatBackgroundNotice(n, { inline: true }));
+      return;
+    }
     const saved = await this.storage.getSession(sessionId).catch(() => null);
     const model = session.model || saved?.model;
     const provider = session.provider || saved?.provider;
@@ -1554,7 +1564,7 @@ export class SessionHub {
     await this.handleUserMessage({
       type: "user_message",
       sessionId,
-      content: notices.map(formatBackgroundNotice).join("\n\n---\n\n"),
+      content: notices.map((n) => formatBackgroundNotice(n)).join("\n\n---\n\n"),
       displayText: label,
       model,
       provider,
@@ -1886,11 +1896,10 @@ export class SessionHub {
       setTimeout(() => { void this.flushSteers(execSessionId); }, 0);
     }
 
-    // 这一轮跑着的时候有后台任务结束了：现在投递。稍等一下，让前端排队的用户消息先发出来——
-    // 用户刚说的话优先，通知等那一轮结束再说。
-    if (this.pendingNotices.has(execSessionId)) {
-      setTimeout(() => { void this.flushBackgroundNotices(execSessionId); }, 1500);
-    }
+    // 这一轮里结束、但没来得及并进回复的后台任务：丢掉。
+    // 通知只给「回复结束时还在跑」的任务——回复过程中结束的，要么已并入这一轮，
+    // 要么 AI 自己等到 / 读到了结果；回复完再补一轮「历史通知」只会打扰用户。
+    execSession.takeBackgroundNotices();
   }
 
   /**

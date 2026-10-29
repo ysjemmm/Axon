@@ -175,9 +175,11 @@ export function backgroundNoticeLabel(n: BackgroundTaskNotice): string {
 }
 
 /** 交给模型的通知正文 */
-export function formatBackgroundNotice(n: BackgroundTaskNotice): string {
+export function formatBackgroundNotice(n: BackgroundTaskNotice, opts: { inline?: boolean } = {}): string {
   return [
-    "【后台任务通知】这条消息由系统在后台任务结束时自动发出，不是用户输入。",
+    opts.inline
+      ? "【后台任务通知】你回复过程中有一个后台任务结束了（系统自动插入，不是用户输入）。结合结果继续当前的回复即可，不要另起话头。"
+      : "【后台任务通知】这条消息由系统在后台任务结束时自动发出，不是用户输入。",
     backgroundNoticeLabel(n),
     `terminalId: ${n.terminalId}${n.cwd ? ` · 目录: ${n.cwd}` : ""}`,
     "",

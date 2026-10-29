@@ -76,6 +76,8 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
 
     if (m.role === "user") {
       if ((m as any)._screenshotInjection) continue;
+      // 回复过程中并入的后台任务通知：不显示，前后两段回复接在同一条里
+      if ((m as any)._bgInline) continue;
       if (currentAssistant) {
         restored.push(currentAssistant);
         currentAssistant = null;

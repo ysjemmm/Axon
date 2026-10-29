@@ -619,12 +619,12 @@ export class AgentSession {
     let seen = -1;
     let totalUserMsgs = 0;
     for (const m of this.messages as any[]) {
-      if (m.role === "user" && !m._screenshotInjection && !isSummaryMessage(m)) totalUserMsgs++;
+      if (m.role === "user" && !m._screenshotInjection && !m._bgInline && !isSummaryMessage(m)) totalUserMsgs++;
     }
     console.log(`[edit_user_message] messageId=${messageId} userIndex=${userIndex} totalUserMsgs=${totalUserMsgs} images=${images?.length ?? 0} files=${attachedFiles?.length ?? 0}`);
     for (const m of this.messages as any[]) {
       // 跳过压缩摘要（前端显示成分隔行）和已在压缩存档里显示过的当前请求：都不计入用户消息序号
-      if (m.role !== "user" || m._screenshotInjection || m._shownInArchive || isSummaryMessage(m)) continue;
+      if (m.role !== "user" || m._screenshotInjection || m._bgInline || m._shownInArchive || isSummaryMessage(m)) continue;
       seen++;
       const hitById = messageId && m.clientMessageId === messageId;
       const hitByIndex = typeof userIndex === "number" && seen === userIndex;
@@ -1853,6 +1853,24 @@ export class AgentSession {
     return this.toolDefBuilder.getToolDefs();
   }
 
+  /**
+   * 回复进行中结束的后台任务：结果在下一次请求模型之前并进当前这一轮（见 absorbSteers），
+   * 不另起一轮、界面上也不出现新的「AI 回复」。这一轮结束时还没被并入的直接丢弃 ——
+   * 只有「回复结束时还在跑」的任务才值得事后单独通知（由 SessionHub 负责）。
+   */
+  /** @internal */ pendingBgNotices: string[] = [];
+
+  enqueueBackgroundNotice(text: string): void {
+    this.pendingBgNotices.push(text);
+  }
+
+  /** 取走未并入的后台任务通知（一轮结束时由 SessionHub 清掉） */
+  takeBackgroundNotices(): string[] {
+    const list = this.pendingBgNotices;
+    this.pendingBgNotices = [];
+    return list;
+  }
+
   /** 回复进行中追加一条消息（插话） */
   enqueueSteer(steer: SteerMessage): void {
     this.pendingSteers.push(steer);
@@ -1877,6 +1895,16 @@ export class AgentSession {
    * 正文前加一句说明，让模型知道这是做到一半时用户补充的——优先照顾，但别把手上的事丢掉，除非用户就是要它停。
    */
   private absorbSteers(): void {
+    // 后台任务结果：作为一条不在界面显示的消息并入（_bgInline），模型接着当前回复往下做
+    if (this.pendingBgNotices.length > 0) {
+      const notices = this.takeBackgroundNotices();
+      this.messages.push({
+        role: "user",
+        content: notices.join("\n\n---\n\n"),
+        _bgInline: true,
+      } as unknown as ChatCompletionMessageParam);
+      this.persistMessages();
+    }
     if (this.pendingSteers.length === 0) return;
     const steers = this.takeSteers();
     const preface = "【用户在你工作过程中发来的消息】请结合它调整接下来的做法；除非用户要求停下或换方向，已经在做的事继续完成。\n\n";

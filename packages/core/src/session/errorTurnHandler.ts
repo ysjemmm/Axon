@@ -55,7 +55,7 @@ export class ErrorTurnHandler {
     const trimmed = streamedContent.trim();
     for (let i = this.s.messages.length - 1; i >= 0; i--) {
       const m = this.s.messages[i];
-      if (m.role === "user") break; // 越过本轮边界，不再回溯
+      if (m.role === "user" && !(m as any)._bgInline) break; // 越过本轮边界，不再回溯（回复中并入的后台通知不算边界）
       if (m.role === "assistant") {
         const candidates = [(m as any).content, (m as any).displayContent, (m as any).runtimeContent];
         for (const c of candidates) {
