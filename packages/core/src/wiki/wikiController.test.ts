@@ -59,6 +59,9 @@ function setup(opts: {
   ok?: (req: WikiSubAgentRequest) => boolean;
   signal?: AbortSignal;
   maxPages?: number;
+  tokenBudget?: number;
+  /** 每次子 Agent 运行报告的 token 用量 */
+  tokensPerRun?: number;
 }) {
   const { host, store: files } = makeHost(opts.seed);
   const wikiStore = new WikiStore([WS], host);
@@ -72,9 +75,10 @@ function setup(opts: {
     model: "test-model",
     sessionId: "s-1",
     maxPages: opts.maxPages,
+    tokenBudget: opts.tokenBudget,
     runSubAgent: async (req) => {
       await opts.behavior(req);
-      return { ok: opts.ok ? opts.ok(req) : true, text: "ok" };
+      return { ok: opts.ok ? opts.ok(req) : true, text: "ok", inputTokens: opts.tokensPerRun ?? 0, outputTokens: 0 };
     },
   });
   return { controller, events, wikiStore, files, host };
@@ -322,7 +326,8 @@ describe("WikiController · 工具注入", () => {
 
     expect(seen).toHaveLength(2);
     expect(seen[0]).toEqual({ phase: "plan", hasPlan: true, hasSave: false, readOnly: true });
-    expect(seen[1]).toEqual({ phase: "save", hasPlan: false, hasSave: true, readOnly: false });
+    // 撰写者同样只读：只读仓库 + 只能提交页面，没有写文件 / 执行命令的工具
+    expect(seen[1]).toEqual({ phase: "save", hasPlan: false, hasSave: true, readOnly: true });
   });
 
   it("两次调用同一标题时，save 写入的是同一页（不产生重复文件）", async () => {
@@ -423,5 +428,104 @@ describe("resolveWikiModel · 模型解析", () => {
   it("base 为空串（会话尚未选模型）时不崩，原样返回", () => {
     const empty = { provider: "", model: "" };
     expect(resolveWikiModel(empty, {}, found)).toEqual(empty);
+  });
+});
+
+describe("WikiController · 刷新、预算与用量", () => {
+  it("再次生成会重写「待复核」的页面，不待复核的跳过", async () => {
+    const pages = [{ title: "A", summary: "s", sources: ["src/a.ts"] }, { title: "B", summary: "s", sources: ["src/b.ts"] }];
+    const written: string[] = [];
+    const { controller, host } = setup({
+      seed: { [`${WS}/src/a.ts`]: "a", [`${WS}/src/b.ts`]: "b" },
+      behavior: async (req) => {
+        if (req.wiki?.plan) { await req.wiki.plan(pages); return; }
+        const title = req.prompt.includes("《A》") ? "A" : "B";
+        written.push(title);
+        await req.wiki?.save?.({ title, summary: "s", sources: [`src/${title.toLowerCase()}.ts`], body: "x" });
+      },
+    });
+    await controller.generate(WS);
+    expect(written).toEqual(["A", "B"]);
+    // A 的依据文件变了
+    const orig = host.fs.stat;
+    host.fs.stat = (async (p: string) => {
+      const r = await orig(p);
+      return r && norm(p).endsWith("src/a.ts") ? { ...r, mtimeMs: 99999 } : r;
+    }) as typeof host.fs.stat;
+    written.length = 0;
+    await controller.generate(WS);
+    expect(written).toEqual(["A"]);
+  });
+
+  it("mode=stale 不规划，只重写待复核页面；mode=pages 只重写指定页面", async () => {
+    const calls: string[] = [];
+    const { controller, wikiStore, host } = setup({
+      seed: { [`${WS}/src/a.ts`]: "a", [`${WS}/src/b.ts`]: "b" },
+      behavior: async (req) => {
+        calls.push(req.wiki?.plan ? "plan" : req.prompt.includes("《A》") ? "A" : "B");
+        if (req.wiki?.save) {
+          const title = req.prompt.includes("《A》") ? "A" : "B";
+          await req.wiki.save({ title, summary: "s", sources: [`src/${title.toLowerCase()}.ts`], body: "x" });
+        }
+      },
+    });
+    await wikiStore.save({ title: "A", summary: "s", sources: ["src/a.ts"], body: "x", workspace: WS });
+    await wikiStore.save({ title: "B", summary: "s", sources: ["src/b.ts"], body: "x", workspace: WS });
+    const orig = host.fs.stat;
+    host.fs.stat = (async (p: string) => {
+      const r = await orig(p);
+      return r && norm(p).endsWith("src/b.ts") ? { ...r, mtimeMs: 99999 } : r;
+    }) as typeof host.fs.stat;
+    await controller.generate(WS, { mode: "stale" });
+    expect(calls).toEqual(["B"]);
+    calls.length = 0;
+    await controller.generate(WS, { mode: "pages", slugs: ["A"] });
+    expect(calls).toEqual(["A"]);
+  });
+
+  it("撰写者换了标题：仍按计划的标题落盘，不产生孤儿页", async () => {
+    const { controller, wikiStore } = setup({
+      behavior: async (req) => {
+        if (req.wiki?.plan) { await req.wiki.plan([{ title: "订单系统", summary: "s", sources: [] }]); return; }
+        await req.wiki?.save?.({ title: "订单模块详解", summary: "s", sources: [], body: "x" });
+      },
+    });
+    const res = await controller.generate(WS);
+    expect(res.failed).toEqual([]);
+    expect((await wikiStore.summary()).map((p) => p.title)).toEqual(["订单系统"]);
+  });
+
+  it("达到 token 上限就停，作业记为可续跑，并报告用量", async () => {
+    const pages = [1, 2, 3, 4].map((i) => ({ title: `P${i}`, summary: "s", sources: [] }));
+    const { controller, events, files } = setup({
+      behavior: planAndWrite(pages),
+      tokenBudget: 2500,
+      tokensPerRun: 1000,
+    });
+    const res = await controller.generate(WS);
+    // 规划 1000 + 两页 2000 = 3000 ≥ 2500：写完两页后停
+    expect(res.budgetExceeded).toBe(true);
+    expect(res.done).toBe(2);
+    expect(res.usage).toEqual({ inputTokens: 3000, outputTokens: 0 });
+    const jobs = await readJobs(files);
+    expect(jobs[0].status).toBe("interrupted");
+    expect(jobs[0].usage?.inputTokens).toBe(3000);
+    const fin = events.find((e) => e.type === "finished");
+    expect(fin && "message" in fin && fin.message).toContain("token 上限");
+  });
+
+  it("子 Agent 拿到轮次与 token 上限", async () => {
+    const reqs: WikiSubAgentRequest[] = [];
+    const { controller } = setup({
+      behavior: async (req) => {
+        reqs.push(req);
+        if (req.wiki?.plan) await req.wiki.plan([{ title: "A", summary: "s", sources: [] }]);
+        else await req.wiki?.save?.({ title: "A", summary: "s", sources: [], body: "x" });
+      },
+    });
+    await controller.generate(WS);
+    expect(reqs[0].maxRounds).toBeGreaterThan(0);
+    expect(reqs[0].tokenBudget).toBeGreaterThan(0);
+    expect(reqs[1].maxRounds).toBeLessThanOrEqual(reqs[0].maxRounds);
   });
 });

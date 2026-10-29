@@ -243,6 +243,13 @@
           "scope": "resource",
           "markdownDescription": "**生成 Wiki 使用的模型**。留空表示沿用当前会话模型。\n\n默认跟随会话是有意的：Wiki 跑得少、但要读懂代码，沿用用户已经选定并认可的模型最稳妥。只有想为它单独指定（例如大仓库用更强的、或想省钱用便宜的）时才需要填。\n\n⚠️ 与内联补全刻意相反——那个跑得太频繁，默认要挑最便宜的。"
         },
+        "axon.wiki.tokenBudget": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "scope": "resource",
+          "markdownDescription": "**单次生成的 token 上限**（输入 + 输出累计）。达到上限就停下，已写好的页面保留，下次点击接着写剩下的。\n\n0 表示按页数自动估算（规划约 120 万 + 每页约 60 万）。每个子任务另有自己的轮次和 token 上限，防止某一页把预算烧光。"
+        },
         "axon.wiki.maxPages": {
           "type": "number",
           "default": 15,
@@ -404,6 +411,21 @@
         "command": "axon.wiki.deletePage",
         "title": "删除页面",
         "icon": "$(trash)"
+      },
+      {
+        "command": "axon.wiki.regeneratePage",
+        "title": "重新生成此页",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "axon.wiki.markReviewed",
+        "title": "标记为已复核（内容仍准确）",
+        "icon": "$(check)"
+      },
+      {
+        "command": "axon.wiki.refreshStale",
+        "title": "重写待复核的页面",
+        "icon": "$(sync)"
       },
       {
         "command": "axon.wiki.deleteJob",
@@ -601,6 +623,26 @@
           "command": "axon.deleteRelay",
           "when": "viewItem == relayItem",
           "group": "inline"
+        },
+        {
+          "command": "axon.wiki.markReviewed",
+          "when": "viewItem == wikiPageStale",
+          "group": "inline"
+        },
+        {
+          "command": "axon.wiki.markReviewed",
+          "when": "viewItem == wikiPageStale",
+          "group": "1_wiki@1"
+        },
+        {
+          "command": "axon.wiki.regeneratePage",
+          "when": "viewItem =~ /^wikiPage/ && !axon.wikiGenerating",
+          "group": "1_wiki@2"
+        },
+        {
+          "command": "axon.wiki.refreshStale",
+          "when": "viewItem == wikiWorkspace && !axon.wikiGenerating",
+          "group": "1_wiki@1"
         },
         {
           "command": "axon.wiki.deletePage",

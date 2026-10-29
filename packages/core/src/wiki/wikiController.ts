@@ -31,13 +31,19 @@ import { buildWikiAuthoringSkill } from "./wikiAuthoringSkill.js";
 export type WikiGenerationEvent =
   | { type: "planning"; workspace: string }
   | { type: "planned"; workspace: string; pages: { title: string; summary: string }[]; truncated?: boolean }
-  | { type: "page_saved"; workspace: string; slug: string; title: string; done: number; total: number }
+  | { type: "page_saved"; workspace: string; slug: string; title: string; done: number; total: number; usage?: WikiUsage }
   | { type: "page_failed"; workspace: string; title: string; reason: string }
   /**
    * cancelled 单独标出：用户主动取消既不是成功也不是失败，呈现端据此决定用信息提示而非警告。
    * 否则只能靠 message 里有没有「取消」二字来猜 —— 那是靠文案做逻辑，改一个字就失效。
    */
-  | { type: "finished"; workspace: string; ok: boolean; done: number; total: number; failed: string[]; message: string; cancelled?: boolean };
+  | { type: "finished"; workspace: string; ok: boolean; done: number; total: number; failed: string[]; message: string; cancelled?: boolean; usage?: WikiUsage; budgetExceeded?: boolean };
+
+/** 一次生成累计消耗的 token */
+export interface WikiUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
 
 /** 对一次子 Agent 运行的要求 */
 export interface WikiSubAgentRequest {
@@ -47,6 +53,18 @@ export interface WikiSubAgentRequest {
   readOnly: boolean;
   /** 本阶段可用的 wiki 工具。规划阶段给 plan，撰写阶段给 save */
   wiki?: WikiTools;
+  /** 本次子 Agent 的轮次上限 */
+  maxRounds: number;
+  /** 本次子 Agent 的 token 上限（输入 + 输出） */
+  tokenBudget: number;
+}
+
+/** 子 Agent 一次运行的结果 */
+export interface WikiSubAgentResult {
+  ok: boolean;
+  text: string;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 /**
@@ -61,6 +79,33 @@ export interface WikiGenerationOptions {
   model?: string;
   /** 页面数上限。缺省用 WIKI_DEFAULT_MAX_PAGES */
   maxPages?: number;
+  /** 整次生成的 token 上限（输入 + 输出）。缺省按页数估算，见 defaultWikiTokenBudget */
+  tokenBudget?: number;
+  /**
+   * 生成范围：
+   *   · full（默认）：重新规划，补写缺失的页面、重写「待复核」的页面
+   *   · stale：不规划，只重写「待复核」的页面（便宜，适合代码改了一些之后刷新）
+   *   · pages：不规划，只重写指定的页面（slug 列表）
+   */
+  mode?: "full" | "stale" | "pages";
+  slugs?: string[];
+}
+
+/**
+ * 子 Agent 的轮次 / token 上限。
+ *
+ * 为什么要分别封顶：子 Agent 默认可以跑 200 轮，每轮都把整段上下文重发一遍；
+ * 一个在仓库里打转的子 Agent 就能把整次预算烧光。规划要通读仓库，给得宽一些；
+ * 单页只聚焦一个主题，40 轮足够。
+ */
+export const WIKI_PLAN_MAX_ROUNDS = 60;
+export const WIKI_PAGE_MAX_ROUNDS = 40;
+export const WIKI_PLAN_TOKEN_BUDGET = 1_200_000;
+export const WIKI_PAGE_TOKEN_BUDGET = 600_000;
+
+/** 整次生成的默认 token 上限：规划一次 + 每页一份 */
+export function defaultWikiTokenBudget(pages: number, planning: boolean): number {
+  return (planning ? WIKI_PLAN_TOKEN_BUDGET : 0) + Math.max(1, pages) * WIKI_PAGE_TOKEN_BUDGET;
 }
 
 /**
@@ -107,13 +152,15 @@ export interface WikiGenerationDeps {
    * 运行一个子 Agent。注入而非直接 new SubAgentRunner —— 真实实现要拿 strategy/model，
    * 那是会话层的事；编排逻辑不该关心这些。测试里换成假实现即可完整验证流程。
    */
-  runSubAgent: (req: WikiSubAgentRequest) => Promise<{ ok: boolean; text: string }>;
+  runSubAgent: (req: WikiSubAgentRequest) => Promise<WikiSubAgentResult>;
   emit: (event: WikiGenerationEvent) => void;
   signal?: AbortSignal;
   model?: string;
   sessionId?: string;
   /** 页面数上限；缺省 WIKI_DEFAULT_MAX_PAGES */
   maxPages?: number;
+  /** 整次生成的 token 上限；缺省 defaultWikiTokenBudget */
+  tokenBudget?: number;
 }
 
 export interface WikiGenerationResult {
@@ -127,7 +174,13 @@ export interface WikiGenerationResult {
   message: string;
   /** 是否走了续跑（此前已有未完成的作业） */
   resumed: boolean;
+  /** 本次累计消耗的 token */
+  usage?: WikiUsage;
+  /** 因达到 token 上限而提前停止 */
+  budgetExceeded?: boolean;
 }
+
+type PlannedPage = { title: string; summary: string; sources: string[]; category?: string };
 
 export class WikiController {
   constructor(private readonly deps: WikiGenerationDeps) {}
@@ -138,61 +191,91 @@ export class WikiController {
    * 全程只写这一个工作区 —— 目标由用户在 UI 上显式选定，此处不做任何推定。
    * 生成是写操作，写错仓库会往不相干的项目里塞进一堆文件，而且它们还会被提交。
    */
-  async generate(workspace: string): Promise<WikiGenerationResult> {
+  async generate(workspace: string, opts: Pick<WikiGenerationOptions, "mode" | "slugs"> = {}): Promise<WikiGenerationResult> {
     const { store, emit, signal } = this.deps;
     if (!workspace) {
       return { ok: false, done: 0, total: 0, failed: [], message: "未指定目标工作区。", resumed: false };
     }
-
-    // 先报「已开始」。规划阶段要通读仓库、可能几十秒，期间若没有任何反馈，
-    // 用户会以为按钮没生效（这正是曾经的实际观感）。这条事件让呈现端立刻能给可见提示，
-    // 而不是等第一个页面落盘才有动静。
-    emit({ type: "planning", workspace });
+    const mode = opts.mode ?? "full";
 
     const skill = buildWikiAuthoringSkill();
     const maxPages = Math.max(1, this.deps.maxPages ?? WIKI_DEFAULT_MAX_PAGES);
 
-    // 磁盘现状：既是「续跑时要跳过的页」，也是进度的真实基数
+    // 用量与预算：每次子 Agent 跑完累加；超出上限就不再开新的子 Agent
+    const usage: WikiUsage = { inputTokens: 0, outputTokens: 0 };
+    const used = () => usage.inputTokens + usage.outputTokens;
+    const run = async (req: Omit<WikiSubAgentRequest, "tokenBudget"> & { tokenBudget: number }) => {
+      const res = await this.deps.runSubAgent({ ...req, tokenBudget: Math.max(1, Math.min(req.tokenBudget, budget - used())) });
+      usage.inputTokens += res.inputTokens ?? 0;
+      usage.outputTokens += res.outputTokens ?? 0;
+      return res;
+    };
+
+    // 磁盘现状：既是「续跑时要跳过的页」，也是进度的真实基数。
+    // 「待复核」的页面不算已完成 —— 刷新的意义正是重写它们。
     const existing = (await store.summary()).filter((p) => p.workspace === workspace);
-    const existingSlugs = new Set(existing.map((p) => p.slug));
-    const resumable: WikiJob | null = await store.getResumableJob(workspace);
+    const freshSlugs = new Set(existing.filter((p) => !p.stale).map((p) => p.slug));
+    const resumable: WikiJob | null = mode === "full" ? await store.getResumableJob(workspace) : null;
 
-    // ── 阶段 1：规划 ──
-    // 把已有页面告知规划者：它可以沿用（避免同一主题换名字导致重复页），
-    // 也可以因为代码变化而调整页面划分。规划总是新鲜的。
-    let planned: { title: string; summary: string; sources: string[]; category?: string }[] | null = null;
-    await this.deps.runSubAgent({
-      prompt: buildPlanPrompt(workspace, existing.map((p) => p.title), maxPages),
-      skill,
-      readOnly: true,
-      wiki: {
-        plan: async (pages) => {
-          planned = pages;
-          return `已登记 ${pages.length} 个页面。规划阶段完成，请结束本轮（不要尝试撰写正文）。`;
+    let plan: PlannedPage[];
+    let truncated = false;
+    let budget: number;
+    if (mode === "full") {
+      budget = this.deps.tokenBudget ?? defaultWikiTokenBudget(maxPages, true);
+      // 先报「已开始」。规划阶段要通读仓库、可能几十秒，期间若没有任何反馈，
+      // 用户会以为按钮没生效。这条事件让呈现端立刻能给可见提示。
+      emit({ type: "planning", workspace });
+
+      // ── 阶段 1：规划 ──
+      // 把已有页面告知规划者：它可以沿用（避免同一主题换名字导致重复页），
+      // 也可以因为代码变化而调整页面划分。规划总是新鲜的。
+      let planned: PlannedPage[] | null = null;
+      await run({
+        prompt: buildPlanPrompt(workspace, existing.map((p) => p.title), maxPages),
+        skill,
+        readOnly: true,
+        maxRounds: WIKI_PLAN_MAX_ROUNDS,
+        tokenBudget: WIKI_PLAN_TOKEN_BUDGET,
+        wiki: {
+          plan: async (pages) => {
+            planned = pages;
+            return `已登记 ${pages.length} 个页面。规划阶段完成，请结束本轮（不要尝试撰写正文）。`;
+          },
         },
-      },
-    });
+      });
 
-    if (signal?.aborted) {
-      return { ok: false, done: existingSlugs.size, total: 0, failed: [], message: "已取消。", resumed: false };
+      if (signal?.aborted) {
+        return { ok: false, done: freshSlugs.size, total: 0, failed: [], message: "已取消。", resumed: false, usage };
+      }
+      // TS 不把闭包内的赋值纳入控制流分析：直接判断 `planned` 会被收窄成 never。
+      const collected = planned as PlannedPage[] | null;
+      if (!collected || collected.length === 0) {
+        // 规划失败就别建作业 —— 建一个永远跑不完的空作业只会污染续跑判断
+        const msg = "规划未能产出页面清单。可能是子 Agent 未调用 wiki_plan_pages，或仓库内容不足。";
+        emit({ type: "finished", workspace, ok: false, done: freshSlugs.size, total: 0, failed: [], message: msg, usage });
+        return { ok: false, done: freshSlugs.size, total: 0, failed: [], resumed: false, message: msg, usage };
+      }
+      // 硬性截断：提示词里已说明上限，但模型未必遵守。页数直接等于花费，
+      // 这个上限不能只靠「请遵守」来保证 —— 必须由代码兜底。
+      truncated = collected.length > maxPages;
+      plan = dedupeBySlug(truncated ? collected.slice(0, maxPages) : collected);
+    } else {
+      // 不规划：直接拿现有页面的元信息当计划（标题、定位、依据、分类都在 frontmatter 里）
+      const wanted = mode === "stale"
+        ? existing.filter((p) => p.stale)
+        : existing.filter((p) => (opts.slugs ?? []).includes(p.slug));
+      plan = wanted.map((p) => ({ title: p.title, summary: p.summary, sources: p.sources, category: p.category }));
+      budget = this.deps.tokenBudget ?? defaultWikiTokenBudget(plan.length, false);
+      if (plan.length === 0) {
+        const msg = mode === "stale" ? "没有需要复核的页面。" : "没有找到要重新生成的页面。";
+        emit({ type: "finished", workspace, ok: true, done: 0, total: 0, failed: [], message: msg, usage });
+        return { ok: true, done: 0, total: 0, failed: [], message: msg, resumed: false, usage };
+      }
+      // 这些页面本次一定重写：从「已完成」里拿掉
+      for (const p of plan) freshSlugs.delete(wikiSlug(p.title));
     }
-    // TS 不把闭包内的赋值纳入控制流分析：直接判断 `planned` 会被收窄成 never。
-    // 显式取一次并存进局部常量，既修复类型又让下面的使用更清楚。
-    const collected = planned as { title: string; summary: string; sources: string[]; category?: string }[] | null;
-    if (!collected || collected.length === 0) {
-      // 规划失败就别建作业 —— 建一个永远跑不完的空作业只会污染续跑判断
-      return {
-        ok: false, done: existingSlugs.size, total: 0, failed: [], resumed: false,
-        message: "规划未能产出页面清单。可能是子 Agent 未调用 wiki_plan_pages，或仓库内容不足。",
-      };
-    }
-
-    // 硬性截断：提示词里已说明上限，但模型未必遵守。页数直接等于花费，
-    // 这个上限不能只靠「请遵守」来保证 —— 必须由代码兜底。
-    const truncated = collected.length > maxPages;
-    const plan = truncated ? collected.slice(0, maxPages) : collected;
     const slugs = plan.map((p) => wikiSlug(p.title));
-    const alreadyDone = slugs.filter((s) => existingSlugs.has(s));
+    const alreadyDone = slugs.filter((s) => freshSlugs.has(s));
 
     // ── 阶段 2：建作业 ──
     const job = await store.startJob({
@@ -216,21 +299,30 @@ export class WikiController {
     // 而且失败时的定位会因交错而变难。页面通常十几页，串行的总时长可以接受。
     const saved = new Set(alreadyDone);
     const failed: string[] = [];
+    let budgetExceeded = false;
     for (const page of plan) {
       const slug = wikiSlug(page.title);
-      if (saved.has(slug)) continue; // 已存在，跳过
+      if (saved.has(slug)) continue; // 已存在且不需要复核，跳过
       if (signal?.aborted) break;
+      // 预算用完就停：剩下的页面留给下次续跑，已写好的都保留
+      if (used() >= budget) { budgetExceeded = true; break; }
 
-      const res = await this.deps.runSubAgent({
+      const res = await run({
         prompt: buildPagePrompt(workspace, page),
         skill,
-        readOnly: false,
+        // 撰写者只读仓库、只能提交页面：不给写文件和执行命令的工具。
+        // 被文档化的仓库内容（README、注释）可能藏着提示注入，撰写者不该有被利用的能力。
+        readOnly: true,
+        maxRounds: WIKI_PAGE_MAX_ROUNDS,
+        tokenBudget: WIKI_PAGE_TOKEN_BUDGET,
         wiki: {
           save: async (p) => {
-            const out = await store.save({ ...p, workspace });
-            if (!out) throw new Error(`页面《${p.title}》写入 ${workspace} 失败。`);
+            // 标题以计划为准：模型换了标题会写出一个计划外的孤儿页，
+            // 进度也会对不上（这一页被判「未产出」，分子却多了一页）。同一次运行多次保存只覆盖这一页。
+            const out = await store.save({ ...p, title: page.title, category: p.category || page.category, workspace });
+            if (!out) throw new Error(`页面《${page.title}》写入 ${workspace} 失败。`);
             saved.add(out.slug);
-            emit({ type: "page_saved", workspace, slug: out.slug, title: p.title, done: saved.size, total: slugs.length });
+            emit({ type: "page_saved", workspace, slug: out.slug, title: page.title, done: saved.size, total: slugs.length, usage: { ...usage } });
             return { slug: out.slug };
           },
         },
@@ -246,27 +338,47 @@ export class WikiController {
 
     // ── 阶段 4：收尾 ──
     const cancelled = !!signal?.aborted;
-    const ok = !cancelled && failed.length === 0;
-    if (cancelled) {
-      // 取消不是失败：保持可续跑语义，下次点击接着写剩下的，不必从头再来
-      await store.finishJob(job.id, "interrupted");
+    const ok = !cancelled && !budgetExceeded && failed.length === 0;
+    const jobExtra = { workspace, usage: { ...usage } };
+    if (cancelled || budgetExceeded) {
+      // 取消 / 预算用完都不是失败：保持可续跑语义，下次点击接着写剩下的，不必从头再来
+      await store.finishJob(job.id, "interrupted", budgetExceeded ? "达到本次 token 上限" : undefined, jobExtra);
     } else {
       await store.finishJob(
         job.id,
         failed.length === 0 ? "done" : "failed",
         failed.length > 0 ? `${failed.length} 页未成功：${failed.join("、")}` : undefined,
+        jobExtra,
       );
     }
 
+    const cost = `（用量 ${formatTokens(used())} tokens）`;
     const message = cancelled
-      ? `已取消，已完成 ${saved.size}/${slugs.length} 页。下次点击会接着写剩下的。`
-      : failed.length === 0
-        ? `生成完成，共 ${slugs.length} 页。`
-        : `完成 ${saved.size}/${slugs.length} 页，${failed.length} 页未成功：${failed.join("、")}。`;
+      ? `已取消，已完成 ${saved.size}/${slugs.length} 页。下次点击会接着写剩下的。${cost}`
+      : budgetExceeded
+        ? `已达到本次 token 上限，完成 ${saved.size}/${slugs.length} 页。下次点击会接着写剩下的。${cost}`
+        : failed.length === 0
+          ? `生成完成，共 ${slugs.length} 页。${cost}`
+          : `完成 ${saved.size}/${slugs.length} 页，${failed.length} 页未成功：${failed.join("、")}。${cost}`;
 
-    emit({ type: "finished", workspace, ok, done: saved.size, total: slugs.length, failed, message, cancelled: cancelled || undefined });
-    return { ok, done: saved.size, total: slugs.length, failed, message, resumed: resumable !== null };
+    emit({ type: "finished", workspace, ok, done: saved.size, total: slugs.length, failed, message, cancelled: cancelled || undefined, usage: { ...usage }, budgetExceeded: budgetExceeded || undefined });
+    return { ok, done: saved.size, total: slugs.length, failed, message, resumed: resumable !== null, usage: { ...usage }, budgetExceeded: budgetExceeded || undefined };
   }
+}
+
+/** 同一计划里标题不同但文件名相同的页面（如「A/B」与「A B」）只保留第一个，否则会互相覆盖 */
+function dedupeBySlug(pages: PlannedPage[]): PlannedPage[] {
+  const seen = new Set<string>();
+  return pages.filter((p) => {
+    const slug = wikiSlug(p.title);
+    if (seen.has(slug)) return false;
+    seen.add(slug);
+    return true;
+  });
+}
+
+function formatTokens(n: number): string {
+  return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M` : n >= 1000 ? `${Math.round(n / 1000)}K` : String(n);
 }
 
 /** 规划阶段的提示词（方法论在 skill 正文里，这里只给本次的具体任务） */

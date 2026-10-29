@@ -249,6 +249,19 @@ export class AgentSession {
   private lastWikiRecallSignature: string | null = null;
   // 生成中标志：挡住重复触发。并发生成会互相破坏，理由见 generateWiki 的注释。
   /** @internal */ wikiGenerating = false;
+  /**
+   * Wiki 生成专用的取消信号。不能复用聊天这一轮的 abortController：
+   * 那样聊天里点「停止」会顺带停掉 Wiki 生成；生成期间发了新消息，旧信号被换掉，
+   * 「取消 Wiki」反而停掉了聊天；上一轮被取消过时信号为 null，生成干脆没法取消。
+   */
+  private wikiAbort: AbortController | null = null;
+
+  /** 取消正在进行的 Wiki 生成（每页之间检查，作业记为可续跑）。没有在生成时返回 false */
+  cancelWiki(): boolean {
+    if (!this.wikiAbort) return false;
+    this.wikiAbort.abort();
+    return true;
+  }
   // 工具确认门：relay_create 等需要用户确认的操作，await 此 Promise 阻塞直到用户响应
   private toolConfirmResolve: ((confirmed: boolean) => void) | null = null;
   // 选项问答门（ask_user）：await 此 Promise 阻塞直到用户作答。
@@ -2256,16 +2269,18 @@ export class AgentSession {
       };
     }
     this.wikiGenerating = true;
+    this.wikiAbort = new AbortController();
     try {
-      return await this.doGenerateWiki(workspace, opts);
+      return await this.doGenerateWiki(workspace, opts, this.wikiAbort.signal);
     } finally {
       // 无论成功 / 失败 / 取消都要复位，否则一次失败会把功能永久锁死
       this.wikiGenerating = false;
+      this.wikiAbort = null;
     }
   }
 
   /** generateWiki 的实际实现。已被防重入守卫包裹，不要直接调用。 */
-  private async doGenerateWiki(workspace: string, opts: WikiGenerationOptions = {}): Promise<WikiGenerationResult> {
+  private async doGenerateWiki(workspace: string, opts: WikiGenerationOptions, signal: AbortSignal): Promise<WikiGenerationResult> {
     // 模型解析：显式配置优先 → 回退到会话所用（含 Relay 执行阶段的模型覆盖）。
     //
     // 为什么给 Wiki 留一个独立的模型开关：它是本项目里最贵的单个操作，
@@ -2283,8 +2298,9 @@ export class AgentSession {
       store: this.wikiStore,
       model,
       maxPages: opts.maxPages,
+      tokenBudget: opts.tokenBudget,
       sessionId: this.getSessionId(),
-      signal: this.abortSignal,
+      signal,
       emit: (event) => this.send("wiki_generation", { event }),
       runSubAgent: async (req) => {
         const runner = new SubAgentRunner({
@@ -2295,7 +2311,7 @@ export class AgentSession {
           workspaces: this.workspaces,
           // 派生独立 host：子 Agent 的 edits 暂存区独立，不与父会话互相干扰
           host: deriveSubAgentHost(this.host),
-          signal: this.abortSignal,
+          signal,
           // 子 Agent 的内部过程**刻意不转发**到前端。
           //
           // 一是会让聊天界面被十几张卡片灌满（用户明确担心过"污染会话"），
@@ -2310,13 +2326,16 @@ export class AgentSession {
           modelSupportsThinking: declaredThinkingFor(model, provider),
           readOnly: req.readOnly,
           wiki: req.wiki,
+          maxRounds: req.maxRounds,
+          tokenBudget: req.tokenBudget,
         });
         const res = await runner.run(req.prompt, req.skill);
-        return { ok: res.ok, text: res.text };
+        // 用量带回去累计：这是本项目最贵的操作，花了多少必须算得清
+        return { ok: res.ok, text: res.text, inputTokens: res.inputTokens, outputTokens: res.outputTokens };
       },
     });
 
-    return controller.generate(workspace);
+    return controller.generate(workspace, { mode: opts.mode, slugs: opts.slugs });
   }
 
   /** use_skill 工具的 skill 加载器（绑定 this，传给 executeToolCall） */

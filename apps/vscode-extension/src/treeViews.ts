@@ -778,7 +778,7 @@ function emptyWikiItem(): SimpleItem {
   item.tooltip = new vscode.MarkdownString(
     "为一个工作区生成结构化知识文档，落盘在该工作区的 `.axon/wiki/`，可随 git 提交供团队共享。\n\n" +
     "**点击后会让你选择目标工作区** —— Wiki 是仓库级资产，一次针对一个仓库生成。\n\n" +
-    "生成功能即将上线；在此之前，手动放置 `.axon/wiki/*.md` 也会被列在这里。",
+    "手动放置的 `.axon/wiki/*.md` 也会被列在这里。",
   );
   return item;
 }

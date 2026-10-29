@@ -187,7 +187,7 @@ describe("serializeWikiPage ↔ parseWikiFrontmatter · 往返", () => {
 
 describe("WikiStore · 读写", () => {
   it("save 后 list/read 能取回，且落盘路径符合约定", async () => {
-    const { host, store } = makeHost();
+    const { host, store } = makeHost({ files: { "D:/ws/axon/src/a.ts": "x" } });
     const w = new WikiStore(WS, host);
 
     const meta = await w.save({ title: "订单系统", summary: "一句话", sources: ["src/a.ts"], body: "# 正文" });
@@ -475,9 +475,18 @@ describe("WikiStore · 边界", () => {
   });
 
   it("sources 中的空白项被清理", async () => {
-    const { host } = makeHost();
+    const { host } = makeHost({ files: { "D:/ws/axon/a.ts": "x" } });
     const meta = await new WikiStore(WS, host).save({ title: "X", summary: "", sources: [" a.ts ", "", "  "], body: "" });
     expect(meta?.sources).toEqual(["a.ts"]);
+  });
+
+  it("sources 规整：绝对路径转相对、反斜杠转正斜杠、./ 去掉、重复去掉；越界与不存在的丢弃", async () => {
+    const { host } = makeHost({ files: { "D:/ws/axon/src/a.ts": "x", "D:/ws/axon/src/b.ts": "y" } });
+    const meta = await new WikiStore(WS, host).save({
+      title: "X", summary: "", body: "",
+      sources: ["D:\\ws\\axon\\src\\a.ts", "./src/b.ts", "src\\a.ts", "../other/c.ts", "D:/elsewhere/d.ts", "src/ghost.ts"],
+    });
+    expect(meta?.sources).toEqual(["src/a.ts", "src/b.ts"]);
   });
 
   it("pathExists 用到的目录判断：wiki 目录不存在时 save 仍能成功（靠 mkdirp）", async () => {
@@ -510,15 +519,57 @@ describe("WikiStore · summary 聚合视图", () => {
     expect(s.unknown).toBe(false);
   });
 
-  it("引用的源文件不存在 → 判为需要复核（依据消失，结论不再可靠）", async () => {
-    const { host } = makeHost();
+  it("生成时引用了不存在的文件 → 不记进 sources，页面不会一生成就「待复核」", async () => {
+    const { host } = makeHost({ files: { "D:/ws/axon/src/a.ts": "x" } });
     const w = new WikiStore(WS, host);
-    // 生成时源文件就缺失（例如 AI 引错了路径），因此压根没采到水位
-    await w.save({ title: "X", summary: "", sources: ["src/ghost.ts"], body: "" });
+    await w.save({ title: "X", summary: "", sources: ["src/a.ts", "src/ghost.ts"], body: "" });
 
     const [s] = await w.summary();
+    expect(s.sources).toEqual(["src/a.ts"]);
+    expect(s.stale).toBe(false);
+  });
+
+  it("依据文件生成后被删掉 → 判为需要复核", async () => {
+    const { host, store } = makeHost({ files: { "D:/ws/axon/src/a.ts": "x" } });
+    const w = new WikiStore(WS, host);
+    await w.save({ title: "X", summary: "", sources: ["src/a.ts"], body: "" });
+    store.delete("D:/ws/axon/src/a.ts");
+    const [s] = await w.summary();
     expect(s.stale).toBe(true);
-    expect(s.changedSources).toEqual(["src/ghost.ts"]);
+    expect(s.changedSources).toEqual(["src/a.ts"]);
+  });
+
+  it("markReviewed 重新记录时间戳，「待复核」消失", async () => {
+    const { host } = makeHost({ files: { "D:/ws/axon/src/a.ts": "x" } });
+    const w = new WikiStore(WS, host);
+    await w.save({ title: "X", summary: "", sources: ["src/a.ts"], body: "" });
+    // 源文件被改过：之后 stat 拿到新的 mtime
+    const orig = host.fs.stat;
+    host.fs.stat = (async (p: string) => {
+      const r = await orig(p);
+      return r && norm(p).endsWith("src/a.ts") ? { ...r, mtimeMs: 5000 } : r;
+    }) as typeof host.fs.stat;
+    expect((await w.summary())[0].stale).toBe(true);
+    expect(await w.markReviewed("X", WS)).toBe(true);
+    expect((await w.summary())[0].stale).toBe(false);
+  });
+
+  it("写状态时在 wiki/ 下放 .gitignore 挡住 .state.json", async () => {
+    const { host, store } = makeHost({ files: { "D:/ws/axon/src/a.ts": "x" } });
+    await new WikiStore(WS, host).save({ title: "X", summary: "", sources: ["src/a.ts"], body: "" });
+    const ig = store.get("D:/ws/axon/.axon/wiki/.gitignore");
+    expect(ig).toContain(".*");
+    expect(ig).toContain("!.gitignore");
+  });
+
+  it("状态文件写坏了（半截 JSON）→ 退回备份，不丢其它页的记录", async () => {
+    const { host, store } = makeHost({ files: { "D:/ws/axon/src/a.ts": "x" } });
+    const w = new WikiStore(WS, host);
+    await w.save({ title: "A", summary: "", sources: ["src/a.ts"], body: "" });
+    store.set("D:/ws/axon/.axon/wiki/.state.json", "{\"version\":1,\"pa");
+    await w.save({ title: "B", summary: "", sources: ["src/a.ts"], body: "" });
+    const state = JSON.parse(store.get("D:/ws/axon/.axon/wiki/.state.json")!);
+    expect(Object.keys(state.pages).sort()).toEqual(["A", "B"]);
   });
 
   it("没有 wiki 时返回空数组（侧边栏据此显示空状态）", async () => {
@@ -564,7 +615,7 @@ describe("WikiStore · summary 聚合视图", () => {
     expect(s.changedSources).toEqual(["src/a.ts"]);
   });
 
-  it("跨根去重：同 slug 以根顺序靠前者为准（与 list() 保持一致）", async () => {
+  it("多工作区同名页面各自保留（按 工作区 + slug 区分），删除只删指定工作区的", async () => {
     const WS2 = "D:/ws/other";
     const { host } = makeHost({
       files: {
@@ -572,9 +623,12 @@ describe("WikiStore · summary 聚合视图", () => {
         "D:/ws/other/.axon/wiki/x.md": "---\ntitle: 次根版本\n---\n",
       },
     });
-    const list = await new WikiStore([WS, WS2], host).summary();
-    expect(list).toHaveLength(1);
-    expect(list[0].title).toBe("首根版本");
+    const w = new WikiStore([WS, WS2], host);
+    const list = await w.summary();
+    expect(list.map((p) => p.title).sort()).toEqual(["次根版本", "首根版本"]);
+    expect(await w.remove("x", WS2)).toBe(true);
+    const after = await w.summary();
+    expect(after.map((p) => p.title)).toEqual(["首根版本"]);
   });
 });
 

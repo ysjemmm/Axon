@@ -105,6 +105,11 @@ export interface SubAgentDeps {
    * 并行执行的子 Agent 应设一个更紧的上限（如 30），避免陷入长时间循环。
    */
   maxRounds?: number;
+  /**
+   * 可选：本次运行的 token 上限（输入 + 输出累计）。每轮结束后检查，超出即停止并返回 ok=false。
+   * 用于按次计费的长任务（如 Wiki 生成）给单个子 Agent 封顶，防止一个页面把整次预算烧光。
+   */
+  tokenBudget?: number;
   /** 允许写入的工作区外目录（父会话注入：产物 / 产出目录，完全访问模式下含通配 "*"） */
   writeRoots?: () => string[];
   /**
@@ -127,6 +132,8 @@ export interface SubAgentResult {
   outputTokens: number;
   /** 总 tokens（向后兼容，= inputTokens + outputTokens） */
   tokens: number;
+  /** 因超出 tokenBudget 而停止 */
+  budgetExceeded?: boolean;
 }
 
 function looksLikeInternalToolTrace(text: string): boolean {
@@ -191,8 +198,10 @@ export class SubAgentRunner {
     // 规划：只登记清单、不写文件，因此只读模式下也允许 ——
     // 只读契约约束的是「不得改动仓库」，而登记计划只发生在内存里。
     if (this.deps.wiki?.plan) extra.push(...getWikiPlanToolDefinitions());
-    // 撰写：真正写 .axon/wiki/，只读模式下不给（那是写操作）
-    if (this.deps.wiki?.save && !this.deps.readOnly) extra.push(...getWikiToolDefinitions());
+    // 撰写：只写 .axon/wiki/ 下的页面，由调用方显式提供 save 才有。
+    // 只读模式下也给：Wiki 撰写者应当「只读仓库 + 只能提交页面」，
+    // 不能写别的文件、不能执行命令（被文档化的仓库内容可能含提示注入，见 agentSession.doGenerateWiki）。
+    if (this.deps.wiki?.save) extra.push(...getWikiToolDefinitions());
     return [...base, ...extra] as unknown as ToolDef[];
   }
 
@@ -207,7 +216,8 @@ export class SubAgentRunner {
         `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
         `你当前处于只读调研模式：只能读文件、搜索、列目录、联网查询，` +
         `【不能】创建/修改文件、不能执行命令。你的任务是调研并产出一份结构清晰、自包含的中文结论` +
-        `（含关键发现、涉及的文件路径与行号、你的判断）。不要尝试动手改任何东西——那不是你的职责。`;
+        `（含关键发现、涉及的文件路径与行号、你的判断）。不要尝试动手改任何东西——那不是你的职责。` +
+        (this.deps.wiki?.save ? `\n例外：本任务的产出是 Wiki 页面，用 wiki_save_page 提交（这是唯一允许的写操作）。` : "");
     }
     if (skill) {
       system +=
@@ -268,6 +278,9 @@ export class SubAgentRunner {
       }
       const turn = await this.runTurnWithRetry(messages);
       const { content, toolCalls } = turn;
+      if (this.deps.tokenBudget && this.inputTokensUsed + this.outputTokensUsed > this.deps.tokenBudget) {
+        return { ok: false, text: finalText || "（已超出本次任务的 token 预算，已停止）", inputTokens: this.inputTokensUsed, outputTokens: this.outputTokensUsed, tokens: this.inputTokensUsed + this.outputTokensUsed, budgetExceeded: true };
+      }
       // 消费归一化后的产品语义结束原因（策略层保证已填充）；协议原始 finishReason 不再在此点直接判断。
       const finishReason: NormalizedFinishReason = turn.normalizedFinishReason;
 
@@ -488,8 +501,14 @@ export class SubAgentRunner {
       let result: string;
       let status: "success" | "error" = "success";
       const meta: ToolMeta = {};
+      // 执行前再核一遍工具是否在本次的工具集里：模型可能凭记忆调用没提供给它的工具
+      // （例如只读子 Agent 调 execute_command）。只靠「不给 schema」挡不住，必须在执行处拦。
+      const offered = (this.getToolDefs() as unknown as { function?: { name?: string } }[]).some((d) => d.function?.name === toolName);
 
-      if (parseError) {
+      if (!offered) {
+        result = `工具 ${toolName} 在本任务中不可用。请只使用提供给你的工具。`;
+        status = "error";
+      } else if (parseError) {
         result = parseError;
         status = "error";
       } else if (!verdict.allowed) {

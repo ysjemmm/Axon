@@ -105,12 +105,15 @@ function readTraceConfig(): Partial<TraceConfig> {
  * 侧栏按钮不属于任何对话面板，没有天然的「当前会话模型」；而它是本项目里最贵的单个操作
  * （多页 × 每页多轮工具调用）。最贵的操作，配置不该靠猜。
  */
-function readWikiConfig(): { provider: string; model: string; maxPages: number } {
+function readWikiConfig(): { provider: string; model: string; maxPages: number; tokenBudget?: number } {
   const cfg = vscode.workspace.getConfiguration("axon.wiki");
+  // 0 / 未填 = 按页数自动估算（见 core 的 defaultWikiTokenBudget）
+  const budget = cfg.get<number>("tokenBudget", 0);
   return {
     provider: cfg.get<string>("provider", "") || "",
     model: cfg.get<string>("model", "") || "",
     maxPages: cfg.get<number>("maxPages", 15),
+    ...(budget > 0 ? { tokenBudget: budget } : {}),
   };
 }
 
@@ -890,6 +893,38 @@ export function activate(context: vscode.ExtensionContext): void {
     return staleCount;
   }
 
+  /**
+   * 跑一次 Wiki 生成（整体 / 只刷新待复核 / 只重写某页），统一处理防重入、状态栏进度与收尾。
+   */
+  async function runWikiGeneration(target: string, scope: { mode: "full" | "stale" | "pages"; slugs?: string[] }, firstStatus: string): Promise<void> {
+    // 挡重复点击：并发生成会互相破坏。根因层的守卫在 core（AgentSession.generateWiki），
+    // 这里再挡一层是为了立刻给出可见提示 —— 否则用户只会看到一个通知闪一下又消失。
+    if (wikiGenerating) {
+      void vscode.window.showInformationMessage("已有 Wiki 生成在进行中，请等它结束或先取消。");
+      return;
+    }
+    wikiGenerating = true;
+    const { provider, model, maxPages, tokenBudget } = readWikiConfig();
+    // 进度放在【状态栏】而不是弹窗通知里：进度通知没有关闭按钮（见 wikiStatusItem 的说明）。
+    // 取消有两个入口：① 点状态栏那条进度 ② Wiki 面板标题栏的「取消」（仅生成期间出现）
+    wikiTargetName = basename(target);
+    setWikiProgress(firstStatus);
+    wikiStatusItem.show();
+    void vscode.commands.executeCommand("setContext", "axon.wikiGenerating", true);
+    try {
+      await hub.dispatch({ type: "wiki_generate", workspace: target, provider, model, maxPages, tokenBudget, mode: scope.mode, slugs: scope.slugs } as any);
+    } catch (err) {
+      vscode.window.showErrorMessage(`生成 Wiki 失败：${(err as Error).message}`);
+    } finally {
+      // 无论成功/失败/取消都要收干净：残留的状态栏项和 spinner 看上去像卡死了
+      wikiTree.setGenerating(null);
+      wikiStatusItem.hide();
+      wikiTargetName = "";
+      wikiGenerating = false;
+      void vscode.commands.executeCommand("setContext", "axon.wikiGenerating", false);
+    }
+  }
+
   const isValidDir = async (p: string): Promise<boolean> => {
     try {
       const st = await vscode.workspace.fs.stat(vscode.Uri.file(p));
@@ -1202,50 +1237,43 @@ export function activate(context: vscode.ExtensionContext): void {
       // 目标工作区由用户显式选择，不做任何推定（推定会把「碰巧在看什么」当成「想做什么」）。
       const target = await pickWikiTargetWorkspace();
       if (!target) return; // 用户取消
-      // 挡重复点击：并发生成会互相破坏。根因层的守卫在 core（AgentSession.generateWiki），
-      // 这里再挡一层是为了立刻给出可见提示 —— 否则用户只会看到一个通知闪一下又消失。
-      if (wikiGenerating) {
-        void vscode.window.showInformationMessage("已有 Wiki 生成在进行中，请等它结束或先取消。");
-        return;
-      }
-      wikiGenerating = true;
-      const { provider, model, maxPages } = readWikiConfig();
-      // 生成是长任务（十几页 × 每页多次工具调用，可能跑几分钟）。
-      //
-      // 进度放在【状态栏】而不是弹窗通知里：进度通知没有关闭按钮（见 wikiStatusItem 的说明），
-      // 长任务期间它一直占着屏幕，用户只能靠点「取消」让它消失 —— 而取消会中止整个生成。
-      // 状态栏项既不挡视线，也不需要用户去关。
-      //
-      // 取消有两个入口，都与进度同处可见：
-      //   ① 点状态栏那条进度（它带了 command）
-      //   ② Wiki 面板标题栏的「取消」（仅生成期间出现，见 package.json 的 view/title）
-      wikiTargetName = basename(target);
-      setWikiProgress("正在勘察仓库、规划页面…");
-      wikiStatusItem.show();
-      // 让标题栏的「取消」按钮出现
-      void vscode.commands.executeCommand("setContext", "axon.wikiGenerating", true);
+      await runWikiGeneration(target, { mode: "full" }, "正在勘察仓库、规划页面…");
+    }),
+    vscode.commands.registerCommand("axon.wiki.refreshStale", async (item?: vscode.TreeItem) => {
+      // 只重写「待复核」的页面，不重新规划：代码改了一些之后刷新用，比整体重新生成便宜得多
+      const ws = (item as unknown as { wikiWorkspace?: string } | undefined)?.wikiWorkspace ?? await pickWikiTargetWorkspace();
+      if (!ws) return;
+      await runWikiGeneration(ws, { mode: "stale" }, "正在重写待复核的页面…");
+    }),
+    vscode.commands.registerCommand("axon.wiki.regeneratePage", async (item?: vscode.TreeItem) => {
+      const target = item as unknown as { wikiSlug?: string; wikiWorkspace?: string } | undefined;
+      if (!target?.wikiSlug || !target.wikiWorkspace) return;
+      await runWikiGeneration(target.wikiWorkspace, { mode: "pages", slugs: [target.wikiSlug] }, "正在重新生成页面…");
+    }),
+    vscode.commands.registerCommand("axon.wiki.markReviewed", async (item?: vscode.TreeItem) => {
+      // 看过后认为内容仍然准确（只是格式化、改了无关代码）：重新记录时间戳，不花钱重新生成
+      const target = item as unknown as { wikiSlug?: string; wikiWorkspace?: string } | undefined;
+      if (!target?.wikiSlug || !target.wikiWorkspace) return;
       try {
-        await hub.dispatch({ type: "wiki_generate", workspace: target, provider, model, maxPages } as any);
+        const { WikiStore } = await import("@axon/core");
+        const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+        const store = new WikiStore(allWorkspaces, createHost());
+        if (!(await store.markReviewed(target.wikiSlug, target.wikiWorkspace))) {
+          vscode.window.showWarningMessage("未找到该页面，可能已被删除。");
+        }
+        await refreshWikiTree().catch(() => { /* 刷新失败不影响结果 */ });
       } catch (err) {
-        vscode.window.showErrorMessage(`生成 Wiki 失败：${(err as Error).message}`);
-      } finally {
-        // 无论成功/失败/取消都要收干净：残留的状态栏项会一直挂在状态栏上，
-        // 应用节点上的 spinner 也会一直转下去 —— 那比不显示更糟，看上去像卡死了
-        wikiTree.setGenerating(null);
-        wikiStatusItem.hide();
-        wikiTargetName = "";
-        wikiGenerating = false;
-        void vscode.commands.executeCommand("setContext", "axon.wikiGenerating", false);
+        vscode.window.showErrorMessage(`标记失败：${(err as Error).message}`);
       }
     }),
     vscode.commands.registerCommand("axon.wiki.cancel", async () => {
-      // 取消 = 走会话取消：驱动层在每页之间检查中断信号，把作业记为 interrupted（可续跑）。
+      // 只取消 Wiki 生成（专用信号），不碰聊天：驱动层在每页之间检查，作业记为 interrupted（可续跑）。
       // 已生成的页面全部保留，下次点击接着写剩下的，不必从头再来。
       if (!wikiGenerating) {
         void vscode.window.showInformationMessage("当前没有正在进行的 Wiki 生成。");
         return;
       }
-      await hub.dispatch({ type: "cancel" } as any);
+      await hub.dispatch({ type: "wiki_cancel" } as any);
     }),
     vscode.commands.registerCommand("axon.wiki.pickModel", async () => {
       // 选 provider + 模型，写入设置（用户级）。
@@ -1324,7 +1352,8 @@ export function activate(context: vscode.ExtensionContext): void {
         const { WikiStore } = await import("@axon/core");
         const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
         const store = new WikiStore(allWorkspaces, createHost());
-        if (await store.remove(slug)) {
+        // 带上工作区：多个项目可以有同名页面，删错项目的文件是不可接受的
+        if (await store.remove(slug, target?.wikiWorkspace)) {
           vscode.window.showInformationMessage(`已删除页面「${label}」`);
         } else {
           vscode.window.showWarningMessage(`未找到页面「${label}」，可能已被删除。`);

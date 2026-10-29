@@ -174,7 +174,10 @@ export type ControlCommandPayload =
   // 多工作区下不能由后端推定（写错仓库会污染不相干项目，且那些文件还会被提交）。
   // model / provider / maxPages 来自 VS Code 设置（axon.wiki.*），由呈现端读出后透传：
   // 读设置是形态相关的事，而「哪个 provider 提供这个模型」的解析留在 core。
-  | { type: "wiki_generate"; workspace: string; provider?: string; model?: string; maxPages?: number }
+  // mode：full 重新规划 / stale 只重写待复核页 / pages 只重写 slugs 指定的页；tokenBudget 为整次生成的 token 上限
+  | { type: "wiki_generate"; workspace: string; provider?: string; model?: string; maxPages?: number; tokenBudget?: number; mode?: "full" | "stale" | "pages"; slugs?: string[] }
+  // 取消正在进行的 Wiki 生成（只停 Wiki，不影响聊天）
+  | { type: "wiki_cancel" }
   // Credits 预算门：硬暂停触发时用户的继续/停止决策
   | { type: "credit_budget_choice"; choice: "continue" | "stop" }
   // 浏览器：把 open_browser 打开的页面带到前台（前端点击卡片输出触发）

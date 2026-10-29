@@ -592,7 +592,17 @@ export class SessionHub {
           provider: cmd.provider,
           model: cmd.model,
           maxPages: cmd.maxPages,
+          tokenBudget: cmd.tokenBudget,
+          mode: cmd.mode,
+          slugs: cmd.slugs,
         });
+        return;
+      }
+      case "wiki_cancel": {
+        // 找正在生成的那个会话，而不是「当前活动会话」：生成期间用户可能已经切到别的会话
+        for (const session of this.activeSessions.values()) {
+          if (session.cancelWiki()) return;
+        }
         return;
       }
       case "compaction_choice": {
