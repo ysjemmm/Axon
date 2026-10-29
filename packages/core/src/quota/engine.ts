@@ -313,6 +313,9 @@ function round(value: number | undefined): number | undefined {
   return value === undefined ? undefined : Math.round(value * 10_000) / 10_000;
 }
 
+/** 总额达到这个数（已按 scale 换算）就当作不限额 */
+const UNLIMITED_TOTAL = 10_000_000;
+
 function buildMetric(rule: QuotaMetricRule, scope: PathScope, fallbackLabel: string): QuotaMetric | null {
   const scale = rule.scale || 1;
   let used = readField(rule.used, scope, scale);
@@ -325,14 +328,24 @@ function buildMetric(rule: QuotaMetricRule, scope: PathScope, fallbackLabel: str
   if (total === undefined && used !== undefined && remaining !== undefined) total = used + remaining;
   if (percent === undefined && used !== undefined && total !== undefined && total > 0) percent = (used / total) * 100;
   if ([used, total, remaining, percent].every((v) => v === undefined)) return null;
+  // 「无限额度」：中转站给不限额的令牌返回一个天文数字（new-api 是 1 亿美元），照实显示成
+  // 「$7020 / $100M · 0%」毫无意义。总额大到这个程度就只保留已用
+  let unlimited = false;
+  if (total !== undefined && total >= UNLIMITED_TOTAL) {
+    unlimited = true;
+    total = undefined;
+    remaining = undefined;
+    percent = undefined;
+  }
 
   const rawLabel = rule.labelPath ? resolvePath(rule.labelPath, scope) : undefined;
   const labelKey = rawLabel === undefined || rawLabel === null ? "" : String(rawLabel);
-  const label = (labelKey && rule.labelMap?.[labelKey]) || labelKey || rule.label || fallbackLabel;
+  const baseLabel = (labelKey && rule.labelMap?.[labelKey]) || labelKey || rule.label || fallbackLabel;
+  const label = unlimited ? `${baseLabel}（不限额）` : baseLabel;
   const unitRaw = rule.unitPath ? resolvePath(rule.unitPath, scope) : undefined;
   return {
     label,
-    kind: rule.kind || (total !== undefined ? "quota" : "balance"),
+    kind: unlimited ? "balance" : rule.kind || (total !== undefined ? "quota" : "balance"),
     used: round(used),
     total: round(total),
     remaining: round(remaining),

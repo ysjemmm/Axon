@@ -114,15 +114,31 @@ export const QUOTA_PRESETS: QuotaPreset[] = [
   },
   {
     id: "new-api-user",
-    label: "new-api 中转站（账户面板）",
-    description: "账户剩余额度与已用额度（/api/user/self）。需要在中转站「个人设置」里生成的系统访问令牌和用户 ID。",
+    label: "new-api 中转站（账户余额 + 订阅）",
+    description: "账户剩余额度与已用（/api/user/self），开通了订阅套餐的再显示套餐额度与下次重置时间（/api/subscription）。需要中转站「个人设置」里生成的系统访问令牌和用户 ID。",
     needs: ["accessToken"],
     vars: [{ name: "userId", label: "用户 ID", placeholder: "个人设置页里的数字 ID" }],
     verified: false,
     rule: {
       auth: { header: "authorization", prefix: "Bearer " },
-      steps: [{ id: "main", url: "{{origin}}/api/user/self", headers: { "new-api-user": "{{vars.userId}}" } }],
-      metrics: [{ label: "账户额度", kind: "balance", remaining: "$.data.quota", used: "$.data.used_quota", scale: 500000, unit: "$" }],
+      steps: [
+        { id: "main", url: "{{origin}}/api/user/self", headers: { "new-api-user": "{{vars.userId}}" } },
+        // 没开通订阅的站点或账户这一步会失败，跳过即可，只显示余额
+        { id: "sub", url: "{{origin}}/api/subscription", headers: { "new-api-user": "{{vars.userId}}" }, optional: true },
+      ],
+      metrics: [
+        { label: "账户余额", kind: "balance", remaining: "main:$.data.quota", used: "main:$.data.used_quota", scale: 500000, unit: "$" },
+        {
+          label: "订阅额度",
+          each: "sub:$.data.subscriptions",
+          kind: "window",
+          used: "@.subscription.amount_used",
+          total: "@.subscription.amount_total",
+          resetAt: "@.subscription.next_reset_time",
+          scale: 500000,
+          unit: "$",
+        },
+      ],
     },
   },
   {

@@ -171,3 +171,44 @@ describe("规则校验", () => {
     expect(() => validateQuotaRule({ steps: [{ id: "a", url: "https://x" }], metrics: [{ remaining: "b:$.n" }] })).toThrow(/不存在的步骤「b」/);
   });
 });
+
+describe("new-api 中转站", () => {
+  const SCALE = 500000;
+
+  it("API Key 预设：令牌不限额时只显示已用，不显示 $100M", async () => {
+    const { fn } = fakeFetch({
+      "/v1/dashboard/billing/subscription": { hard_limit_usd: 100_000_000 },
+      "/v1/dashboard/billing/usage": { total_usage: 702039 },
+    });
+    const preset = QUOTA_PRESETS.find((p) => p.id === "new-api-key")!;
+    const result = await runQuotaRule(provider, preset.rule, { fetch: fn });
+    expect(result.metrics[0]).toMatchObject({ label: "令牌额度（不限额）", kind: "balance", used: 7020.39, unit: "$" });
+    expect(result.metrics[0].total).toBeUndefined();
+    expect(result.metrics[0].percent).toBeUndefined();
+  });
+
+  it("账户余额 + 订阅：两项都显示，订阅带重置时间；请求带上用户 ID", async () => {
+    const reset = Math.floor(new Date("2026-10-30T00:00:00Z").getTime() / 1000);
+    const { fn, calls } = fakeFetch({
+      "/api/user/self": { success: true, data: { quota: 843.7 * SCALE, used_quota: 7846.19 * SCALE } },
+      "/api/subscription": { success: true, data: { subscriptions: [{ subscription: { amount_used: 54.81 * SCALE, amount_total: 200 * SCALE, next_reset_time: reset } }] } },
+    });
+    const preset = QUOTA_PRESETS.find((p) => p.id === "new-api-user")!;
+    const result = await runQuotaRule(provider, { ...preset.rule, vars: { userId: "42" } }, { fetch: fn, secrets: memorySecrets({ accessToken: "panel-token" }) });
+    expect(calls.map((c) => c.headers["new-api-user"])).toEqual(["42", "42"]);
+    expect(calls[0].headers.authorization).toBe("Bearer panel-token");
+    expect(result.metrics[0]).toMatchObject({ label: "账户余额", remaining: 843.7, used: 7846.19 });
+    expect(result.metrics[1]).toMatchObject({ label: "订阅额度", kind: "window", used: 54.81, total: 200, remaining: 145.19, resetAt: reset * 1000 });
+  });
+
+  it("没开通订阅：订阅接口失败就只显示余额", async () => {
+    const { fn } = fakeFetch({
+      "/api/user/self": { success: true, data: { quota: 10 * SCALE, used_quota: 0 } },
+      "/api/subscription": () => ({ status: 404, body: "not found" }),
+    });
+    const preset = QUOTA_PRESETS.find((p) => p.id === "new-api-user")!;
+    const result = await runQuotaRule(provider, { ...preset.rule, vars: { userId: "42" } }, { fetch: fn, secrets: memorySecrets({ accessToken: "t" }) });
+    expect(result.metrics).toHaveLength(1);
+    expect(result.metrics[0]).toMatchObject({ label: "账户余额", remaining: 10 });
+  });
+});
