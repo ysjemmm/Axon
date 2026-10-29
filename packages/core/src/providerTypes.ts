@@ -177,4 +177,9 @@ export interface ProviderConfigFile {
    * 留空/缺省 = 不启用识图兜底。
    */
   visionFallbackModel?: string;
+  /**
+   * 语音输入：录音交给哪个 Provider 的哪个模型转文字（走 OpenAI 兼容的 /audio/transcriptions）。
+   * 只认用户级配置：工作区配置不能决定把用户的录音发到哪里。
+   */
+  voiceInput?: { provider: string; model: string; language?: string };
 }

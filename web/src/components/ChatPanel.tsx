@@ -46,6 +46,8 @@ import { BackgroundTasksButton } from "./chat/BackgroundTasks";
 import { PermissionModePicker } from "./chat/PermissionModePicker";
 import { attachmentTypeLabel, imageTypeLabel } from "./chat/attachmentType";
 import { SendStopIcon } from "./chat/SendStopIcon";
+import { VoiceInputButton } from "./chat/VoiceInput";
+import { isVSCode } from "@/lib/transport";
 import { ProcessingAttachmentCard, type ProcessingAttachment } from "./chat/ProcessingAttachmentCard";
 import { AttachmentCard, FileCardBody } from "./chat/AttachmentCard";
 import { useChatSession, type SubmitPayload } from "./chat/useChatSession";
@@ -240,6 +242,12 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     if (msg) {
       fileErrorTimer.current = setTimeout(() => setFileError(""), 3000);
     }
+  }, []);
+
+  const handleVoiceText = useCallback((text: string) => {
+    editorRef.current?.insertAtCursor(text);
+    setComposerEmpty(editorRef.current?.isEmpty() ?? false);
+    editorRef.current?.focus();
   }, []);
   /** 手动关掉文件错误提示（状态条右侧的 ×）：同时清掉自动消失的定时器。 */
   const dismissFileError = useCallback(() => {
@@ -2263,6 +2271,14 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                     onCompact={() => session.compactSession()}
                     breakdown={session.tokenUsage.breakdown}
                   />
+                  {/* 语音输入：只在 IDE 里有（录音在扩展进程里做），识别出的文字插到光标处 */}
+                  {isVSCode && (
+                    <VoiceInputButton
+                      onText={handleVoiceText}
+                      onError={showFileError}
+                      disabled={!connected}
+                    />
+                  )}
                   {/* 发送/停止与辅助控件之间多留一点距离：主操作单独成组，不和开关挤在一起 */}
                   <span className="w-1" aria-hidden />
                   {/* 回复进行中：输入框是空的就是「停止」；打了字就变回「发送」——发出去 AI 下一步就能看到（插话），

@@ -718,6 +718,36 @@ export function setVisionFallbackModel(model: string | null, level: ProviderLeve
   return put(`/api/providers/vision-fallback${providerQuery(workspace)}`, { model, level });
 }
 
+/** 语音输入配置：录音交给哪个 Provider 的哪个模型转文字（只存用户级） */
+export interface VoiceInputConfig {
+  provider: string;
+  model: string;
+  language?: string;
+}
+
+export function getVoiceConfig(): Promise<{ config: VoiceInputConfig | null; supported: boolean }> {
+  return get("/api/voice/config");
+}
+
+export function setVoiceConfig(config: VoiceInputConfig | null): Promise<{ ok: boolean }> {
+  return put("/api/voice/config", { config });
+}
+
+/** 开始录音（扩展进程里录；没配置识别服务时返回 needsConfig） */
+export function startVoice(): Promise<{ ok: boolean; needsConfig?: boolean }> {
+  return post("/api/voice/start");
+}
+
+/** 取走自上次以来的音量点（0~1）与已录秒数 */
+export function voiceLevels(): Promise<{ recording: boolean; levels: number[]; seconds: number }> {
+  return get("/api/voice/levels");
+}
+
+/** 停止录音并识别；cancel 时丢弃录音。长录音识别要一阵子，超时放宽到 2 分钟 */
+export function stopVoice(cancel = false): Promise<{ text?: string; needsConfig?: boolean }> {
+  return apiRequest("POST", "/api/voice/stop", { cancel }, 120_000);
+}
+
 /** 新增/覆盖一个自定义 provider */
 export function addCustomProvider(level: ProviderLevel, name: string, entry: RawProviderEntry & { apiKeyHeader?: string }, workspace?: string): Promise<{ ok: boolean }> {
   return post(`/api/providers/${level}/custom${providerQuery(workspace)}`, { name, entry });

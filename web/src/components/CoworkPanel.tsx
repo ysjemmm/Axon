@@ -16,6 +16,8 @@
  * 界面上不出现工具调用、工作区、Provider 这类开发概念。
  */
 
+import { VoiceInputButton } from "./chat/VoiceInput";
+import { isVSCode } from "@/lib/transport";
 import { useCallback, useMemo, useState } from "react";
 import { ArrowDown, FolderOpen, History, Home, Loader2, Plus, Send, Square } from "lucide-react";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
@@ -417,6 +419,12 @@ export function CoworkPanel({ clientId, connected, send, onExit }: CoworkPanelPr
                 <TokenIndicator used={tokenUsage.used} max={contextMax} />
               </div>
               <div className="flex shrink-0 items-center gap-1">
+                {isVSCode && (
+                  <VoiceInputButton
+                    onText={(text) => { editorEl?.insertAtCursor(text); setDraft(editorEl?.read().text || ""); editorEl?.focus(); }}
+                    onError={setNotice}
+                  />
+                )}
                 {running && (
                   <button onClick={cancel} className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:text-foreground" aria-label="停止处理" title="停止当前任务">
                     <Square className="h-3 w-3" fill="currentColor" />

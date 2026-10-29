@@ -11,6 +11,7 @@
  * 因此 loadProviderEnv() 只需在"用户发第一条消息"之前执行即可——activate 里调一次足矣。
  */
 
+import { stopRecording } from "./voiceInput.js";
 import * as vscode from "vscode";
 import { homedir } from "node:os";
 import { join, basename, dirname } from "node:path";
@@ -2479,6 +2480,7 @@ export function activate(context: vscode.ExtensionContext): void {
 let disposeOnDeactivate: (() => Promise<void>) | undefined;
 
 export async function deactivate(): Promise<void> {
-  // 其余资源由 context.subscriptions 自动释放；这两类是子进程，必须显式关闭
+  // 其余资源由 context.subscriptions 自动释放；这几类是子进程，必须显式关闭
+  await stopRecording(true).catch(() => null); // 还在录音就丢掉，别让麦克风一直开着
   await disposeOnDeactivate?.();
 }

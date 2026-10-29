@@ -15,6 +15,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { VisionFallbackSelector } from "@/components/ModelSelector";
+import { VoiceInputSettings } from "@/components/VoiceInputSettings";
+import { isVSCode } from "@/lib/transport";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   getProviders,
@@ -205,6 +207,14 @@ export function ProviderStudio({ workspace }: ProviderStudioProps) {
             <VisionFallbackSelector value={visionFallbackModel} onChange={saveVisionFallback} />
           </div>
         </section>
+
+        {/* 语音输入只在 IDE 里有：录音在扩展进程里做 */}
+        {isVSCode && (
+          <section>
+            <SectionTitle title="语音输入" />
+            <VoiceInputSettings providers={providers} />
+          </section>
+        )}
       </div>
     </div>
   );

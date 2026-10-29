@@ -17,6 +17,7 @@ import { RelayStore, renameSessionTitle, ProviderRegistry, refreshProviders, pro
 import { createVSCodeAgentHost } from "@axon/host-vscode";
 import { queryProvider, quotaSecrets, clearQuotaSecrets, quotaTokenStatus, saveQuotaTokens, quotaOverview, invalidateQuotaOverview } from "./quotaService.js";
 import { createMarketplaceRegistry, persistSourcesToSettings } from "./marketplaceBridge.js";
+import { startRecording, stopRecording, takeLevels, transcribe } from "./voiceInput.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -691,6 +692,39 @@ export class RequestRouter {
       await resolveProviders(workspace || d.defaultWorkspace);
       return { ok: true };
     }
+    // 语音输入：配置只存用户级；录音在扩展进程里做（webview 拿不到麦克风），识别复用 Provider 的地址和 Key
+    if (path === "/api/voice/config" && method === "GET") {
+      const cfg = (await readProviderConfig("user")).voiceInput;
+      return { config: cfg ?? null, supported: true };
+    }
+    if (path === "/api/voice/config" && method === "PUT") {
+      const { config: next } = (body || {}) as { config?: { provider?: string; model?: string; language?: string } | null };
+      const config = await readProviderConfig("user");
+      if (next?.provider && next.model?.trim()) {
+        config.voiceInput = { provider: next.provider, model: next.model.trim(), ...(next.language?.trim() ? { language: next.language.trim() } : {}) };
+      } else {
+        delete config.voiceInput;
+      }
+      await writeProviderConfig("user", config);
+      return { ok: true };
+    }
+    if (path === "/api/voice/start" && method === "POST") {
+      const cfg = (await readProviderConfig("user")).voiceInput;
+      if (!cfg) return { ok: false, needsConfig: true };
+      await startRecording();
+      return { ok: true };
+    }
+    if (path === "/api/voice/levels" && method === "GET") {
+      return takeLevels();
+    }
+    if (path === "/api/voice/stop" && method === "POST") {
+      const { cancel } = (body || {}) as { cancel?: boolean };
+      const wav = await stopRecording(!!cancel);
+      if (!wav) return { text: "" };
+      const cfg = (await readProviderConfig("user")).voiceInput;
+      if (!cfg) return { ok: false, needsConfig: true };
+      return { text: await transcribe(wav, cfg) };
+    }
     const providerLevelMatch = path.match(/^\/api\/providers\/(user|workspace)$/);
     if (providerLevelMatch && method === "PUT") {
       const level = providerLevelMatch[1] as "user" | "workspace";
@@ -971,6 +1005,7 @@ async function readProviderConfig(level: "user" | "workspace", workspace?: strin
       builtinModels: parsed.builtinModels || {},
       builtinQuota: parsed.builtinQuota || {},
       ...(parsed.visionFallbackModel ? { visionFallbackModel: parsed.visionFallbackModel } : {}),
+      ...(parsed.voiceInput ? { voiceInput: parsed.voiceInput } : {}),
     };
   }
 }
@@ -984,6 +1019,7 @@ async function writeProviderConfig(level: "user" | "workspace", config: Provider
     builtinModels: config.builtinModels || {},
     builtinQuota: config.builtinQuota || {},
     ...(config.visionFallbackModel ? { visionFallbackModel: config.visionFallbackModel } : {}),
+    ...(config.voiceInput ? { voiceInput: config.voiceInput } : {}),
   };
   // 原子写 + 仅本人可读：文件里有 API Key
   await writeJsonConfig(providerConfigPath(level, workspace), normalized);

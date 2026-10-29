@@ -88,7 +88,7 @@ export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
  *  - 浏览器：fetch(API_BASE + path)
  *  - webview：postMessage 请求 + requestId 应答配对
  */
-export async function apiRequest<T = unknown>(method: HttpMethod, path: string, body?: unknown): Promise<T> {
+export async function apiRequest<T = unknown>(method: HttpMethod, path: string, body?: unknown, timeoutMs: number = TIMEOUT.API_REQUEST): Promise<T> {
   const vscode = getVSCodeApi();
   if (vscode) {
     ensureWebviewListener();
@@ -102,7 +102,7 @@ export async function apiRequest<T = unknown>(method: HttpMethod, path: string, 
           pendingRequests.delete(id);
           reject(new Error(`请求超时: ${method} ${path}`));
         }
-      }, TIMEOUT.API_REQUEST);
+      }, timeoutMs);
     });
   }
 
