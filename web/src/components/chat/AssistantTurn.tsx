@@ -5,7 +5,11 @@ import { AxonSpark } from "@/components/AxonSpark";
 import type { ChatMessage, TextSegment } from "./types";
 import { formatElapsed } from "./format";
 import { MessageTime } from "./MessageTime";
-import { GitFork } from "lucide-react";
+import { Clock, Coins, Cpu, GitFork, Timer } from "lucide-react";
+import { metaItemClass, metaTooltipClass } from "./turnMetaStyles";
+
+/** 底部元信息行的图标：小、细、比文字再淡一点 */
+const META_ICON = "size-3 shrink-0 opacity-70";
 import { renderSegments } from "./renderSegments";
 
 /**
@@ -156,42 +160,54 @@ function AssistantTurnImpl({
         )}
 
         {!message.streaming && message.turnStats && (
-          <div className="mt-3 text-[11px] text-muted-foreground animate-rise-in">
-            <TurnUsageLabel stats={message.turnStats} uncertain={uncertain} />
+          <div className="mt-3 flex min-h-5 flex-wrap items-center gap-x-3.5 gap-y-1 font-sans text-[11.5px] leading-none text-muted-foreground/75 tabular-nums animate-rise-in">
+            {message.turnStats.completedAt ? (
+              <span className={metaItemClass}>
+                <Clock className={META_ICON} />
+                <MessageTime at={message.turnStats.completedAt} />
+              </span>
+            ) : null}
+            <TurnUsageLabel stats={message.turnStats} uncertain={uncertain} icon={<Coins className={META_ICON} />} />
             {message.turnStats.modelName || message.turnStats.model ? (
-              <>
-                {" · "}
-                <span className="relative inline-flex cursor-default border-b border-dotted border-muted-foreground/40 group/model-meta">
-                  {message.turnStats.modelName || message.turnStats.model}
-                  <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 hidden -translate-x-1/2 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs leading-relaxed text-white shadow-xl group-hover/model-meta:block">
-                    <span className="grid grid-cols-[auto_auto] gap-x-3 gap-y-1 whitespace-nowrap">
-                      <span className="text-white/60">Provider</span>
-                      <span className="text-right">{message.turnStats.providerName || "未知"}</span>
-                      <span className="text-white/60">强度</span>
-                      <span className="text-right font-mono">{message.turnStats.effort || "关闭"}</span>
-                    </span>
+              <span className={`${metaItemClass} group/model-meta max-w-[220px]`}>
+                <Cpu className={META_ICON} />
+                <span className="truncate">{message.turnStats.modelName || message.turnStats.model}</span>
+                {message.turnStats.effort && <span className="rounded bg-muted px-1 py-px text-[10px] text-muted-foreground">{message.turnStats.effort}</span>}
+                <span className={`${metaTooltipClass} group-hover/model-meta:block`}>
+                  <span className="grid grid-cols-[auto_auto] gap-x-4 gap-y-0.5 whitespace-nowrap">
+                    <span className="text-muted-foreground">Provider</span>
+                    <span className="text-right">{message.turnStats.providerName || "未知"}</span>
+                    <span className="text-muted-foreground">模型</span>
+                    <span className="text-right font-mono text-[11px]">{message.turnStats.model || "—"}</span>
+                    <span className="text-muted-foreground">思考强度</span>
+                    <span className="text-right">{message.turnStats.effort || "关闭"}</span>
                   </span>
                 </span>
-              </>
+              </span>
             ) : null}
-            {message.turnStats.completedAt ? <>{" · "}<MessageTime at={message.turnStats.completedAt} /></> : null}
-            <span className="hidden group-hover/assistant:inline">
-              {" · "}Elapsed: {formatElapsed(message.turnStats.elapsed)}
-              {uncertain ? "(?)" : ""}
-            </span>
-            {/* 分叉入口跟在时间后面，同一条元信息行里：单独起一行会把回复底部撑高，
-                而且它和 Credits/Elapsed 属于同一层级的"这条回复的附属信息"。
-                跟随 Elapsed 一起 hover 才出现（Elapsed 本身也是 hover 才显示）。 */}
-            {!message.streaming && !message.archived && onForkFromMessage && (
-              <button
-                type="button"
-                onClick={() => onForkFromMessage(message)}
-                title="从这里分叉（带上此前的对话）"
-                className="ml-1 hidden align-middle text-muted-foreground/60 hover:text-foreground transition-colors group-hover/assistant:inline-flex"
-              >
-                <GitFork className="w-3 h-3" />
-              </button>
+            {uncertain && (
+              <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10.5px] text-amber-700 dark:text-amber-400">
+                {message.turnStatus === "cancelled" ? "已中断" : "出错"}
+              </span>
             )}
+            {/* 用时和分叉是次要信息：悬停这条回复时才出现，不占平时的视线 */}
+            <span className="ml-auto flex items-center gap-2.5 opacity-0 transition-opacity duration-150 group-hover/assistant:opacity-100 focus-within:opacity-100">
+              <span className={metaItemClass} title="这轮回复的总用时">
+                <Timer className={META_ICON} />
+                {formatElapsed(message.turnStats.elapsed)}
+              </span>
+              {!message.archived && onForkFromMessage && (
+                <button
+                  type="button"
+                  onClick={() => onForkFromMessage(message)}
+                  title="从这里分叉（带上此前的对话）"
+                  className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-muted-foreground/75 transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <GitFork className={META_ICON} />
+                  分叉
+                </button>
+              )}
+            </span>
           </div>
         )}
       </div>

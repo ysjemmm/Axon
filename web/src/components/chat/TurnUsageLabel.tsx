@@ -10,7 +10,9 @@
  * 而其中大部分命中缓存、按很低的价格计费——当标题既吓人又不反映真实开销。
  */
 
+import type React from "react";
 import type { ChatMessage } from "./types";
+import { metaItemClass, metaTooltipClass } from "./turnMetaStyles";
 
 type Stats = NonNullable<ChatMessage["turnStats"]>;
 
@@ -28,16 +30,16 @@ function formatCost(cost: { amount: number; currency: string }): string {
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <>
-      <span className="text-white/70">{label}</span>
-      <span className="text-right">{value}</span>
+      <span className="text-muted-foreground">{label}</span>
+      <span className="text-right tabular-nums text-foreground">{value}</span>
     </>
   );
 }
 
-const tooltipClass = "pointer-events-none absolute bottom-full left-0 z-50 mb-2 hidden rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs leading-relaxed text-white shadow-xl group-hover/credits:block";
+const tooltipClass = `${metaTooltipClass} group-hover/credits:block`;
 
-export function TurnUsageLabel({ stats, uncertain }: { stats: Stats; uncertain: boolean }) {
-  const mark = uncertain ? "(?)" : "";
+export function TurnUsageLabel({ stats, uncertain, icon }: { stats: Stats; uncertain: boolean; icon?: React.ReactNode }) {
+  const mark = uncertain ? "≈" : "";
   const usage = stats.usage;
 
   if ((stats.billing === "cost" || stats.billing === "tokens") && usage) {
@@ -46,8 +48,8 @@ export function TurnUsageLabel({ stats, uncertain }: { stats: Stats; uncertain: 
     const text = stats.billing === "cost" && stats.cost ? formatCost(stats.cost) : `${formatTokenCount(headline)} tokens`;
     const requests = usage.requests ?? 0;
     return (
-      <span className="relative inline-flex cursor-default border-b border-dotted border-muted-foreground/40 group/credits">
-        {text}{mark}
+      <span className={`${metaItemClass} group/credits`}>
+        {icon}{mark}{text}
         <span className={tooltipClass}>
           <span className="flex flex-col">
             <span className="grid grid-cols-[auto_auto] gap-x-3 gap-y-0.5 whitespace-nowrap">
@@ -56,7 +58,7 @@ export function TurnUsageLabel({ stats, uncertain }: { stats: Stats; uncertain: 
               {cached > 0 && <Row label="缓存命中" value={`${cached.toLocaleString()} tokens`} />}
               <Row label="输出" value={`${usage.output.toLocaleString()} tokens`} />
             </span>
-            <span className="mt-1 max-w-[260px] whitespace-normal text-center text-[9px] leading-snug text-white/50">
+            <span className="mt-1 max-w-[260px] whitespace-normal text-center text-[10px] leading-snug text-muted-foreground">
               {usage.estimated
                 ? "端点未返回用量，数字为本地估算"
                 : stats.billing === "cost"
@@ -71,12 +73,12 @@ export function TurnUsageLabel({ stats, uncertain }: { stats: Stats; uncertain: 
     );
   }
 
-  const credits = `Credits: ${(stats.credits ?? 0).toFixed(2)}${mark}`;
+  const credits = `${mark}${(stats.credits ?? 0).toFixed(2)} credits`;
   const detail = stats.creditDetail;
-  if (!detail) return <span>{credits}</span>;
+  if (!detail) return <span className={metaItemClass}>{icon}{credits}</span>;
   return (
-    <span className="relative inline-flex cursor-default border-b border-dotted border-muted-foreground/40 group/credits">
-      {credits}
+    <span className={`${metaItemClass} group/credits`}>
+      {icon}{credits}
       <span className={tooltipClass}>
         <span className="flex flex-col">
           <span className="grid grid-cols-[auto_auto] gap-x-3 gap-y-0.5 whitespace-nowrap">
@@ -85,7 +87,7 @@ export function TurnUsageLabel({ stats, uncertain }: { stats: Stats; uncertain: 
             <Row label="Question" value={`${(detail.questionTokens ?? detail.inputTokens).toLocaleString()} tokens`} />
             <Row label="Output" value={`${detail.outputTokens.toLocaleString()} tokens`} />
           </span>
-          <span className="mt-1 text-center text-[9px] text-white/50">Token split is approximate.</span>
+          <span className="mt-1 text-center text-[10px] text-muted-foreground">Token split is approximate.</span>
         </span>
       </span>
     </span>
