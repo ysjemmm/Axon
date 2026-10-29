@@ -5,7 +5,7 @@
  *     子 Agent 的最终交付物，没有“重新读一次就能补回”的手段，故**任何环节都不裁**：
  *     ① contentLimit = Infinity  ② 旧轮次裁剪  ③ 请求组装的历史摘要截断  ④ 前端事件完整发送
  *
- *   · 终端类（execute_command / get_process_output）= TERMINAL_OUTPUT_TOOLS。
+ *   · 终端类（execute_command / get_process_output / wait_process）= TERMINAL_OUTPUT_TOOLS。
  *     输出体积由外部命令决定、我们控制不了，策略刻意不同：**单次结果有硬上限**
  *     （TERMINAL_OUTPUT_CAP，超出保留头尾）、**旧轮次允许被裁剪**，
  *     但发往前端仍走完整结果（用户要在卡片上看）。
@@ -95,13 +95,13 @@ describe("裁剪集合的成员划分", () => {
   });
 
   it("终端类单独成集，与结论型互不重叠", () => {
-    expect([...TERMINAL_OUTPUT_TOOLS].sort()).toEqual(["execute_command", "get_process_output"]);
+    expect([...TERMINAL_OUTPUT_TOOLS].sort()).toEqual(["execute_command", "get_process_output", "wait_process"]);
     for (const t of TERMINAL_OUTPUT_TOOLS) expect(NO_TRUNCATE_TOOLS.has(t)).toBe(false);
   });
 
   it("FULL_RESULT_TOOLS = 结论型 ∪ 终端类（两类都要给前端看完整结果）", () => {
     expect([...FULL_RESULT_TOOLS].sort()).toEqual(
-      ["delegate_task", "execute_command", "get_process_output"],
+      ["delegate_task", "execute_command", "get_process_output", "wait_process"],
     );
   });
 });

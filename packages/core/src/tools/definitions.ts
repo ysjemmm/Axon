@@ -123,8 +123,9 @@ export function getToolDefinitions() {
           "在后台启动一个进程，立即返回不阻塞。两种用法：\n\n" +
           "【1. 常驻进程】开发服务器（npm run dev / vite / next dev）、监听（tsc --watch / nodemon / jest --watch）等不会自己结束的命令。" +
           "这类命令绝不能用 execute_command——它会同步等进程退出，卡到超时。不要设 notify。\n\n" +
-          "【2. 会结束、但要跑很久的后台任务】确定要几分钟以上的完整测试、大型构建、批量数据处理、长时间脚本，设 notify=true：" +
-          "进程结束时系统会自动发一条通知给你（退出码 + 最后的输出），你不用轮询，可以先做别的事；没有别的事就告诉用户在后台跑、结束后汇报，然后结束本轮。" +
+          "【2. 会结束、但要跑很久的任务】确定要几分钟以上的完整测试（mvn test / gradle test / pytest 全量）、大型构建、批量数据处理，设 notify=true，" +
+          "然后在同一次回复里用 wait_process 等它跑完、拿到结果再继续——结果出来之前不要结束回复，也不要让用户等「结束后再汇报」。" +
+          "等待期间想先做别的不冲突的事也可以，做完再 wait_process。你在结果出来前就收尾时，系统也会自动替你等。" +
           "一两分钟内能跑完的普通构建、测试、安装仍然用 execute_command。\n\n" +
           "【返回】立即返回 terminalId。之后用 get_process_output 看日志/报错，用 stop_process 停止。\n" +
           "若已有相同命令+目录的进程在跑，会复用它并提示（不重复启动）。",
@@ -133,7 +134,7 @@ export function getToolDefinitions() {
           properties: {
             command: { type: "string", description: "要在后台启动的命令" },
             cwd: { type: "string", description: "工作目录（绝对路径），默认终端当前目录" },
-            notify: { type: "boolean", description: "进程结束时自动通知你（只用于会结束的长任务；开发服务器、watch 不要设）" },
+            notify: { type: "boolean", description: "这是会结束的长任务、本次回复要等它的结果（开发服务器、watch 不要设）" },
           },
           required: ["command"],
         },
@@ -153,6 +154,23 @@ export function getToolDefinitions() {
             lines: { type: "number", description: "仅返回最近 N 行输出（可选，用于控制篇幅）。省略则返回全部缓冲" },
           },
           required: ["terminalId"],
+        },
+      },
+    },
+    {
+      type: "function" as const,
+      function: {
+        name: "wait_process",
+        description:
+          "等后台任务（start_process 启动的）跑完，返回退出码和最后的输出。用于在同一次回复里拿到长测试 / 长构建的结果。\n" +
+          "不传 terminalId 就等所有设了 notify 的、还在跑的任务。用户中途发来消息时会提前返回，让你先看用户说了什么，之后可以再次等待。",
+        parameters: {
+          type: "object",
+          properties: {
+            terminalId: { type: "string", description: "要等的进程句柄 id；省略则等所有设了 notify 的任务" },
+            timeoutMinutes: { type: "number", description: "最多等多少分钟（默认 30，最大 120）。到时任务还没结束就先返回当前输出" },
+          },
+          required: [],
         },
       },
     },

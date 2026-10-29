@@ -192,6 +192,10 @@ export class ToolCallExecutor {
       const out = this.s.loadTools(toolArgs);
       result = out.result;
       status = out.status;
+    } else if (route === "wait_process") {
+      const out = await this.s.waitProcesses(toolArgs);
+      result = out.result;
+      status = out.status;
     } else if (route === "report_checks") {
       const out = this.s.reportChecks(toolArgs, meta);
       result = out.result;

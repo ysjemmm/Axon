@@ -835,7 +835,16 @@ function CardHeader({ status, Icon, label, right }: { status: ToolStatus; Icon: 
 }
 
 /** 后台进程工具的状态文案（折叠行左侧那句话）。各工具动词不同，所以按 verb 拼。 */
-function processStatusLabel(status: ToolStatus, kind: "start" | "output" | "stop"): string {
+function processStatusLabel(status: ToolStatus, kind: "start" | "output" | "stop" | "wait"): string {
+  if (kind === "wait") {
+    switch (status) {
+      case "queued": return "准备等待后台任务";
+      case "pending": return "正在等待后台任务结束";
+      case "success": return "后台任务已有结果";
+      case "error": return "等待失败";
+      case "cancelled": return "已取消等待";
+    }
+  }
   if (kind === "start") {
     switch (status) {
       case "queued": return "准备启动";
@@ -959,8 +968,8 @@ function ProcessStartCard({ tool, approval }: { tool: ToolCallData; approval: Re
   );
 }
 
-/** get_process_output：折叠行 + 缩进详情（详情就是读回来的那段输出）。 */
-function ProcessOutputCard({ tool }: { tool: ToolCallData }) {
+/** get_process_output / wait_process：折叠行 + 缩进详情（详情就是读回来的那段输出）。 */
+function ProcessOutputCard({ tool, kind = "output" }: { tool: ToolCallData; kind?: "output" | "wait" }) {
   const [expanded, setExpanded] = useState(false);
   const tid = typeof tool.args?.terminalId === "string" ? (tool.args.terminalId as string) : undefined;
   const hasOutput = !!tool.output;
@@ -974,7 +983,7 @@ function ProcessOutputCard({ tool }: { tool: ToolCallData }) {
         } ${hasOutput ? "cursor-pointer hover:text-muted-foreground" : ""}`}
       >
         <CardStatusIcon status={tool.status} Icon={ScrollText} />
-        <span className="shrink-0">{processStatusLabel(tool.status, "output")}</span>
+        <span className="shrink-0">{processStatusLabel(tool.status, kind)}</span>
         {tid && (
           <>
             <span className="shrink-0 opacity-40">·</span>
@@ -1151,6 +1160,7 @@ export function ToolCallItem({ tool, onAcceptEdit, onRejectEdit, onUndoEdit }: T
   // 后台进程工具卡片
   if (tool.name === "start_process") return <ProcessStartCard tool={tool} approval={approval} />;
   if (tool.name === "get_process_output") return <ProcessOutputCard tool={tool} />;
+  if (tool.name === "wait_process") return <ProcessOutputCard tool={tool} kind="wait" />;
   if (tool.name === "stop_process") return <ProcessStopCard tool={tool} />;
   // 浏览器工具卡片
   if (tool.name === "open_browser") return <BrowserOpenCard tool={tool} />;

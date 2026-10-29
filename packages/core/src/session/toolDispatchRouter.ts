@@ -21,6 +21,7 @@ export type ToolDispatchRoute =
   | "artifact_io"
   | "render_media"
   | "command"
+  | "wait_process"
   | "mcp"
   | "generic";
 
@@ -46,6 +47,7 @@ export function resolveToolDispatchRoute(toolName: string): ToolDispatchRoute {
   if (toolName === ToolName.CreateArtifact) return "create_artifact";
   if (toolName === ToolName.EditArtifact || toolName === ToolName.ReadArtifact || toolName === ToolName.ReadSkillFile) return "artifact_io";
   if (toolName === ToolName.RenderMedia) return "render_media";
+  if (toolName === ToolName.WaitProcess) return "wait_process";
   if (toolName === ToolName.ExecuteCommand || toolName === ToolName.StartProcess) return "command";
   if (toolName.startsWith(MCP_TOOL_PREFIX)) return "mcp";
   return "generic";

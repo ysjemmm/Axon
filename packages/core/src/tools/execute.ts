@@ -19,6 +19,7 @@
 import { describeShellEnvironment } from "../environment.js";
 import { resolve, relative, sep } from "node:path";
 import { isWithinWorkspaces } from "./safety.js";
+import { formatWaitResult, waitForProcesses, waitTimeoutMs } from "./processWait.js";
 import {
   resolveInWorkspaces,
   owningWorkspace,
@@ -458,7 +459,7 @@ export async function executeToolCall(
       if (result.timedOut || result.reason === "timeout") {
         const partial = (result.stdout || "").trim();
         const queryHint = result.terminalId
-          ? `· 可随时用 get_process_output(terminalId="${result.terminalId}") 查询它的进度与最终结果（命令结束会自动标记退出状态）。\n`
+          ? `· 需要它的结果就用 wait_process(terminalId="${result.terminalId}") 在本次回复里等它跑完；只想看进度用 get_process_output。\n`
           : "";
         return (
           `命令仍在运行中（等待 ${240} 秒超时未结束，进程未被终止）：${args.command}\n` +
@@ -543,6 +544,15 @@ export async function executeToolCall(
         return `进程 ${args.terminalId} 状态：${statusText}\n（进程仍在启动中，暂无输出。不要立即重试——等 5~10 秒后再读，或先做别的事。）`;
       }
       return `进程 ${args.terminalId} 状态：${statusText}\n----- 输出 -----\n${out.output || "(暂无输出)"}`;
+    }
+    case "wait_process": {
+      // 子 Agent 走这里（主会话由 AgentSession.waitProcesses 处理，支持等全部与插话唤醒）
+      if (typeof args.terminalId !== "string" || !args.terminalId.trim()) {
+        throw new Error("wait_process 失败：缺少参数 terminalId（start_process 返回的进程句柄）。");
+      }
+      if (!host.processes) throw new Error("wait_process 失败：当前形态不支持后台进程。");
+      const out = await waitForProcesses(host.processes, [args.terminalId], { timeoutMs: waitTimeoutMs(args.timeoutMinutes), signal });
+      return formatWaitResult(out);
     }
     case "stop_process": {
       if (typeof args.terminalId !== "string" || !args.terminalId.trim()) {
@@ -1046,7 +1056,7 @@ export async function executeToolCall(
  */
 const ALL_TOOL_NAMES = [
   "read_file", "create_file", "str_replace", "apply_patch",
-  "execute_command", "start_process", "get_process_output", "stop_process", "list_processes",
+  "execute_command", "start_process", "get_process_output", "wait_process", "stop_process", "list_processes",
   "open_browser", "get_browser_logs", "screenshot_page", "close_browser",
   "browser_click", "browser_type", "browser_press", "browser_select",
   "browser_scroll", "browser_reload", "browser_back", "browser_forward",

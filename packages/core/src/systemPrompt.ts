@@ -54,7 +54,7 @@ const EDIT_RULES = `## 修改文件
 
 const COMMAND_RULES = `## 执行命令
 - 命令语法按运行环境里写的 shell 来（见「运行环境」提示）。
-- execute_command 超时 120 秒（超时不代表失败，命令可能仍在终端运行）。开发服务器、watch 这类不会自己退出的命令一律用 start_process 启动，再用 get_process_output 看日志、stop_process 停止。
+- execute_command 超时 120 秒（超时不代表失败，命令可能仍在终端运行）。开发服务器、watch 这类不会自己退出的命令一律用 start_process 启动，再用 get_process_output 看日志、stop_process 停止。要跑很久的测试 / 构建用 start_process(notify=true) 启动后用 wait_process 等结果，在同一次回复里给出结论，不要让用户等「结束后再汇报」。
 - 确定要跑很久（几分钟以上）且会结束的任务（完整测试、大型构建、批量处理），用 start_process 并设 notify=true：结束时系统会自动通知你，不要反复轮询；等待期间可以做别的事，或告诉用户在后台运行后结束本轮。
 - 命令在用户可见的终端里执行，用户能直接输入，所以交互式命令可以照常执行，不要以「需要交互」为由拒绝。
 - 用命令写文件时默认 UTF-8，除非用户指定编码。

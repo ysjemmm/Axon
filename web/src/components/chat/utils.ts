@@ -17,7 +17,7 @@ export function segEditUnits(seg: { diff?: { path: string; editId?: string }; di
 
 /** 这些工具的结果文本要作为卡片下层"输出"展示（后台进程 / 浏览器类）。execute_command 单独处理。 */
 export const OUTPUT_TOOLS = new Set([
-  "start_process", "get_process_output", "get_browser_logs", "get_browser_network",
+  "start_process", "get_process_output", "wait_process", "get_browser_logs", "get_browser_network",
   "get_browser_storage", "browser_eval", "browser_get_html", "open_browser",
 ]);
 

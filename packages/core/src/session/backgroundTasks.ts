@@ -37,6 +37,8 @@ export interface BackgroundTaskNotice {
 
 interface TaskMeta {
   notify: boolean;
+  /** 进程还在跑（结束 / 停止事件到达后置 false） */
+  running: boolean;
   /** Agent 已经知道它结束了（读到过结束状态、或是它自己停的），不再通知 */
   acknowledged: boolean;
 }
@@ -46,6 +48,8 @@ const NOTICE_TAIL_LINES = 40;
 
 export class BackgroundTaskTracker {
   private readonly meta = new Map<string, TaskMeta>();
+  /** Agent 正在本轮里 wait_process 等的任务：结束时结果由等待方交给它，不再另发通知 */
+  private readonly waiting = new Set<string>();
   /** 需要通知 Agent 时调用（由 SessionHub 决定是立刻发起一轮还是等当前这轮结束） */
   onNotice?: (notice: BackgroundTaskNotice) => void;
   /** 任务列表有变化（启动 / 结束 / 停止），供界面刷新 */
@@ -70,7 +74,7 @@ export class BackgroundTaskTracker {
         if (existing) {
           if (opts.notify) existing.notify = true;
         } else {
-          this.meta.set(result.terminalId, { notify: !!opts.notify, acknowledged: false });
+          this.meta.set(result.terminalId, { notify: !!opts.notify, running: true, acknowledged: false });
         }
         this.onChange?.();
         return result;
@@ -109,6 +113,23 @@ export class BackgroundTaskTracker {
     return ok;
   }
 
+  /**
+   * 本轮该等的任务：要求过通知、还在跑、Agent 还不知道结果。
+   * Agent 想收尾时若还有这类任务，本轮不结束，先等它们跑完（见 AgentSession.waitProcesses）。
+   */
+  awaitedIds(): string[] {
+    return [...this.meta].filter(([, m]) => m.notify && m.running && !m.acknowledged).map(([id]) => id);
+  }
+
+  /** 标记 / 取消标记「本轮正在等」 */
+  beginWait(ids: string[]): void { for (const id of ids) this.waiting.add(id); }
+  endWait(ids: string[]): void { for (const id of ids) this.waiting.delete(id); }
+
+  /** 是否由本追踪器启动（wait_process 只等本会话的进程） */
+  has(terminalId: string): boolean {
+    return this.meta.has(terminalId);
+  }
+
   private acknowledge(terminalId: string): void {
     const meta = this.meta.get(terminalId);
     if (meta) meta.acknowledged = true;
@@ -117,6 +138,8 @@ export class BackgroundTaskTracker {
   private async handleExit(event: ProcessExitEvent): Promise<void> {
     this.onChange?.();
     const meta = this.meta.get(event.terminalId);
+    if (meta) meta.running = false;
+    if (meta && this.waiting.has(event.terminalId)) { meta.acknowledged = true; return; }
     if (!meta?.notify || meta.acknowledged || event.status !== "exited") return;
     meta.acknowledged = true;
     const [out, info] = await Promise.all([

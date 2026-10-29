@@ -670,7 +670,7 @@ export function setPruneKeepChars(chars: number): void {
  * - 其余默认：保留开头
  */
 function shouldKeepTail(toolName: string): boolean {
-  const tailTools = ["execute_command", "search", "search_workspace", "grep", "get_process_output", "get_browser_logs"];
+  const tailTools = ["execute_command", "search", "search_workspace", "grep", "get_process_output", "wait_process", "get_browser_logs"];
   return tailTools.includes(toolName);
 }
 

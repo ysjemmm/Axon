@@ -26,6 +26,7 @@ export enum ToolName {
   StartProcess = "start_process",
   GetProcessOutput = "get_process_output",
   StopProcess = "stop_process",
+  WaitProcess = "wait_process",
   ListProcesses = "list_processes",
   // 浏览器
   OpenBrowser = "open_browser",
@@ -195,6 +196,7 @@ export const NO_TRUNCATE_TOOLS: Set<string> = new Set([
 export const TERMINAL_OUTPUT_TOOLS: Set<string> = new Set([
   ToolName.ExecuteCommand,
   ToolName.GetProcessOutput,
+  ToolName.WaitProcess,
 ]);
 
 /**
@@ -284,6 +286,7 @@ export const TOOL_CATALOG: Record<ToolName, ToolSpec> = {
   [ToolName.StartProcess]: { status: S("正在启动后台进程...", "running"), requiresArgs: true },
   [ToolName.GetProcessOutput]: { status: S("正在读取进程输出...", "running"), requiresArgs: true, contentLimit: TERMINAL_OUTPUT_CAP },
   [ToolName.StopProcess]: { status: S("正在停止后台进程...", "running"), requiresArgs: true },
+  [ToolName.WaitProcess]: { status: S("正在等待后台任务结束...", "running"), contentLimit: TERMINAL_OUTPUT_CAP },
   [ToolName.ListProcesses]: { status: S("正在列出后台进程...", "running") },
   [ToolName.OpenBrowser]: { status: S("正在打开浏览器...", "running"), requiresArgs: true },
   [ToolName.GetBrowserLogs]: { status: S("正在读取控制台/报错...", "checking"), requiresArgs: true },

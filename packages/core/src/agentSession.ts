@@ -4,6 +4,7 @@
  * 复用 cli 的核心逻辑，但通过 WS 推送中间状态给前端。
  */
 
+import { formatWaitResult, waitForProcesses, waitTimeoutMs } from "./tools/processWait.js";
 import { ANY_PATH, normalizePermissionMode, skipsApproval, writesAnywhere, type PermissionMode } from "./session/permissionMode.js";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { isAbsolute, resolve } from "node:path";
@@ -1847,6 +1848,30 @@ export class AgentSession {
     this.persistMessages();
   }
 
+  /**
+   * wait_process：在本次回复里等后台任务跑完。不传 terminalId 就等所有设了 notify、还在跑的任务。
+   * 用户插话时提前返回（插话在下一次请求前并入对话），取消时立即返回。
+   */
+  /** @internal */ async waitProcesses(toolArgs: Record<string, unknown>): Promise<{ result: string; status: "success" | "error" }> {
+    const tracker = this.backgroundTasks;
+    if (!tracker) return { result: "当前环境不支持后台进程。", status: "error" };
+    const wanted = typeof toolArgs.terminalId === "string" && toolArgs.terminalId.trim() ? [toolArgs.terminalId.trim()] : tracker.awaitedIds();
+    if (wanted.length === 0) return { result: "没有在跑、需要等待的后台任务。", status: "success" };
+    const labels = new Map((await tracker.list()).map((t) => [t.terminalId, t.command]));
+    tracker.beginWait(wanted);
+    let out: Awaited<ReturnType<typeof waitForProcesses>>;
+    try {
+      out = await waitForProcesses(this.host.processes!, wanted, {
+        timeoutMs: waitTimeoutMs(toolArgs.timeoutMinutes),
+        signal: this.abortSignal,
+        interrupt: () => this.pendingSteers.length > 0,
+      });
+    } finally {
+      tracker.endWait(wanted);
+    }
+    return { result: formatWaitResult(out, labels), status: "success" };
+  }
+
   /** load_tools 工具实现：按组名加载不常用的工具组，下一次请求起生效 */
   /** @internal */ loadTools(toolArgs: Record<string, unknown>): { result: string; status: "success" | "error" } {
     const groups = this.toolDefBuilder.toolGroups();
@@ -3124,6 +3149,9 @@ export class AgentSession {
 
     // 追踪当前轮已流式输出的文字（用于取消时持久化已产出内容，不丢失）
     let streamedContentThisRound = "";
+    // 本轮已自动等待后台任务的次数（防止任务一直不结束时反复等）
+    let autoWaits = 0;
+    const MAX_AUTO_WAITS = 3;
 
     try {
     while (rounds < MAX_ROUNDS) {
@@ -3262,6 +3290,18 @@ export class AgentSession {
         if (this.cancelled) {
           this.stampCancelledTurnStats(turnStartTime, streamedContentThisRound);
           return;
+        }
+        // 模型想收尾，但它本轮启动的长任务（start_process notify=true）还没跑完：
+        // 本轮不结束，替它调一次 wait_process，结果出来交还给它接着做——结果在同一次回复里给到用户，
+        // 而不是先说「在后台跑，结束后汇报」再另起一轮。用户插话 / 取消会让等待提前返回。
+        if (this.backgroundTasks && this.backgroundTasks.awaitedIds().length > 0 && autoWaits < MAX_AUTO_WAITS && this.pendingSteers.length === 0) {
+          autoWaits++;
+          if (turnStreamStarted) this.send("stream_pause", {});
+          const waitCall: NormalizedToolCall = { id: `auto_wait_${Date.now()}`, name: "wait_process", arguments: "{}" };
+          this.messages.push(buildToolTurnAssistantMessage({ text: contentBuffer, toolCalls: [waitCall], reasoningContent: turn.reasoningContent, anthropicThinkingBlocks: turn.anthropicThinkingBlocks }));
+          this.summarizeToolGroups(strategy, this.toolGroupTracker.onRound(contentBuffer, [waitCall]));
+          await this.runToolDispatch([waitCall], guard, ts, mutatedFiles);
+          continue;
         }
         // 出现可见正文 = 前端的折叠组到此结束（空回复 / 弱内容不切断，与前端口径一致）
         this.summarizeToolGroups(strategy, this.toolGroupTracker.onRound(contentBuffer, []));

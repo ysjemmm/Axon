@@ -27,6 +27,7 @@ const TOOL_KIND_MAP: Record<ToolName, ToolKind> = {
   [ToolName.StartProcess]: "command",
   [ToolName.GetProcessOutput]: "command",
   [ToolName.StopProcess]: "command",
+  [ToolName.WaitProcess]: "command",
   [ToolName.ListProcesses]: "command",
   // 浏览器
   [ToolName.OpenBrowser]: "browser",
