@@ -10,7 +10,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { Loader2, Cloud, Plus, Trash2, Save, KeyRound, ChevronRight, ChevronDown, CornerDownLeft, Pencil, Ban, RotateCcw, Download, ArrowUpToLine, ArrowDownToLine, Eye } from "lucide-react";
+import { Loader2, Cloud, Plus, Trash2, Save, KeyRound, ChevronDown, CornerDownLeft, Pencil, Ban, RotateCcw, Download, MoreHorizontal, Check, ExternalLink, Brain, Zap, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { VisionFallbackSelector } from "@/components/ModelSelector";
@@ -26,14 +26,15 @@ import {
   setCustomProviderModels,
   probeProviderModels,
   openProviderConfigInEditor,
-  moveCustomProvider,
   getVisionFallbackModel,
   setVisionFallbackModel,
   type ProviderLevel,
   type ResolvedProviderInfo,
   type ProviderModelInfo,
   type ProbedModelInfo,
+  type ProviderProtocol,
 } from "@/lib/apiClient";
+import { PROVIDER_PRESETS, PRESET_REGIONS, builtinToModel, hostOf, presetForBaseUrl, presetModels, slugify, type PresetRegion, type ProviderPreset } from "@/lib/providerPresets";
 import { PricingPanel, QuotaConfigPanel, QuotaOverviewCard } from "@/components/QuotaPanels";
 import { BUILTIN_MODELS, protocolForVendor, type BuiltinModel, type BuiltinModelTag } from "@/lib/builtinModels";
 
@@ -83,8 +84,8 @@ export function ProviderStudio({ workspace }: ProviderStudioProps) {
   const level: ProviderLevel = "user";
   const [providers, setProviders] = useState<ResolvedProviderInfo[]>([]);
   const [visionFallbackModel, setVisionFallbackModelState] = useState<string | null>(null);
-  const [, setSavingVision] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
   /** Provider 配置（含用量规则 / 凭证）保存后递增，让用量总览重新取数 */
   const [quotaVersion, setQuotaVersion] = useState(0);
 
@@ -124,14 +125,12 @@ export function ProviderStudio({ workspace }: ProviderStudioProps) {
   useEffect(() => { load(); }, [load]);
 
   const saveVisionFallback = async (modelId: string | null) => {
-    setSavingVision(true);
     try {
       await setVisionFallbackModel(modelId, level, workspace || undefined);
       setVisionFallbackModelState(modelId);
     } catch (e) {
       console.warn("保存识图兜底模型失败", e);
     }
-    setSavingVision(false);
   };
 
   if (loading) {
@@ -146,195 +145,114 @@ export function ProviderStudio({ workspace }: ProviderStudioProps) {
   const wsArg = undefined;
 
   return (
-    <div className="flex flex-col h-full overflow-y-auto">
-      {/* 顶部标题区：标题与操作按钮同一行；层级/写入目标压成一行更小更淡的说明 */}
-      <div className="px-5 pt-4 pb-2.5 border-b border-border sticky top-0 bg-background z-10">
-        <div className="flex items-center gap-2">
-          <Cloud className="w-4 h-4 text-primary" />
-          <span className="text-sm font-medium text-foreground">Provider 配置</span>
+    <div className="flex h-full flex-col overflow-y-auto">
+      <div className="sticky top-0 z-10 border-b border-border bg-background/95 px-6 py-3 backdrop-blur">
+        <div className="mx-auto flex max-w-[860px] items-center gap-2">
+          <Cloud className="h-4 w-4 text-primary" />
+          <span className="text-sm font-medium text-foreground">模型 Provider</span>
+          <span className="hidden text-[11px] text-muted-foreground sm:inline">· 保存在 <code className="font-mono">~/.axon/settings/providers.json</code></span>
           {isInVSCode() && (
-            <Button size="sm" variant="outline" className="ml-auto" onClick={() => openProviderConfigInEditor(level, wsArg)}>
+            <Button size="sm" variant="ghost" className="ml-auto h-7 text-xs" onClick={() => openProviderConfigInEditor(level, wsArg)}>
               在编辑器中打开
             </Button>
           )}
         </div>
-        <div className="mt-1 text-[11px] text-muted-foreground">
-          用户级（全局） · 写入目标：<code className="font-mono">~/.axon/settings/providers.json</code>
-        </div>
       </div>
 
-      {/* 用量总览：所有启用了用量查询的 Provider */}
-      <div className="px-5 pt-4">
+      <div className="mx-auto w-full max-w-[860px] space-y-7 px-6 py-5">
         <QuotaOverviewCard workspace={wsArg} version={quotaVersion} />
-      </div>
 
-      {/* 识图兜底模型 */}
-      <div className="px-5 pt-4">
-        <div className="px-3 py-2.5 rounded-lg border border-border bg-muted/20">
-          <div className="flex items-center gap-2 mb-1">
-            <Eye className="w-4 h-4 text-primary" />
-            <span className="text-sm font-medium">识图兜底模型</span>
-          </div>
-          <p className="text-[11px] text-muted-foreground mb-2">
-            主模型不支持图片时，用该模型把图片转成文字描述再喂给主模型。留空 = 不启用识图兜底。
-          </p>
-          <VisionFallbackSelector value={visionFallbackModel} onChange={saveVisionFallback} />
-        </div>
-      </div>
-
-      {/* 内置 provider */}
-      <div className="px-5 pt-4">
-        <div className="text-xs font-medium text-muted-foreground mb-2">内置 Provider</div>
-        <div className="space-y-3">
-          {builtins.map((p) => (
-            <BuiltinCard key={p.name} provider={p} level={level} workspace={wsArg} onChanged={refreshAndNotify} />
-          ))}
-        </div>
-      </div>
-
-      {/* 自定义 provider */}
-      <div className="px-5 pt-4 pb-6">
-        <div className="text-xs font-medium text-muted-foreground mb-2">自定义 Provider</div>
-        <div className="space-y-3 mb-3">
-          {customs.length === 0 && (
-            <div className="text-sm text-muted-foreground py-3 text-center border border-dashed border-border rounded-lg">
-              暂无自定义 Provider，下方添加一个 OpenAI 兼容端点。
-            </div>
+        <section>
+          <SectionTitle title="我的 Provider" hint={customs.length ? `${customs.length} 个` : undefined}
+            action={!adding && <Button size="sm" className="h-7 text-xs" onClick={() => setAdding(true)}><Plus className="h-3.5 w-3.5" />添加 Provider</Button>} />
+          {adding && (
+            <AddProviderPanel
+              level={level}
+              workspace={wsArg}
+              takenNames={providers.map((p) => p.name)}
+              onDone={() => { setAdding(false); void refreshAndNotify(); }}
+              onCancel={() => setAdding(false)}
+            />
           )}
-          {customs.map((p) => (
-            <CustomCard key={p.name} provider={p} level={level} workspace={wsArg} onChanged={refreshAndNotify} />
-          ))}
-        </div>
-        <AddCustomForm level={level} workspace={wsArg} onChanged={refreshAndNotify} />
+          <div className="space-y-2.5">
+            {customs.length === 0 && !adding && (
+              <button onClick={() => setAdding(true)} className="w-full rounded-xl border border-dashed border-border px-4 py-6 text-center text-[13px] text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground">
+                还没有自己的 Provider。点这里从 DeepSeek、Kimi、通义千问、OpenAI 等厂商里选一个，或者接入中转站。
+              </button>
+            )}
+            {customs.map((p) => (
+              <ProviderCard key={p.name} provider={p} level={level} workspace={wsArg} onChanged={refreshAndNotify} />
+            ))}
+          </div>
+        </section>
+
+        {builtins.length > 0 && (
+          <section>
+            <SectionTitle title="内置 Provider" />
+            <div className="space-y-2.5">
+              {builtins.map((p) => (
+                <ProviderCard key={p.name} provider={p} level={level} workspace={wsArg} onChanged={refreshAndNotify} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        <section>
+          <SectionTitle title="识图兜底模型" />
+          <div className="rounded-xl border border-border px-4 py-3">
+            <p className="mb-2 text-[12px] text-muted-foreground">当前模型不支持图片时，先用这个模型把图片转成文字再交给它。留空表示不启用。</p>
+            <VisionFallbackSelector value={visionFallbackModel} onChange={saveVisionFallback} />
+          </div>
+        </section>
       </div>
     </div>
   );
 }
 
-/** 内置 provider 卡片：API Key + Base URL 可编辑，模型列表只读 */
-function BuiltinCard({ provider, level, workspace, onChanged }: { provider: ResolvedProviderInfo; level: ProviderLevel; workspace?: string; onChanged: () => void }) {
-  const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState(provider.baseUrl || "");
-  const [savingKey, setSavingKey] = useState(false);
-  const [savingUrl, setSavingUrl] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const [errorMessage, setErrorMessage] = useState("");
-
-  const saveKey = async () => {
-    setSavingKey(true);
-    setErrorMessage("");
-    try {
-      await setBuiltinProviderKey(level, provider.name, apiKey, workspace);
-      setApiKey("");
-      onChanged();
-    } catch (e) {
-      setErrorMessage(`保存失败: ${(e as Error).message}`);
-    }
-    setSavingKey(false);
-  };
-
-  const saveBaseUrl = async () => {
-    setSavingUrl(true);
-    setErrorMessage("");
-    try {
-      await setBuiltinProviderBaseUrl(level, provider.name, baseUrl.trim(), workspace);
-      onChanged();
-    } catch (e) {
-      setErrorMessage(`保存失败: ${(e as Error).message}`);
-    }
-    setSavingUrl(false);
-  };
-
+function SectionTitle({ title, hint, action }: { title: string; hint?: string; action?: ReactNode }) {
   return (
-    <div className={`rounded-lg border bg-muted/20 transition-colors ${expanded ? "border-primary/50" : "border-border"}`}>
-      {/* 标题行（与自定义卡片同构）：chevron + 图标 + 名称/徽标一行，端点等次要信息一行 */}
-      <div className="group flex items-center gap-2 px-3 py-2">
-        <button
-          onClick={() => setExpanded((v) => !v)}
-          title={expanded ? "收起模型列表" : "展开模型列表"}
-          className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-        >
-          <ChevronRight className={`w-3.5 h-3.5 transition-transform ${expanded ? "rotate-90" : ""}`} />
-        </button>
-        <Cloud className={`w-4 h-4 shrink-0 ${provider.configured ? "text-primary" : "text-muted-foreground"}`} />
-        <div className="min-w-0 flex-1 cursor-pointer" onClick={() => setExpanded((v) => !v)}>
-          <div className="flex items-center gap-1.5">
-            <span className="text-sm font-medium truncate">{provider.label}</span>
-            <Tag variant={provider.configured ? "primary" : "muted"}>{provider.configured ? "已配置" : "未配置"}</Tag>
-            {provider.locked && <Tag variant="outline" title="该 provider 仅允许修改 API Key">仅可改 Key</Tag>}
-          </div>
-          <div className="text-xs text-muted-foreground truncate">
-            {provider.baseUrl || "默认 Base URL"} · {provider.models.length} 模型
-          </div>
-        </div>
-      </div>
-      <div className="px-3 pb-3 pt-0.5 space-y-2">
-        {/* 「保存 / 更新」为一组尺寸一致的主/次按钮，与输入框同高，避免失衡感 */}
-        <div className="flex items-center gap-2">
-          <Input
-            type="password"
-            placeholder={provider.configured ? "已配置（留空保留，输入则覆盖）" : "输入 API Key"}
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            className="h-8 text-sm flex-1"
-          />
-          <Button size="sm" className="h-8" onClick={saveKey} disabled={savingKey || !apiKey.trim()}>
-            {savingKey ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <KeyRound className="w-3.5 h-3.5" />}保存
-          </Button>
-        </div>
-        <div className="flex items-center gap-2">
-          <Input
-            placeholder="Base URL（留空使用默认）"
-            value={baseUrl}
-            onChange={(e) => setBaseUrl(e.target.value)}
-            className="h-8 text-sm flex-1"
-          />
-          <Button size="sm" variant="outline" className="h-8" onClick={saveBaseUrl} disabled={savingUrl || !baseUrl.trim()}>
-            {savingUrl ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}更新
-          </Button>
-        </div>
-        {errorMessage && <div className="text-xs text-destructive">{errorMessage}</div>}
-      </div>
-      {expanded && (
-        <div className="px-3 pb-3 pt-2 border-t border-border/60">
-          <ModelManager
-            models={provider.models}
-            editable={true}
-            providerName={provider.name}
-            level={level}
-            workspace={workspace}
-            onSave={async (models) => {
-              try {
-                await setBuiltinProviderModels(level, provider.name, models, workspace);
-                onChanged();
-              } catch (e) {
-                setErrorMessage(`保存模型失败: ${(e as Error).message}`);
-              }
-            }}
-          />
-          <QuotaConfigPanel provider={provider} level={level} workspace={workspace} onChanged={onChanged} />
-        </div>
-      )}
+    <div className="mb-2.5 flex items-center gap-2">
+      <h2 className="text-[13px] font-medium text-foreground">{title}</h2>
+      {hint && <span className="text-[11px] text-muted-foreground">{hint}</span>}
+      {action && <div className="ml-auto">{action}</div>}
     </div>
   );
 }
 
-/** 自定义 provider 卡片：展示 + 删除 + 模型增删改禁用 */
-function CustomCard({ provider, level, workspace, onChanged }: { provider: ResolvedProviderInfo; level: ProviderLevel; workspace?: string; onChanged: () => void }) {
+/** Provider 徽章：认得出厂商就用品牌色缩写，否则取名字首字 */
+function ProviderBadge({ baseUrl, label, size = "md" }: { baseUrl: string; label: string; size?: "sm" | "md" }) {
+  const preset = presetForBaseUrl(baseUrl);
+  const badge = preset?.badge ?? { text: (label.trim()[0] || "?").toUpperCase(), className: "bg-muted text-foreground" };
+  const box = size === "sm" ? "size-7 text-[10px]" : "size-9 text-[12px]";
+  return <span className={`inline-flex ${box} shrink-0 items-center justify-center rounded-lg font-semibold ${badge.className}`}>{badge.text}</span>;
+}
+
+type CardTab = "models" | "connection" | "quota" | "pricing";
+
+/** 一个 Provider：标题行（徽章 / 名称 / 主机 / 状态）+ 展开后分标签页：模型、连接、用量、计费 */
+function ProviderCard({ provider, level, workspace, onChanged }: { provider: ResolvedProviderInfo; level: ProviderLevel; workspace?: string; onChanged: () => void }) {
   const [expanded, setExpanded] = useState(false);
+  const [tab, setTab] = useState<CardTab>("models");
+  const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [moving, setMoving] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [editLabel, setEditLabel] = useState(provider.label || "");
-  const [editBaseUrl, setEditBaseUrl] = useState(provider.baseUrl || "");
-  const [editApiKey, setEditApiKey] = useState("");
-  const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
-
-  // 环境变量来源：它不在 providers.json 里，编辑/降级/模型管理都会写错地方或直接报错，
-  // 只有"从 ~/.axon/.env 移除"这条路径对它有效。
+  const isBuiltin = provider.builtin;
+  // 环境变量来源：不在 providers.json 里，编辑 / 模型 / 用量都会写错地方，只能从 .env 移除
   const isEnvSource = provider.source === "env";
+  const enabledModels = provider.models.filter((m) => !m.disabled).length;
+  const quotaOn = !!provider.quota && provider.quota.enabled !== false;
+
+  const saveModels = async (models: ProviderModelInfo[]) => {
+    setErrorMessage("");
+    try {
+      if (isBuiltin) await setBuiltinProviderModels(level, provider.name, models, workspace);
+      else await setCustomProviderModels(level, provider.name, models, workspace);
+      onChanged();
+    } catch (e) {
+      setErrorMessage(`保存模型失败: ${(e as Error).message}`);
+    }
+  };
 
   const remove = async () => {
     setDeleting(true);
@@ -343,189 +261,208 @@ function CustomCard({ provider, level, workspace, onChanged }: { provider: Resol
       if (isEnvSource) {
         const res = await removeEnvProvider(provider.name, workspace);
         // 若它同时由 VS Code 设置提供，改 .env 是删不掉的——如实说明该去哪删
-        if (res.fromSettings) {
-          setErrorMessage("已从 ~/.axon/.env 移除；但它仍由 VS Code 设置（axon.providers / axon.env）提供，请到设置里删除后重载窗口。");
-        }
+        if (res.fromSettings) setErrorMessage("已从 ~/.axon/.env 移除；但它仍由 VS Code 设置（axon.providers / axon.env）提供，请到设置里删除后重载窗口。");
       } else {
         await removeCustomProvider(level, provider.name, workspace);
       }
-      setConfirmDelete(false);
       onChanged();
     } catch (e) {
       setErrorMessage(`删除失败: ${(e as Error).message}`);
-      setConfirmDelete(false);
     }
     setDeleting(false);
+    setConfirmDelete(false);
   };
 
-  const handleDeleteClick = () => {
-    if (!confirmDelete) {
-      setConfirmDelete(true);
-      setTimeout(() => setConfirmDelete(false), 4000); // 4 秒后自动取消
-      return;
-    }
-    remove();
-  };
-
-  const startEditing = () => {
-    setEditLabel(provider.label || "");
-    setEditBaseUrl(provider.baseUrl || "");
-    setEditApiKey("");
-    setEditing(true);
-    setErrorMessage("");
-  };
-
-  const cancelEditing = () => {
-    setEditing(false);
-    setErrorMessage("");
-  };
-
-  const saveEdit = async () => {
-    if (!editBaseUrl.trim()) {
-      setErrorMessage("Base URL 必填");
-      return;
-    }
-    setSaving(true);
-    setErrorMessage("");
-    try {
-      // addCustomProvider 是 upsert：同名 key 直接覆盖整个 entry
-      await addCustomProvider(level, provider.name, {
-        label: editLabel.trim() || provider.name,
-        baseUrl: editBaseUrl.trim(),
-        // API Key 为空时不传（保留原值由后端 merge 处理）
-        ...(editApiKey.trim() ? { apiKey: editApiKey.trim() } : {}),
-        models: provider.models,
-      }, workspace);
-      setEditing(false);
-      onChanged();
-    } catch (e) {
-      setErrorMessage(`保存失败: ${(e as Error).message}`);
-    }
-    setSaving(false);
-  };
-
-  const saveModels = async (models: ProviderModelInfo[]) => {
-    setErrorMessage("");
-    try {
-      await setCustomProviderModels(level, provider.name, models, workspace);
-      onChanged();
-    } catch (e) {
-      setErrorMessage(`保存模型失败: ${(e as Error).message}`);
-    }
-  };
-
-  const targetLevel: ProviderLevel = level === "workspace" ? "user" : "workspace";
-  const canMove = level === "user" ? !!workspace : true;
-  const moveLabel = level === "workspace" ? "提升为用户级" : "降级为工作区级";
-
-  const move = async () => {
-    if (!canMove) return;
-    setMoving(true);
-    setErrorMessage("");
-    try {
-      await moveCustomProvider(level, targetLevel, provider.name, workspace);
-      onChanged();
-    } catch (e) {
-      setErrorMessage(`迁移失败: ${(e as Error).message}`);
-    }
-    setMoving(false);
-  };
+  const tabs: { id: CardTab; label: string }[] = [
+    { id: "models", label: `模型 ${provider.models.length}` },
+    { id: "connection", label: "连接" },
+    ...(!isEnvSource ? [{ id: "quota" as const, label: quotaOn ? "用量 · 已启用" : "用量" }] : []),
+    ...(!isBuiltin && !isEnvSource ? [{ id: "pricing" as const, label: provider.pricing ? "计费 · 已配置" : "计费" }] : []),
+  ];
 
   return (
-    /* 展开中的 provider 给一个【常驻】的淡蓝边框：它是"我正在看哪个 provider"的持续标记，
-       不能靠 :focus 那种"点别处就消失"的短暂命中。收起时回中性边框，transition-colors 负责过渡。 */
-    <div className={`rounded-lg border bg-muted/20 transition-colors ${expanded ? "border-primary/50" : "border-border"}`}>
-      <div className="group flex items-center gap-2 px-3 py-2">
-        <button onClick={() => { setExpanded((v) => !v); setConfirmDelete(false); }} className="shrink-0 text-muted-foreground hover:text-foreground">
-          <ChevronRight className={`w-3.5 h-3.5 transition-transform ${expanded ? "rotate-90" : ""}`} />
+    <div className={`overflow-hidden rounded-xl border bg-background transition-colors ${expanded ? "border-primary/40 shadow-sm" : "border-border hover:border-foreground/20"}`}>
+      <div className="flex items-center gap-3 px-4 py-3">
+        <button className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => setExpanded((v) => !v)}>
+          <ProviderBadge baseUrl={provider.baseUrl} label={provider.label || provider.name} />
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-2">
+              <span className="truncate text-[14px] font-medium text-foreground">{provider.label || provider.name}</span>
+              <span className={`inline-flex shrink-0 items-center gap-1 text-[11px] ${provider.configured ? "text-emerald-600 dark:text-emerald-500" : "text-muted-foreground"}`}>
+                <span className={`size-1.5 rounded-full ${provider.configured ? "bg-emerald-500" : "bg-muted-foreground/40"}`} />
+                {provider.configured ? "已配置" : "未配置 Key"}
+              </span>
+              {isEnvSource && <Tag variant="outline" title="来自环境变量（~/.axon/.env），不在 providers.json 中">环境变量</Tag>}
+              {provider.locked && <Tag variant="outline" title="该 provider 仅允许修改 API Key">仅可改 Key</Tag>}
+            </span>
+            <span className="mt-0.5 block truncate text-[12px] text-muted-foreground">
+              {provider.baseUrl ? hostOf(provider.baseUrl) : "默认地址"} · {enabledModels === provider.models.length ? `${provider.models.length} 个模型` : `${enabledModels}/${provider.models.length} 个模型启用`}
+            </span>
+          </span>
+          <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
         </button>
-        <Cloud className={`w-4 h-4 shrink-0 ${provider.configured ? "text-primary" : "text-muted-foreground"}`} />
-        <div className="min-w-0 flex-1 cursor-pointer" onClick={() => { setExpanded((v) => !v); setConfirmDelete(false); }}>
-          <div className="flex items-center gap-1.5">
-            <span className="text-sm font-medium truncate">{provider.label || provider.name}</span>
-            {!provider.configured && <Tag>未配置</Tag>}
-            {isEnvSource && (
-              <Tag variant="outline" title="来自环境变量（~/.axon/.env），不在 providers.json 中">环境变量</Tag>
+        {!isBuiltin && (
+          <div className="relative">
+            <button onClick={() => { setMenuOpen((v) => !v); setConfirmDelete(false); }} className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="更多操作">
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
+            {menuOpen && (
+              <div className="absolute right-0 top-full z-20 mt-1 w-40 overflow-hidden rounded-lg border border-border bg-background py-1 shadow-lg" onMouseLeave={() => { setMenuOpen(false); setConfirmDelete(false); }}>
+                {!isEnvSource && (
+                  <button onClick={() => { setMenuOpen(false); setExpanded(true); setTab("connection"); }} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] hover:bg-muted/60">
+                    <Pencil className="h-3.5 w-3.5" />编辑连接
+                  </button>
+                )}
+                <button onClick={() => (confirmDelete ? void remove() : setConfirmDelete(true))} disabled={deleting}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-destructive hover:bg-destructive/10">
+                  {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                  {confirmDelete ? "再点一次确认删除" : isEnvSource ? "从环境变量移除" : "删除"}
+                </button>
+              </div>
             )}
           </div>
-          <div className="text-xs text-muted-foreground truncate">{provider.baseUrl} · {provider.models.length} 模型</div>
-        </div>
-        {/* env 来源没有 providers.json 条目，编辑会凭空造一条新记录，故不提供 */}
-        {!isEnvSource && (
-          <button
-            onClick={() => { setExpanded(true); startEditing(); }}
-            className="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
-            title="编辑 provider"
-          >
-            <Pencil className="w-3.5 h-3.5" />
-          </button>
         )}
-        <button
-          onClick={handleDeleteClick}
-          className={`shrink-0 p-1 rounded transition-all flex items-center whitespace-nowrap ${confirmDelete ? "bg-destructive/10 text-destructive opacity-100 px-1.5" : "opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive hover:bg-muted"}`}
-          title={confirmDelete ? "再次点击确认删除" : "删除 provider"}
-          disabled={deleting}
-        >
-          {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5 shrink-0" />}
-          {confirmDelete && <span className="ml-1 text-[11px] font-medium">确认删除</span>}
-        </button>
       </div>
+
+      {errorMessage && <div className="px-4 pb-2 text-[12px] text-destructive">{errorMessage}</div>}
+
       {expanded && (
-        <div className="px-3 pb-3 pt-2 border-t border-border/60">
-          {editing ? (
-            <div className="space-y-2 mb-3">
-              <div className="text-xs font-medium text-muted-foreground mb-1">编辑 Provider 信息</div>
-              <Input placeholder="展示名" value={editLabel} onChange={(e) => setEditLabel(e.target.value)} className="h-8 text-sm" />
-              <Input placeholder="Base URL" value={editBaseUrl} onChange={(e) => setEditBaseUrl(e.target.value)} className="h-8 text-sm" />
-              <Input type="password" placeholder="API Key（留空保持不变）" value={editApiKey} onChange={(e) => setEditApiKey(e.target.value)} className="h-8 text-sm" />
-              {errorMessage && <div className="text-xs text-destructive">{errorMessage}</div>}
-              <div className="flex gap-2">
-                <Button size="sm" className="h-8" onClick={saveEdit} disabled={saving || !editBaseUrl.trim()}>
-                  {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Save className="w-3.5 h-3.5 mr-1" />}保存
-                </Button>
-                <Button size="sm" variant="outline" className="h-8" onClick={cancelEditing}>取消</Button>
-              </div>
-            </div>
-          ) : (
-            isEnvSource ? (
-              <div className="text-[11px] text-muted-foreground mb-3">
-                来源：环境变量（<code className="px-1 rounded bg-muted">~/.axon/.env</code>）。它不在 providers.json 中，
-                因此不能在此编辑或降级；用右上角删除按钮可从环境变量里移除。
-              </div>
-            ) : (
-              <div className="flex items-center justify-between gap-2 mb-3">
-                <div className="text-[11px] text-muted-foreground">
-                  当前层级：{level === "user" ? "用户级（全局）" : "工作区级"}
-                </div>
-                <div className="flex gap-1">
-                  <Button size="sm" variant="outline" onClick={startEditing}>
-                    <Pencil className="w-3.5 h-3.5 mr-1" />编辑
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={move} disabled={moving || !canMove}>
-                    {moving ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : level === "workspace" ? <ArrowUpToLine className="w-3.5 h-3.5 mr-1" /> : <ArrowDownToLine className="w-3.5 h-3.5 mr-1" />}
-                    {moveLabel}
-                  </Button>
-                </div>
-              </div>
-            )
-          )}
-          {!editing && errorMessage && <div className="mb-3 text-xs text-destructive">{errorMessage}</div>}
-          {/* env 来源没有 providers.json 条目，模型/额度写入会直接报"provider 不存在"，故不展示 */}
-          {!isEnvSource && (
-            <>
-              <ModelManager models={provider.models} editable onSave={saveModels} providerName={provider.name} level={level} workspace={workspace} />
-              <QuotaConfigPanel provider={provider} level={level} workspace={workspace} onChanged={onChanged} />
-              <PricingPanel provider={provider} level={level} workspace={workspace} onChanged={onChanged} />
-            </>
-          )}
+        <div className="border-t border-border/70">
+          <div className="flex gap-1 border-b border-border/70 px-3">
+            {tabs.map((t) => (
+              <button key={t.id} onClick={() => setTab(t.id)}
+                className={`relative px-2.5 py-2 text-[12px] transition-colors ${tab === t.id ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+                {t.label}
+                {tab === t.id && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-primary" />}
+              </button>
+            ))}
+          </div>
+          <div className="px-4 py-3">
+            {tab === "models" && (
+              isEnvSource
+                ? <p className="text-[12px] text-muted-foreground">来自环境变量（<code className="rounded bg-muted px-1">~/.axon/.env</code>）的 Provider 没有模型配置可编辑。</p>
+                : <ModelManager models={provider.models} editable onSave={saveModels} providerName={provider.name} level={level} workspace={workspace} />
+            )}
+            {tab === "connection" && (isBuiltin
+              ? <BuiltinConnection provider={provider} level={level} workspace={workspace} onChanged={onChanged} />
+              : <CustomConnection provider={provider} level={level} workspace={workspace} onChanged={onChanged} />)}
+            {tab === "quota" && <QuotaConfigPanel embedded provider={provider} level={level} workspace={workspace} onChanged={onChanged} />}
+            {tab === "pricing" && <PricingPanel embedded provider={provider} level={level} workspace={workspace} onChanged={onChanged} />}
+          </div>
         </div>
       )}
     </div>
   );
 }
 
+/** 表单里的一行：左标签右输入 */
+function FieldRow({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-1 gap-1 sm:grid-cols-[96px_1fr] sm:items-center sm:gap-3">
+      <span className="text-[12px] text-muted-foreground">{label}</span>
+      <div className="min-w-0">
+        {children}
+        {hint && <div className="mt-1 text-[11px] text-muted-foreground">{hint}</div>}
+      </div>
+    </div>
+  );
+}
+
+/** 内置 Provider 的连接：API Key + Base URL 各自保存 */
+function BuiltinConnection({ provider, level, workspace, onChanged }: { provider: ResolvedProviderInfo; level: ProviderLevel; workspace?: string; onChanged: () => void }) {
+  const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState(provider.baseUrl || "");
+  const [busy, setBusy] = useState<"" | "key" | "url">("");
+  const [message, setMessage] = useState("");
+
+  const run = async (kind: "key" | "url", fn: () => Promise<unknown>, done: string) => {
+    setBusy(kind); setMessage("");
+    try { await fn(); setMessage(done); onChanged(); } catch (e) { setMessage(`保存失败: ${(e as Error).message}`); }
+    setBusy("");
+  };
+
+  return (
+    <div className="space-y-3">
+      <FieldRow label="API Key">
+        <div className="flex gap-2">
+          <Input type="password" placeholder={provider.configured ? "已保存（留空保留，输入则覆盖）" : "输入 API Key"} value={apiKey} onChange={(e) => setApiKey(e.target.value)} className="h-8 flex-1 text-sm" />
+          <Button size="sm" className="h-8" disabled={!!busy || !apiKey.trim()} onClick={() => run("key", async () => { await setBuiltinProviderKey(level, provider.name, apiKey, workspace); setApiKey(""); }, "API Key 已保存")}>
+            {busy === "key" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <KeyRound className="h-3.5 w-3.5" />}保存
+          </Button>
+        </div>
+      </FieldRow>
+      {!provider.locked && (
+        <FieldRow label="Base URL">
+          <div className="flex gap-2">
+            <Input placeholder="留空使用默认地址" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} className="h-8 flex-1 text-sm" />
+            <Button size="sm" variant="outline" className="h-8" disabled={!!busy || !baseUrl.trim()} onClick={() => run("url", () => setBuiltinProviderBaseUrl(level, provider.name, baseUrl.trim(), workspace), "Base URL 已更新")}>
+              {busy === "url" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}更新
+            </Button>
+          </div>
+        </FieldRow>
+      )}
+      {message && <p className={`text-[12px] ${message.startsWith("保存失败") ? "text-destructive" : "text-muted-foreground"}`}>{message}</p>}
+    </div>
+  );
+}
+
+/** 自定义 Provider 的连接：名称 / 地址 / Key，一起保存 */
+function CustomConnection({ provider, level, workspace, onChanged }: { provider: ResolvedProviderInfo; level: ProviderLevel; workspace?: string; onChanged: () => void }) {
+  const [label, setLabel] = useState(provider.label || "");
+  const [baseUrl, setBaseUrl] = useState(provider.baseUrl || "");
+  const [apiKey, setApiKey] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const isEnvSource = provider.source === "env";
+  const dirty = label !== (provider.label || "") || baseUrl !== (provider.baseUrl || "") || !!apiKey.trim();
+
+  if (isEnvSource) {
+    return (
+      <div className="space-y-2 text-[12px] text-muted-foreground">
+        <FieldRow label="Base URL"><code className="break-all font-mono text-foreground">{provider.baseUrl}</code></FieldRow>
+        <p>这个 Provider 来自环境变量（<code className="rounded bg-muted px-1">~/.axon/.env</code>），不在 providers.json 里，不能在这里编辑。需要的话可以从右上角菜单移除，再用「添加 Provider」重新添加。</p>
+      </div>
+    );
+  }
+
+  const save = async () => {
+    if (!baseUrl.trim()) { setMessage("Base URL 必填"); return; }
+    setSaving(true); setMessage("");
+    try {
+      // addCustomProvider 是 upsert：同名 key 直接覆盖整个 entry；Key 为空时不传（后端保留原值）
+      await addCustomProvider(level, provider.name, {
+        label: label.trim() || provider.name,
+        baseUrl: baseUrl.trim(),
+        ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+        models: provider.models,
+      }, workspace);
+      setApiKey("");
+      setMessage("已保存");
+      onChanged();
+    } catch (e) {
+      setMessage(`保存失败: ${(e as Error).message}`);
+    }
+    setSaving(false);
+  };
+
+  return (
+    <div className="space-y-3">
+      <FieldRow label="名称"><Input value={label} onChange={(e) => setLabel(e.target.value)} className="h-8 text-sm" /></FieldRow>
+      <FieldRow label="Base URL"><Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} className="h-8 font-mono text-[12px]" /></FieldRow>
+      <FieldRow label="API Key"><Input type="password" placeholder={provider.configured ? "已保存（留空保持不变）" : "输入 API Key"} value={apiKey} onChange={(e) => setApiKey(e.target.value)} className="h-8 text-sm" /></FieldRow>
+      <FieldRow label="标识" hint="配置文件里的 key，创建后不能修改"><code className="font-mono text-[12px] text-foreground">{provider.name}</code></FieldRow>
+      <div className="flex items-center justify-end gap-2">
+        {message && <span className={`mr-auto text-[12px] ${message === "已保存" ? "text-muted-foreground" : "text-destructive"}`}>{message}</span>}
+        <Button size="sm" className="h-8" onClick={save} disabled={saving || !dirty}>
+          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}保存
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /**
- * 模型列表管理器：内置 provider 只读展示；自定义 provider 可增/删/改/禁用，并支持从端点批量导入。
+ * 模型列表：表格式排版（模型 / 能力 / 上下文），操作悬浮出现。
  * 任何变更都在数组上算好后整存（onSave），由后端覆盖该 provider 的 models 字段。
  */
 function ModelManager({ models, editable, onSave, providerName, level, workspace }: {
@@ -539,7 +476,7 @@ function ModelManager({ models, editable, onSave, providerName, level, workspace
   const [editing, setEditing] = useState<number | "new" | null>(null);
   const [importing, setImporting] = useState(false);
   const [probed, setProbed] = useState<ProbedModelInfo[] | null>(null);
-
+  const [importError, setImportError] = useState("");
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
 
   const commit = (next: ProviderModelInfo[]) => { onSave?.(next); setEditing(null); setConfirmDeleteIdx(null); };
@@ -555,18 +492,18 @@ function ModelManager({ models, editable, onSave, providerName, level, workspace
   const runImport = async () => {
     if (!providerName) return;
     setImporting(true);
+    setImportError("");
     try {
       const { models: list } = await probeProviderModels({ name: providerName, level, workspace });
       setProbed(list);
     } catch (e) {
-      alert(`拉取失败: ${(e as Error).message}`);
+      setImportError(`拉取失败：${(e as Error).message}`);
     }
     setImporting(false);
   };
 
   const applyImport = (picks: ProbedModelInfo[]) => {
     // 同一 provider 内 model id 唯一：既要跳过已有模型，也要挡住端点自己返回的重复 id
-    // （后端写入时同样会校验，先在这里收敛，避免整批导入被拒）。
     const taken = new Set(models.map((m) => m.id));
     const added: ProviderModelInfo[] = [];
     for (const p of picks) {
@@ -575,12 +512,8 @@ function ModelManager({ models, editable, onSave, providerName, level, workspace
       added.push({
         id: p.id,
         name: p.name || p.id,
-        // 端点没返回窗口时的兜底：取 1M。
-        // 依据：当前主流型号普遍 ≥1M（GPT-6 1.05M / Claude 1M / Gemini 1.048M / DeepSeek 1M /
-        // Qwen 3.7-3.8 1M / MiMo 1M），1M 是"更常见的那一边"。
-        // 代价要清楚：真 128K 的模型会因此迟迟不触发压缩而撞端点超限——但那条路是显性失败，
-        // 且有 force_compact_session + "上下文超出窗口限制"卡片兜底；
-        // 反过来把兜底设小，会在真 1M 模型上静默提前压缩、砍掉用户历史，用户根本不会察觉。
+        // 端点没返回窗口时兜底 1M：当前主流型号普遍 ≥1M；真 128K 的模型撞上限是显性失败，有强制压缩兜底，
+        // 反过来把兜底设小会在真 1M 模型上静默提前压缩、砍掉历史。
         contextWindow: p.contextWindow ?? 1_000_000,
         vision: p.vision ?? false,
         protocol: p.protocol,
@@ -592,41 +525,92 @@ function ModelManager({ models, editable, onSave, providerName, level, workspace
   };
 
   return (
-    <div className="space-y-1">
-      {models.length === 0 && editing !== "new" && (
-        <div className="text-xs text-muted-foreground py-2 text-center">暂无模型</div>
-      )}
-      {models.map((m, i) =>
-        editing === i ? (
-          <ModelForm key={i} initial={m} existingIds={models.filter((_, idx) => idx !== i).map((mm) => mm.id)} onSave={(mm) => saveOne(mm, i)} onCancel={() => setEditing(null)} />
-        ) : (
-          <ModelRow
-            key={i}
-            model={m}
-            editable={!!editable}
-            confirmDelete={confirmDeleteIdx === i}
-            onToggle={() => toggle(i)}
-            onEdit={() => setEditing(i)}
-            onDelete={() => del(i)}
-          />
-        ),
-      )}
-      {editable && editing !== "new" && (
-        <div className="flex items-center gap-3 mt-1">
-          <button onClick={() => setEditing("new")} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-            <Plus className="w-3.5 h-3.5" />添加模型
-          </button>
-          {providerName && (
-            <button onClick={runImport} disabled={importing} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50">
-              {importing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}从端点导入
-            </button>
+    <div>
+      {models.length > 0 && (
+        <div className="overflow-hidden rounded-lg border border-border">
+          <div className="grid grid-cols-[1fr_auto_56px_72px] items-center gap-3 border-b border-border bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground">
+            <span>模型</span><span>能力</span><span className="text-right">上下文</span><span />
+          </div>
+          {models.map((m, i) =>
+            editing === i ? (
+              <div key={i} className="border-b border-border/60 p-2 last:border-b-0">
+                <ModelForm initial={m} existingIds={models.filter((_, idx) => idx !== i).map((mm) => mm.id)} onSave={(mm) => saveOne(mm, i)} onCancel={() => setEditing(null)} />
+              </div>
+            ) : (
+              <ModelRow key={i} model={m} editable={!!editable} confirmDelete={confirmDeleteIdx === i} onToggle={() => toggle(i)} onEdit={() => setEditing(i)} onDelete={() => del(i)} />
+            ),
           )}
         </div>
       )}
+      {models.length === 0 && editing !== "new" && (
+        <div className="rounded-lg border border-dashed border-border py-5 text-center text-[12px] text-muted-foreground">还没有模型。手动添加，或者从端点拉取。</div>
+      )}
       {editable && editing === "new" && (
-        <ModelForm existingIds={models.map((mm) => mm.id)} onSave={(mm) => saveOne(mm, "new")} onCancel={() => setEditing(null)} />
+        <div className="mt-2"><ModelForm existingIds={models.map((mm) => mm.id)} onSave={(mm) => saveOne(mm, "new")} onCancel={() => setEditing(null)} /></div>
+      )}
+      {editable && editing !== "new" && (
+        <div className="mt-2.5 flex items-center gap-2">
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setEditing("new")}><Plus className="h-3.5 w-3.5" />添加模型</Button>
+          {providerName && (
+            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={runImport} disabled={importing}>
+              {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}从端点拉取
+            </Button>
+          )}
+          {importError && <span className="text-[12px] text-destructive">{importError}</span>}
+        </div>
       )}
       {probed && <ImportPanel probed={probed} existingIds={models.map((m) => m.id)} onApply={applyImport} onCancel={() => setProbed(null)} />}
+    </div>
+  );
+}
+
+function formatWindow(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 2).replace(/\.?0+$/, "")}M`;
+  return `${Math.round(n / 1000)}K`;
+}
+
+/** 能力小图标：图像 / 思考（档位数）/ 缓存 / 非默认协议 */
+function Capability({ on, icon, title }: { on: boolean; icon: ReactNode; title: string }) {
+  return (
+    <span title={title} className={`inline-flex size-5 items-center justify-center rounded ${on ? "bg-primary/10 text-primary" : "text-muted-foreground/25"}`}>
+      {icon}
+    </span>
+  );
+}
+
+/** 单行模型（禁用态变淡，操作悬浮出现） */
+function ModelRow({ model, editable, confirmDelete, onToggle, onEdit, onDelete }: { model: ProviderModelInfo; editable: boolean; confirmDelete?: boolean; onToggle: () => void; onEdit: () => void; onDelete: () => void }) {
+  const efforts = model.effortLevels?.length ?? 0;
+  const showId = model.name && model.name !== model.id;
+  return (
+    <div className="group/m grid grid-cols-[1fr_auto_56px_72px] items-center gap-3 border-b border-border/60 px-3 py-2 last:border-b-0 hover:bg-muted/30">
+      <div className={`min-w-0 ${model.disabled ? "opacity-45" : ""}`}>
+        <div className="flex items-center gap-1.5">
+          <span className="truncate text-[13px] font-medium text-foreground">{model.name || model.id}</span>
+          {model.protocol && model.protocol !== "chat" && <Tag variant="outline">{model.protocol === "responses" ? "Responses" : "Anthropic"}</Tag>}
+          {model.disabled && <Tag>已停用</Tag>}
+        </div>
+        {showId && <div className="truncate font-mono text-[11px] text-muted-foreground">{model.id}</div>}
+      </div>
+      <div className={`flex items-center gap-0.5 ${model.disabled ? "opacity-45" : ""}`}>
+        <Capability on={!!model.vision} icon={<ImageIcon className="h-3 w-3" />} title={model.vision ? "支持图片输入" : "不支持图片"} />
+        <Capability on={!!model.thinking} icon={<Brain className="h-3 w-3" />} title={model.thinking ? `支持思考${efforts ? `，${efforts} 档强度` : ""}` : "不开启思考"} />
+        <Capability on={!!model.cacheControl} icon={<Zap className="h-3 w-3" />} title={model.cacheControl ? "发送缓存标记（cache_control）" : "不发送缓存标记"} />
+      </div>
+      <span className={`text-right font-mono text-[12px] text-muted-foreground ${model.disabled ? "opacity-45" : ""}`}>{formatWindow(model.contextWindow)}</span>
+      <div className="flex items-center justify-end gap-0.5">
+        {editable && (
+          <div className={`flex items-center gap-0.5 transition-opacity ${confirmDelete ? "opacity-100" : "opacity-0 group-hover/m:opacity-100 focus-within:opacity-100"}`}>
+            <button onClick={onToggle} title={model.disabled ? "启用" : "停用（不出现在模型选择里）"} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
+              {model.disabled ? <RotateCcw className="h-3.5 w-3.5" /> : <Ban className="h-3.5 w-3.5" />}
+            </button>
+            <button onClick={onEdit} title="编辑" className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><Pencil className="h-3.5 w-3.5" /></button>
+            <button onClick={onDelete} title={confirmDelete ? "再次点击确认删除" : "删除"} className={`flex items-center rounded p-1 ${confirmDelete ? "bg-destructive/10 px-1.5 text-destructive" : "text-muted-foreground hover:bg-muted hover:text-destructive"}`}>
+              <Trash2 className="h-3.5 w-3.5 shrink-0" />{confirmDelete && <span className="ml-0.5 text-[10px] font-medium">确认</span>}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -668,40 +652,6 @@ function ImportPanel({ probed, existingIds, onApply, onCancel }: { probed: Probe
         <Button size="sm" onClick={() => onApply(selectable.filter((p) => picked.has(p.id)))} disabled={picked.size === 0}>导入 {picked.size} 个</Button>
         <Button size="sm" variant="outline" onClick={onCancel}>取消</Button>
       </div>
-    </div>
-  );
-}
-
-/** 单行模型展示（含禁用态样式与悬浮操作） */
-function ModelRow({ model, editable, confirmDelete, onToggle, onEdit, onDelete }: { model: ProviderModelInfo; editable: boolean; confirmDelete?: boolean; onToggle: () => void; onEdit: () => void; onDelete: () => void }) {
-  const win = model.contextWindow >= 1000000 ? `${(model.contextWindow / 1000000).toFixed(0)}M` : `${(model.contextWindow / 1000).toFixed(0)}K`;
-  return (
-    <div className={`group/m flex items-center gap-2 px-2 py-1 rounded ${model.disabled ? "opacity-50" : ""}`}>
-      <div className="min-w-0 flex-1">
-        <span className={`text-xs font-medium ${model.disabled ? "line-through" : ""}`}>{model.name || model.id}</span>
-        {model.vendor && <Tag className="ml-1">{model.vendor}</Tag>}
-        {model.protocol && model.protocol !== "chat" && <Tag variant="outline" className="ml-1">{model.protocol}</Tag>}
-        {model.vision && <Tag variant="primary" className="ml-1">多模态</Tag>}
-        {model.thinking && <Tag variant="outline" className="ml-1">思考</Tag>}
-        {model.cacheControl && <Tag className="ml-1">缓存</Tag>}
-        {model.effortLevels && model.effortLevels.length > 0 && <Tag variant="outline" className="ml-1">强度 {model.effortLevels.length}</Tag>}
-        {model.disabled && <Tag className="ml-1">已禁用</Tag>}
-        <span className="ml-1.5 text-[10px] text-muted-foreground font-mono">{model.id} · {win}</span>
-      </div>
-      {editable && (
-        <div className="flex items-center gap-0.5 opacity-0 group-hover/m:opacity-100 transition-opacity">
-          <button onClick={onToggle} title={model.disabled ? "启用" : "禁用"} className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted">
-            {model.disabled ? <RotateCcw className="w-3 h-3" /> : <Ban className="w-3 h-3" />}
-          </button>
-          <button onClick={onEdit} title="编辑" className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted">
-            <Pencil className="w-3 h-3" />
-          </button>
-          <button onClick={onDelete} title={confirmDelete ? "再次点击确认删除" : "删除"} className={`p-1 rounded transition-all flex items-center whitespace-nowrap ${confirmDelete ? "bg-destructive/10 text-destructive px-1" : "text-muted-foreground hover:text-destructive hover:bg-muted"}`}>
-            <Trash2 className="w-3 h-3 shrink-0" />
-            {confirmDelete && <span className="ml-0.5 text-[10px] font-medium">确认</span>}
-          </button>
-        </div>
-      )}
     </div>
   );
 }
@@ -1100,86 +1050,133 @@ function ModelForm({ initial, existingIds = [], onSave, onCancel }: { initial?: 
   );
 }
 
-/** 添加自定义 provider 表单 */
-function AddCustomForm({ level, workspace, onChanged }: { level: ProviderLevel; workspace?: string; onChanged: () => void }) {
-  const [show, setShow] = useState(false);
-  const [name, setName] = useState("");
+/**
+ * 添加 Provider：先选厂商（地址 / 协议 / 认证 / 常用模型自动带出），再填 Key。
+ * 选「中转站 / 其他」就是原来的手动填写。保存后还可以在「模型」页从端点拉取补全。
+ */
+function AddProviderPanel({ level, workspace, takenNames, onDone, onCancel }: {
+  level: ProviderLevel;
+  workspace?: string;
+  takenNames: string[];
+  onDone: () => void;
+  onCancel: () => void;
+}) {
+  const [preset, setPreset] = useState<ProviderPreset | null>(null);
+  const [region, setRegion] = useState<PresetRegion>("cn");
   const [label, setLabel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
-  const [models, setModels] = useState<ProviderModelInfo[]>([]);
+  const [protocol, setProtocol] = useState<ProviderProtocol>("chat");
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
-  const reset = () => { setName(""); setLabel(""); setBaseUrl(""); setApiKey(""); setModels([]); setShow(false); };
-
-  const submit = async () => {
-    if (!name.trim() || !baseUrl.trim()) return;
-    try {
-      await addCustomProvider(level, name.trim(), {
-        label: label.trim() || name.trim(),
-        baseUrl: baseUrl.trim(),
-        apiKey: apiKey.trim(),
-        models,
-      }, workspace);
-      reset();
-      onChanged();
-    } catch (e) {
-      alert(`添加失败: ${(e as Error).message}`);
-    }
+  const choose = (p: ProviderPreset) => {
+    setPreset(p);
+    setLabel(p.id === "custom" ? "" : p.name.replace(/（.*）$/, ""));
+    setBaseUrl(p.baseUrl);
+    setProtocol(p.protocol);
+    setApiKey("");
+    setPicked(new Set(presetModels(p).map((m) => m.id)));
+    setError("");
   };
 
-  if (!show) {
-    return <Button size="sm" variant="outline" onClick={() => setShow(true)}><Plus className="w-3.5 h-3.5" />添加自定义 Provider</Button>;
-  }
+  const candidates = preset ? presetModels(preset) : [];
+  const togglePick = (id: string) => setPicked((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+
+  const submit = async () => {
+    if (!preset) return;
+    if (!label.trim()) { setError("给这个 Provider 起个名字"); return; }
+    if (!/^https?:\/\//i.test(baseUrl.trim())) { setError("Base URL 要以 http:// 或 https:// 开头"); return; }
+    if (!apiKey.trim() && !preset.noKey) { setError("填一下 API Key"); return; }
+    setSaving(true); setError("");
+    try {
+      const models = candidates.filter((m) => picked.has(m.id)).map(builtinToModel);
+      await addCustomProvider(level, slugify(label, takenNames), {
+        label: label.trim(),
+        baseUrl: baseUrl.trim().replace(/\/+$/, ""),
+        // 本地服务不校验 Key，但 OpenAI 兼容客户端要求非空
+        apiKey: apiKey.trim() || (preset.noKey ? "local" : ""),
+        ...(preset.apiKeyHeader ? { apiKeyHeader: preset.apiKeyHeader } : {}),
+        protocol,
+        models,
+      }, workspace);
+      onDone();
+    } catch (e) {
+      setError(`添加失败：${(e as Error).message}`);
+    }
+    setSaving(false);
+  };
 
   return (
-    <div className="p-3 rounded-lg border border-border bg-muted/20 space-y-2">
-      <Input placeholder="provider 名（唯一标识，如 my-openai）" value={name} onChange={(e) => setName(e.target.value)} className="h-8 text-sm" />
-      <Input placeholder="展示名（可选，如 我的 OpenAI）" value={label} onChange={(e) => setLabel(e.target.value)} className="h-8 text-sm" />
-      <Input placeholder="Base URL，如 https://api.openai.com/v1" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} className="h-8 text-sm" />
-      <Input type="password" placeholder="API Key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} className="h-8 text-sm" />
-      <div className="border-t border-border/60 pt-2">
-        <div className="text-[11px] font-medium text-muted-foreground mb-1">模型列表</div>
-        <ModelEditor models={models} onChange={setModels} />
+    <div className="mb-3 overflow-hidden rounded-xl border border-primary/40 bg-background shadow-sm">
+      <div className="flex items-center justify-between border-b border-border/70 px-4 py-2.5">
+        <span className="text-[13px] font-medium text-foreground">{preset ? `添加 ${preset.name}` : "选择厂商"}</span>
+        <div className="flex items-center gap-1">
+          {preset && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setPreset(null)}>重新选择</Button>}
+          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={onCancel}>取消</Button>
+        </div>
       </div>
-      <div className="flex gap-2">
-        <Button size="sm" className="h-8" onClick={submit} disabled={!name.trim() || !baseUrl.trim()}><Save className="w-3.5 h-3.5" />保存</Button>
-        <Button size="sm" variant="outline" className="h-8" onClick={reset}>取消</Button>
-      </div>
-    </div>
-  );
-}
 
-/** 轻量模型列表编辑（用于新增 provider 时逐个添加模型） */
-function ModelEditor({ models, onChange }: { models: ProviderModelInfo[]; onChange: (mm: ProviderModelInfo[]) => void }) {
-  const [editing, setEditing] = useState<number | "new" | null>(null);
-
-  const del = (i: number) => onChange(models.filter((_, idx) => idx !== i));
-  const save = (m: ProviderModelInfo, idx: number | "new") =>
-    onChange(idx === "new" ? [...models, m] : models.map((prev, i) => (i === idx ? m : prev)));
-
-  return (
-    <div className="space-y-1">
-      {models.map((m, i) =>
-        editing === i ? (
-          <ModelForm key={i} initial={m} existingIds={models.filter((_, idx) => idx !== i).map((mm) => mm.id)} onSave={(mm) => { save(mm, i); setEditing(null); }} onCancel={() => setEditing(null)} />
-        ) : (
-          <div key={i} className="flex items-center gap-2 px-2 py-1 rounded group/m">
-            <span className="text-xs font-medium flex-1 truncate">{m.name || m.id}</span>
-            <span className="text-[10px] text-muted-foreground font-mono">{m.id} · {m.contextWindow >= 1000 ? `${(m.contextWindow / 1000).toFixed(0)}K` : m.contextWindow}</span>
-            {m.vision && <Tag variant="primary">多模态</Tag>}
-            <div className="flex items-center gap-0.5 opacity-0 group-hover/m:opacity-100 transition-opacity">
-              <button onClick={() => setEditing(i)} className="p-1 rounded text-muted-foreground hover:text-foreground"><Pencil className="w-3 h-3" /></button>
-              <button onClick={() => del(i)} className="p-1 rounded text-muted-foreground hover:text-red-500"><Trash2 className="w-3 h-3" /></button>
-            </div>
+      {!preset ? (
+        <div className="px-4 py-3">
+          <div className="mb-3 flex gap-1">
+            {PRESET_REGIONS.map((r) => (
+              <button key={r.id} onClick={() => setRegion(r.id)}
+                className={`rounded-full px-3 py-1 text-[12px] transition-colors ${region === r.id ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"}`}>
+                {r.label}
+              </button>
+            ))}
           </div>
-        ),
-      )}
-      {editing === "new" ? (
-        <ModelForm existingIds={models.map((mm) => mm.id)} onSave={(mm) => { save(mm, "new"); setEditing(null); }} onCancel={() => setEditing(null)} />
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-2">
+            {PROVIDER_PRESETS.filter((p) => p.region === region).map((p) => (
+              <button key={p.id} onClick={() => choose(p)} className="flex items-center gap-2.5 rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:border-foreground/25 hover:bg-muted/30">
+                <span className={`inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-[11px] font-semibold ${p.badge.className}`}>{p.badge.text}</span>
+                <span className="min-w-0">
+                  <span className="block truncate text-[13px] font-medium text-foreground">{p.name}</span>
+                  <span className="block truncate text-[11px] text-muted-foreground">{p.baseUrl ? hostOf(p.baseUrl) : "自己填地址"}{presetModels(p).length ? ` · ${presetModels(p).length} 个常用模型` : ""}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
       ) : (
-        <button onClick={() => setEditing("new")} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mt-1">
-          <Plus className="w-3.5 h-3.5" />添加模型
-        </button>
+        <div className="space-y-3 px-4 py-3">
+          {preset.hint && <p className="rounded-lg bg-muted/40 px-3 py-2 text-[12px] text-foreground/85">{preset.hint}</p>}
+          <FieldRow label="名称"><Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="如「公司中转站」" className="h-8 text-sm" /></FieldRow>
+          <FieldRow label="Base URL"><Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://example.com/v1" className="h-8 font-mono text-[12px]" /></FieldRow>
+          <FieldRow label="API Key" hint={preset.keyUrl ? <a href={preset.keyUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-primary hover:underline">去 {preset.name.replace(/（.*）$/, "")} 控制台获取<ExternalLink className="h-3 w-3" /></a> : preset.noKey ? "本地服务不需要 Key，可以留空" : undefined}>
+            <Input type="password" autoComplete="off" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={preset.noKey ? "可留空" : "sk-…"} className="h-8 text-sm" />
+          </FieldRow>
+          {preset.id === "custom" && (
+            <FieldRow label="协议" hint="绝大多数中转站选 OpenAI 兼容；只提供 Anthropic 原生接口的才选 Anthropic">
+              <div className="flex gap-1.5">
+                <ProtocolButton active={protocol === "chat"} onClick={() => setProtocol("chat")} label="OpenAI 兼容" />
+                <ProtocolButton active={protocol === "responses"} onClick={() => setProtocol("responses")} label="Responses" />
+                <ProtocolButton active={protocol === "anthropic"} onClick={() => setProtocol("anthropic")} label="Anthropic" />
+              </div>
+            </FieldRow>
+          )}
+          <FieldRow label="模型" hint={candidates.length ? "保存后可以在「模型」页继续添加，或从端点拉取" : "保存后在「模型」页从端点拉取，或手动添加"}>
+            {candidates.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {candidates.map((m) => (
+                  <button key={m.id} type="button" onClick={() => togglePick(m.id)} title={m.id}
+                    className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[12px] transition-colors ${picked.has(m.id) ? "border-primary/40 bg-primary/10 text-foreground" : "border-border text-muted-foreground hover:text-foreground"}`}>
+                    {picked.has(m.id) ? <Check className="h-3 w-3 text-primary" /> : <Plus className="h-3 w-3" />}
+                    {m.label || m.id}
+                  </button>
+                ))}
+              </div>
+            ) : <span className="text-[12px] text-muted-foreground">没有预置模型</span>}
+          </FieldRow>
+          <div className="flex items-center justify-end gap-2 pt-1">
+            {error && <span className="mr-auto text-[12px] text-destructive">{error}</span>}
+            <Button size="sm" className="h-8" onClick={submit} disabled={saving}>
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}添加
+            </Button>
+          </div>
+        </div>
       )}
     </div>
   );

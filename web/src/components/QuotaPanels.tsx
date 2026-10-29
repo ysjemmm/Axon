@@ -156,13 +156,15 @@ function parseRule(text: string): { rule?: ProviderQuotaConfig; error?: string }
   }
 }
 
-export function QuotaConfigPanel({ provider, level, workspace, onChanged }: {
+export function QuotaConfigPanel({ provider, level, workspace, onChanged, embedded = false }: {
   provider: ResolvedProviderInfo;
   level: ProviderLevel;
   workspace?: string;
   onChanged: () => void;
+  /** 嵌在 Provider 卡片的标签页里：不要折叠标题，直接展开 */
+  embedded?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(embedded);
   const [presets, setPresets] = useState<QuotaPresetInfo[]>([]);
   const [text, setText] = useState(() => (provider.quota ? JSON.stringify(provider.quota, null, 2) : ""));
   const [advanced, setAdvanced] = useState(false);
@@ -268,13 +270,17 @@ export function QuotaConfigPanel({ provider, level, workspace, onChanged }: {
   const statusLabel = enabled ? `已启用${provider.quota?.preset ? ` · ${presets.find((p) => p.id === provider.quota?.preset)?.label || provider.quota.preset}` : ""}` : provider.quota ? "已停用" : "未配置";
 
   return (
-    <div className="mt-3 pt-2 border-t border-border/60">
-      <button onClick={() => setOpen((v) => !v)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-        <WalletCards className="w-3.5 h-3.5" />用量查询 · {statusLabel}
-        <ChevronRight className={`w-3.5 h-3.5 transition-transform ${open ? "rotate-90" : ""}`} />
-      </button>
+    <div className={embedded ? "" : "mt-3 pt-2 border-t border-border/60"}>
+      {embedded ? (
+        <div className="mb-3 text-[12px] text-muted-foreground">状态：{statusLabel}。配置后用量会显示在状态栏和页面顶部的用量总览里。</div>
+      ) : (
+        <button onClick={() => setOpen((v) => !v)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+          <WalletCards className="w-3.5 h-3.5" />用量查询 · {statusLabel}
+          <ChevronRight className={`w-3.5 h-3.5 transition-transform ${open ? "rotate-90" : ""}`} />
+        </button>
+      )}
       {open && (
-        <div className="mt-2 space-y-3">
+        <div className={`${embedded ? "" : "mt-2 "}space-y-3`}>
           {/* 1. 选规则：自动识别 / 模板 */}
           <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" onClick={runDetect} disabled={!!busy || !provider.configured} title={provider.configured ? "用现有 API Key 与已保存的凭证逐个尝试内置模板" : "需先保存 API Key"}>
@@ -427,14 +433,16 @@ function fromDraft(draft: PriceDraft | undefined): ModelPrice | undefined {
  * 计费单价：配置后回复底部显示估算花费（按端点实报的 token 数计算），不配置只显示 Token 数。
  * 单价按每 100 万 token 填写，和各家价目表的写法一致。
  */
-export function PricingPanel({ provider, level, workspace, onChanged }: {
+export function PricingPanel({ provider, level, workspace, onChanged, embedded = false }: {
   provider: ResolvedProviderInfo;
   level: ProviderLevel;
   workspace?: string;
   onChanged: () => void;
+  /** 嵌在 Provider 卡片的标签页里：不要折叠标题，直接展开 */
+  embedded?: boolean;
 }) {
   const pricing = provider.pricing;
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(embedded);
   const [currency, setCurrency] = useState(pricing?.currency ?? "¥");
   const [rows, setRows] = useState<Record<string, PriceDraft>>({});
   const [busy, setBusy] = useState(false);
@@ -485,13 +493,15 @@ export function PricingPanel({ provider, level, workspace, onChanged }: {
   const ids = Object.keys(rows).filter((id) => id !== DEFAULT_ROW);
 
   return (
-    <div className="mt-3 pt-2 border-t border-border/60">
-      <button onClick={() => setOpen((v) => !v)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-        <Coins className="w-3.5 h-3.5" />计费单价 · {statusLabel}
-        <ChevronRight className={`w-3.5 h-3.5 transition-transform ${open ? "rotate-90" : ""}`} />
-      </button>
+    <div className={embedded ? "" : "mt-3 pt-2 border-t border-border/60"}>
+      {!embedded && (
+        <button onClick={() => setOpen((v) => !v)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+          <Coins className="w-3.5 h-3.5" />计费单价 · {statusLabel}
+          <ChevronRight className={`w-3.5 h-3.5 transition-transform ${open ? "rotate-90" : ""}`} />
+        </button>
+      )}
       {open && (
-        <div className="mt-2 space-y-2.5">
+        <div className={`${embedded ? "" : "mt-2 "}space-y-2.5`}>
           <p className="text-[11px] text-muted-foreground">
             填了单价，回复底部按端点实际返回的 token 数估算本轮花费；不填只显示 Token 数。单价按每 100 万 token 填写，缓存命中不填时按输入价计算。
           </p>
