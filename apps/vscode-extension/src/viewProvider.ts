@@ -993,17 +993,21 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
       .replace(/(src|href)="\.?\/assets\//g, `$1="${baseUri}/assets/`)
       .replace(/(src|href)="\.\/(?!assets)/g, `$1="${baseUri}/`);
 
-    // 注入 CSP（允许 webview 资源 + inline 样式；脚本仅限 webview 源）
+    // 注入 CSP（允许 webview 资源 + inline 样式；脚本仅限 webview 源）。
+    // nonce 只发给聊天里的 HTML 预览：预览 iframe 继承这份 CSP，带上同一个 nonce 的脚本才能运行，
+    // 让 AI 写的交互页面（按钮、表单、图表库）真正可用；iframe 不开同源权限，脚本碰不到主页面。
+    // 'unsafe-eval' 用于把预览里的 onclick="..." 这类内联事件转成监听器（CSP 下内联事件无法用 nonce 放行）。
+    const nonce = createCspNonce();
     const csp = [
       `default-src 'none'`,
       `img-src ${webview.cspSource} https: data:`,
       `style-src ${webview.cspSource} 'unsafe-inline'`,
-      `script-src ${webview.cspSource}`,
+      `script-src ${webview.cspSource} 'nonce-${nonce}' 'unsafe-eval'`,
       `font-src ${webview.cspSource} data:`,
       `connect-src ${webview.cspSource}`,
     ].join("; ");
     if (!/Content-Security-Policy/.test(html)) {
-      html = html.replace(/<head>/i, `<head>\n<meta http-equiv="Content-Security-Policy" content="${csp}" />`);
+      html = html.replace(/<head>/i, `<head>\n<meta http-equiv="Content-Security-Policy" content="${csp}" />\n<meta name="axon-csp-nonce" content="${nonce}" />`);
     }
     return html;
   }
@@ -1042,4 +1046,9 @@ body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);displa
 </div>
 </body></html>`;
   }
+}
+
+/** CSP nonce：每次生成页面换一个 */
+function createCspNonce(): string {
+  return require("crypto").randomBytes(18).toString("base64");
 }

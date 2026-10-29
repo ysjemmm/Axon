@@ -313,11 +313,13 @@ function buildWebviewHtml(webview: vscode.Webview, webRoot: vscode.Uri, query: s
   // 简单的 SPA 入口 HTML（加载 web 产物的 JS/CSS）
   // 因为 web 产物的 index.html 内的资源引用是相对路径（./assets/...），
   // 我们直接构造一个加载 index 的页面，通过 URL hash/search 传参数
+  // nonce 的用途见 viewProvider.buildHtml：放行聊天里 HTML 预览的脚本
+  const nonce: string = require("crypto").randomBytes(18).toString("base64");
   const csp = [
     `default-src 'none'`,
     `img-src ${webview.cspSource} https: data:`,
     `style-src ${webview.cspSource} 'unsafe-inline'`,
-    `script-src ${webview.cspSource} 'unsafe-eval'`,
+    `script-src ${webview.cspSource} 'nonce-${nonce}' 'unsafe-eval'`,
     `font-src ${webview.cspSource} data:`,
     `connect-src ${webview.cspSource} ws: wss: http: https:`,
     `worker-src ${webview.cspSource} blob:`,
@@ -342,7 +344,7 @@ function buildWebviewHtml(webview: vscode.Webview, webRoot: vscode.Uri, query: s
 
   // 注入 CSP
   if (!/Content-Security-Policy/.test(html)) {
-    html = html.replace(/<head>/i, `<head>\n<meta http-equiv="Content-Security-Policy" content="${csp}" />`);
+    html = html.replace(/<head>/i, `<head>\n<meta http-equiv="Content-Security-Policy" content="${csp}" />\n<meta name="axon-csp-nonce" content="${nonce}" />`);
   }
 
   // 注入 URL 参数脚本（在 app 加载前设置 location.search 模拟参数）

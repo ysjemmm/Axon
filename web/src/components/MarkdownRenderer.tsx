@@ -13,8 +13,8 @@ import { renderMarkdown } from "@/lib/markdown";
 import { fitSvgToContainer, readSvgIntrinsicSize } from "@/lib/diagramFit";
 import {
   attachHtmlPreviewAutoHeight,
+  buildHtmlPreviewDoc,
   HTML_PREVIEW_MIN_HEIGHT,
-  HTML_PREVIEW_PRELUDE,
   HTML_PREVIEW_SANDBOX,
 } from "@/lib/htmlPreviewResize";
 import { useThemeVersion } from "@/lib/theme";
@@ -1025,6 +1025,8 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, stream
         const clone = cached.cloneNode(true) as HTMLElement;
         const pre = block.querySelector("pre");
         if (pre) pre.replaceWith(clone);
+        // 克隆回来的 HTML 预览会重新加载，要重新登记高度上报和链接转交
+        clone.querySelectorAll<HTMLIFrameElement>("iframe[data-axon-html-preview]").forEach((f) => attachHtmlPreviewAutoHeight(f, undefined, openPreviewLink));
         block.dataset.hydrated = "1";
         block.style.background = "transparent";
         block.style.border = "none";
@@ -1203,6 +1205,14 @@ function hydrateSvg(block: HTMLElement, content: string, onRendered?: (el: HTMLE
   onRendered?.(wrapper);
 }
 
+/** HTML 预览里点的外部链接：交给插件用系统浏览器打开（Web 版新开标签页） */
+function openPreviewLink(url: string): void {
+  const w = window as any;
+  const vscode = w.__axonVSCode || (typeof w.acquireVsCodeApi === "function" ? w.acquireVsCodeApi() : null);
+  if (vscode) vscode.postMessage({ type: "open_external", url });
+  else window.open(url, "_blank", "noopener,noreferrer");
+}
+
 function hydrateHtml(block: HTMLElement, content: string, onRendered?: (el: HTMLElement) => void): void {
   block.dataset.hydrated = "1";
   const wrapper = document.createElement("div");
@@ -1213,18 +1223,14 @@ function hydrateHtml(block: HTMLElement, content: string, onRendered?: (el: HTML
   wrapper.dataset.axonSource = encodeURIComponent(content);
   const iframe = document.createElement("iframe");
   iframe.className = "w-full border-0 rounded-md";
-  // 初始取最小高度，真实高度在 load 后由父页量出（见 lib/htmlPreviewResize.ts）。
-  // 早先写死 400px：内容短时那 400px 里绝大部分是空白，看着像"渲染坏了"。
+  // 初始取最小高度，真实高度由预览里的引导脚本量好后上报（见 lib/htmlPreviewResize.ts）
   iframe.style.cssText = `height:${HTML_PREVIEW_MIN_HEIGHT}px;display:block`;
-  // 开 allow-same-origin 让父页能读 contentDocument 自行测量；**不开 allow-scripts** ——
-  // 沙箱 iframe 里本就执行不了任何脚本（CSP 与 vscode-webview 协议处理器双重封死，
-  // 详见 lib/htmlPreviewResize.ts 头注释）。挂着它只会掩盖真实边界。
+  // 允许脚本（AI 写的交互能用），但不开同源：预览碰不到主页面，详见 lib/htmlPreviewResize.ts 头注释
   iframe.setAttribute("sandbox", HTML_PREVIEW_SANDBOX);
-  // 样式前奏放在内容之前：内容里的同名声明才能覆盖它（例如 AI 自己写的 body 外边距）
-  iframe.srcdoc = HTML_PREVIEW_PRELUDE + content;
-  // 先挂测量再插入文档：load 是插入后才触发的，顺序反了会漏掉首次测量。
-  // 测量完成后再回调 onRendered —— 缓存必须存"量好高度之后"的快照，否则命中缓存的会是被裁的旧高度。
-  attachHtmlPreviewAutoHeight(iframe, () => onRendered?.(wrapper));
+  iframe.dataset.axonHtmlPreview = "1";
+  iframe.srcdoc = buildHtmlPreviewDoc(content);
+  // 量好高度后再回调 onRendered —— 缓存必须存"量好高度之后"的快照，否则命中缓存的会是被裁的旧高度
+  attachHtmlPreviewAutoHeight(iframe, () => onRendered?.(wrapper), openPreviewLink);
   wrapper.appendChild(iframe);
   wrapper.appendChild(createEnhancedMenu("html", "right-3"));
   const pre = block.querySelector("pre");

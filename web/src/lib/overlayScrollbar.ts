@@ -14,7 +14,7 @@
  *
  * ── 适用范围 ──
  *   · 图表滚动槽 `.axon-diagram-scroll`（SVG / Mermaid）：横向
- *   · HTML 预览 `.axon-html-preview` 里的 iframe：纵向 + 横向（滚的是 iframe 内部文档）
+ *   （HTML 预览不在此列：预览 iframe 为了隔离不开同源，父页读不到它的文档，滚动条由预览自己的细滚动条负责）
  *
  * ── 为什么按 hover 懒绑定 ──
  * 这些块由 hydrate 以 DOM 手术插入，还会从 hydrate 缓存里 cloneNode 出来复用——
@@ -210,23 +210,9 @@ function bindDiagram(slot: HTMLElement): void {
   })));
 }
 
-function bindIframe(host: HTMLElement, iframe: HTMLIFrameElement): void {
-  const existing = bindings.get(host);
-  if (existing) { existing.refresh(); return; }
-  const b = bind(host, () => {
-    const doc = iframe.contentDocument;
-    const se = doc?.scrollingElement ?? doc?.documentElement;
-    if (!doc || !se) return null;
-    return { scroller: se, scrollTarget: doc, resizeTargets: doc.body ? [se, doc.body] : [se] };
-  });
-  // srcdoc 每次加载都是新文档，旧文档上的监听已失效，需要换源
-  iframe.addEventListener("load", () => b.reattach());
-  bindings.set(host, b);
-}
-
 let installed = false;
 
-/** 全局安装一次（幂等）：首次 hover 到图表 / HTML 预览时为其挂上悬浮滚动条 */
+/** 全局安装一次（幂等）：首次 hover 到图表时为其挂上悬浮滚动条 */
 export function installOverlayScrollbars(): void {
   if (installed || typeof document === "undefined") return;
   installed = true;
@@ -234,9 +220,6 @@ export function installOverlayScrollbars(): void {
     const t = e.target as Element | null;
     if (!t || typeof t.closest !== "function") return;
     const slot = t.closest<HTMLElement>(".axon-diagram-scroll");
-    if (slot) { bindDiagram(slot); return; }
-    const preview = t.closest<HTMLElement>(".axon-html-preview");
-    const iframe = preview?.querySelector("iframe");
-    if (preview && iframe) bindIframe(preview, iframe);
+    if (slot) bindDiagram(slot);
   }, { passive: true });
 }
