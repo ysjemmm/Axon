@@ -318,6 +318,16 @@ export function getClient(provider: string, model?: string): OpenAI {
 const strategies: Record<string, LLMStrategy> = {};
 
 /** 获取模型级协议：model.protocol 优先，provider.protocol 仅作为旧配置 fallback */
+/** 这个 provider + 模型实际走哪种协议（不认识的 provider 返回 null） */
+export function requestProtocolFor(provider: string, model: string): ProviderProtocol | null {
+  try {
+    const name = resolveProviderName(provider) ?? normalizeProvider(provider);
+    return protocolForModel(name, model);
+  } catch {
+    return null;
+  }
+}
+
 function protocolForModel(provider: string, model: string): ProviderProtocol {
   const name = normalizeProvider(provider);
   const resolved = _resolved?.get(name);

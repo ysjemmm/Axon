@@ -74,6 +74,8 @@ export interface SubAgentDeps {
    * 由 strategy 回退到启发式判定）。由构造方用 declaredThinkingFor 解析后注入。
    */
   modelSupportsThinking?: boolean;
+  /** provider 对 cache_control 的声明（透传给策略层决定是否打缓存断点） */
+  modelSupportsCacheControl?: boolean;
   cwd: string;
   workspaces: string[];
   /** 执行端能力（父注入一个独立的 auto 模式 host，子 agent 改动直接落盘） */
@@ -429,6 +431,8 @@ export class SubAgentRunner {
       temperature: 0.2,
       think: this.deps.think,
       modelSupportsThinking: this.deps.modelSupportsThinking,
+      // 子 Agent 一跑几十轮、每轮重发整段上下文：缓存省下的比主会话还多
+      modelSupportsCacheControl: this.deps.modelSupportsCacheControl,
     }).then((turn) => {
       // 累计本回合 input/output token，run() 结束时上报父 Agent
       if (turn.usage) {

@@ -108,7 +108,7 @@ export class ChatCompletionsStrategy implements LLMStrategy {
     const isNativeOpenAI = /^(gpt|o1|o3|o4)/i.test(model);
     const usesExplicitCacheBreakpoints = !isNativeOpenAI
       && supportsCacheControl(model, modelSupportsCacheControl);
-    const requestMessages = usesExplicitCacheBreakpoints && safeMessages.length > 6
+    const requestMessages = usesExplicitCacheBreakpoints
       ? applyCacheBreakpoints(safeMessages)
       : safeMessages;
 
@@ -359,36 +359,42 @@ export class ChatCompletionsStrategy implements LLMStrategy {
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * 给稳定前缀打 cache_control breakpoint。
+ * 给稳定前缀打 cache_control breakpoint（显式缓存的兼容端点，如 Qwen / GLM）。
  *
- * 策略：打两个 breakpoint，最大化缓存命中率：
- * - breakpoint A：消息总长的 1/4 处（覆盖 system prompt + 早期历史）
- * - breakpoint B：倒数第 3 条（覆盖绝大部分历史，只留最新 2 条变化）
- * 双 breakpoint 让 API 提供商有更灵活的缓存粒度——即使前缀有微小变化（如早期消息被裁剪），
- * breakpoint A 之后的缓存仍然有效。
+ * 三个断点，位置都跟着「内容边界」走，而不是按消息条数比例算（比例位置每次请求都在挪，等于没打）：
+ *   · 开头那段系统提示词的最后一条 —— 整段会话都稳定
+ *   · 上一条用户消息 —— 上一轮写下的缓存，本轮第一次请求就能命中
+ *   · 最后一条消息 —— 本轮后续每一步都在它之上续写
+ * 会话一开始就打（早先要攒够 6 条才打，头几次请求的 1 万多 token 系统提示词全按原价）。
+ * content 为数组（多模态）的给最后一段加标记；content 为空的（只有 tool_calls 的 assistant）跳过、往前找。
  */
-function applyCacheBreakpoints(messages: any[]): any[] {
-  if (messages.length <= 6) return messages;
-
+export function applyCacheBreakpoints(messages: any[]): any[] {
   const result = [...messages];
-  const breakpoints = new Set<number>();
-
-  // breakpoint A：1/4 处
-  breakpoints.add(Math.floor(result.length * 0.25));
-  // breakpoint B：倒数第 3 条
-  breakpoints.add(result.length - 3);
-
-  for (const idx of breakpoints) {
-    if (idx < 1 || idx >= result.length - 1) continue;
+  const mark = (idx: number): boolean => {
     const msg = result[idx];
-    if (!msg || typeof msg.content !== "string") continue;
-    result[idx] = {
-      ...msg,
-      content: [
-        { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
-      ],
-    };
+    if (!msg) return false;
+    if (typeof msg.content === "string" && msg.content) {
+      result[idx] = { ...msg, content: [{ type: "text", text: msg.content, cache_control: { type: "ephemeral" } }] };
+      return true;
+    }
+    if (Array.isArray(msg.content) && msg.content.length > 0) {
+      const parts = [...msg.content];
+      parts[parts.length - 1] = { ...parts[parts.length - 1], cache_control: { type: "ephemeral" } };
+      result[idx] = { ...msg, content: parts };
+      return true;
+    }
+    return false;
+  };
+  // 1. 开头系统提示词段的最后一条
+  let sys = -1;
+  while (sys + 1 < result.length && result[sys + 1]?.role === "system") sys++;
+  if (sys >= 0) mark(sys);
+  // 2. 最后一条（没内容就往前找最近一条有内容的）
+  let last = result.length - 1;
+  while (last > sys && !mark(last)) last--;
+  // 3. 最后那条之前的上一条用户消息
+  for (let i = last - 1; i > sys; i--) {
+    if (result[i]?.role === "user" && mark(i)) break;
   }
-
   return result;
 }

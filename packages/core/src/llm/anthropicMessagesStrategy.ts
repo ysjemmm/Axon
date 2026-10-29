@@ -57,6 +57,51 @@ interface AnthropicMessage {
   content: string | AnthropicContentBlock[];
 }
 
+type CacheControl = { cache_control?: { type: "ephemeral" } };
+
+/**
+ * 打 Prompt Caching 断点（Messages API 只在显式断点处写缓存，不打就每次按原价重算整段前缀）。
+ *
+ * 三个断点（上限 4 个）：
+ *   · 系统提示词末尾 —— 覆盖工具定义 + 系统提示词，整段会话都稳定
+ *   · 上一条用户消息末尾 —— 上一轮写下的缓存，本轮第一次请求就能命中
+ *   · 最后一条消息末尾 —— 本轮后续每一步都在它之上续写
+ * 断点只能打在 text / image / tool_use / tool_result 块上（thinking 块不行），所以取消息里最后一个非 thinking 块。
+ */
+function applyAnthropicCache(system: string, messages: AnthropicMessage[]): { system: (AnthropicContentBlock & CacheControl)[] | undefined; messages: AnthropicMessage[] } {
+  const mark = (msg: AnthropicMessage): AnthropicMessage => {
+    const blocks: (AnthropicContentBlock & CacheControl)[] = typeof msg.content === "string" ? [{ type: "text", text: msg.content }] : msg.content.map((b) => ({ ...b }));
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      if (blocks[i].type === "thinking") continue;
+      if (blocks[i].type === "text" && !(blocks[i] as { text: string }).text) continue; // 空文本块不能打断点
+      blocks[i] = { ...blocks[i], cache_control: { type: "ephemeral" } };
+      return { ...msg, content: blocks };
+    }
+    return msg;
+  };
+  const out = [...messages];
+  if (out.length > 0) out[out.length - 1] = mark(out[out.length - 1]);
+  for (let i = out.length - 2; i >= 0; i--) {
+    if (out[i].role === "user") { out[i] = mark(out[i]); break; }
+  }
+  return {
+    system: system ? [{ type: "text", text: system, cache_control: { type: "ephemeral" } }] : undefined,
+    messages: out,
+  };
+}
+
+/**
+ * 不再接受 budget_tokens、只认 adaptive 思考的 Claude：Opus 4.7 及以后、各家 5 代及以后。
+ * 其它走 Anthropic 协议的模型（GLM / Kimi 等兼容端点）仍按 enabled + budget_tokens 下发。
+ */
+function requiresAdaptiveThinking(model: string): boolean {
+  const m = /claude-(?:opus|sonnet|haiku|fable)-(\d+)(?:[-.](\d+))?/i.exec(model);
+  if (!m) return false;
+  const major = Number(m[1]);
+  const minor = Number(m[2] ?? 0);
+  return major >= 5 || (major === 4 && minor >= 7 && minor < 100);
+}
+
 interface AnthropicToolDef {
   name: string;
   description: string;
@@ -141,7 +186,11 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
   async runTurn(params: RunTurnParams): Promise<LLMTurnResult> {
     const { model, messages, tools, signal, callbacks, temperature, maxOutputTokens, think, effort, modelSupportsThinking } = params;
 
-    const { system, anthropicMessages } = this.convertMessages(messages);
+    const converted = this.convertMessages(messages);
+    const system = converted.system;
+    // 缓存断点默认打上；provider 明确声明不支持（cacheControl: false）时才关掉
+    const cached = params.modelSupportsCacheControl === false ? null : applyAnthropicCache(system, converted.anthropicMessages);
+    const anthropicMessages = cached ? cached.messages : converted.anthropicMessages;
     const hasTools = tools.length > 0;
     const anthropicTools = hasTools ? this.convertTools(tools) : [];
     // 本地粗估本次请求的 prompt 规模：用于识别中转站返回的 usage 是"原生相加"还是"已含缓存"语义
@@ -161,7 +210,7 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
       max_tokens: effectiveMaxTokens,
       messages: anthropicMessages,
       stream: true,
-      ...(system ? { system } : {}),
+      ...(cached?.system ? { system: cached.system } : system ? { system } : {}),
       ...(hasTools ? { tools: anthropicTools } : {}),
       // extended thinking 要求 temperature=1 或不传；启用时忽略外部 temperature
       ...(useThinking ? {} : (temperature !== undefined ? { temperature } : {})),
@@ -170,7 +219,9 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
       ...(useThinking
         ? effort
           ? { thinking: { type: "adaptive" }, output_config: { effort } }
-          : { thinking: { type: "enabled", budget_tokens: THINKING_BUDGET_TOKENS } }
+          : requiresAdaptiveThinking(model)
+            ? { thinking: { type: "adaptive" } }
+            : { thinking: { type: "enabled", budget_tokens: THINKING_BUDGET_TOKENS } }
         : {}),
     };
 
@@ -386,7 +437,21 @@ export class AnthropicMessagesStrategy implements LLMStrategy {
 
       if (role === "system") {
         const text = this.extractText(msg.content);
-        if (text) systemParts.push(text);
+        if (!text) continue;
+        // 只有开头那段 system（系统提示词）进顶层 system；历史中间的 system（每轮的上下文注入、
+        // 临时纠偏）就地转成 user 消息里的 <system-reminder> 块。早先一律合并进顶层 system：
+        // 注入一变，请求最前面就变，后面整段历史的缓存全部失效。
+        if (result.length === 0) {
+          systemParts.push(text);
+          continue;
+        }
+        const block: AnthropicContentBlock = { type: "text", text: `<system-reminder>\n${text}\n</system-reminder>` };
+        const prev = result[result.length - 1];
+        if (prev.role === "user") {
+          prev.content = typeof prev.content === "string" ? [{ type: "text", text: prev.content }, block] : [...(prev.content as AnthropicContentBlock[]), block];
+        } else {
+          result.push({ role: "user", content: [block] });
+        }
         continue;
       }
 

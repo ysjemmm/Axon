@@ -16,6 +16,7 @@ import { sanitizeToolPairing } from "../messageSanitizer.js";
 import type { AgentSession } from "../agentSession.js";
 import { workspaceOfPath } from "./focusWorkspace.js";
 import { buildEnvironmentNotice } from "../environment.js";
+import { requestProtocolFor } from "../providers.js";
 
 /*
  * 关于「不要给注入块加说明」—— 这里曾有过一条自我介绍的说明文字（先后两版），
@@ -278,7 +279,12 @@ export class PromptBuilder {
     const isDeepSeek = /deepseek/i.test(this.s.model);
     // 自动 Prompt Caching（GPT / o 系列）和显式前缀缓存模型都要求：
     // 已发过的 system + 历史保持在请求最前面，不能被易变注入插到前面去。
-    const isCacheFriendly = isDeepSeek || /^(gpt|o1|o3|o4)/i.test(this.s.model)
+    // 走 Anthropic / Responses 协议时，策略层会把历史中间的 system 原地保留（<system-reminder> 块 /
+    // developer 消息），所以无论什么模型都按「锚定在用户消息前」组装 —— 早先按模型名判断，
+    // GPT 走 Responses、GLM / Kimi 走 Anthropic 兼容端点时都被当成「不友好」，注入插到最前面，整段前缀缓存失效。
+    const protocol = requestProtocolFor(this.s.provider, this.s.model);
+    const isCacheFriendly = protocol === "anthropic" || protocol === "responses"
+      || isDeepSeek || /^(gpt|o1|o3|o4)/i.test(this.s.model)
       || /glm|qwen|moonshot|kimi|yi-/i.test(this.s.model);
 
     // ⚠️ 这里【不能】以 turnStartMsgCount（本轮起点）为界改写历史。

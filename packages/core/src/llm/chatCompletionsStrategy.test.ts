@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ChatCompletionsStrategy } from "./chatCompletionsStrategy.js";
+import { ChatCompletionsStrategy, applyCacheBreakpoints } from "./chatCompletionsStrategy.js";
 import type { RunTurnParams } from "./types.js";
 
 function makeAsyncIterable(chunks: any[]) {
@@ -235,5 +235,29 @@ describe("ChatCompletionsStrategy request body", () => {
     const strategy = new ChatCompletionsStrategy({ chat: { completions: { create } } } as any);
     const result = await strategy.runTurn(makeParams("compatible-model"));
     expect(result.content).toBe("fallback text");
+  });
+});
+
+describe("applyCacheBreakpoints", () => {
+  const cc = { type: "ephemeral" };
+  it("会话一开始就给系统提示词和最后一条打断点", () => {
+    const out = applyCacheBreakpoints([{ role: "system", content: "s" }, { role: "user", content: "q" }]);
+    expect(out[0].content).toEqual([{ type: "text", text: "s", cache_control: cc }]);
+    expect(out[1].content).toEqual([{ type: "text", text: "q", cache_control: cc }]);
+  });
+
+  it("最后一条没内容（只有 tool_calls）时往前找；多模态给最后一段加；上一条用户消息也打", () => {
+    const out = applyCacheBreakpoints([
+      { role: "system", content: "s" },
+      { role: "user", content: [{ type: "text", text: "看图" }, { type: "image_url", image_url: { url: "data:x" } }] },
+      { role: "assistant", content: "好" },
+      { role: "tool", tool_call_id: "1", content: "结果" },
+      { role: "assistant", content: null, tool_calls: [{ id: "2" }] },
+    ]);
+    expect(out[3].content[0].cache_control).toEqual(cc);
+    expect(out[1].content[1].cache_control).toEqual(cc);
+    expect(out[1].content[0].cache_control).toBeUndefined();
+    expect(out[2].content).toBe("好");
+    expect(out[4].content).toBeNull();
   });
 });

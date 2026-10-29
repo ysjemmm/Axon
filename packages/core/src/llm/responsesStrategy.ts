@@ -233,7 +233,12 @@ export class ResponsesStrategy implements LLMStrategy {
 
       if (role === "system") {
         const text = this.extractText(msg.content);
-        if (text) systemParts.push(text);
+        if (!text) continue;
+        // 只有开头那段 system（系统提示词）进 instructions；历史中间的 system（每轮的上下文注入、
+        // 临时纠偏）原地保留为 developer 消息。早先一律合并进 instructions：注入一变，
+        // 请求最前面的 instructions 就变，整段前缀的缓存全部失效。
+        if (input.length === 0) systemParts.push(text);
+        else input.push({ role: "developer", content: text } as any);
         continue;
       }
 

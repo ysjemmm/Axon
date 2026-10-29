@@ -1285,6 +1285,7 @@ export class AgentSession {
       web: this.web,
       think: this.think,
       modelSupportsThinking: declaredThinkingFor(base.model, base.provider),
+      modelSupportsCacheControl: declaredCacheControlFor(base.model, base.provider),
       readOnly: true,
     });
     const result = await runner.run(
@@ -2327,6 +2328,7 @@ export class AgentSession {
           // 思考开关跟随父会话；wiki 工具按阶段注入（plan / save）
           think: this.think,
           modelSupportsThinking: declaredThinkingFor(model, provider),
+          modelSupportsCacheControl: declaredCacheControlFor(model, provider),
           readOnly: req.readOnly,
           wiki: req.wiki,
           maxRounds: req.maxRounds,
