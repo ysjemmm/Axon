@@ -88,6 +88,18 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
         await vscode.commands.executeCommand("setContext", "axon.chatMode", m.mode);
         return;
       }
+      // 后台 Agent 任务完成：面板没开着时用 VS Code 通知提醒（开着时面板里自己有提醒）
+      if (m.type === "agent_task_notify" && typeof m.sessionId === "string") {
+        if (view.visible) return;
+        const title = typeof m.title === "string" ? m.title : "后台任务";
+        const text = m.status === "done" ? `后台任务完成：${title}` : m.status === "failed" ? `后台任务出错：${title}` : `后台任务已停止：${title}`;
+        const pick = await vscode.window.showInformationMessage(text, "查看");
+        if (pick === "查看") {
+          view.show?.(false);
+          void view.webview.postMessage({ type: "open_session", sessionId: m.sessionId });
+        }
+        return;
+      }
       // 聚焦 Axon 终端（从工具卡片"打开终端"按钮）
       if (m.type === "focus_terminal") {
         try {

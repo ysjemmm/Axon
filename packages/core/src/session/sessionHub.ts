@@ -32,6 +32,7 @@ import { CoworkFlowStore, generateFlowDraft, generateFlowDraftFromDescription } 
 import { ConnectorStore, type ConnectorDraft } from "../connectors/store.js";
 import { connectorCatalog } from "../connectors/catalog.js";
 import { getStrategy } from "../providers.js";
+import { AGENT_TASK_PREFACE, AgentTaskStore, stepFromEvent, type AgentTask } from "./agentTasks.js";
 import { backgroundNoticeLabel, formatBackgroundNotice, type BackgroundTaskInfo, type BackgroundTaskNotice } from "./backgroundTasks.js";
 
 /**
@@ -57,7 +58,11 @@ class SessionChannel implements AgentChannel {
     return tagged;
   }
 
+  /** 旁听本会话的事件（后台任务用它更新「正在做什么」） */
+  onEvent?: (event: AgentEvent) => void;
+
   emit(event: AgentEvent): void {
+    this.onEvent?.(event);
     this.realChannel.emit(this.tag(event, this.clientId));
   }
 
@@ -704,6 +709,26 @@ export class SessionHub {
         return;
       case "set_edit_mode":
         return this.handleSetEditMode(cmd, clientId);
+      case "agent_task_start":
+        return this.handleAgentTaskStart(cmd, clientId);
+      case "agent_tasks_list":
+        await this.agentTaskStore().list();
+        this.emitAgentTasks(clientId);
+        return;
+      case "agent_task_stop": {
+        this.getActiveSession(cmd.taskId)?.cancel();
+        return;
+      }
+      case "agent_task_remove":
+        await this.agentTaskStore().remove(cmd.taskId);
+        this.emitAgentTasks();
+        return;
+      case "agent_task_seen":
+        if (this.agentTaskStore().get(cmd.taskId)?.unread) {
+          this.agentTaskStore().update(cmd.taskId, { unread: false });
+          this.emitAgentTasks();
+        }
+        return;
       case "set_permission_mode": {
         const mode = normalizePermissionMode(cmd.mode);
         if (clientId) this.clientPermissionModes.set(clientId, mode);
@@ -1536,6 +1561,123 @@ export class SessionHub {
     this.emitResult(sid, clientId, { type: "edit_mode_set", mode } as AgentEvent);
   }
 
+  // ── 后台 Agent 任务 ──
+
+  private agentTaskStoreInstance: AgentTaskStore | null = null;
+
+  private agentTaskStore(): AgentTaskStore {
+    if (!this.agentTaskStoreInstance) this.agentTaskStoreInstance = new AgentTaskStore(this.deps.createHost().fs, this.deps.homeDir);
+    return this.agentTaskStoreInstance;
+  }
+
+  private emitAgentTasks(clientId?: string): void {
+    void this.agentTaskStore().list().then((tasks) => {
+      const event = { type: "agent_tasks", tasks } as AgentEvent;
+      if (clientId) this.sendToClient(clientId, event);
+      else this.channel.emit(event);
+    });
+  }
+
+  /**
+   * 交给后台：新建一条会话，在自动权限下跑完整个任务。
+   * 会话不归属任何面板（事件投给一个不存在的面板标识，不会串到正在聊的面板里）；
+   * 用户随时可以在会话列表 / 后台任务面板里打开它，打开后流式过程照常显示。
+   */
+  private async handleAgentTaskStart(cmd: Extract<ControlCommand, { type: "agent_task_start" }>, clientId: string | undefined): Promise<void> {
+    const content = (cmd.content || "").trim();
+    if (!content) return;
+    // 任务清单里显示用户写的那句话；带了附件时发给模型的 content 里还有文件内容
+    const display = (cmd.displayText || "").trim() || content;
+    if (!cmd.model?.trim() || !cmd.provider?.trim()) throw new Error("请先在模型菜单中选择已配置的 Provider 和模型");
+    const { all: allWorkspaces, primary: primaryWorkspace } = this.resolveWorkspaces();
+    const ws_dir = cmd.workspace || primaryWorkspace;
+    const ws_dirs = cmd.workspaces?.length ? cmd.workspaces : allWorkspaces;
+    const created = await this.storage.createSession({
+      id: "",
+      title: PLACEHOLDER_TITLE,
+      model: cmd.model,
+      provider: cmd.provider,
+      workspace: ws_dir,
+      workspaces: ws_dirs.length > 1 ? ws_dirs : undefined,
+      mode: "agent",
+      messages: [],
+      totalTokens: 0,
+    });
+    const sid = created.id;
+    const channel = this.getOrCreateSessionChannel(sid);
+    channel.clientId = `agent-task:${sid}`;
+    channel.onEvent = (event) => {
+      const step = stepFromEvent(event as { type?: string });
+      if (step && this.agentTaskStore().get(sid)?.status === "running") {
+        this.agentTaskStore().update(sid, { step }, false);
+        this.throttledEmitAgentTasks();
+      }
+    };
+    const session = this.createSession(sid, ws_dir, undefined, ws_dirs, undefined, "agent");
+    session.setSessionId(sid);
+    session.unattended = true;
+    // 没人盯着，不能卡在审批上：至少自动；用户当前是完全访问就沿用
+    const mode = clientId ? this.clientPermissionModes.get(clientId) : undefined;
+    await session.setPermissionMode(mode === "full" ? "full" : "auto");
+    this.registerPersistence(session, sid);
+    this.activeSessions.set(sid, session);
+
+    const task: AgentTask = { id: sid, prompt: display, status: "running", startedAt: Date.now(), model: cmd.model, provider: cmd.provider, workspace: ws_dir, step: "准备开始" };
+    await this.agentTaskStore().add(task);
+    this.channel.emit({ type: "agent_task_started", task, ...(clientId ? { clientId } : {}) } as AgentEvent);
+    this.emitAgentTasks();
+
+    void this.handleUserMessage({
+      type: "user_message",
+      sessionId: sid,
+      content: AGENT_TASK_PREFACE + content,
+      displayText: display,
+      model: cmd.model,
+      provider: cmd.provider,
+      mode: "agent",
+      ...(cmd.effort ? { effort: cmd.effort } : {}),
+    } as UserMessageCommand & { sessionId: string }, undefined).catch((err) => {
+      this.agentTaskStore().update(sid, { status: "failed", endedAt: Date.now(), step: undefined, summary: (err as Error).message, unread: true });
+      this.emitAgentTasks();
+    });
+  }
+
+  private agentTasksEmitTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** 进度更新很频繁（每个工具都有一条），合并成最多每秒一次 */
+  private throttledEmitAgentTasks(): void {
+    if (this.agentTasksEmitTimer) return;
+    this.agentTasksEmitTimer = setTimeout(() => {
+      this.agentTasksEmitTimer = null;
+      this.emitAgentTasks();
+    }, 1000);
+  }
+
+  /** 一轮跑完：后台任务据此记结果、发完成通知（还有插话 / 后台进程通知要接着跑时先不算完） */
+  private async finishAgentTaskTurn(sid: string, session: AgentSession): Promise<void> {
+    const store = this.agentTaskStore();
+    const task = store.get(sid);
+    if (!task) return;
+    const saved = await this.storage.getSession(sid).catch(() => null);
+    if (saved?.title && saved.title !== PLACEHOLDER_TITLE) task.title = saved.title;
+    if (session.pendingSteers.length > 0 || this.pendingNotices.has(sid)) {
+      store.update(sid, {});
+      return;
+    }
+    const last = [...session.getMessages()].reverse().find((m) => m.role === "assistant" && typeof m.content === "string" && m.content.trim()) as { content: string; turnStats?: { turnStatus?: string } } | undefined;
+    const turnStatus = last?.turnStats?.turnStatus;
+    const status: AgentTask["status"] = session.isCancelled || turnStatus === "cancelled" ? "stopped" : turnStatus === "error" ? "failed" : "done";
+    const updated = store.update(sid, {
+      status,
+      endedAt: Date.now(),
+      step: undefined,
+      summary: last?.content.trim().replace(/\s+/g, " ").slice(0, 280),
+      unread: true,
+    });
+    if (updated) this.channel.emit({ type: "agent_task_done", task: updated } as AgentEvent);
+    this.emitAgentTasks();
+  }
+
   /** 处理用户消息 */
   private async handleUserMessage(cmd: UserMessageCommand & { clientId?: string; sessionId?: string }, clientId: string | undefined): Promise<void> {
     const { all: allWorkspaces, primary: primaryWorkspace } = this.resolveWorkspaces();
@@ -1612,7 +1754,15 @@ export class SessionHub {
     const execSessionId = sid!;
     const execSession = session!;
     // 记录最近活跃会话：供侧栏树按钮等「无 clientId」入口的指令定位目标（见 resolveSessionId）
-    this.lastActiveSessionId = execSessionId;
+    // 后台任务的会话不算「最近活跃」：侧栏按钮等全局入口不该作用到它上面
+    await this.agentTaskStore().list();
+    const agentTask = this.agentTaskStore().get(execSessionId);
+    if (!agentTask) this.lastActiveSessionId = execSessionId;
+    else if (agentTask.status !== "running") {
+      // 用户打开已结束的后台任务接着聊：重新算作运行中
+      this.agentTaskStore().update(execSessionId, { status: "running", endedAt: undefined, step: "继续处理", unread: false });
+      this.emitAgentTasks();
+    }
     this.runningSessions.add(execSessionId);
 
     const finalContent = cmd.content || "";
@@ -1664,6 +1814,8 @@ export class SessionHub {
         execSession.appendTrace("session.title_updated", { title });
       }
     }
+
+    if (this.agentTaskStore().get(execSessionId)) await this.finishAgentTaskTurn(execSessionId, execSession);
 
     // 这一轮结束时还有没插进去的插话（模型在写最终回答、或被停止）：用户的话优先，马上开新一轮
     if (execSession.pendingSteers.length > 0) {

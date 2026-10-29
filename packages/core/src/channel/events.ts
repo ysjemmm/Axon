@@ -8,6 +8,7 @@
  * 注意：这里只定义“事件形状”，不定义传输方式。传输由 AgentChannel 的具体实现决定。
  */
 
+import type { AgentTask } from "../session/agentTasks.js";
 import type { CoworkCheck } from "../cowork/checks.js";
 import type { BackgroundTaskInfo } from "../session/backgroundTasks.js";
 import type { ConnectorTemplateInfo } from "../connectors/catalog.js";
@@ -222,6 +223,9 @@ export type AgentEventPayload =
   // ── 编辑模式 / 待确认改动 ──
   | { type: "edit_mode_set"; mode: "auto" | "manual" }
   | { type: "permission_mode_set"; mode: "safe" | "auto" | "full" }
+  | { type: "agent_tasks"; tasks: AgentTask[] }
+  | { type: "agent_task_started"; task: AgentTask }
+  | { type: "agent_task_done"; task: AgentTask }
   | {
       type: "edits_updated";
       pending: string[];

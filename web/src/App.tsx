@@ -8,6 +8,8 @@ import { RelayTabView } from "./components/RelayTabView";
 import { PowerStudio } from "./components/PowerStudio";
 import { McpStudio } from "./components/McpStudio";
 import { ConnectorsDialog, OPEN_CONNECTORS_EVENT } from "./components/ConnectorsDialog";
+import { AgentTaskToasts } from "./components/chat/AgentTaskToasts";
+import { agentTaskName, OPEN_SESSION_EVENT, type AgentTask } from "./lib/agentTasks";
 import { ProviderStudio } from "./components/ProviderStudio";
 import { MarketplaceStudio } from "./components/MarketplaceStudio";
 import { X } from "lucide-react";
@@ -191,6 +193,18 @@ function App() {
     if (coworkOpen) setCoworkMounted(true);
   }, [coworkOpen]);
 
+  // 后台任务：完成提醒 + 在面板里打开某条会话（后台面板的「打开」、提醒的「查看」、IDE 通知的「查看」）
+  const [doneTasks, setDoneTasks] = useState<AgentTask[]>([]);
+  const openSessionRef = useRef<(id: string) => void>(() => {});
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const id = (e as CustomEvent<{ sessionId?: string }>).detail?.sessionId;
+      if (id) openSessionRef.current(id);
+    };
+    window.addEventListener(OPEN_SESSION_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_SESSION_EVENT, onOpen);
+  }, []);
+
   // 连接器面板：全局一个，输入框「+」菜单派发 OPEN_CONNECTORS_EVENT，IDE 命令发 open_connectors
   const [connectorsOpen, setConnectorsOpen] = useState(false);
   useEffect(() => {
@@ -205,6 +219,17 @@ function App() {
     if (m.type === "open_connectors") {
       setConnectorsOpen(true);
       return;
+    }
+    const extra = msg as { sessionId?: unknown; task?: AgentTask };
+    if (m.type === "open_session" && typeof extra.sessionId === "string") {
+      openSessionRef.current(extra.sessionId);
+      return;
+    }
+    // 后台任务完成：右下角提醒（面板照常收到这条事件，不拦）；IDE 面板收起时由扩展弹系统通知
+    if (m.type === "agent_task_done" && extra.task) {
+      const task = extra.task;
+      setDoneTasks((prev) => [task, ...prev.filter((t) => t.id !== task.id)].slice(0, 3));
+      (window as { __axonVSCode?: { postMessage: (m: unknown) => void } }).__axonVSCode?.postMessage({ type: "agent_task_notify", sessionId: task.id, title: agentTaskName(task), status: task.status });
     }
     if (m.type === "set_mode") {
       const next = (m as any).mode;
@@ -336,6 +361,18 @@ function App() {
     }
     setHistoryOpen(false);
   }, [tabs, mode, setActive]);
+
+  /** 打开一条后台任务的会话：它们都是 Code（agent）会话，先切到 Code 再开 tab */
+  const openSessionInAgent = useCallback((id: string) => {
+    setCoworkOpen(false);
+    setMode("agent");
+    const existing = tabs.find((t) => t.id === id && t.mode === "agent");
+    const key = existing?.key ?? genTabKey();
+    if (!existing) setTabs((prev) => [...prev, { id, title: "加载中...", key, mode: "agent" }]);
+    setActiveKeys((prev) => ({ ...prev, agent: key }));
+    setHistoryOpen(false);
+  }, [tabs]);
+  useEffect(() => { openSessionRef.current = openSessionInAgent; }, [openSessionInAgent]);
 
   /** 新建 tab（当前模式）：已有空会话就直接切过去复用，不再叠一条新的 */
   const openBlankTab = useCallback(() => {
@@ -573,6 +610,11 @@ function App() {
         </div>
       )}
       <ConnectorsDialog open={connectorsOpen} onClose={() => setConnectorsOpen(false)} connected={connected} send={send} />
+      <AgentTaskToasts
+        tasks={doneTasks}
+        onOpen={(task) => { openSessionInAgent(task.id); send({ type: "agent_task_seen", taskId: task.id }); setDoneTasks((prev) => prev.filter((t) => t.id !== task.id)); }}
+        onDismiss={(task) => setDoneTasks((prev) => prev.filter((t) => t.id !== task.id))}
+      />
     </div>
   );
 }

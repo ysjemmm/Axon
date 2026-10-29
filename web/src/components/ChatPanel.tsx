@@ -11,7 +11,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { SESSION_HEADER_SLOT_ID } from "./SessionSwitcher";
 import { LiveSparkModeContext, type SparkMode } from "./AxonSpark";
-import { Loader2, ImagePlus, X, Paperclip, Plus, Camera, ChevronDown, ListChecks, Globe, NotebookPen, FolderOpen, Plug } from "lucide-react";
+import { Loader2, ImagePlus, X, Paperclip, Plus, Camera, ChevronDown, ListChecks, Globe, NotebookPen, FolderOpen, Plug, Rocket } from "lucide-react";
 import { OPEN_CONNECTORS_EVENT } from "./ConnectorsDialog";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -691,7 +691,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   }, [connected]);
 
   // ── 发送 ──────────────────────────────────────────────────────────────────
-  const doSend = (text: string, sendImgs: string[], sendFileList: AttachedFile[], segments: UserSegment[]) => {
+  const doSend = (text: string, sendImgs: string[], sendFileList: AttachedFile[], segments: UserSegment[], toBackground = false) => {
     if (!hasConfiguredSelection) return;
     const sendImages = canSendImages ? sendImgs : [];
     const sendFiles = [...sendFileList];
@@ -777,6 +777,22 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
       },
     };
 
+    // 交给后台：新开一条后台会话独立跑完，当前会话不动
+    if (toBackground) {
+      send({
+        type: "agent_task_start",
+        clientId,
+        content: payload.send.content,
+        displayText: text,
+        model: actualModel,
+        provider: actualProvider,
+        effort: actualEffort,
+        workspace: session.workspace || undefined,
+        workspaces: session.workspaces.length > 0 ? session.workspaces : undefined,
+      });
+      return;
+    }
+
     const queued = session.submit(payload);
     if (!queued) {
       // submit 会先更新 chatHistory/isLoading，footer 的“思考中...”占位随后才挂载；
@@ -825,6 +841,31 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     editorRef.current?.clear();
     setComposerEmpty(true);
     setImages([]);
+    setUploadedFiles([]);
+    showFileError("");
+  };
+
+  /** 「交给后台执行」：输入框里的任务交给一条后台会话独立完成，做完通知你 */
+  const handleSendToBackground = () => {
+    if (processingAttachments.length > 0) {
+      showFileError("附件仍在处理中，请稍候");
+      return;
+    }
+    if (images.length > 0) {
+      showFileError("后台任务暂不支持图片，请改成文字描述");
+      return;
+    }
+    if (mode !== "quest" && session.workspacesLoaded && !session.workspace && session.workspaces.length === 0) {
+      setPickerOpen(true);
+      return;
+    }
+    const { text, tags, segments } = editorRef.current?.read() ?? { text: "", tags: [], segments: [] };
+    const sendTags: AttachedFile[] = [...uploadedFiles.map(({ id: _id, ...file }) => file), ...tags];
+    if (!text && sendTags.length === 0) return;
+    pushHistory(text);
+    doSend(text, [], sendTags, segments, true);
+    editorRef.current?.clear();
+    setComposerEmpty(true);
     setUploadedFiles([]);
     showFileError("");
   };
@@ -2189,6 +2230,17 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                         <span className="flex-1">截图</span>
                       </button>
 
+                      {mode !== "quest" && (
+                        <button
+                          onClick={() => { handleSendToBackground(); setMenuOpen(false); }}
+                          disabled={composerEmpty || !hasConfiguredSelection || !connected}
+                          className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs hover:bg-muted/60 transition-colors text-left disabled:opacity-40 disabled:cursor-not-allowed"
+                          title={composerEmpty ? "先在输入框里写好要交代的任务" : "新开一条后台会话把它做完（自动权限），你可以继续聊别的，做完会通知你"}
+                        >
+                          <Rocket className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                          <span className="flex-1">交给后台执行</span>
+                        </button>
+                      )}
                       <button
                         onClick={() => { window.dispatchEvent(new Event(OPEN_CONNECTORS_EVENT)); setMenuOpen(false); }}
                         className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs hover:bg-muted/60 transition-colors text-left"

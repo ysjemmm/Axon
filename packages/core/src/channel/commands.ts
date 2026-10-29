@@ -175,6 +175,13 @@ export type ControlCommandPayload =
   | { type: "set_edit_mode"; mode: "auto" | "manual" }
   /** 权限模式：safe 安全（默认）/ auto 自动（不审批）/ full 完全访问（自动 + 可写工作区外） */
   | { type: "set_permission_mode"; mode: "safe" | "auto" | "full" }
+  /** 后台 Agent 任务：交给 AI 在后台独立完成（新会话，自动权限） */
+  | { type: "agent_task_start"; content: string; displayText?: string; model: string; provider: string; effort?: string; workspace?: string; workspaces?: string[] }
+  | { type: "agent_tasks_list" }
+  | { type: "agent_task_stop"; taskId: string }
+  | { type: "agent_task_remove"; taskId: string }
+  /** 用户看过了（清掉未读标记） */
+  | { type: "agent_task_seen"; taskId: string }
   | { type: "accept_edits"; path?: string }
   | { type: "reject_edits"; path?: string }
   | { type: "undo_edits"; path: string }

@@ -1303,6 +1303,9 @@ export class AgentSession {
     this.host.edits.setMode(skipsApproval(this.permissionMode) ? "auto" : mode);
   }
 
+  /** 后台任务（没人盯着）：不提问、不等用户（见 session/agentTasks.ts） */
+  /** @internal */ unattended = false;
+
   /** 权限模式（安全 / 自动 / 完全访问，逐层包含，见 permissionMode.ts） */
   /** @internal */ permissionMode: PermissionMode = "safe";
   private editModePreference: "auto" | "manual" = "manual";

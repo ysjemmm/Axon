@@ -168,6 +168,10 @@ export class ToolCallExecutor {
     if (!verdict.allowed) {
       result = verdict.message || "调用被拦截。";
       status = "error";
+    } else if (this.s.unattended && (route === "ask_user" || route === "ask_form")) {
+      // 后台任务没人盯着：问了也没人答，会一直卡住
+      result = "这是后台任务，用户不在、没人回答。请按最合理的方式自己决定并继续，最后在汇报里说明你的取舍。";
+      status = "error";
     } else if (route === "delegate_task") {
       const out = await this.s.delegatedToolExecutor.execute({ toolName, toolArgs, toolCallId });
       result = out.result;
