@@ -73,42 +73,6 @@ const RESTORE_HISTORY_BATCH_SIZE = 24;
  */
 const COMPOSER_LANDING_MS = 420;
 
-/** 单行版式下编辑区与工具栏之间的间距（对应容器上的 gap-1）。 */
-const COMPOSER_ROW_GAP = 4;
-/** 单行版式下工具栏自身左右内边距合计（对应 toolbar 上的 px-1.5）。 */
-const COMPOSER_TOOLBAR_PAD = 12;
-/**
- * 单行版式里编辑区至少要留出的宽度。
- * 面板窄到工具栏吃掉大半宽度时，勉强并排会把输入区挤成一条缝（连发送按钮都可能被裁掉），
- * 这时宁可退回多行版式——多行本来就是"一定放得下"的那一侧。
- */
-const COMPOSER_MIN_INLINE_EDITOR_WIDTH = 200;
-
-/**
- * 数编辑区「真实渲染出来的行数」。
- *
- * 用 Range 量内容占据的矩形、总高除以行高。自动折行会多出一个行盒，所以它同时覆盖
- * 「用户敲了回车」和「长文本被折行」两种情况——只数 "\n" 的个数会漏掉后者。
- *
- * 不能用 scrollHeight：contentEditable 带 min-height(44px)，空文档的 scrollHeight 就是 44，
- * 换算下来永远"两行多"，空态根本收不回一行。
- */
-function measureRenderedLines(root: HTMLElement): number {
-  const range = document.createRange();
-  range.selectNodeContents(root);
-  let top = Number.POSITIVE_INFINITY;
-  let bottom = Number.NEGATIVE_INFINITY;
-  for (const rect of Array.from(range.getClientRects())) {
-    if (rect.width <= 0 && rect.height <= 0) continue;
-    if (rect.top < top) top = rect.top;
-    if (rect.bottom > bottom) bottom = rect.bottom;
-  }
-  if (!Number.isFinite(top) || bottom - top <= 0) return 1; // 空文档：一个空段落，按一行算
-  const lineHeight = Number.parseFloat(window.getComputedStyle(root).lineHeight) || 21;
-  // 行内 tag（28px 高）比行高略高，所以按四舍五入收，别把一行算成两行
-  return Math.max(1, Math.round((bottom - top) / lineHeight));
-}
-
 export function ChatPanel({ clientId, sessionId, mode, connected, active, send, onSessionCreated, onCompactionMigrated, onSessionForked, onStreamingChange }: ChatPanelProps) {
   const session = useChatSession({ clientId, sessionId, mode, connected, send, onSessionCreated, onCompactionMigrated, onSessionForked, onStreamingChange });
   const [hiddenMessageCount, setHiddenMessageCount] = useState(0);
@@ -380,98 +344,14 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     updateDiagState({ streaming: session.isLoading });
   }, [session.isLoading]);
 
-  // ── 输入区版式：单行 / 多行 ──────────────────────────────────────────────
-  // 只有一行文字时整块只有一行高：编辑区与工具栏并排（空态居中时例外，见 composerStacked）；
-  // 内容超过一行（敲回车、粘贴多行、或长文本自动折行）时切成上下两段，并随内容继续长高。
-  const [composerMultiline, setComposerMultiline] = useState(false);
-  /** state 的同步镜像：同一次事件里可能连跑两遍判定，读 state 会拿到旧值 */
-  const composerMultilineRef = useRef(false);
-  // 空态居中时一律用上下两段的版式，并给编辑区留出几行高度：新对话页的输入框就是这一屏的主角，
-  // 压成一行细条既不好点、也不像"从这里开始"。有消息之后再回到按内容判定的单行 / 多行。
-  const composerStacked = composerMultiline || composerCentered;
+  // ── 输入区版式：固定上下两段（编辑区默认两行高，工具栏单独一行） ──
+  // 以前只有一行文字时编辑区和工具栏挤在同一行，内容和按钮混在一起；现在始终分开。
   /** 输入区内容层：它的自然高度就是动画的目标高度 */
   const inputAreaRef = useRef<HTMLDivElement>(null);
   const editorWrapRef = useRef<HTMLDivElement>(null);
-  const toolbarLeftRef = useRef<HTMLDivElement>(null);
-  const toolbarRightRef = useRef<HTMLDivElement>(null);
   const [inputAreaHeight, setInputAreaHeight] = useState<number | null>(null);
   /** 会话记忆是否已沉淀过内容（决定记忆图标的着色与状态点） */
   const hasMemory = session.memory.trim().length > 0;
-
-  /**
-   * 「如果现在切回单行版式，这行内容会不会折行？」
-   *
-   * 单行版式里编辑区被工具栏挤窄，多行版式里是满宽——同一段文字在两种版式下的行数可能不一样。
-   * 不收这个口子，宽度刚好落在「满宽一行、窄版两行」区间的内容就会
-   * 展开 → 折行 → 收起 → 不折行 → 展开……来回抖。
-   *
-   * 做法：把编辑区同步收窄到单行版式的可用宽度，量一次真实行数，再复原。三段都在同一个
-   * JS 任务里完成（中间不会被绘制），所以看不到闪烁；而且只有「多行版式 + 当前只剩一行」
-   * 这个边界才会走到（典型是删字删到只剩一行），不是每次按键都做。
-   */
-  const wouldWrapInCompactRow = useCallback((): boolean => {
-    const editorEl = editorRef.current?.getEditorElement();
-    const wrap = editorWrapRef.current;
-    const leftW = toolbarLeftRef.current?.getBoundingClientRect().width ?? 0;
-    const rightW = toolbarRightRef.current?.getBoundingClientRect().width ?? 0;
-    // 量不到宽度就保守地留在多行：多行是"一定放得下"的那一侧，不会来回切
-    if (!editorEl || !wrap || leftW <= 0) return true;
-    // 单行版式下编辑区可用宽度 ≈ 满宽 - 工具栏自然宽 - 组间距 - 工具栏内边距。
-    // 这里没扣掉「多行版式右内边距更大」那几十像素，量出来比实际窄一点——
-    // 只会让刚好塞满一行的文本晚一步收窄，不会抖。
-    const capacity = editorEl.clientWidth - leftW - rightW - COMPOSER_ROW_GAP - COMPOSER_TOOLBAR_PAD;
-    if (capacity < COMPOSER_MIN_INLINE_EDITOR_WIDTH) return true;
-    const style = window.getComputedStyle(wrap);
-    const hPad = (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0);
-    const prevWidth = wrap.style.width;
-    let wrapped = true;
-    try {
-      wrap.style.width = `${capacity + hPad}px`;
-      // 读矩形会强制同步布局，量到的是收窄之后的真实排版
-      wrapped = measureRenderedLines(editorEl) > 1;
-    } finally {
-      // 复原必须无条件执行：内联宽度留在收窄值上会把编辑区永久压窄
-      wrap.style.width = prevWidth;
-    }
-    return wrapped;
-  }, []);
-
-  /**
-   * 重新判定单行 / 多行。判据是真实排版高度，不是 "\n" 的个数。
-   * 只在结果真的变了才 setState，避免每次按键都多渲染一遍输入区。
-   */
-  const evaluateComposerLayout = useCallback(() => {
-    const editorEl = editorRef.current?.getEditorElement();
-    if (!editorEl) return;
-    let next = measureRenderedLines(editorEl) > 1;
-    // 单行版式里编辑区已经被挤到没法用（面板太窄）：退回多行版式。
-    // 反过来在多行版式里由 wouldWrapInCompactRow 按同一个阈值把关，两边一致不会来回切。
-    // clientWidth 为 0 说明面板处于隐藏状态（量不到宽度），这时别据此判定。
-    const inlineWidth = editorEl.clientWidth;
-    if (!next && !composerMultilineRef.current && inlineWidth > 0 && inlineWidth < COMPOSER_MIN_INLINE_EDITOR_WIDTH) {
-      next = true;
-    }
-    if (!next && composerMultilineRef.current) next = wouldWrapInCompactRow();
-    if (next === composerMultilineRef.current) return;
-    composerMultilineRef.current = next;
-    setComposerMultiline(next);
-  }, [wouldWrapInCompactRow]);
-
-  // 编辑区宽度变化（面板拖拽 / 窗口缩放 / 版式切换本身）后重新判定。
-  // 只认宽度：高度变化是本组件自己的排版产物，跟着它重算会和 ResizeObserver 形成回环。
-  useEffect(() => {
-    const wrap = editorWrapRef.current;
-    if (!wrap || typeof ResizeObserver === "undefined") return;
-    let lastWidth = -1;
-    const observer = new ResizeObserver((entries) => {
-      const width = entries[0]?.contentRect.width ?? 0;
-      if (Math.abs(width - lastWidth) < 0.5) return;
-      lastWidth = width;
-      evaluateComposerLayout();
-    });
-    observer.observe(wrap);
-    return () => observer.disconnect();
-  }, [evaluateComposerLayout]);
 
   // 高度动画的数据源：量内层（内容自然高度），写到外层的内联 height 上。
   // 分成两个元素是为了打破回环——内层高度不受外层的固定高度约束，外层也就不会量到自己。
@@ -490,9 +370,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   const handleEditorChange = useCallback((before: string) => {
     setComposerEmpty(editorRef.current?.isEmpty() ?? true);
     slash.handleTextChange(before);
-    // 内容一变就重判版式：变长（换行 / 折行 / 粘贴）展开，删回一行收起
-    evaluateComposerLayout();
-  }, [slash, evaluateComposerLayout]);
+  }, [slash]);
 
   /** 当前模型是否支持图片（含自定义 provider 模型，故走合并列表） */
   const models = useModels();
@@ -2131,34 +2009,26 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
           )}
           {/* 会话已迁移 / 命令风险 / 上下文超限都属于「提示类」，已上移到输入框上方的状态条 */}
           {/* 命令信任授权改为内联在对应命令卡片下方（无感模式），见 ToolCallItem。此处不再用模态弹窗 */}
-          {/* 输入区：单行版式 = 编辑区与工具栏并排一行；多行版式 = 编辑区在上、工具栏在下。
-              外层是「高度动画壳」：内层高度由内容自然撑开（文字逐行变高、或版式切换都会改变它），
-              外层写内联 height 并做 CSS 过渡——height 从旧值过渡到新值，盒子才会平滑长高/收拢，
-              而不是被内容顶得一跳一跳。prefers-reduced-motion 下由 motion-reduce 关掉过渡，直接切换。 */}
+          {/* 输入区：编辑区在上、工具栏在下。
+              外层是「高度动画壳」：内层高度由内容自然撑开（文字逐行变高），
+              外层写内联 height 并做 CSS 过渡——盒子平滑长高/收拢，而不是被内容顶得一跳一跳。
+              prefers-reduced-motion 下由 motion-reduce 关掉过渡，直接切换。 */}
           <div
             className="overflow-hidden transition-[height] duration-200 ease-out motion-reduce:transition-none"
             style={inputAreaHeight != null ? { height: inputAreaHeight } : undefined}
           >
             <div
               ref={inputAreaRef}
-              className={composerStacked ? "flex flex-col" : "flex items-center gap-1"}
+              className="flex flex-col"
             >
-              {/* 输入框：contentEditable 富文本，tag 内联在光标处（MentionEditor）
-                  多行版式：满宽、沿用原来的内边距；
-                  单行版式：flex-1 吃掉工具栏之外的剩余宽度（min-w-0 才允许被压窄），
-                  右侧只留一点缝，工具栏自己的 px 会再补一点间距。
-                  单行时还要把编辑区自己的 min-height 压到一行高（原本 44px，是给多行留的
-                  舒适点按高度）：否则一行文字贴在 44px 盒子的顶上，同一行里的工具栏却被
-                  垂直居中，看起来按钮比文字低半截。用后代选择器改 ProseMirror 的 min-height，
-                  不去动 MentionEditor 的默认值（多行版式仍然要 44px）。 */}
+              {/* 输入框：contentEditable 富文本，tag 内联在光标处（MentionEditor）。
+                  满宽；编辑区沿用 MentionEditor 默认的 44px 最小高度，空着时也是两行高，不显得局促。 */}
               <div
                 ref={editorWrapRef}
                 className={
                   composerCentered
                     ? "w-full px-4 pt-3.5 pb-1 [&_.ProseMirror]:min-h-[66px]"
-                    : composerMultiline
-                      ? "w-full px-3 pr-10 pt-2 pb-1"
-                      : "min-w-0 flex-1 pl-3 pr-1 py-1.5 [&_.ProseMirror]:min-h-[22px]"
+                    : "w-full px-3.5 pt-2.5 pb-0.5"
                 }
               >
                 <MentionEditor
@@ -2184,17 +2054,12 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                 · 颜色只给「状态」：发送按钮（主操作）与上下文用量色。其余控件一律 muted 灰字，
                   hover 才变深。编辑模式的绿/黄点缩成 6px 状态点，不再与用量圆环抢视觉。
                 · 左组：[+] 在最左（附加内容是输入的"前置动作"，靠近输入起点），模型选择紧随其后。
-                · 单行版式下这一整组贴在编辑区右侧（shrink-0，不跟着编辑区一起压缩），
-                  多行版式下回到整行：左边一组、右边发送。
+                · 工具栏独占编辑区下方一行：左边一组、右边发送。
               */}
               <div
-                className={
-                  composerStacked
-                    ? "flex items-center justify-between gap-2 px-1.5 pb-1.5"
-                    : "flex shrink-0 items-center gap-0.5 px-1.5"
-                }
+                className="flex items-center justify-between gap-2 px-1.5 pb-1.5"
               >
-                <div ref={toolbarLeftRef} className="flex items-center gap-0.5 min-w-0">
+                <div className="flex items-center gap-0.5 min-w-0">
                   <Popover open={menuOpen} onOpenChange={setMenuOpen}>
                     <PopoverTrigger asChild>
                       <button
@@ -2350,7 +2215,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                   />
 
                 </div>
-                <div ref={toolbarRightRef} className="flex items-center gap-0.5 shrink-0">
+                <div className="flex items-center gap-0.5 shrink-0">
                   {mode === "quest" ? (
                     /* Quest：联网搜索开关（思考开关已统一到模型选择器里，agent / quest 共用） */
                     <TooltipProvider>
