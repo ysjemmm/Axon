@@ -72,6 +72,8 @@ export class DelegateRunner {
       modelSupportsThinking: declaredThinkingFor(execModel, execProvider),
       // 子 Agent 的 execute_command 复用父会话的信任门：灾难硬拦 + 白名单 + 冒泡到用户审批
       gateCommand: (command, toolCallId) => this.s.gateCommand(command, toolCallId),
+      // 写入边界跟随父会话的权限模式（完全访问时子 Agent 也能写工作区外）
+      writeRoots: () => this.s.permissionWriteRoots(),
     });
 
     let result: SubAgentResult;

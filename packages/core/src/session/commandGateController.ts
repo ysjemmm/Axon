@@ -12,6 +12,7 @@
 
 import { CommandGate, type ApprovalDecision, type TrustRule, type GateOutcome, type TrustScope } from "../tools/index.js";
 import type { AgentSession } from "../agentSession.js";
+import { isCatastrophicCommand, skipsApproval } from "./permissionMode.js";
 
 export class CommandGateController {
   // 审批门：按 requestId 多路挂起 resolver。并发安全——parallel_research / 多个子 Agent
@@ -76,6 +77,11 @@ export class CommandGateController {
     toolCallId?: string,
     danger?: string,
   ): Promise<ApprovalDecision> {
+    // 自动 / 完全访问：不再问用户，本次放行（不写入白名单，切回安全模式后仍按原规则审批）。
+    // 一条命令就能毁掉整块盘 / 整个用户目录的除外，任何模式都要用户亲手确认。
+    if (skipsApproval(this.s.permissionMode) && !isCatastrophicCommand(command)) {
+      return Promise.resolve({ choice: "once" });
+    }
     const requestId = `cmd_${Date.now()}_${this.approvalSeq++}`;
     // 带上 toolCallId：前端据此把审批按钮内联到对应的命令卡片上（无感模式），而非弹独立模态框
     // danger 非空时前端卡片闪烁红色警示

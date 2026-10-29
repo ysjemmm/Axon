@@ -173,6 +173,8 @@ export type ControlCommandPayload =
   | { type: "focus_browser" }
   // 编辑模式 / 待确认改动
   | { type: "set_edit_mode"; mode: "auto" | "manual" }
+  /** 权限模式：safe 安全（默认）/ auto 自动（不审批）/ full 完全访问（自动 + 可写工作区外） */
+  | { type: "set_permission_mode"; mode: "safe" | "auto" | "full" }
   | { type: "accept_edits"; path?: string }
   | { type: "reject_edits"; path?: string }
   | { type: "undo_edits"; path: string }

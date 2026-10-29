@@ -23,6 +23,7 @@ export const STORAGE = {
   /** 按 provider:model 保存用户最后选择的思考强度；值为 null 表示用户显式关闭。 */
   EFFORT_PREFERENCES: "axon-effort-preferences",
   EDIT_MODE: "axon-edit-mode",
+  PERMISSION_MODE: "axon-permission-mode",
   /**
    * 思考开关（agent / quest 通用）。用新 key 而不是沿用旧的 axon-quest-think：
    * 旧 key 存的是"要不要展示思考过程"（默认关），新语义是"要不要请求思考"（默认开），
@@ -143,6 +144,7 @@ export const AGENT_EVENT = {
 export const CONTROL_CMD = {
   CANCEL: "cancel",
   SET_EDIT_MODE: "set_edit_mode",
+  SET_PERMISSION_MODE: "set_permission_mode",
   SET_ACTIVE_PROVIDER: "set_active_provider",
   USER_MESSAGE: "user_message",
   ADD_CONTEXT: "add_context",

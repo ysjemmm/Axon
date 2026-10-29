@@ -13,6 +13,7 @@
  * 一个 SessionHub 实例对应一条 UI 连接（一个 webview / 一个 ws）；一条连接下可有多个面板。
  */
 
+import { normalizePermissionMode, type PermissionMode } from "./permissionMode.js";
 import { uniqueAutoTitle, uniqueSessionTitle, PLACEHOLDER_TITLE } from "./sessionTitle.js";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { AgentSession } from "../agentSession.js";
@@ -113,6 +114,8 @@ export class SessionHub {
    * 这里按 clientId 记住期望模式，会话创建时统一回填，与消息顺序解耦。
    */
   private readonly clientEditModes = new Map<string, "auto" | "manual">();
+  /** 每个面板选的权限模式（同 clientEditModes：前端持久化、连接时重发，会话创建时回填） */
+  private readonly clientPermissionModes = new Map<string, PermissionMode>();
 
   /** 面板在会话创建前收到 set_workspace_group 时，按 clientId 暂存的 workspaces */
   private readonly pendingWorkspaces = new Map<string, string[]>();
@@ -367,6 +370,8 @@ export class SessionHub {
     if (clientId) {
       const desiredMode = this.clientEditModes.get(clientId);
       if (desiredMode) session.setEditMode(desiredMode);
+      const permission = this.clientPermissionModes.get(clientId);
+      if (permission) void session.setPermissionMode(permission);
     }
     // 注入滚动压缩配置
     if (this.deps.getCompactionConfig) {
@@ -695,6 +700,14 @@ export class SessionHub {
         return;
       case "set_edit_mode":
         return this.handleSetEditMode(cmd, clientId);
+      case "set_permission_mode": {
+        const mode = normalizePermissionMode(cmd.mode);
+        if (clientId) this.clientPermissionModes.set(clientId, mode);
+        const sid = this.resolveSessionId(cmd);
+        await this.getActiveSession(sid)?.setPermissionMode(mode);
+        this.emitResult(sid, clientId, { type: "permission_mode_set", mode } as AgentEvent);
+        return;
+      }
       case "accept_edits": {
         const sid = this.resolveSessionId(cmd);
         const s = this.getActiveSession(sid);

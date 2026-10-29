@@ -221,6 +221,7 @@ export type AgentEventPayload =
 
   // ── 编辑模式 / 待确认改动 ──
   | { type: "edit_mode_set"; mode: "auto" | "manual" }
+  | { type: "permission_mode_set"; mode: "safe" | "auto" | "full" }
   | {
       type: "edits_updated";
       pending: string[];

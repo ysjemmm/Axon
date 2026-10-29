@@ -500,6 +500,13 @@ export class PromptBuilder {
     const capabilityHint = this.buildCapabilityHint();
     if (capabilityHint) add("capabilities", capabilityHint);
 
+    // 权限模式：安全模式不注入（默认行为）；自动 / 完全访问时告诉模型不用等审批、能写到哪
+    if (this.s.permissionMode === "auto") {
+      add("permission", "权限模式：自动。命令、改动、外部工具调用都不需要用户逐个批准，直接执行；文件写入仍限定在工作区（和产物目录）内。动手前依旧要想清楚，删除数据、推送代码、发邮件这类不可逆或对外的操作按用户的要求来，别擅自扩大范围。");
+    } else if (this.s.permissionMode === "full") {
+      add("permission", "权限模式：完全访问。命令、改动、外部工具调用都不需要用户逐个批准，直接执行；可以读写本机任意目录（包括工作区以外，用绝对路径）。动手前依旧要想清楚，删除数据、推送代码、发邮件这类不可逆或对外的操作按用户的要求来，别擅自扩大范围。");
+    }
+
     const verbosityCalibration = this.getVerbosityCalibration();
     if (verbosityCalibration) {
       add("verbosity", verbosityCalibration);
@@ -589,7 +596,7 @@ export class PromptBuilder {
 
 type InjectionKey =
   | "env" | "artifact" | "capabilities" | "verbosity" | "workspaces" | "focus" | "terminal"
-  | "ide" | "skills" | "powers" | "wiki" | "workspaceAxon" | "memory" | "usage" | "tasks";
+  | "ide" | "skills" | "powers" | "wiki" | "workspaceAxon" | "memory" | "usage" | "tasks" | "permission";
 
 /** 一项上下文注入的快照（挂在用户消息的 _contextInjections 上，随历史持久化） */
 export interface ContextInjection {
@@ -614,6 +621,7 @@ const RETIRED_NOTICE: Record<string, string> = {
   workspaceAxon: "此前注入的工作区 .axon 指令已不再适用。",
   memory: "【会话记忆】已被清空，此前的记忆内容不再作为已确认前提。",
   usage: "此前的「上下文使用率」提醒已不再适用。",
+  permission: "权限模式已切回安全：没信任过的命令、外部工具的写操作要等用户批准，文件只能写在工作区（和产物目录）内。",
   tasks: "此前注入的【任务清单】已不再适用：以历史里最新一次 update_tasks 为准，或任务已全部完成。",
 };
 

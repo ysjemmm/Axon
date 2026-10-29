@@ -19,6 +19,7 @@ import { sealReasoning } from "./reasoningPlacement";
 import { useTypewriter } from "./useTypewriter";
 import { useToolCallQueue } from "./useToolCallQueue";
 import { markTurnEnd } from "@/lib/turnEndProbe";
+import { normalizePermissionMode, type PermissionMode } from "@/lib/permissionModes";
 
 /** 读取持久化的模型选择；无记录或旧的 "auto" 都视为未选择。 */
 function readStoredModelId(): string {
@@ -144,6 +145,9 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const [editMode, setEditMode] = useState<"auto" | "manual">(() => {
     try { return (localStorage.getItem(STORAGE.EDIT_MODE) as "auto" | "manual") || "auto"; } catch { return "auto"; }
   });
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(() => {
+    try { return normalizePermissionMode(localStorage.getItem(STORAGE.PERMISSION_MODE)); } catch { return "safe"; }
+  });
   /** 思考强度默认关闭；切换模型时由 ChatPanel 主动重置。 */
   const [effort, setEffort] = useState<string | null>(null);
   /** 没配置强度档位但声明支持思考时仍开启，由后端选择默认强度。 */
@@ -209,6 +213,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const modelRef = useRef(model); modelRef.current = model;
   const statusPhaseRef = useRef(statusPhase); statusPhaseRef.current = statusPhase;
   const editModeRef = useRef(editMode); editModeRef.current = editMode;
+  const permissionModeRef = useRef(permissionMode); permissionModeRef.current = permissionMode;
   const toolResultResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typewriter = useTypewriter();
   // ── tool_call 渲染队列 hook（卡片按序逐个入场） ──
@@ -335,6 +340,11 @@ export function useChatSession(opts: UseChatSessionOptions) {
 
   // ── 连接成功 / sessionId 变化时加载会话 ────────────────────────────────
   const prevConnectedRef = useRef(false);
+  /** 把本面板的编辑模式、权限模式告诉后端（后端按面板记住，会话建好时回填） */
+  const syncModes = () => {
+    send({ type: CONTROL_CMD.SET_EDIT_MODE, mode: editModeRef.current });
+    send({ type: CONTROL_CMD.SET_PERMISSION_MODE, mode: permissionModeRef.current });
+  };
   useEffect(() => {
     if (!connected) {
       prevConnectedRef.current = false;
@@ -346,12 +356,12 @@ export function useChatSession(opts: UseChatSessionOptions) {
 
     if (sessionId) {
       if (sessionId === ownedSessionId.current && !reconnected) {
-        send({ type: CONTROL_CMD.SET_EDIT_MODE, mode: editModeRef.current });
+        syncModes();
         return;
       }
       if (sessionId === lastLoadedSessionId.current && !reconnected) {
         ownedSessionId.current = sessionId;
-        send({ type: CONTROL_CMD.SET_EDIT_MODE, mode: editModeRef.current });
+        syncModes();
         return;
       }
       // 切到既有会话 / 重连：清空 UI、进入加载态、拉历史
@@ -371,7 +381,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
       setWorkspacesLoaded(false);  // 新开 session 时重置加载标志，等后端返回工作区列表后再判断
       send({ type: "reset_session" });
     }
-    send({ type: CONTROL_CMD.SET_EDIT_MODE, mode: editModeRef.current });
+    syncModes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected, sessionId]);
 
@@ -667,6 +677,13 @@ export function useChatSession(opts: UseChatSessionOptions) {
   // 写进来会让 cancelTurn 每次渲染都重建。本文件其余回调对 typewriter 也是同样处理。
   }, [send, toolConfirm, tokenUsage.used, finishLoading]);
 
+  /** 设置权限模式（安全 / 自动 / 完全访问），本机记住，连接 / 切会话时重发 */
+  const setPermissionModePreference = useCallback((next: PermissionMode) => {
+    setPermissionMode(next);
+    send({ type: CONTROL_CMD.SET_PERMISSION_MODE, mode: next });
+    try { localStorage.setItem(STORAGE.PERMISSION_MODE, next); } catch { /* ignore */ }
+  }, [send]);
+
   /** 设置编辑模式；无本地记录的首次使用默认自动应用。 */
   const setEditModePreference = useCallback((next: "auto" | "manual") => {
     if (next === editMode) return;
@@ -858,7 +875,7 @@ export function useChatSession(opts: UseChatSessionOptions) {
     // 动作
     submit, removeFromQueue, cancelTurn,
     pendingSteers, cancelSteer,
-    setEditModePreference, acceptEdits, rejectEdits, undoEdits, editUserMessage, confirmTool,
+    setEditModePreference, permissionMode, setPermissionModePreference, acceptEdits, rejectEdits, undoEdits, editUserMessage, confirmTool,
     /** 从某条 AI 回复分叉：新会话带截至那一轮为止的历史前缀 */
     forkFromMessage,
     answerUserQuestion,

@@ -140,6 +140,8 @@ function assertWithinWorkspaces(
 ): void {
   const base = workspaces && workspaces.length > 0 ? workspaces : [cwd];
   const extra = (extraRoots ?? []).filter((p) => typeof p === "string" && p.trim() !== "");
+  // 完全访问模式：writeRoots 里带通配，不限目录
+  if (extra.includes("*")) return;
   const roots = extra.length > 0 ? [...base, ...extra] : base;
   if (!isWithinWorkspaces(absPath, roots)) {
     throw new Error(

@@ -4,6 +4,7 @@
  * 复用 cli 的核心逻辑，但通过 WS 推送中间状态给前端。
  */
 
+import { ANY_PATH, normalizePermissionMode, skipsApproval, writesAnywhere, type PermissionMode } from "./session/permissionMode.js";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { isAbsolute, resolve } from "node:path";
 import { ToolCallStatus, type ToolMeta, type WebCapability, type ApprovalDecision, type TrustRule, type GateOutcome } from "./tools/index.js";
@@ -499,7 +500,7 @@ export class AgentSession {
       workspaces: this.workspaces,
       // 用户自己挑的产物目录 / 产出目录也是「允许写」的地方：他明确指定了 AI 的成品放哪，
       // 写进去却撞工作区边界是不合理的。取函数而非快照值——两者都是每轮注入的。
-      writeRoots: () => [this.getArtifactDir(), this.outputDir],
+      writeRoots: () => this.permissionWriteRoots(),
       web: this.web,
       skillLoader: this.loadSkillForTool,
       powerLoader: this.loadPowerForTool,
@@ -1251,7 +1252,34 @@ export class AgentSession {
 
   /** 设置编辑模式（auto=直接落盘 / manual=暂存待确认） */
   setEditMode(mode: "auto" | "manual"): void {
-    this.host.edits.setMode(mode);
+    this.editModePreference = mode;
+    // 自动 / 完全访问下改动一律直接落盘；用户的「自动应用」偏好留着，切回安全模式时恢复
+    this.host.edits.setMode(skipsApproval(this.permissionMode) ? "auto" : mode);
+  }
+
+  /** 权限模式（安全 / 自动 / 完全访问，逐层包含，见 permissionMode.ts） */
+  /** @internal */ permissionMode: PermissionMode = "safe";
+  private editModePreference: "auto" | "manual" = "manual";
+
+  /** 切换权限模式；切到自动 / 完全访问时把暂存的改动一并落盘 */
+  async setPermissionMode(mode: PermissionMode): Promise<void> {
+    this.permissionMode = normalizePermissionMode(mode);
+    if (skipsApproval(this.permissionMode)) {
+      if (this.host.edits.hasPending()) await this.acceptEdits();
+      // 正在等的工具确认（MCP 写操作 / Relay）直接放行
+      if (this.toolConfirmResolve) {
+        const resolve = this.toolConfirmResolve;
+        this.toolConfirmResolve = null;
+        resolve(true);
+      }
+    }
+    this.host.edits.setMode(skipsApproval(this.permissionMode) ? "auto" : this.editModePreference);
+  }
+
+  /** 允许写入的工作区外目录：产物 / 产出目录；完全访问时不限 */
+  /** @internal */ permissionWriteRoots(): string[] {
+    const roots = [this.getArtifactDir(), this.outputDir].filter((p): p is string => typeof p === "string" && p.trim() !== "");
+    return writesAnywhere(this.permissionMode) ? [...roots, ANY_PATH] : roots;
   }
 
   /** 是否有待确认的改动 */
@@ -1561,6 +1589,8 @@ export class AgentSession {
    * 阻塞直到用户确认或拒绝。若 120 秒内无响应（webview 未就绪等），自动拒绝以免永久死锁。
    */
   /** @internal */ waitForToolConfirmation(toolName: string, args: Record<string, unknown>, kind: "relay" | "mcp" = "relay", label?: string): Promise<boolean> {
+    // 自动 / 完全访问：不弹确认，直接执行
+    if (skipsApproval(this.permissionMode)) return Promise.resolve(true);
     this.send("confirm_tool_request", { toolName, args, kind, label });
     return new Promise<boolean>((resolve) => {
       this.toolConfirmResolve = resolve;

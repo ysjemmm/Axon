@@ -103,6 +103,8 @@ export interface SubAgentDeps {
    * 并行执行的子 Agent 应设一个更紧的上限（如 30），避免陷入长时间循环。
    */
   maxRounds?: number;
+  /** 允许写入的工作区外目录（父会话注入：产物 / 产出目录，完全访问模式下含通配 "*"） */
+  writeRoots?: () => string[];
   /**
    * 命令信任门（父会话注入）：子 Agent 的 execute_command 在执行前经此门控——
    * 灾难命令硬拦、白名单放行、未信任则把审批冒泡到父会话再到用户。不注入则不门控。
@@ -495,7 +497,7 @@ export class SubAgentRunner {
         status = "error";
       } else {
         try {
-          result = await executeToolCall(toolName, toolArgs, this.deps.cwd, this.deps.host, meta, this.deps.workspaces, this.deps.skillLoader, this.deps.web, undefined, this.deps.signal, this.deps.wiki);
+          result = await executeToolCall(toolName, toolArgs, this.deps.cwd, this.deps.host, meta, this.deps.workspaces, this.deps.skillLoader, this.deps.web, undefined, this.deps.signal, this.deps.wiki, this.deps.writeRoots?.());
           // 同文件重复读检测
           if (toolName === "read_file" && typeof toolArgs.path === "string") {
             result += guard.noteFileRead(toolArgs.path);

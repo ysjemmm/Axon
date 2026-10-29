@@ -42,6 +42,7 @@ import { MentionEditor, type MentionEditorHandle } from "./chat/MentionEditor";
 import { EmptyStateGreeting } from "./chat/EmptyStateGreeting";
 import { TokenIndicator } from "./chat/TokenIndicator";
 import { BackgroundTasksButton } from "./chat/BackgroundTasks";
+import { PermissionModePicker } from "./chat/PermissionModePicker";
 import { attachmentTypeLabel, imageTypeLabel } from "./chat/attachmentType";
 import { SendStopIcon } from "./chat/SendStopIcon";
 import { ProcessingAttachmentCard, type ProcessingAttachment } from "./chat/ProcessingAttachmentCard";
@@ -2240,7 +2241,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                         )}
                       </div>
 
-                      {mode !== "quest" && (
+                      {mode !== "quest" && session.permissionMode === "safe" && (
                         <button
                           type="button"
                           role="switch"
@@ -2272,6 +2273,10 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                     disabledTooltip={session.contextOverflow ? "上下文超限，请先压缩" : "压缩期间不可切换模型"}
                     effort={{ levels: selectedEffortLevels, value: session.effort, defaultValue: selectedDefaultEffort, onChange: handleEffortChange }}
                   />
+
+                  {mode !== "quest" && (
+                    <PermissionModePicker value={session.permissionMode} onChange={session.setPermissionModePreference} />
+                  )}
 
                   <input
                     ref={fileInputRef}
