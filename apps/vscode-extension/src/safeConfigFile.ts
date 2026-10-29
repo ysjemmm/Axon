@@ -34,3 +34,8 @@ export async function writeJsonConfig(path: string, data: unknown): Promise<void
   await rename(tmp, path);
   await chmod(path, 0o600).catch(() => { /* Windows 等不支持权限位 */ });
 }
+
+/** webview 请求打开的外部链接是否安全：只允许 http(s) 与 mailto */
+export function isSafeExternalUrl(url: string): boolean {
+  return /^(https?:\/\/|mailto:)/i.test(url.trim());
+}

@@ -20,3 +20,6 @@ __pycache__/
 *.pyc
 tmp-newsreel/
 tmp/find-out.txt
+
+# IDE 本地配置
+.idea/

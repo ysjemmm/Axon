@@ -1,0 +1,48 @@
+# 每次推送 / 提 PR 都跑一遍：内核与宿主包构建、扩展类型检查、内核单测、网页类型检查与构建。
+# 此前仓库里没有任何会在提交时跑的检查，扩展的编译错误攒到了七十多个才被发现。
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-and-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: 构建内核与宿主包
+        run: pnpm --filter @axon/core --filter @axon/host-node --filter @axon/host-vscode build
+      - name: 扩展类型检查
+        run: pnpm --filter axon-ide typecheck
+      - name: 内核单测
+        run: pnpm --filter @axon/core test
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: 类型检查
+        run: npx tsc --noEmit -p .
+      - name: 构建
+        run: npx vite build

@@ -5,6 +5,7 @@
  * 加载同一份 web 构建产物，通过 URL 参数 `?view=xxx` 路由到不同视图。
  */
 
+import { isSafeExternalUrl } from "./safeConfigFile.js";
 import * as vscode from "vscode";
 
 /** 已打开的面板缓存（按 panelId 去重） */
@@ -119,6 +120,12 @@ export function openOrFocusPanel(options: PanelOptions): vscode.WebviewPanel {
 
       // 用系统浏览器打开外部链接（webview 中 target=_blank 被拦截）
       if (m.type === "open_external" && typeof m.url === "string") {
+        // 只放行网页和邮件链接：页面内容来自模型输出，file:、vscode: 这类链接会交给系统默认程序打开，
+        // 等于让一段文字替用户打开本机文件或触发其它扩展的命令
+        if (!isSafeExternalUrl(m.url as string)) {
+          vscode.window.showWarningMessage(`已拦截不安全的链接：${String(m.url).slice(0, 120)}`);
+          return;
+        }
         try {
           await vscode.env.openExternal(vscode.Uri.parse(m.url as string));
         } catch {

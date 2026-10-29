@@ -22,7 +22,6 @@ import {
   contentLimitForTool, NO_TRUNCATE_TOOLS, NO_CONTENT_LIMIT,
   TERMINAL_OUTPUT_CAP, TERMINAL_OUTPUT_TOOLS, FULL_RESULT_TOOLS, capToolContent,
 } from "../src/tools/catalog";
-import { pruneOldToolResults } from "../src/compactor";
 import { ToolOutcomeRecorder } from "../src/session/toolOutcomeRecorder";
 
 /** 造一条超长的工具结果（超过默认裁剪阈值 800 与默认上限 3000） */
@@ -103,53 +102,6 @@ describe("裁剪集合的成员划分", () => {
     expect([...FULL_RESULT_TOOLS].sort()).toEqual(
       ["delegate_task", "execute_command", "get_process_output", "wait_process"],
     );
-  });
-});
-
-describe("旧轮次裁剪放行结论型工具", () => {
-  it("delegate_task 的结论原样保留，同时其它工具仍被裁剪", () => {
-    const { messages, delegated, fetched } = buildAgedHistory();
-    const pruned = pruneOldToolResults(messages, 2) as { content: string }[];
-
-    // 结论型工具：完整保留，一字不少
-    expect(pruned[3].content).toBe(delegated);
-    expect(pruned[3].content).not.toContain("已裁剪");
-
-    // 普通工具：仍然按原有规则裁剪（证明豁免不是"整体失效"）
-    expect(pruned[4].content).toContain("已裁剪");
-    expect(pruned[4].content.length).toBeLessThan(fetched.length);
-  });
-
-  it("不修改入参数组（原消息保持原样）", () => {
-    const { messages, delegated } = buildAgedHistory();
-    const before = JSON.stringify(messages);
-    pruneOldToolResults(messages, 2);
-    expect(JSON.stringify(messages)).toBe(before);
-    expect((messages[3] as { content: string }).content).toBe(delegated);
-  });
-
-  it("execute_command 的旧输出按 keepTail 规则被裁剪（不再永久滞留）", () => {
-    const cmdOut = longContent("命令输出");
-    const messages = [
-      { role: "system", content: "sys" },
-      { role: "user", content: "u1" },
-      {
-        role: "assistant",
-        content: null,
-        tool_calls: [
-          { id: "c-cmd", type: "function", function: { name: "execute_command", arguments: "{}" } },
-        ],
-      },
-      { role: "tool", tool_call_id: "c-cmd", content: cmdOut },
-      { role: "user", content: "u2" },
-      { role: "user", content: "u3" },
-    ] as never[];
-
-    const pruned = pruneOldToolResults(messages, 2) as { content: string }[];
-    expect(pruned[3].content).toContain("已裁剪");
-    expect(pruned[3].content.length).toBeLessThan(cmdOut.length);
-    // 终端类保留尾部：报错与最终结论在末尾，必须还在
-    expect(pruned[3].content.endsWith(cmdOut.slice(-10))).toBe(true);
   });
 });
 

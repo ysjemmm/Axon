@@ -171,7 +171,6 @@ export const NO_CONTENT_LIMIT = Number.POSITIVE_INFINITY;
  *
  * 覆盖的裁剪环节：
  *   · 存入对话历史：toolOutcomeRecorder / SubAgentRunner 读 contentLimit
- *   · 旧轮次裁剪：compactor.pruneOldToolResults
  *   · 请求组装的历史摘要：promptBuilder
  *   · 发往前端的实时事件：见 FULL_RESULT_TOOLS（结论型仍走完整结果）
  *

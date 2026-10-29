@@ -14,7 +14,7 @@ import { ToolCallStatus, type ToolMeta, type WebCapability, type ApprovalDecisio
 import { calculateCredits, buildCreditDetail } from "./credits.js";
 import type { AgentHost } from "./host/index.js";
 import type { AgentChannel, AgentEvent } from "./channel/index.js";
-import { isSummaryMessage, isCompactionAck, DEFAULT_COMPACTION_CONFIG, setPruneKeepChars, autoCompactThreshold } from "./compactor.js";
+import { isSummaryMessage, isCompactionAck, DEFAULT_COMPACTION_CONFIG, autoCompactThreshold } from "./compactor.js";
 import type { CompactionUserConfig } from "./compactor.js";
 import type { CreditBudgetUserConfig } from "./credits.js";
 import type { SerializedPendingEdit } from "./storage/types.js";
@@ -553,8 +553,6 @@ export class AgentSession {
   /** 设置滚动压缩配置（由呈现端在启动时 / 配置变更时调用） */
   setCompactionConfig(cfg: Partial<CompactionUserConfig>): void {
     this.compactionConfig = { ...this.compactionConfig, ...cfg };
-    // 同步工具结果裁剪参数到 compactor 模块
-    setPruneKeepChars(this.compactionConfig.toolResultPruneChars);
   }
 
   /** 获取当前压缩配置（诊断 / UI 展示用） */

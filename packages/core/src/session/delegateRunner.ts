@@ -14,6 +14,11 @@ import { SubAgentRunner, type SubAgentResult } from "../skills/subAgentRunner.js
 import type { LoadedSkill } from "../skills/skillLoader.js";
 import type { AgentSession } from "../agentSession.js";
 
+
+/** 委托子 Agent 的默认轮次 / token 上限（见 run 里的说明） */
+export const SUBAGENT_MAX_ROUNDS = 80;
+export const SUBAGENT_TOKEN_BUDGET = 1_000_000;
+
 export class DelegateRunner {
   constructor(private readonly s: AgentSession) {}
 
@@ -75,6 +80,10 @@ export class DelegateRunner {
       gateCommand: (command, toolCallId) => this.s.gateCommand(command, toolCallId),
       // 写入边界跟随父会话的权限模式（完全访问时子 Agent 也能写工作区外）
       writeRoots: () => this.s.permissionWriteRoots(),
+      // 成本上限：子 Agent 每一轮都重发整段上下文，跑得越久单轮越贵（花费随轮数平方增长）。
+      // 默认最多 80 轮、累计 100 万 token，到了就停下交回已有进展，而不是一路跑到 200 轮
+      maxRounds: SUBAGENT_MAX_ROUNDS,
+      tokenBudget: SUBAGENT_TOKEN_BUDGET,
     });
 
     let result: SubAgentResult;
