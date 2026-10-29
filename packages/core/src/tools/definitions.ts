@@ -104,7 +104,7 @@ export function getToolDefinitions() {
       type: "function" as const,
       function: {
         name: "execute_command",
-        description: "在 Axon 终端中执行 shell 命令。每条命令执行前系统会自动 cd 到指定的 cwd 目录，确保执行环境正确。严禁在命令中使用 cd、Set-Location、pushd 等切换目录的指令——它们会污染终端状态。如需在子目录执行，用 cwd 参数指定。\n\n【命令书写安全】优先写简单、短小、可直接执行的一行命令。避免在 command 中拼接复杂引号/括号/多行脚本/正则嵌套/JSON 字符串；这类命令很容易让 PowerShell 进入 `>>` 续行/等待输入状态。遇到复杂逻辑请改为创建临时 .ps1/.js/.cjs 脚本文件再执行，或拆成多条简单命令。若工具提示命令疑似进入续行/等待输入状态，禁止原样重试，必须换成临时脚本或简化命令。\n\n" +
+        description: "在 Axon 终端中执行 shell 命令。每条命令执行前系统会自动 cd 到指定的 cwd 目录，确保执行环境正确。严禁在命令中使用 cd、Set-Location、pushd 等切换目录的指令——它们会污染终端状态。如需在子目录执行，用 cwd 参数指定。\n\n【命令书写安全】优先写简单、短小、可直接执行的一行命令。避免在 command 中拼接复杂引号/括号/多行脚本/正则嵌套/JSON 字符串；这类命令很容易让 PowerShell 进入 `>>` 续行/等待输入状态。遇到复杂逻辑请改为创建临时 .ps1/.js/.cjs 脚本文件再执行，或拆成多条简单命令。若工具提示命令疑似进入续行/等待输入状态，禁止原样重试，必须换成临时脚本或简化命令。\n\n【不要运行交互式命令】终端里没有人替你按键或输入，会等待输入的命令会一直卡到超时。一律改用非交互写法：脚手架/安装加 `--yes` / `-y` / `--non-interactive` / `--defaults` 等参数（如 `npm init -y`、`npx create-vite@latest app --template react`、`apt-get install -y`）；git 用 `git commit -m \"...\"`、`git --no-pager log`、`git merge --no-edit`，不要打开编辑器或分页器（`git rebase -i`、`git add -p`、不带 -m 的 commit）；不要启动 REPL 或全屏程序（`node`、`python`、`mysql`、`psql` 不带脚本或 `-c`/`-e`，以及 vim、nano、less、top）；需要密码或确认提示的命令（ssh 首次连接、sudo、登录）先告诉用户自己操作。要回答 y/n 的确认提示，优先找跳过确认的参数，不要靠管道喂输入。\n\n" +
           `【输出会被截断】单次结果最多保留约 ${TERMINAL_OUTPUT_CAP} 字符，超出时只留开头 40% 和结尾 60%，中间直接丢掉。` +
           "预计输出很长时（完整测试、构建日志、大目录列表、大文件内容）先控制范围：用 maxOutputChars + keep 指定要多少、要哪一段（只看报错一般 keep=tail），" +
           "或在命令里过滤（bash：| head -n 100、| tail -n 100、| grep 关键词；PowerShell：| Select-Object -First 100、-Last 100、| Select-String 关键词），" +

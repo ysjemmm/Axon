@@ -62,7 +62,8 @@ export function AskUserCard({ request, onAnswer }: AskUserCardProps) {
       const selected = ans.selected.includes(id) ? ans.selected.filter((x) => x !== id) : [...ans.selected, id];
       patchCurrent({ selected, skipped: false });
     } else {
-      patchCurrent({ selected: [id], skipped: false });
+      // 单选：选中已有选项就取消「自己输入」，两者只能留一个
+      patchCurrent({ selected: [id], other: undefined, skipped: false });
       // 单选：选完自动进入下一题（最后一题则停留，等用户点提交）
       if (step < total - 1) {
         const from = step;
@@ -194,7 +195,8 @@ export function AskUserCard({ request, onAnswer }: AskUserCardProps) {
               />
             ) : (
               <button
-                onClick={() => patchCurrent({ other: "", skipped: false })}
+                // 单选时改为自己输入，就取消已选的选项
+                onClick={() => patchCurrent(q.multi ? { other: "", skipped: false } : { other: "", selected: [], skipped: false })}
                 className="flex-1 min-w-0 text-left text-xs text-muted-foreground/70 hover:text-foreground/80 transition-colors"
               >
                 其他（自己输入）
