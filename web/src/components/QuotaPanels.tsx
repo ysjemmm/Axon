@@ -81,9 +81,11 @@ function MetricRow({ metric }: { metric: QuotaMetric }) {
           <div className={`h-full rounded-full ${barColor}`} style={{ width: `${Math.max(1, Math.min(100, percent))}%` }} />
         </div>
       )}
-      {(metric.resetAt || (metric.remaining !== undefined && metric.total !== undefined)) && (
+      {(metric.resetAt || (metric.remaining !== undefined && (metric.total !== undefined || metric.used !== undefined))) && (
         <div className="flex gap-2 text-[11px] text-muted-foreground">
           {metric.remaining !== undefined && metric.total !== undefined && <span>剩余 {withUnit(metric.remaining, metric.unit)}</span>}
+          {/* 余额类：主数值是剩余，这里补一句累计已用 */}
+          {metric.remaining !== undefined && metric.total === undefined && metric.used !== undefined && <span>累计已用 {withUnit(metric.used, metric.unit)}</span>}
           {metric.resetAt && <span className="ml-auto" title={new Date(metric.resetAt).toLocaleString()}>{metric.resetAt > Date.now() ? `${relativeTime(metric.resetAt)}重置` : `已于 ${new Date(metric.resetAt).toLocaleString()} 重置`}</span>}
         </div>
       )}

@@ -191,20 +191,23 @@ describe("new-api 中转站", () => {
     const reset = Math.floor(new Date("2026-10-30T00:00:00Z").getTime() / 1000);
     const { fn, calls } = fakeFetch({
       "/api/user/self": { success: true, data: { quota: 843.7 * SCALE, used_quota: 7846.19 * SCALE } },
-      "/api/subscription": { success: true, data: { subscriptions: [{ subscription: { amount_used: 54.81 * SCALE, amount_total: 200 * SCALE, next_reset_time: reset } }] } },
+      "/api/subscription/self": { success: true, data: { subscriptions: [{ subscription: { amount_used: 54.81 * SCALE, amount_total: 200 * SCALE, next_reset_time: reset } }] } },
     });
     const preset = QUOTA_PRESETS.find((p) => p.id === "new-api-user")!;
     const result = await runQuotaRule(provider, { ...preset.rule, vars: { userId: "42" } }, { fetch: fn, secrets: memorySecrets({ accessToken: "panel-token" }) });
     expect(calls.map((c) => c.headers["new-api-user"])).toEqual(["42", "42"]);
     expect(calls[0].headers.authorization).toBe("Bearer panel-token");
-    expect(result.metrics[0]).toMatchObject({ label: "账户余额", remaining: 843.7, used: 7846.19 });
+    expect(result.metrics[0]).toMatchObject({ label: "账户余额", kind: "balance", remaining: 843.7, used: 7846.19 });
+    expect(result.metrics[0].total).toBeUndefined(); // 余额不凑总额、不算百分比
+    expect(result.metrics[0].percent).toBeUndefined();
+    expect(calls[1].url).toBe("https://relay.example/api/subscription/self");
     expect(result.metrics[1]).toMatchObject({ label: "订阅额度", kind: "window", used: 54.81, total: 200, remaining: 145.19, resetAt: reset * 1000 });
   });
 
   it("没开通订阅：订阅接口失败就只显示余额", async () => {
     const { fn } = fakeFetch({
       "/api/user/self": { success: true, data: { quota: 10 * SCALE, used_quota: 0 } },
-      "/api/subscription": () => ({ status: 404, body: "not found" }),
+      "/api/subscription/self": () => ({ status: 404, body: "not found" }),
     });
     const preset = QUOTA_PRESETS.find((p) => p.id === "new-api-user")!;
     const result = await runQuotaRule(provider, { ...preset.rule, vars: { userId: "42" } }, { fetch: fn, secrets: memorySecrets({ accessToken: "t" }) });

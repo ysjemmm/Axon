@@ -325,7 +325,8 @@ function buildMetric(rule: QuotaMetricRule, scope: PathScope, fallbackLabel: str
   // 缺哪个补哪个：两个已知就能推出第三个
   if (remaining === undefined && total !== undefined && used !== undefined) remaining = total - used;
   if (used === undefined && total !== undefined && remaining !== undefined) used = total - remaining;
-  if (total === undefined && used !== undefined && remaining !== undefined) total = used + remaining;
+  // 余额类不凑总额：「已用 + 剩余」是历史累计消费加当前余额，不是一个额度上限，算出的百分比没有意义
+  if (total === undefined && used !== undefined && remaining !== undefined && rule.kind !== "balance") total = used + remaining;
   if (percent === undefined && used !== undefined && total !== undefined && total > 0) percent = (used / total) * 100;
   if ([used, total, remaining, percent].every((v) => v === undefined)) return null;
   // 「无限额度」：中转站给不限额的令牌返回一个天文数字（new-api 是 1 亿美元），照实显示成
