@@ -30,7 +30,7 @@ import { useMascotMood } from "./chat/useMascotMood";
 import { MascotStatusText } from "./chat/MascotStatusText";
 import { SkillStudio } from "@/components/SkillStudio";
 
-import type { AttachedFile, ChatPanelProps, UserSegment } from "./chat/types";
+import type { AttachedFile, ChatMessage, ChatPanelProps, UserSegment } from "./chat/types";
 import { FILE_MAX_SIZE, FILE_INLINE_MAX_SIZE, isAllowedTextFile, looksBinary } from "./chat/fileUtils";
 import { MessageBubble } from "./chat/MessageBubble";
 import { AssistantTurnHeader } from "./chat/AssistantTurn";
@@ -291,6 +291,16 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   const [previewState, setPreviewState] = useState<{ images: string[]; index: number } | null>(null);
   /** 消息里的截图缩略图点开大图（经 ImagePreviewContext 调起，与消息图片共用一个看图组件） */
   const openImagePreview = useCallback((images: string[], index: number) => setPreviewState({ images, index }), []);
+  /** 引用历史消息到输入框（稳定引用：MessageBubble 的 memo 不比较回调，新闭包也不会让它重渲染） */
+  const handleQuoteToInput = useCallback((qMsg: ChatMessage) => {
+    if (qMsg.userSegments && qMsg.userSegments.length > 0) {
+      editorRef.current?.appendSegments(qMsg.userSegments);
+    } else if (qMsg.content) {
+      editorRef.current?.appendText(qMsg.content);
+    }
+    if (qMsg.images && qMsg.images.length > 0) setImages((prev) => [...prev, ...qMsg.images!]);
+    setComposerEmpty(editorRef.current?.isEmpty() ?? false);
+  }, []);
   // 问题列表 Popover 受控状态
   const [questionListOpen, setQuestionListOpen] = useState(false);
   // 顶部 sticky：当前视图所属 AI 回答对应的用户提问
@@ -1712,16 +1722,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                   replyingToMessageId={replyingToMessageId}
                   // 会话还没落盘（首轮刚发出）时不给入口：没有可截断的后端历史
                   onForkFromMessage={sessionId ? session.forkFromMessage : undefined}
-                  onQuoteToInput={(qMsg) => {
-                    if (qMsg.userSegments && qMsg.userSegments.length > 0) {
-                      editorRef.current?.appendSegments(qMsg.userSegments);
-                    } else if (qMsg.content) {
-                      editorRef.current?.appendText(qMsg.content);
-                    }
-                    if (qMsg.images && qMsg.images.length > 0) setImages((prev) => [...prev, ...qMsg.images!]);
-                    setComposerEmpty(editorRef.current?.isEmpty() ?? false);
-                  }}
-                  onImagePreview={(imgs, idx) => setPreviewState({ images: imgs, index: idx })}
+                  onQuoteToInput={handleQuoteToInput}
+                  onImagePreview={openImagePreview}
                 />
               </InlineFormContext.Provider>
               </CommandApprovalContext.Provider>

@@ -9,7 +9,19 @@
  */
 
 import MarkdownIt from "markdown-it";
-import hljs from "highlight.js";
+// 只带常用的约 36 种语言：完整包注册了约 190 种（源码 1.5MB，首屏包里最大的一块），
+// 而且没标语言的代码块自动识别要挨个试一遍所有语言，语言越多越慢
+import hljs from "highlight.js/lib/common";
+import powershell from "highlight.js/lib/languages/powershell";
+import dockerfile from "highlight.js/lib/languages/dockerfile";
+import nginx from "highlight.js/lib/languages/nginx";
+import properties from "highlight.js/lib/languages/properties";
+
+// 常用集里没有、但 Axon 用户常见的几种（Windows 上的命令都是 PowerShell）
+hljs.registerLanguage("powershell", powershell);
+hljs.registerLanguage("dockerfile", dockerfile);
+hljs.registerLanguage("nginx", nginx);
+hljs.registerLanguage("properties", properties);
 
 /**
  * ── 渲染结果缓存（流式输出的关键优化）──

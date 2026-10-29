@@ -344,4 +344,6 @@ function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRej
   );
 }
 
-export const MessageBubble = memo(MessageBubbleImpl, (prev, next) => prev.message === next.message && prev.replyingToMessageId === next.replyingToMessageId && prev.liveStatus === next.liveStatus && prev.startedAt === next.startedAt);
+// 回调不逐个比较（ChatPanel 传的都是稳定引用）；但「有没有分叉入口」会变 ——
+// 首轮发出后会话才有 id，此前已经显示的消息要重新渲染才能拿到分叉入口
+export const MessageBubble = memo(MessageBubbleImpl, (prev, next) => prev.message === next.message && prev.replyingToMessageId === next.replyingToMessageId && prev.liveStatus === next.liveStatus && prev.startedAt === next.startedAt && !!prev.onForkFromMessage === !!next.onForkFromMessage);

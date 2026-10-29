@@ -8,7 +8,6 @@
  */
 
 import { useRef, useEffect, useLayoutEffect, useMemo, useState, useCallback, memo } from "react";
-import mermaid from "mermaid";
 import { renderMarkdown } from "@/lib/markdown";
 import { fitSvgToContainer, readSvgIntrinsicSize } from "@/lib/diagramFit";
 import {
@@ -1263,6 +1262,16 @@ function cleanupMermaidErrorArtifacts(root: ParentNode = document): void {
   });
 }
 
+/**
+ * mermaid 按需加载：它连带 dompurify、roughjs、katex 等十几个分块，压在首屏包里却只有画图时才用。
+ * 第一次遇到 mermaid 代码块时加载一次，之后复用同一个模块。
+ */
+let mermaidModule: Promise<typeof import("mermaid")["default"]> | null = null;
+function loadMermaid(): Promise<typeof import("mermaid")["default"]> {
+  mermaidModule ??= import("mermaid").then((m) => m.default);
+  return mermaidModule;
+}
+
 async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: (el: HTMLElement) => void): Promise<void> {
   // ⚠️ 这里只置「进行中」标记，绝不置 data-hydrated="1"。
   //
@@ -1282,6 +1291,7 @@ async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: 
   try {
     // 手绘 + 多巴胺配色，按当前明暗主题取色（见 lib/mermaidTheme.ts）；主题切换时 themeTick 变化会重新渲染
     const dark = isDarkTheme();
+    const mermaid = await loadMermaid();
     mermaid.initialize(mermaidConfig(dark));
     mermaid.setParseErrorHandler(() => { /* Mermaid syntax errors are intentionally silent in chat previews. */ });
     renderId = `axon-mmd-${Date.now()}-${mermaidRenderSeq++}`;

@@ -1,18 +1,20 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, lazy, Suspense } from "react";
 import { SessionContainer, type SessionTab } from "./components/SessionContainer";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { SessionSwitcher } from "./components/SessionSwitcher";
-import { CoworkPanel } from "./components/CoworkPanel";
-import { SkillStudio } from "./components/SkillStudio";
-import { RelayTabView } from "./components/RelayTabView";
-import { PowerStudio } from "./components/PowerStudio";
-import { McpStudio } from "./components/McpStudio";
 import { ConnectorsDialog, OPEN_CONNECTORS_EVENT } from "./components/ConnectorsDialog";
 import { AgentTaskToasts } from "./components/chat/AgentTaskToasts";
 import { agentTaskName, OPEN_SESSION_EVENT, type AgentTask } from "./lib/agentTasks";
-import { ProviderStudio } from "./components/ProviderStudio";
-import { MarketplaceStudio } from "./components/MarketplaceStudio";
 import { X } from "lucide-react";
+
+// 各个管理面板、Cowork 按需加载：大多数会话从不打开它们，没必要压在首屏包里（合计五千多行）
+const CoworkPanel = lazy(() => import("./components/CoworkPanel").then((m) => ({ default: m.CoworkPanel })));
+const SkillStudio = lazy(() => import("./components/SkillStudio").then((m) => ({ default: m.SkillStudio })));
+const RelayTabView = lazy(() => import("./components/RelayTabView").then((m) => ({ default: m.RelayTabView })));
+const PowerStudio = lazy(() => import("./components/PowerStudio").then((m) => ({ default: m.PowerStudio })));
+const McpStudio = lazy(() => import("./components/McpStudio").then((m) => ({ default: m.McpStudio })));
+const ProviderStudio = lazy(() => import("./components/ProviderStudio").then((m) => ({ default: m.ProviderStudio })));
+const MarketplaceStudio = lazy(() => import("./components/MarketplaceStudio").then((m) => ({ default: m.MarketplaceStudio })));
 import { listSessions, renameSession } from "./lib/apiClient";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { sessionEventBus } from "./hooks/useSessionEvents";
@@ -59,7 +61,7 @@ function App() {
     const workspace = getViewParam("workspace");
     return (
       <div className="h-screen bg-background text-foreground">
-        <SkillStudio workspace={workspace} onBack={() => {}} />
+        <Suspense fallback={null}><SkillStudio workspace={workspace} onBack={() => {}} /></Suspense>
       </div>
     );
   }
@@ -70,7 +72,7 @@ function App() {
     const relayId = getViewParam("id");
     return (
       <div className="h-screen bg-background text-foreground">
-        <RelayTabView workspace={workspace} relayId={relayId} />
+        <Suspense fallback={null}><RelayTabView workspace={workspace} relayId={relayId} /></Suspense>
       </div>
     );
   }
@@ -81,7 +83,7 @@ function App() {
     const powerName = getViewParam("name");
     return (
       <div className="h-screen bg-background text-foreground">
-        <PowerStudio workspace={workspace} powerName={powerName} />
+        <Suspense fallback={null}><PowerStudio workspace={workspace} powerName={powerName} /></Suspense>
       </div>
     );
   }
@@ -91,7 +93,7 @@ function App() {
     const workspace = getViewParam("workspace");
     return (
       <div className="h-screen bg-background text-foreground">
-        <McpStudio workspace={workspace} />
+        <Suspense fallback={null}><McpStudio workspace={workspace} /></Suspense>
       </div>
     );
   }
@@ -101,7 +103,7 @@ function App() {
     const workspace = getViewParam("workspace");
     return (
       <div className="h-screen bg-background text-foreground">
-        <ProviderStudio workspace={workspace} />
+        <Suspense fallback={null}><ProviderStudio workspace={workspace} /></Suspense>
       </div>
     );
   }
@@ -110,7 +112,7 @@ function App() {
   if (viewMode === "marketplace") {
     return (
       <div className="h-screen bg-background text-foreground">
-        <MarketplaceStudio />
+        <Suspense fallback={null}><MarketplaceStudio /></Suspense>
       </div>
     );
   }
@@ -601,12 +603,14 @@ function App() {
         >
           {/* clientId 用固定值：Cowork 只有一个工作面（不像 Chat 有多 tab），
               固定值让它在覆盖层反复开关之间仍能对上同一条事件流。 */}
+          <Suspense fallback={null}>
           <CoworkPanel
             clientId="cowork-main"
             connected={connected}
             send={send}
             onExit={() => setCoworkOpen(false)}
           />
+          </Suspense>
         </div>
       )}
       <ConnectorsDialog open={connectorsOpen} onClose={() => setConnectorsOpen(false)} connected={connected} send={send} />
