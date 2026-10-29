@@ -28,12 +28,61 @@ import { getResolvedProviders, resolveProviderName } from "@axon/core";
 
 /** 语音输入配置（用户级 providers.json 的 voiceInput 字段） */
 export interface VoiceInputConfig {
-  /** 用哪个 Provider 的地址和 Key */
+  /** 用哪个 Provider 的地址和 Key；"builtin" 表示内置的硅基流动 */
   provider: string;
   /** 识别模型，如 whisper-1 / gpt-4o-mini-transcribe / FunAudioLLM/SenseVoiceSmall */
   model: string;
   /** 语言（ISO-639-1，如 zh / en）；留空让服务自动判断 */
   language?: string;
+}
+
+/**
+ * 内置识别服务：硅基流动的 SenseVoiceSmall（免费，中文效果好）。
+ * Key 在打包时由 esbuild 注入（见 esbuild.mjs 的 define），源码和 git 里没有；
+ * 开发时也可以用同名环境变量。用户在设置里选了自己的 Provider 就不再用内置的。
+ */
+declare const __AXON_BUILTIN_VOICE_KEY__: string;
+export const BUILTIN_VOICE = {
+  label: "硅基流动（内置）",
+  baseUrl: "https://api.siliconflow.cn/v1",
+  model: "FunAudioLLM/SenseVoiceSmall",
+};
+/** 设置里「用内置服务」存成这个 provider 名 */
+export const BUILTIN_VOICE_PROVIDER = "builtin";
+
+function builtinVoiceKey(): string {
+  const injected = typeof __AXON_BUILTIN_VOICE_KEY__ === "string" ? __AXON_BUILTIN_VOICE_KEY__ : "";
+  return (injected || process.env.AXON_BUILTIN_VOICE_KEY || "").trim();
+}
+
+export function builtinVoiceAvailable(): boolean {
+  return !!builtinVoiceKey();
+}
+
+/** 识别请求实际要用的地址 / Key / 模型 */
+interface VoiceEndpoint {
+  label: string;
+  baseUrl: string;
+  apiKey: string;
+  apiKeyHeader?: string;
+  model: string;
+  language?: string;
+}
+
+/**
+ * 解析出这次要用的识别服务：用户选了自己的 Provider 就用它；
+ * 没配置或选了「内置」就用内置的硅基流动。都用不了返回 null（界面引导去设置）。
+ */
+export function resolveVoiceEndpoint(cfg: VoiceInputConfig | undefined): VoiceEndpoint | null {
+  if (cfg && cfg.provider !== BUILTIN_VOICE_PROVIDER) {
+    const name = resolveProviderName(cfg.provider) ?? cfg.provider;
+    const p = getResolvedProviders().find((x) => x.name === name);
+    if (!p || !p.apiKey) return null;
+    return { label: p.label || p.name, baseUrl: p.baseUrl, apiKey: p.apiKey, apiKeyHeader: p.apiKeyHeader, model: cfg.model, language: cfg.language };
+  }
+  const key = builtinVoiceKey();
+  if (!key) return null;
+  return { label: BUILTIN_VOICE.label, baseUrl: BUILTIN_VOICE.baseUrl, apiKey: key, model: BUILTIN_VOICE.model, language: cfg?.language };
 }
 
 const SAMPLE_RATE = 16_000;
@@ -303,19 +352,16 @@ const ZH_PROMPT = "以下是普通话的句子，使用简体中文，带标点�
  * 不走 OpenAI SDK：它配上全局 fetch 后上传文件会报「duplex option is required」，
  * 直接用原生 fetch + FormData 发 multipart 最省事。
  */
-export async function transcribe(wav: Buffer, cfg: VoiceInputConfig): Promise<string> {
-  const name = resolveProviderName(cfg.provider) ?? cfg.provider;
-  const p = getResolvedProviders().find((x) => x.name === name);
-  if (!p || !p.apiKey) throw new Error(`语音识别服务「${cfg.provider}」没有配置或缺少 API Key。`);
-  const language = (cfg.language || "").trim();
+export async function transcribe(wav: Buffer, ep: VoiceEndpoint): Promise<string> {
+  const language = (ep.language || "").trim();
   const form = new FormData();
   form.append("file", new Blob([new Uint8Array(wav)], { type: "audio/wav" }), "voice.wav");
-  form.append("model", cfg.model);
+  form.append("model", ep.model);
   form.append("response_format", "json");
   if (language) form.append("language", language);
   if (!language || language.startsWith("zh")) form.append("prompt", ZH_PROMPT);
-  const headers: Record<string, string> = p.apiKeyHeader === "x-api-key" ? { "x-api-key": p.apiKey } : { Authorization: `Bearer ${p.apiKey}` };
-  const url = `${p.baseUrl.replace(/\/+$/, "")}/audio/transcriptions`;
+  const headers: Record<string, string> = ep.apiKeyHeader === "x-api-key" ? { "x-api-key": ep.apiKey } : { Authorization: `Bearer ${ep.apiKey}` };
+  const url = `${ep.baseUrl.replace(/\/+$/, "")}/audio/transcriptions`;
   let res: Response;
   try {
     res = await fetch(url, { method: "POST", headers, body: form, signal: AbortSignal.timeout(110_000) });
@@ -323,7 +369,7 @@ export async function transcribe(wav: Buffer, cfg: VoiceInputConfig): Promise<st
     throw new Error(`语音识别请求没有发出去：${(err as Error).message}`);
   }
   const raw = await res.text();
-  if (res.status === 404) throw new Error(`「${p.label || p.name}」不支持语音识别接口（/audio/transcriptions 返回 404）。换一个支持的服务商，比如 OpenAI、硅基流动、Groq。`);
+  if (res.status === 404) throw new Error(`「${ep.label}」不支持语音识别接口（/audio/transcriptions 返回 404）。换一个支持的服务商，比如 OpenAI、硅基流动、Groq。`);
   if (!res.ok) {
     let msg = raw.slice(0, 300);
     try { msg = (JSON.parse(raw) as { error?: { message?: string }; message?: string }).error?.message || JSON.parse(raw).message || msg; } catch { /* 原样显示 */ }

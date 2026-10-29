@@ -17,7 +17,7 @@ import { RelayStore, renameSessionTitle, ProviderRegistry, refreshProviders, pro
 import { createVSCodeAgentHost } from "@axon/host-vscode";
 import { queryProvider, quotaSecrets, clearQuotaSecrets, quotaTokenStatus, saveQuotaTokens, quotaOverview, invalidateQuotaOverview } from "./quotaService.js";
 import { createMarketplaceRegistry, persistSourcesToSettings } from "./marketplaceBridge.js";
-import { startRecording, stopRecording, takeLevels, transcribe } from "./voiceInput.js";
+import { BUILTIN_VOICE, builtinVoiceAvailable, resolveVoiceEndpoint, startRecording, stopRecording, takeLevels, transcribe } from "./voiceInput.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -692,10 +692,12 @@ export class RequestRouter {
       await resolveProviders(workspace || d.defaultWorkspace);
       return { ok: true };
     }
-    // 语音输入：配置只存用户级；录音在扩展进程里做（webview 拿不到麦克风），识别复用 Provider 的地址和 Key
+    // 语音输入：配置只存用户级；录音在扩展进程里做（webview 拿不到麦克风）。
+    // 识别默认用内置的硅基流动，用户也可以改用自己某个 Provider 的地址和 Key
     if (path === "/api/voice/config" && method === "GET") {
       const cfg = (await readProviderConfig("user")).voiceInput;
-      return { config: cfg ?? null, supported: true };
+      // 内置服务（硅基流动）只回名字和模型，Key 永远不出扩展进程
+      return { config: cfg ?? null, supported: true, builtin: builtinVoiceAvailable() ? { label: BUILTIN_VOICE.label, model: BUILTIN_VOICE.model } : null };
     }
     if (path === "/api/voice/config" && method === "PUT") {
       const { config: next } = (body || {}) as { config?: { provider?: string; model?: string; language?: string } | null };
@@ -709,8 +711,8 @@ export class RequestRouter {
       return { ok: true };
     }
     if (path === "/api/voice/start" && method === "POST") {
-      const cfg = (await readProviderConfig("user")).voiceInput;
-      if (!cfg) return { ok: false, needsConfig: true };
+      // 先确认有识别服务可用（自己选的 Provider 或内置的），免得录完才发现没处识别
+      if (!resolveVoiceEndpoint((await readProviderConfig("user")).voiceInput)) return { ok: false, needsConfig: true };
       await startRecording();
       return { ok: true };
     }
@@ -721,9 +723,9 @@ export class RequestRouter {
       const { cancel } = (body || {}) as { cancel?: boolean };
       const wav = await stopRecording(!!cancel);
       if (!wav) return { text: "" };
-      const cfg = (await readProviderConfig("user")).voiceInput;
-      if (!cfg) return { ok: false, needsConfig: true };
-      return { text: await transcribe(wav, cfg) };
+      const endpoint = resolveVoiceEndpoint((await readProviderConfig("user")).voiceInput);
+      if (!endpoint) return { ok: false, needsConfig: true };
+      return { text: await transcribe(wav, endpoint) };
     }
     const providerLevelMatch = path.match(/^\/api\/providers\/(user|workspace)$/);
     if (providerLevelMatch && method === "PUT") {
