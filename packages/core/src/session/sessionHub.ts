@@ -27,7 +27,7 @@ import type { SessionStorage } from "../storage/types.js";
 import type { SessionHubDeps } from "./types.js";
 import { filterPersistableMessages, filterTransientMessages, slimDiffBodies, findDiffBody } from "./persistable.js";
 import { buildForkMessages } from "./forkHistory.js";
-import { CoworkFlowStore, generateFlowDraft } from "../cowork/flows.js";
+import { CoworkFlowStore, generateFlowDraft, generateFlowDraftFromDescription } from "../cowork/flows.js";
 import { ConnectorStore, type ConnectorDraft } from "../connectors/store.js";
 import { connectorCatalog } from "../connectors/catalog.js";
 import { getStrategy } from "../providers.js";
@@ -615,7 +615,7 @@ export class SessionHub {
         await this.flowStore().remove(String(cmd.id || ""));
         return this.emitFlows(clientId);
       case "cowork_draft_flow":
-        return this.handleDraftFlow(cmd.sessionId, cmd.requestId, clientId);
+        return this.handleDraftFlow(cmd, clientId);
       case "connectors_list":
         return this.emitConnectors(clientId);
       case "connector_save": {
@@ -1410,10 +1410,17 @@ export class SessionHub {
   }
 
   /** 用该会话自己的模型把它提炼成流程草稿；失败时把原因回给前端，不抛 */
-  private async handleDraftFlow(sessionId: string, requestId: string | undefined, clientId: string | undefined): Promise<void> {
+  private async handleDraftFlow(cmd: Extract<ControlCommand, { type: "cowork_draft_flow" }>, clientId: string | undefined): Promise<void> {
     const reply = (data: Record<string, unknown>) =>
-      this.emitResult(null, clientId, { type: "cowork_flow_draft", requestId, ...data } as AgentEvent);
+      this.emitResult(null, clientId, { type: "cowork_flow_draft", requestId: cmd.requestId, ...data } as AgentEvent);
     try {
+      if (typeof cmd.description === "string") {
+        if (!cmd.model || !cmd.provider) throw new Error("请先在下方选择一个模型");
+        const draft = await generateFlowDraftFromDescription({ strategy: getStrategy(cmd.provider, cmd.model), model: cmd.model, description: cmd.description });
+        reply({ draft });
+        return;
+      }
+      const sessionId = cmd.sessionId || "";
       const active = this.activeSessions.get(sessionId);
       const saved = active ? null : await this.storage.getSession(sessionId);
       const messages = active ? active.getMessages() : (saved?.messages ?? []);

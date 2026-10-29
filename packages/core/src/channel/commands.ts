@@ -127,7 +127,8 @@ export type ControlCommandPayload =
   | { type: "cowork_save_flow"; flow: unknown; requestId?: string }
   | { type: "cowork_delete_flow"; id: string }
   /** 把一个已完成的 Cowork 会话提炼成流程草稿（不保存，等用户确认） */
-  | { type: "cowork_draft_flow"; sessionId: string; requestId?: string }
+  /** 起草流程：给 sessionId 就从做完的任务提炼；给 description 就按描述设计（此时用 model / provider） */
+  | { type: "cowork_draft_flow"; sessionId?: string; description?: string; model?: string; provider?: string; requestId?: string }
   // 连接器（~/.axon/settings/connectors.json，密钥单独存放）
   | { type: "connectors_list" }
   | { type: "connector_save"; connector: unknown; requestId?: string }

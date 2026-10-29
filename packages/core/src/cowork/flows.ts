@@ -268,6 +268,41 @@ export function parseFlowDraft(raw: string): Omit<CoworkFlowInputDraft, "id"> {
   return normalizeFlow(obj);
 }
 
+const DESCRIBE_PREFACE = `用户还没有用 AI 做过这件事，下面是他对自己例行工作的描述。请按同样的格式为它设计一个流程：
+- 输入槽按描述里提到的文件角色划分；描述没提到但显然需要的文件也加上（标为 optional）。
+- 步骤写成办公人员能看懂、能核对的业务动作；描述里没说清的地方按行业惯例补全，宁可具体。
+- checks 针对这类工作最容易出错的地方。`;
+
+/** 根据用户一句话的描述起草流程（还没做过这件事、想直接建一个例行流程时） */
+export async function generateFlowDraftFromDescription(params: {
+  strategy: LLMStrategy;
+  model: string;
+  description: string;
+  signal?: AbortSignal;
+}): Promise<Omit<CoworkFlowInputDraft, "id">> {
+  const description = params.description.trim().slice(0, 4000);
+  if (!description) throw new Error("先描述一下这个流程要做什么");
+  return runDraft(params.strategy, params.model, `${DESCRIBE_PREFACE}\n\n【用户的描述】\n${description}`, params.signal);
+}
+
+async function runDraft(strategy: LLMStrategy, model: string, user: string, signal?: AbortSignal): Promise<Omit<CoworkFlowInputDraft, "id">> {
+  const run = strategy.runTurn({
+    model,
+    messages: [{ role: "system", content: DRAFT_SYSTEM }, { role: "user", content: user }],
+    tools: [],
+    signal,
+    callbacks: { onReasoningDelta: () => {}, onTextDelta: () => {}, onToolCallDetected: () => {} },
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("整理流程超时，请重试")), DRAFT_TIMEOUT_MS); });
+  try {
+    const result = await Promise.race([run, timeout]);
+    return parseFlowDraft(result.content || "");
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** 用当前模型把会话提炼成流程草稿（用户确认、修改后才保存） */
 export async function generateFlowDraft(params: {
   strategy: LLMStrategy;
@@ -290,20 +325,5 @@ export async function generateFlowDraft(params: {
     "【给用户的最终说明】",
     source.replies.slice(-2).join("\n\n") || "（无）",
   ];
-  const user = parts.join("\n").slice(0, 24_000);
-  const run = params.strategy.runTurn({
-    model: params.model,
-    messages: [{ role: "system", content: DRAFT_SYSTEM }, { role: "user", content: user }],
-    tools: [],
-    signal: params.signal,
-    callbacks: { onReasoningDelta: () => {}, onTextDelta: () => {}, onToolCallDetected: () => {} },
-  });
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("整理流程超时，请重试")), DRAFT_TIMEOUT_MS); });
-  try {
-    const result = await Promise.race([run, timeout]);
-    return parseFlowDraft(result.content || "");
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+  return runDraft(params.strategy, params.model, parts.join("\n").slice(0, 24_000), params.signal);
 }

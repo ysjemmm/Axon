@@ -59,5 +59,13 @@ export function useCoworkFlows({ clientId, connected, send }: { clientId: string
     send({ type: "cowork_draft_flow", clientId, requestId, sessionId });
   }), [clientId, connected, send]);
 
-  return { flows, loaded, save, remove, draftFromSession };
+  /** 让 AI 按一段描述设计流程（还没做过这件事时） */
+  const draftFromDescription = useCallback((description: string, model: string, provider?: string) => new Promise<CoworkFlowDraft>((resolve, reject) => {
+    if (!connected) { reject(new Error("还没连上服务，请稍后再试")); return; }
+    const requestId = newRequestId("draft");
+    pendingDrafts.current.set(requestId, { resolve, reject });
+    send({ type: "cowork_draft_flow", clientId, requestId, description, model, provider });
+  }), [clientId, connected, send]);
+
+  return { flows, loaded, save, remove, draftFromSession, draftFromDescription };
 }

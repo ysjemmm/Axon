@@ -35,6 +35,8 @@ import { FlowRunner, type FlowRunValues } from "@/components/cowork/FlowRunner";
 import { FlowEditor } from "@/components/cowork/FlowEditor";
 import { TaskThread } from "@/components/cowork/TaskThread";
 import { ConfirmCard } from "@/components/cowork/ConfirmCard";
+import { NewFlowDialog } from "@/components/cowork/NewFlowDialog";
+import { shareFlowText } from "@/components/cowork/flowShare";
 import { useStickToBottom } from "@/components/cowork/useStickToBottom";
 import type { CoworkFlow, CoworkFlowDraft } from "@/components/cowork/flowTypes";
 import { STORAGE, TIMEOUT } from "@/lib/constants";
@@ -113,7 +115,8 @@ export function CoworkPanel({ clientId, connected, send, onExit }: CoworkPanelPr
 
   // ── 会话 / 流程 / 文件选择 ─────────────────────────────────────────────
   const { tasks, running, tokenUsage, sessionId, loadingHistory, queue, confirm, submit, cancel, startNewSession, openSession, removeFromQueue, answerConfirm } = useCoworkSession({ clientId, connected, send });
-  const { flows, save: saveFlow, remove: removeFlow, draftFromSession } = useCoworkFlows({ clientId, connected, send });
+  const { flows, save: saveFlow, remove: removeFlow, draftFromSession, draftFromDescription } = useCoworkFlows({ clientId, connected, send });
+  const [newFlowOpen, setNewFlowOpen] = useState(false);
   const { pickFiles, pickDir } = useFilePicker(clientId);
   const { ref: scrollRef, showScrollButton, scrollToBottom } = useStickToBottom<HTMLDivElement>();
 
@@ -335,6 +338,12 @@ export function CoworkPanel({ clientId, connected, send, onExit }: CoworkPanelPr
               onEditFlow={(flow) => setEditor({ title: "编辑流程", initial: flow })}
               onDeleteFlow={(flow) => { if (window.confirm(`删除流程「${flow.name}」？已经做出来的文件不受影响。`)) removeFlow(flow.id); }}
               onUseTemplate={(template) => setOpenFlow({ flow: template })}
+              onNewFlow={() => setNewFlowOpen(true)}
+              onShareFlow={(flow) => {
+                void navigator.clipboard.writeText(shareFlowText(flow))
+                  .then(() => setNotice(`已复制流程「${flow.name}」，发给同事后对方在「新建流程 → 导入分享的流程」里粘贴即可。`))
+                  .catch(() => setNotice("复制失败，请重试"));
+              }}
             />
           </div>
         )}
@@ -441,6 +450,17 @@ export function CoworkPanel({ clientId, connected, send, onExit }: CoworkPanelPr
           resetComposer();
         }}
       />
+
+      {newFlowOpen && (
+        <NewFlowDialog
+          onDraft={(description) => {
+            if (!model.trim() || !provider?.trim()) return Promise.reject(new Error("请先在下方选择一个模型"));
+            return draftFromDescription(description, model, provider);
+          }}
+          onOpenEditor={(draft) => { setNewFlowOpen(false); setEditor({ title: "新建流程", initial: draft, thenOpen: true }); }}
+          onClose={() => setNewFlowOpen(false)}
+        />
+      )}
 
       {editor && (
         <FlowEditor

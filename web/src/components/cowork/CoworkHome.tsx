@@ -6,7 +6,7 @@
  */
 
 import { useState } from "react";
-import { MoreHorizontal, Pencil, Play, Repeat2, Trash2 } from "lucide-react";
+import { Copy, MoreHorizontal, Pencil, Play, Plus, Repeat2, Trash2 } from "lucide-react";
 import { relativeTime } from "./relativeTime";
 import { FLOW_ROLES, FLOW_TEMPLATES, type FlowRole, type FlowTemplate } from "./builtinFlows";
 import type { CoworkFlow } from "./flowTypes";
@@ -17,9 +17,13 @@ interface CoworkHomeProps {
   onEditFlow: (flow: CoworkFlow) => void;
   onDeleteFlow: (flow: CoworkFlow) => void;
   onUseTemplate: (template: FlowTemplate) => void;
+  /** 新建 / 导入流程 */
+  onNewFlow: () => void;
+  /** 复制流程给同事 */
+  onShareFlow: (flow: CoworkFlow) => void;
 }
 
-function FlowCard({ flow, onRun, onEdit, onDelete }: { flow: CoworkFlow; onRun: () => void; onEdit: () => void; onDelete: () => void }) {
+function FlowCard({ flow, onRun, onEdit, onDelete, onShare }: { flow: CoworkFlow; onRun: () => void; onEdit: () => void; onDelete: () => void; onShare: () => void }) {
   const [menu, setMenu] = useState(false);
   const runs = flow.runs ?? [];
   const meta = runs.length > 0 ? `上次运行 ${relativeTime(runs[0].at)} · 共 ${runs.length} 次` : "还没运行过";
@@ -40,6 +44,7 @@ function FlowCard({ flow, onRun, onEdit, onDelete }: { flow: CoworkFlow; onRun: 
         {menu && (
           <div className="absolute right-0 z-20 mt-1 w-28 overflow-hidden rounded-lg border border-border bg-background py-1 shadow-lg" onMouseLeave={() => setMenu(false)}>
             <button onClick={() => { setMenu(false); onEdit(); }} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] hover:bg-muted/60"><Pencil className="h-3.5 w-3.5" />编辑</button>
+            <button onClick={() => { setMenu(false); onShare(); }} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] hover:bg-muted/60"><Copy className="h-3.5 w-3.5" />复制分享</button>
             <button onClick={() => { setMenu(false); onDelete(); }} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-destructive hover:bg-muted/60"><Trash2 className="h-3.5 w-3.5" />删除</button>
           </div>
         )}
@@ -48,7 +53,7 @@ function FlowCard({ flow, onRun, onEdit, onDelete }: { flow: CoworkFlow; onRun: 
   );
 }
 
-export function CoworkHome({ flows, onRunFlow, onEditFlow, onDeleteFlow, onUseTemplate }: CoworkHomeProps) {
+export function CoworkHome({ flows, onRunFlow, onEditFlow, onDeleteFlow, onUseTemplate, onNewFlow, onShareFlow }: CoworkHomeProps) {
   const [role, setRole] = useState<FlowRole>("finance");
   const templates = FLOW_TEMPLATES.filter((t) => t.role === role);
   return (
@@ -56,20 +61,24 @@ export function CoworkHome({ flows, onRunFlow, onEditFlow, onDeleteFlow, onUseTe
       <h2 className="text-[17px] font-medium text-foreground">今天要处理什么？</h2>
       <p className="mt-1 text-[13px] text-muted-foreground">选一个流程放进文件就能运行；临时的需求直接在下面说。</p>
 
-      {flows.length > 0 && (
-        <section className="mt-6">
-          <h3 className="mb-2 text-[12px] font-medium text-muted-foreground">我的流程</h3>
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2">
-            {flows.map((flow) => (
-              <FlowCard key={flow.id} flow={flow} onRun={() => onRunFlow(flow)} onEdit={() => onEditFlow(flow)} onDelete={() => onDeleteFlow(flow)} />
-            ))}
-          </div>
-        </section>
-      )}
+      <section className="mt-6">
+        <h3 className="mb-2 text-[12px] font-medium text-muted-foreground">我的流程</h3>
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2">
+          {flows.map((flow) => (
+            <FlowCard key={flow.id} flow={flow} onRun={() => onRunFlow(flow)} onEdit={() => onEditFlow(flow)} onDelete={() => onDeleteFlow(flow)} onShare={() => onShareFlow(flow)} />
+          ))}
+          {/* 自定义流程入口：描述让 AI 起草 / 从空白开始 / 导入同事分享的 */}
+          <button onClick={onNewFlow} className="flex min-h-[96px] flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-border p-3 text-[12px] text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground">
+            <Plus className="h-4 w-4" />
+            新建流程
+            {flows.length === 0 && <span className="text-[11px] text-muted-foreground/70">描述一下，AI 帮你写步骤</span>}
+          </button>
+        </div>
+      </section>
 
       <section className="mt-6">
         <div className="mb-2 flex items-center gap-3">
-          <h3 className="text-[12px] font-medium text-muted-foreground">{flows.length > 0 ? "更多模板" : "从模板开始"}</h3>
+          <h3 className="text-[12px] font-medium text-muted-foreground">从模板开始</h3>
           <div className="flex gap-1">
             {FLOW_ROLES.map((r) => (
               <button
