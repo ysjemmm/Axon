@@ -56,6 +56,11 @@ export interface SessionData {
   workspaces?: string[]; // 多工作区路径列表（工作区组绑定时使用）
   workspaceGroupId?: string; // 绑定的工作区组 ID
   messages: ChatCompletionMessageParam[];
+  /**
+   * 被上下文压缩换成摘要的原始消息（按时间顺序）。只用于界面展示完整聊天记录，不再发给模型——
+   * 压缩只缩模型的上下文，用户看到的历史一条不少。
+   */
+  archivedMessages?: ChatCompletionMessageParam[];
   totalTokens: number; // 当前上下文 token 占用（API 真实 prompt token）
   pendingEdits?: SerializedPendingEdit[]; // 手动模式下暂存的待确认改动
   /**
@@ -91,7 +96,7 @@ export interface SessionStorage {
   createSession(data: Omit<SessionData, "createdAt" | "updatedAt">): Promise<SessionData>;
 
   /** 更新会话（消息追加、标题修改等） */
-  updateSession(id: string, patch: Partial<Pick<SessionData, "title" | "model" | "provider" | "workspace" | "workspaces" | "workspaceGroupId" | "messages" | "totalTokens" | "pendingEdits" | "memory" | "memoryHistory">>): Promise<void>;
+  updateSession(id: string, patch: Partial<Pick<SessionData, "title" | "model" | "provider" | "workspace" | "workspaces" | "workspaceGroupId" | "messages" | "archivedMessages" | "totalTokens" | "pendingEdits" | "memory" | "memoryHistory">>): Promise<void>;
 
   /** 删除会话 */
   deleteSession(id: string): Promise<void>;

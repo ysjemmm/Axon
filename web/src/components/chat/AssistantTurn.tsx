@@ -180,7 +180,7 @@ function AssistantTurnImpl({
             {/* 分叉入口跟在时间后面，同一条元信息行里：单独起一行会把回复底部撑高，
                 而且它和 Credits/Elapsed 属于同一层级的"这条回复的附属信息"。
                 跟随 Elapsed 一起 hover 才出现（Elapsed 本身也是 hover 才显示）。 */}
-            {!message.streaming && onForkFromMessage && (
+            {!message.streaming && !message.archived && onForkFromMessage && (
               <button
                 type="button"
                 onClick={() => onForkFromMessage(message)}

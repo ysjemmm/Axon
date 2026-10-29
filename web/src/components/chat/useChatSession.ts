@@ -699,7 +699,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
   const rejectEdits = useCallback((path?: string) => send({ type: "reject_edits", path }), [send]);
   const undoEdits = useCallback((path: string) => send({ type: "undo_edits", path }), [send]);
   const editUserMessage = useCallback((messageId: string, content: string, images?: string[], attachedFiles?: AttachedFile[]) => {
-    const userIndex = chatHistory.filter((msg) => msg.role === "user").findIndex((msg) => msg.id === messageId);
+    // 序号只数还在上下文里的用户消息（压缩存档里的不算），与后端口径一致
+    const userIndex = chatHistory.filter((msg) => msg.role === "user" && !msg.archived).findIndex((msg) => msg.id === messageId);
     setChatHistory((prev) => prev.map((msg) => (
       msg.role === "user" && msg.id === messageId
         ? { ...msg, content, images: images && images.length > 0 ? images : undefined, attachedFiles: attachedFiles && attachedFiles.length > 0 ? attachedFiles : undefined, userSegments: undefined }
@@ -739,11 +740,12 @@ export function useChatSession(opts: UseChatSessionOptions) {
     for (let i = clickedIdx; i >= 0; i--) {
       if (history[i].role === "user") { anchorIdx = i; break; }
     }
-    if (anchorIdx < 0) return;
+    // 压缩存档里的消息已不在上下文里，无从按它截断
+    if (anchorIdx < 0 || history[anchorIdx].archived) return;
     const anchorId = history[anchorIdx].id;
     let upToUserIndex = 0;
     for (let i = 0; i < anchorIdx; i++) {
-      if (history[i].role === "user") upToUserIndex++;
+      if (history[i].role === "user" && !history[i].archived) upToUserIndex++;
     }
     // `hist-u-N` 是会话加载时为「没有 clientMessageId 的历史用户消息」临时生成的 id
     // （老会话 / 压缩摘要出来的用户消息），后端不可能匹配到，只发序号。

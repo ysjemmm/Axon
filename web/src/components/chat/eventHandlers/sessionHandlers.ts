@@ -80,6 +80,8 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
         restored.push(currentAssistant);
         currentAssistant = null;
       }
+      // 压缩时被钉在摘要后的当前请求：存档里已有一份副本显示过，这里不再重复
+      if ((m as any)._shownInArchive && !(m as any)._archived) continue;
       let content = "";
       let images: string[] | undefined;
       if (typeof m.content === "string") {
@@ -109,6 +111,7 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
         content: backgroundNotice ? (displayText ?? backgroundNotice.label) : bodyText,
         images, attachedFiles, userSegments: restoredSegments, effort,
         ...(backgroundNotice ? { backgroundNotice } : {}),
+        ...((m as any)._archived ? { archived: true } : {}),
       });
     } else if (m.role === "assistant") {
       // 正文来源分两种，必须都读：
@@ -126,7 +129,7 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
       const hasToolCalls = m.tool_calls && m.tool_calls.length > 0;
 
       if (!currentAssistant) {
-        currentAssistant = { id: `hist-a-${seq++}`, role: "assistant", segments: [] };
+        currentAssistant = { id: `hist-a-${seq++}`, role: "assistant", segments: [], ...((m as any)._archived ? { archived: true } : {}) };
       }
 
       if (text) {

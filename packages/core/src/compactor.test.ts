@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { serializeHistoryForMemory } from "./compactor.js";
+import { estimateChatMessagesTokens } from "./llm/tokenEstimator.js";
 
 describe("会话记忆历史序列化", () => {
   it("保留工具名称、参数和关键路径", () => {
@@ -119,9 +120,21 @@ describe("回答进行中的压缩：当前请求原样保留", () => {
     const turn = [...toolRound("a", "小结果"), ...toolRound("b", "小结果")];
     const messages = [...before, user, ...turn];
     const { strategy } = summarizer();
-    const out = await compactKeepingCurrentTurn(messages, strategy, "m", before.length, 10_000);
+    // 预算刚好装下本轮：更早的对话全部进摘要
+    const out = await compactKeepingCurrentTurn(messages, strategy, "m", before.length, estimateChatMessagesTokens([user, ...turn]) + 1);
     expect(out[1].content).toContain("[对话历史摘要]");
     expect(out.slice(3)).toEqual([user, ...turn]);
+  });
+
+  it("预算有富余：本轮之前最近几条原文也留下（指代「刚才那个」要靠它）", async () => {
+    const before = longHistory(6);
+    const user = { role: "user", content: "把刚才那个改一下" };
+    const messages = [...before, user];
+    const { strategy } = summarizer();
+    const lastTwo = before.slice(-2);
+    const out = await compactKeepingCurrentTurn(messages, strategy, "m", before.length, estimateChatMessagesTokens([...lastTwo, user]) + 1);
+    expect(out[1].content).toContain("[对话历史摘要]");
+    expect(out.slice(3)).toEqual([...lastTwo, user]);
   });
 
   it("本轮自己很大：前面的工具轮进摘要，用户消息钉在摘要之后，不留孤儿 tool 结果", async () => {

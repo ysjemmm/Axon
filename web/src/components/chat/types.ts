@@ -154,6 +154,8 @@ export interface SubAgentSegment {
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
+  /** 已被上下文压缩换成摘要的早期消息：照常显示，但不在模型上下文里，不能编辑 / 分叉 */
+  archived?: boolean;
   /** 消息创建时间戳（毫秒） */
   timestamp?: number;
   // user 用

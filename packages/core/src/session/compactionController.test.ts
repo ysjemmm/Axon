@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // 压缩本身要调 LLM，这里只关心"压缩后如何落盘"，故把摘要生成替换成确定结果。
 vi.mock("../providers.js", () => ({ getStrategy: () => ({}), declaredThinkingFor: () => undefined }));
@@ -47,6 +47,8 @@ function makeSession(messages: any[]) {
     getMemory: () => "已有记忆",
     send: vi.fn(),
     getContextWindow: () => 1_000_000,
+    getAutoCompactAt: () => s.autoCompactAt ?? 0,
+    applyCompaction: (_before: any[], next: any[]) => { s.messages = next; return true; },
     getLastTotalTokens: () => s.lastTotalTokens,
     persistMessages: () => {
       persisted.push(s.lastTotalTokens);
@@ -174,6 +176,7 @@ describe("后台记忆整理的时机", () => {
 });
 
 describe("回答进行中的自动压缩", () => {
+  beforeEach(() => { vi.mocked(compactKeepingCurrentTurn).mockClear(); });
   const history = () => [
     { role: "system", content: "system" },
     { role: "user", content: "旧问题" },

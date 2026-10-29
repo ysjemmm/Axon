@@ -146,7 +146,7 @@ function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRej
               >
                 <Copy className="w-3.5 h-3.5" />
               </button>
-              <button
+              {!message.archived && <button
                 onClick={() => {
                   setDraftUserText(plainText);
                   setDraftImages(message.images ? [...message.images] : []);
@@ -158,7 +158,7 @@ function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRej
                 disabled={message.id === replyingToMessageId}
               >
                 <Pencil className="w-3.5 h-3.5" />
-              </button>
+              </button>}
               <button
                 onClick={() => onQuoteToInput?.(message)}
                 className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/80"

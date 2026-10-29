@@ -441,8 +441,11 @@ export class SessionHub {
       const total = s.getLastTotalTokens();
       const allMessages = s.getMessages();
       const persistable = this.filterPersistable(allMessages);
+      const archived = s.getArchivedMessages();
       await this.storage.updateSession(sid, {
         messages: persistable,
+        // 压缩存档只增不减：有内容才写，免得空数组抹掉磁盘上已有的
+        ...(archived.length > 0 ? { archivedMessages: this.filterPersistable(archived) } : {}),
         // 仅在有有效值时写入 totalTokens：避免尚未拿到真实 usage 时用 0 覆盖磁盘已有统计。
         ...(total > 0 ? { totalTokens: total } : {}),
         // 会话记忆：非空时写；本次会话里改过（包括用户清空）时也写——否则清空永远存不下来，
@@ -482,6 +485,7 @@ export class SessionHub {
     // 被持久化回写、覆盖磁盘上的有效值（刷新后上下文显示为 0 的根因）。
     session.hydrateTokenUsage(savedSession?.totalTokens);
     session.hydrateMemory(savedSession?.memory, savedSession?.memoryHistory);
+    session.hydrateArchived(savedSession?.archivedMessages);
     this.registerPersistence(session, sid);
     this.activeSessions.set(sid, session);
 
@@ -815,9 +819,12 @@ export class SessionHub {
       workspaceGroupId: savedSession?.workspaceGroupId || null,
       // 只过滤瞬态、不剥离改动字段：运行中重连/切回时本会话的改动照常展示（重启后内存来自盘，天然干净）。
       // 改动前后全文不随快照下发（slimDiffBodies），前端打开 diff 时经 get_diff_content 按需取。
-      messages: slimDiffBodies(
-        session.getMessages().length > 0 ? filterTransientMessages(session.getMessages()) : filterTransientMessages(savedSession?.messages || []),
-      ),
+      // 完整聊天记录 = 压缩存档（标 _archived，只展示）+ 当前上下文：压缩只缩模型上下文，用户看到的历史一条不少
+      messages: slimDiffBodies([
+        ...filterTransientMessages(session.getArchivedMessages().length > 0 ? session.getArchivedMessages() : savedSession?.archivedMessages || [])
+          .map((m) => ({ ...m, _archived: true }) as unknown as typeof m),
+        ...(session.getMessages().length > 0 ? filterTransientMessages(session.getMessages()) : filterTransientMessages(savedSession?.messages || [])),
+      ]),
       totalTokens: session.getLastTotalTokens() || savedSession?.totalTokens || 0,
       // 上下文面板的明细与权威窗口随会话一起下发：否则要等下一轮 token_usage 才有明细
       // 仍不知道模型时不下发：前端按自己选中的模型占位，等第一轮 token_usage

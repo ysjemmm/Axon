@@ -12,7 +12,7 @@ import { ToolCallStatus, type ToolMeta, type WebCapability, type ApprovalDecisio
 import { calculateCredits, buildCreditDetail } from "./credits.js";
 import type { AgentHost } from "./host/index.js";
 import type { AgentChannel, AgentEvent } from "./channel/index.js";
-import { isSummaryMessage, DEFAULT_COMPACTION_CONFIG, setPruneKeepChars, autoCompactThreshold } from "./compactor.js";
+import { isSummaryMessage, isCompactionAck, DEFAULT_COMPACTION_CONFIG, setPruneKeepChars, autoCompactThreshold } from "./compactor.js";
 import type { CompactionUserConfig } from "./compactor.js";
 import type { CreditBudgetUserConfig } from "./credits.js";
 import type { SerializedPendingEdit } from "./storage/types.js";
@@ -562,6 +562,51 @@ export class AgentSession {
   }
 
   /** 获取当前完整消息列表（持久化用） */
+  /** 被压缩换成摘要的原始消息（只给界面展示，见 SessionData.archivedMessages） */
+  private archivedMessages: ChatCompletionMessageParam[] = [];
+
+  getArchivedMessages(): ChatCompletionMessageParam[] {
+    return this.archivedMessages;
+  }
+
+  /** 从磁盘回填压缩存档 */
+  hydrateArchived(list?: ChatCompletionMessageParam[]): void {
+    if (Array.isArray(list)) this.archivedMessages = list;
+  }
+
+  /**
+   * 压缩结果生效：把被摘要替换掉的原始消息移进存档（界面照常显示），再替换模型上下文。
+   *
+   * snapshot 是开始压缩时的消息列表。压缩要调一次模型、耗时几秒到几十秒，这期间
+   * 对话可能还在往后追加（后台滚动摘要时用户发了新消息、回复还在写）：
+   * 追加的部分接到压缩结果后面，一条不丢；若这期间历史被改写过（编辑消息、另一次压缩），
+   * 这次结果作废，返回 false。
+   */
+  /** @internal */ applyCompaction(snapshot: ChatCompletionMessageParam[], next: ChatCompletionMessageParam[]): boolean {
+    const current = this.messages;
+    if (current.length < snapshot.length || snapshot.some((m, i) => current[i] !== m)) return false;
+    const appended = current.slice(snapshot.length);
+    const kept = new Set(next);
+    const isContext = (m: ChatCompletionMessageParam) => m.role === "system" || isSummaryMessage(m) || isCompactionAck(m) || !!(m as { _ephemeralInjected?: boolean })._ephemeralInjected;
+    const removed = snapshot.filter((m) => !kept.has(m) && !isContext(m));
+    // 当前请求被钉在摘要之后（回答进行中压缩、且本轮自己就很大）：它后面的工具步骤进了存档，
+    // 存档里补一份它的副本放在这些步骤前面，原消息标记为「已在存档中显示」，界面不再重复显示
+    const lastRemoved = removed.length ? snapshot.indexOf(removed[removed.length - 1]) : -1;
+    const archive: ChatCompletionMessageParam[] = [];
+    for (let i = 0; i <= lastRemoved; i++) {
+      const m = snapshot[i];
+      if (isContext(m)) continue;
+      if (!kept.has(m)) { archive.push(m); continue; }
+      if (m.role === "user" && !(m as { _shownInArchive?: boolean })._shownInArchive) {
+        archive.push({ ...m } as ChatCompletionMessageParam);
+        (m as { _shownInArchive?: boolean })._shownInArchive = true;
+      }
+    }
+    this.archivedMessages = [...this.archivedMessages, ...archive];
+    this.messages = [...next, ...appended];
+    return true;
+  }
+
   getMessages(): ChatCompletionMessageParam[] {
     return this.messages;
   }
@@ -576,8 +621,8 @@ export class AgentSession {
     }
     console.log(`[edit_user_message] messageId=${messageId} userIndex=${userIndex} totalUserMsgs=${totalUserMsgs} images=${images?.length ?? 0} files=${attachedFiles?.length ?? 0}`);
     for (const m of this.messages as any[]) {
-      // 跳过压缩摘要：前端把它显示成分隔行、不计入用户消息序号
-      if (m.role !== "user" || m._screenshotInjection || isSummaryMessage(m)) continue;
+      // 跳过压缩摘要（前端显示成分隔行）和已在压缩存档里显示过的当前请求：都不计入用户消息序号
+      if (m.role !== "user" || m._screenshotInjection || m._shownInArchive || isSummaryMessage(m)) continue;
       seen++;
       const hitById = messageId && m.clientMessageId === messageId;
       const hitByIndex = typeof userIndex === "number" && seen === userIndex;

@@ -245,14 +245,28 @@ export async function compactKeepingCurrentTurn(
   const userMsg = messages[turnStart];
   const turn = messages.slice(turnStart + 1);
   // 本轮之前只剩上次压缩留下的「摘要 + 确认」：再摘一遍省不出空间
-  const beforeHasContent = before.some((m) => !isSummaryMessage(m) && !isSummaryAck(m) && !isEphemeral(m));
+  const beforeHasContent = before.some((m) => !isSummaryMessage(m) && !isCompactionAck(m) && !isEphemeral(m));
 
   let old: ChatCompletionMessageParam[];
   let kept: ChatCompletionMessageParam[];
   let pinned = false;
-  if (beforeHasContent && estimateChatMessagesTokens([userMsg, ...turn]) <= keepTokens) {
-    old = before;
-    kept = [userMsg, ...turn];
+  const turnTokens = estimateChatMessagesTokens([userMsg, ...turn]);
+  if (beforeHasContent && turnTokens <= keepTokens) {
+    // 本轮之前的对话也按剩余预算留下最近几条原文：「刚才那个」「按上面的方案」这类指代要靠它
+    let keepCount = 0;
+    let used = 0;
+    for (let i = before.length - 1; i >= 0; i--) {
+      if (isSummaryMessage(before[i]) || isCompactionAck(before[i])) break;
+      used += estimateChatMessagesTokens([before[i]]);
+      if (used > keepTokens - turnTokens) break;
+      keepCount++;
+    }
+    // 保留的部分从一轮的开头（用户消息）算起：半截回合（只剩回答、问题进了摘要）对模型是噪音
+    let split = alignSplitIndex(before, keepCount);
+    while (split < before.length && before[split].role !== "user") split++;
+    old = before.slice(0, split);
+    if (!old.some((m) => !isSummaryMessage(m) && !isCompactionAck(m) && !isEphemeral(m))) return messages;
+    kept = [...before.slice(split), userMsg, ...turn];
   } else {
     // 从末尾往前按预算保留，再对齐到完整回合边界
     let keepCount = 0;
@@ -288,7 +302,8 @@ export async function compactKeepingCurrentTurn(
   ];
 }
 
-function isSummaryAck(msg: ChatCompletionMessageParam): boolean {
+/** 摘要后面那句「明白，我已了解之前的对话内容」 */
+export function isCompactionAck(msg: ChatCompletionMessageParam): boolean {
   return msg?.role === "assistant" && typeof msg.content === "string" && msg.content.startsWith("明白，我已了解");
 }
 
