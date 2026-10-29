@@ -18,7 +18,7 @@ import { createContext, useContext, useEffect, useId, useRef } from "react";
  * 活动中的几种状态（括号里是成分组合）：
  * · think   思考：还没开始输出（三点一排，依次亮起）
  * · reason  推理：模型在输出推理过程（三点弯成三角，缓缓转动）
- * · write   输出正文（三点一排，依次跳起）
+ * · write   输出正文（四点一排，波浪式依次跳起）
  * · tool    执行工具（四点围成一圈转动）
  * · wait    等用户确认 / 作答（三点一排，一起慢呼吸）
  * · compact 压缩上下文（四点一圈，向中心收拢再舒展）
@@ -56,7 +56,7 @@ interface Params {
 const MODES: Record<SparkMode | "idle", Params> = {
   think: { count: 3, ring: 0, speed: 1.1, bounce: 0, seq: 1, sync: 0, spin: 0, squeeze: 0, alpha: 1 },
   reason: { count: 3, ring: 1, speed: 0.8, bounce: 0, seq: 0.5, sync: 0, spin: 110, squeeze: 0, alpha: 1 },
-  write: { count: 3, ring: 0, speed: 1.5, bounce: 1, seq: 0.35, sync: 0, spin: 0, squeeze: 0, alpha: 1 },
+  write: { count: 4, ring: 0, speed: 1.4, bounce: 1, seq: 0, sync: 0, spin: 0, squeeze: 0, alpha: 1 },
   tool: { count: 4, ring: 1, speed: 1.2, bounce: 0, seq: 0.6, sync: 0, spin: 220, squeeze: 0, alpha: 1 },
   wait: { count: 3, ring: 0, speed: 0.5, bounce: 0, seq: 0, sync: 1, spin: 0, squeeze: 0, alpha: 1 },
   compact: { count: 4, ring: 1, speed: 0.8, bounce: 0, seq: 0, sync: 0.4, spin: 90, squeeze: 1, alpha: 1 },
@@ -144,7 +144,8 @@ export function AxonSpark({ size = 20, animate = false, mode, className = "" }: 
 
         // 大小与亮度：依次亮起（seq）+ 一起呼吸（sync）
         const lit = (1 + Math.cos(s.phase - i * 1.1)) / 2;
-        const presence = i < 3 ? 1 : n4;
+        // 四个点排成一行时间距变小，点也跟着缩一点，免得挤成一条
+        const presence = (i < 3 ? 1 : n4) * (1 - 0.2 * n4 * (1 - p.ring));
         const scale = presence * (1 - 0.38 * p.seq * (1 - lit)) * (1 - 0.3 * p.sync * (1 - breath));
         const opacity = p.alpha * (1 - 0.55 * p.seq * (1 - lit) - 0.4 * p.sync * (1 - breath));
 
