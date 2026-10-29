@@ -634,6 +634,26 @@ input[type="file"],
   border: 1px solid color-mix(in oklab, var(--foreground) 10%, transparent);
 }
 
+/* 聊天里的用户消息气泡：同样不能用 bg-muted（原因见上），从 --foreground 按很小的比例混进背景，
+   得到一块中性的浅灰底（深色主题下是略亮一点的灰），与 AI 回复（无底色）区分开，又不显得重。 */
+.axon-chat-user-bubble {
+  --bubble-bg: color-mix(in oklab, var(--foreground) 4.5%, var(--background));
+  background: var(--bubble-bg);
+  border: 1px solid color-mix(in oklab, var(--foreground) 7%, transparent);
+}
+.dark .axon-chat-user-bubble,
+.vscode-dark .axon-chat-user-bubble {
+  --bubble-bg: color-mix(in oklab, var(--foreground) 9%, var(--background));
+  border-color: color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+.axon-chat-user-bubble-fade {
+  background: linear-gradient(to top, var(--bubble-bg), transparent);
+}
+.axon-chat-user-bubble .axon-bubble-chip {
+  background: color-mix(in oklab, var(--background) 82%, transparent);
+  border-color: color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
 /* 气泡内的附件卡片：再往上提一层亮度，才能从气泡底色里"浮"出来 */
 .axon-user-bubble .axon-bubble-chip {
   background: color-mix(in oklab, var(--background) 82%, transparent);

@@ -3,6 +3,7 @@
  * 从原 ChatPanel.tsx 拆出。
  */
 
+import { MessageTime } from "./MessageTime";
 import { memo, useState } from "react";
 import { Bell, Check, ChevronDown, Copy, Feather, FileText, Pencil, X } from "lucide-react";
 import type { AttachedFile, ChatMessage } from "./types";
@@ -129,10 +130,13 @@ function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRej
     if (!message.content && (!message.images || message.images.length === 0) && !hasFiles && !hasSegments) return null;
     return (
       <div className="group/user flex items-start flex-row-reverse">
-        <div className="relative rounded-xl px-3 py-1.5 max-w-[85%] bg-muted border border-border/70 text-foreground shadow-sm">
-          {/* Hover 操作按钮 */}
-          {(message.content || hasSegments || (message.images && message.images.length > 0)) && (
-            <div className="absolute -left-16 bottom-0 flex items-center gap-0.5 opacity-0 group-hover/user:opacity-100 transition-opacity">
+        <div className="axon-chat-user-bubble relative max-w-[82%] rounded-2xl rounded-br-md px-3.5 py-2 text-foreground">
+          {/* 悬停工具条：浮在气泡左下角外侧，带发送时间；不占布局，出现时内容不跳 */}
+          {!editingUser && (message.content || hasSegments || (message.images && message.images.length > 0)) && (
+            <div className="absolute right-full bottom-0 mr-1.5 flex items-center gap-0.5 whitespace-nowrap rounded-lg border border-border/60 bg-background/95 px-1 py-0.5 shadow-sm opacity-0 translate-x-1 pointer-events-none transition-all duration-150 group-hover/user:opacity-100 group-hover/user:translate-x-0 group-hover/user:pointer-events-auto">
+              {message.timestamp && (
+                <span className="px-1 text-[10.5px] tabular-nums text-muted-foreground/70"><MessageTime at={message.timestamp} /></span>
+              )}
               <button
                 onClick={async (e) => {
                   // 先取 currentTarget：await 之后合成事件的 currentTarget 可能已失效
@@ -258,19 +262,19 @@ function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRej
               )}
               {hasSegments ? (
                 <div className="relative">
-                  <p className={`text-[14px] whitespace-pre-wrap leading-[1.5] overflow-hidden ${collapsed ? "max-h-40" : ""}`}>
+                  <p className={`text-[14px] whitespace-pre-wrap leading-[1.65] overflow-hidden ${collapsed ? "max-h-40" : ""}`}>
                     {message.userSegments!.map((seg, i) =>
                       seg.type === "text" ? <span key={i}>{seg.text}</span> : <FileTag key={i} data={{ name: seg.tag.name, path: seg.tag.name, content: seg.tag.content, kind: seg.tag.kind }} />,
                     )}
                   </p>
-                  {collapsed && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-muted to-transparent" />}
+                  {collapsed && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 axon-chat-user-bubble-fade" />}
                 </div>
               ) : (
                 <>
                   {hasFiles && (
                     <div className="flex gap-2 flex-wrap mb-2">
                       {message.attachedFiles!.map((f, i) => (
-                        <div key={i} className="relative flex min-h-20 w-52 items-center gap-3 rounded-xl bg-background/60 border border-border p-3 shadow-sm">
+                        <div key={i} className="relative flex min-h-20 w-52 items-center gap-3 rounded-xl axon-bubble-chip border p-3">
                           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
                             <FileText className="w-5 h-5 text-muted-foreground" />
                           </div>
@@ -287,8 +291,8 @@ function MessageBubbleImpl({ message, liveStatus, startedAt, onAcceptEdit, onRej
                   )}
                   {message.content && (
                     <div className="relative">
-                      <p className={`text-[14px] whitespace-pre-wrap leading-relaxed overflow-hidden ${collapsed ? "max-h-40" : ""}`}>{message.content}</p>
-                      {collapsed && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-muted to-transparent" />}
+                      <p className={`text-[14px] whitespace-pre-wrap leading-[1.65] overflow-hidden ${collapsed ? "max-h-40" : ""}`}>{message.content}</p>
+                      {collapsed && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 axon-chat-user-bubble-fade" />}
                     </div>
                   )}
                 </>
