@@ -4,6 +4,7 @@ import { Code } from "lucide-react";
 import { AxonSpark } from "@/components/AxonSpark";
 import type { ChatMessage, TextSegment } from "./types";
 import { formatElapsed } from "./format";
+import { MessageTime } from "./MessageTime";
 import { GitFork } from "lucide-react";
 import { renderSegments } from "./renderSegments";
 
@@ -173,6 +174,7 @@ function AssistantTurnImpl({
                 </span>
               </>
             ) : null}
+            {message.turnStats.completedAt ? <>{" · "}<MessageTime at={message.turnStats.completedAt} /></> : null}
             <span className="hidden group-hover/assistant:inline">
               {" · "}Elapsed: {formatElapsed(message.turnStats.elapsed)}
               {uncertain ? "(?)" : ""}

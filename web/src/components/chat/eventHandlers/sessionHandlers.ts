@@ -137,7 +137,10 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
       }
 
       if ((m as any).turnStats) {
-        currentAssistant.turnStats = (m as any).turnStats;
+        const stats = (m as any).turnStats as NonNullable<ChatMessage["turnStats"]>;
+        // 老会话的统计里没有完成时间：用这一轮提问的时间 + 用时推算
+        const askedAt = [...restored].reverse().find((r) => r.role === "user")?.timestamp;
+        currentAssistant.turnStats = stats.completedAt || !askedAt ? stats : { ...stats, completedAt: askedAt + (stats.elapsed || 0) };
         // 尊重后端落盘的终止状态。早先这里无条件写 "success"，把 errorTurnHandler 特意持久化的
         // turnStatus（"cancelled" / "error"）直接抹掉——于是一轮失败的回复在刷新后显示为正常完成，
         // 连 Credits 后面的 (?) 不确定标记都没了，用户无从得知那轮其实中断了。

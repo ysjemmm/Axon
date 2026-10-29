@@ -175,7 +175,7 @@ export interface ChatMessage {
   streaming?: boolean;
   /** 本轮状态：pending=等待响应 / running=执行中 / success=正常完成 / cancelled=用户取消 / error=异常中断 */
   turnStatus?: "pending" | "running" | "success" | "cancelled" | "error";
-  turnStats?: { elapsed: number; tokens: number; model?: string; modelName?: string; providerName?: string; effort?: string; credits?: number; creditDetail?: CreditDetail } & TurnBillingInfo;
+  turnStats?: { elapsed: number; tokens: number; /** 这轮回复完成的时刻（毫秒） */ completedAt?: number; model?: string; modelName?: string; providerName?: string; effort?: string; credits?: number; creditDetail?: CreditDetail } & TurnBillingInfo;
   /** turn 代数：取消后启动新轮时递增，防止陈旧事件穿透到新轮 */
   turnGen?: number;
 }

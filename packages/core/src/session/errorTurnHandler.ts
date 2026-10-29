@@ -147,7 +147,7 @@ export class ErrorTurnHandler {
     const billing = this.s.buildTurnBilling(estimatedOutput);
     for (let i = this.s.messages.length - 1; i >= 0; i--) {
       if (this.s.messages[i].role === "assistant") {
-        (this.s.messages[i] as any).turnStats = { elapsed, tokens: turnTokens, model: this.s.model, modelName: getModelDisplayName(this.s.model, this.s.provider), providerName: getProviderDisplayName(this.s.provider), effort: this.s.effort, credits, creditDetail, ...billing };
+        (this.s.messages[i] as any).turnStats = { elapsed, tokens: turnTokens, completedAt: Date.now(), model: this.s.model, modelName: getModelDisplayName(this.s.model, this.s.provider), providerName: getProviderDisplayName(this.s.provider), effort: this.s.effort, credits, creditDetail, ...billing };
         (this.s.messages[i] as any).turnStatus = status;
         break;
       }
@@ -177,7 +177,7 @@ export class ErrorTurnHandler {
     const billing = this.s.buildTurnBilling(estimatedOutput);
     for (let i = this.s.messages.length - 1; i >= 0; i--) {
       if (this.s.messages[i].role === "assistant") {
-        (this.s.messages[i] as any).turnStats = { elapsed, tokens: turnTokens, model: this.s.model, modelName: getModelDisplayName(this.s.model, this.s.provider), providerName: getProviderDisplayName(this.s.provider), effort: this.s.effort, credits, creditDetail, ...billing };
+        (this.s.messages[i] as any).turnStats = { elapsed, tokens: turnTokens, completedAt: Date.now(), model: this.s.model, modelName: getModelDisplayName(this.s.model, this.s.provider), providerName: getProviderDisplayName(this.s.provider), effort: this.s.effort, credits, creditDetail, ...billing };
         (this.s.messages[i] as any).turnStatus = "cancelled";
         break;
       }

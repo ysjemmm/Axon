@@ -73,7 +73,7 @@ export class TurnFinalizer {
       ...(input.anthropicThinkingBlocks?.length
         ? { anthropic_thinking_blocks: input.anthropicThinkingBlocks }
         : {}),
-      turnStats: { elapsed, tokens: turnTokens, model: input.model, providerName: input.providerName, effort: input.effort, credits, creditDetail, ...billing },
+      turnStats: { elapsed, tokens: turnTokens, completedAt: Date.now(), model: input.model, providerName: input.providerName, effort: input.effort, credits, creditDetail, ...billing },
     } as any];
 
     // ⚠️ 这里【不再】在回合结束时裁剪旧工具结果（曾经调用 pruneOldToolResults）。

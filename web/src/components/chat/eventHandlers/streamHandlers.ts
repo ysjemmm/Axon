@@ -95,6 +95,8 @@ export function handleStreamEnd(msg: WsMessage, ctx: EventHandlerCtx): void {
   const stats: TurnStats = {
     elapsed: (msg as any).elapsed || 0,
     tokens: (msg as any).tokens || 0,
+    // 完成时间：回复底部显示「刚刚 / 几分钟前」；事件没带就用收到的时刻
+    completedAt: typeof (msg as any).completedAt === "number" ? (msg as any).completedAt : Date.now(),
     model: (msg as any).model as string | undefined,
     modelName: (msg as any).modelName as string | undefined,
     providerName: (msg as any).providerName as string | undefined,
