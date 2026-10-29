@@ -2962,7 +2962,8 @@ export class AgentSession {
   private _drawingPhase: "none" | "started" | "detail" = "none";
   private updateDrawingStatus(content: string): void {
     // 检测是否在显式 opt-in 的增强代码块内（已开始但未闭合）
-    const openMatch = content.match(/```(svg|mermaid|html)(?:[^\n`]*\s)?axon-render[^\n`]*\n/i);
+    // mermaid 不带 axon-render 也会渲染成图（前端按内容判断），这里同样算「在画图」
+    const openMatch = content.match(/```(mermaid)[^\n`]*\n/i) ?? content.match(/```(svg|html)(?:[^\n`]*\s)?axon-render[^\n`]*\n/i);
     if (!openMatch) {
       if (this._drawingPhase !== "none") {
         this._drawingPhase = "none";

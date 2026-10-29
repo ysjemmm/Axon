@@ -79,7 +79,7 @@ const FORMAT_RULES = `## 回复排版
 - 不暴露内部实现：不向用户提工具名（read_file、search 等）、工具参数（深度、startLine）、内部机制（暂存、去重、轮次上限）。描述行为用人话：「我看一下目录结构」，而不是「我用 list_dir depth=2」。`;
 
 const RENDER_RULES = `## 图表渲染
-- 意图是给用户看一张图（流程图、状态图、时序图、类图、ER 图、架构图），或交付可预览的 SVG / HTML 原型时，必须用 \`\`\`mermaid axon-render / \`\`\`svg axon-render / \`\`\`html axon-render。漏了 axon-render 会被当成普通代码块只显示源码，等于没画。判据是意图不是语言：只有展示或讲解源码本身时才用普通 \`\`\`mermaid / \`\`\`svg / \`\`\`html。
+- 意图是给用户看一张图（流程图、状态图、时序图、类图、ER 图、架构图），或交付可预览的 SVG / HTML 原型时，必须用 \`\`\`mermaid axon-render / \`\`\`svg axon-render / \`\`\`html axon-render。漏了 axon-render 的话：mermaid、以 <svg 开头的 svg、完整的 HTML 页面仍会被渲染；HTML 片段会被当成普通代码块只显示源码。判据是意图不是语言：只有展示或讲解源码本身时才用普通 \`\`\`mermaid / \`\`\`svg / \`\`\`html。
 - 选型：架构、数据流用 mermaid flowchart；状态转换用 stateDiagram；调用时序用 sequenceDiagram；精确的静态图用 svg；界面原型用 html。
 - mermaid 用标准语法，不加 %%{init}%% 配置头。
 - svg：不加 <?xml?> 头，根 <svg> 带 viewBox 且 width ≤ 600；文字用 currentColor 跟随主题，不硬编码 #000 / #333 等深色；不画全尺寸背景 rect，局部色块用语义色。

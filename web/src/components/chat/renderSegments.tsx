@@ -430,8 +430,9 @@ export function renderSegments(
       // StreamingCursor 在非流式时本就返回 null，所以保留同一个 wrapper 即可，代价仅是多一层 div.relative。
       nodes.push(
         <div key={`text-${i}`} className="relative">
-          {/* 整条消息仍在流式时传 streaming：增强渲染（svg/mermaid/html 预览）推迟到终态再 hydrate。 */}
-          <MarkdownRenderer content={seg.content} streaming={streaming} />
+          {/* 只有消息最后一段正文才算还在流式：后面已经接了工具调用的段落是定稿，图表立刻渲染，
+              不该等整轮回复结束（早先传的是整条消息的 streaming，AI 中途画的图要到最后才出来）。 */}
+          <MarkdownRenderer content={seg.content} streaming={!!streaming && isLast} />
           {streaming && isLast && <StreamingCursor />}
         </div>
       );

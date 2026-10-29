@@ -7,7 +7,7 @@
  * - 增强渲染：SVG / Mermaid / HTML 代码块内联渲染为图表
  */
 
-import { useRef, useEffect, useLayoutEffect, useState, useCallback, memo } from "react";
+import { useRef, useEffect, useLayoutEffect, useMemo, useState, useCallback, memo } from "react";
 import mermaid from "mermaid";
 import { renderMarkdown } from "@/lib/markdown";
 import { fitSvgToContainer, readSvgIntrinsicSize } from "@/lib/diagramFit";
@@ -1001,19 +1001,23 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, stream
     };
   }, []);
 
+  // 流式时已经闭合的图表块（见 closedFenceKeys）：这些块可以先渲染
+  const closedBlocks = useMemo(() => (streaming ? closedFenceKeys(content) : null), [streaming, content]);
+
   // ── 增强渲染 hydration ──
   // useLayoutEffect: 缓存命中恢复 + SVG/HTML 同步首次渲染（paint 前完成，无跳动）
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    // 流式期间不 hydrate（含缓存恢复）：只做终态渲染，避免边输出边闪烁。
-    if (streaming) return;
+    // 流式期间只恢复已闭合的图表块（缓存里的成品）；没闭合的块内容还在变，保持源码，避免边输出边闪烁。
+    if (streaming && (!closedBlocks || closedBlocks.size === 0)) return;
     el.querySelectorAll<HTMLElement>(".axon-codeblock[data-enhanced-lang]").forEach((block) => {
       if (block.dataset.hydrated === "1" || block.dataset.hydrating === "1") return;
       const lang = block.dataset.enhancedLang || "";
       const codeEl = block.querySelector("code");
       const codeContent = (codeEl?.textContent || "").trim();
       if (!codeContent) return;
+      if (streaming && !closedBlocks?.has(`${lang}::${codeContent}`)) return;
       const cacheKey = `${themeTick}::${lang}::${codeContent}`;
       const heightKey = hydrateHeightKey(lang, codeContent);
       const cached = readHydrateCache(cacheKey);
@@ -1050,6 +1054,30 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, stream
     // 每次提交都跑，推平与还原落在同一次提交里，浏览器只会画最终态，中间态不可见。
     // 代价可忽略：流式期间第一行的 early return 就挡住了，终态后提交本就稀疏。
   });
+
+  // 流式中：已经闭合的图表块（结束围栏 ``` 已到）内容不会再变，立刻渲染，不等整段输出完。
+  // 渲染结果进缓存；之后每次重解析即便把这块推平，上面每次提交都跑的 layout effect 也会在同一次提交里
+  // 从缓存换回去，所以不会闪。还没闭合的那一块照旧显示源码。
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !streaming || !closedBlocks || closedBlocks.size === 0) return;
+    el.querySelectorAll<HTMLElement>(".axon-codeblock[data-enhanced-lang]").forEach((block) => {
+      if (block.dataset.hydrated === "1" || block.dataset.hydrating === "1" || block.dataset.previewRenderToken) return;
+      const lang = block.dataset.enhancedLang || "";
+      const codeContent = (block.querySelector("code")?.textContent || "").trim();
+      if (!codeContent || !closedBlocks.has(`${lang}::${codeContent}`)) return;
+      const cacheKey = `${themeTick}::${lang}::${codeContent}`;
+      if (readHydrateCache(cacheKey)) return; // 已有成品：layout effect 会换上
+      const heightKey = hydrateHeightKey(lang, codeContent);
+      const onRendered = (r: HTMLElement) => {
+        writeHydrateCache(cacheKey, r);
+        writeHydrateHeight(heightKey, block.offsetHeight);
+      };
+      if (lang === "svg") hydrateSvg(block, codeContent, onRendered);
+      else if (lang === "html") hydrateHtml(block, codeContent, onRendered);
+      else if (lang === "mermaid") hydrateMermaid(block, codeContent, onRendered);
+    });
+  }, [html, themeTick, streaming, closedBlocks]);
 
   // 防抖首次 hydration：流式输出时 html 每 80ms 变化，频繁 hydrate 导致闪烁。
   // 等 content 稳定 300ms 后再执行首次 SVG/HTML/Mermaid 渲染。
@@ -1094,6 +1122,31 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, stream
   );
 });
 
+
+/**
+ * 找出 markdown 里已经闭合的围栏代码块（开头 ``` / ~~~ 与结束围栏都到了），返回「语言::内容」集合。
+ * 流式时据此判断哪些图表块已经定稿、可以先渲染。
+ */
+function closedFenceKeys(markdown: string): Set<string> {
+  const keys = new Set<string>();
+  const lines = markdown.split("\n");
+  let open: { fence: string; lang: string; body: string[] } | null = null;
+  for (const line of lines) {
+    const m = line.match(/^\s{0,3}(`{3,}|~{3,})\s*([\w-]*)/);
+    if (!open) {
+      if (m) open = { fence: m[1], lang: m[2].toLowerCase(), body: [] };
+      continue;
+    }
+    const close = line.match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
+    if (close && close[1][0] === open.fence[0] && close[1].length >= open.fence.length) {
+      keys.add(`${open.lang}::${open.body.join("\n").trim()}`);
+      open = null;
+    } else {
+      open.body.push(line);
+    }
+  }
+  return keys;
+}
 
 // ── Hydrate 函数 ──
 

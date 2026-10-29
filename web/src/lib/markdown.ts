@@ -151,12 +151,26 @@ md.renderer.rules.image = function (tokens, idx, options, env, self) {
 const ENHANCED_LANGS = new Set(["svg", "mermaid", "html"]);
 const ENHANCED_RENDER_MARKER = "axon-render";
 
+/**
+ * 模型经常漏写 axon-render：内容一看就是「要给人看的图 / 页面」时照样渲染。
+ *   · mermaid：几乎总是想画图（讲 mermaid 语法本身的情况少见，仍可从图的菜单「复制源码」）
+ *   · svg：以 <svg（或 XML 声明）开头的完整图形
+ *   · html：完整页面（<!doctype html> / <html>）。组件片段、模板代码多半是在讲代码，照旧显示源码 + 「预览」按钮
+ */
+function looksLikeDrawing(lang: string, content: string): boolean {
+  const head = content.trimStart().slice(0, 200).toLowerCase();
+  if (lang === "mermaid") return true;
+  if (lang === "svg") return /^(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)?<svg[\s>]/.test(head);
+  if (lang === "html") return /^(<!--[\s\S]*?-->\s*)?(<!doctype html|<html[\s>])/.test(head);
+  return false;
+}
+
 md.renderer.rules.fence = function (tokens, idx) {
   const token = tokens[idx];
   const infoParts = token.info.trim().split(/\s+/).filter(Boolean);
   const lang = (infoParts[0] || "code").toLowerCase();
   const meta = infoParts.slice(1).map((part) => part.toLowerCase());
-  const enableEnhance = ENHANCED_LANGS.has(lang) && meta.includes(ENHANCED_RENDER_MARKER);
+  const enableEnhance = ENHANCED_LANGS.has(lang) && (meta.includes(ENHANCED_RENDER_MARKER) || looksLikeDrawing(lang, token.content));
   const canPreview = ENHANCED_LANGS.has(lang) && !enableEnhance;
 
   // 内联表单：```form axon-render —— AI 交付一块声明式交互面板。
