@@ -8,10 +8,12 @@
  * 展开规则：
  * · 默认收起。进行中也收起——标题实时显示当前动作，用户想看明细自己点开。
  * · 组内有命令在等审批 / 等输入时强制展开：审批按钮内联在命令卡片下方，收起就点不到了。
- * · 内容用 grid 0fr/1fr 折叠而不是卸载：明细里的卡片各自有展开状态，卸载会全部丢失。
+ * · 内容用 Collapse：第一次展开才挂载，之后收起只隐藏不卸载（明细里的卡片各自有展开状态，卸载会全部丢失）；
+ *   不做高度动画——几十张卡片逐帧重排会卡，见 Collapse。
  */
 
 import { useContext, useState, type ReactNode } from "react";
+import { Collapse } from "./Collapse";
 import { ChevronRight, Layers, Loader2 } from "lucide-react";
 import { isToolInFlight } from "@/components/ToolCallItem";
 import { CommandApprovalContext } from "./commandApprovalContext";
@@ -73,15 +75,9 @@ export function ActivityGroup({ tools, live, children }: {
           className={`w-3.5 h-3.5 shrink-0 opacity-50 transition-transform duration-200 motion-reduce:transition-none ${open ? "rotate-90" : ""}`}
         />
       </button>
-      <div
-        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
-        style={{ gridTemplateRows: open ? "1fr" : "0fr", opacity: open ? 1 : 0 }}
-        aria-hidden={!open}
-      >
-        <div className="min-h-0 overflow-hidden">
+      <Collapse open={open}>
           <div className="ml-[7px] mt-0.5 pl-3 border-l border-border">{children}</div>
-        </div>
-      </div>
+        </Collapse>
     </div>
   );
 }

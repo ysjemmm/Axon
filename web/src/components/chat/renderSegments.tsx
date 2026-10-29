@@ -8,6 +8,7 @@
  */
 
 import { useState, useRef, useEffect, type ReactNode } from "react";
+import { Collapse } from "./Collapse";
 import { Loader2, Boxes, ListChecks, ChevronRight, ChevronDown, Check, X, Bot, Clock, BookOpen } from "lucide-react";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import {
@@ -147,12 +148,7 @@ export function RelayProgressCard({ steps, pending, queuedOnly }: { steps: { nam
           <span className="shrink-0 text-[10px] opacity-50">{steps.length} 步</span>
         )}
       </div>
-      <div
-        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
-        style={{ gridTemplateRows: expanded ? "1fr" : "0fr", opacity: expanded ? 1 : 0 }}
-        aria-hidden={!expanded}
-      >
-        <div className="min-h-0 overflow-hidden">
+      <Collapse open={expanded}>
           <div className="ml-5 mt-1 space-y-1 text-[11px] text-muted-foreground/70">
             {steps.map((s, idx) => (
               <div key={idx} className="flex items-center gap-1.5 min-w-0">
@@ -179,8 +175,7 @@ export function RelayProgressCard({ steps, pending, queuedOnly }: { steps: { nam
               </button>
             )}
           </div>
-        </div>
-      </div>
+        </Collapse>
     </div>
   );
 }

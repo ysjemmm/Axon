@@ -1308,6 +1308,18 @@ body.vscode-high-contrast {
  * 这是入场动画在虚拟列表里的固有性质，不是 bug；位移只有 6px、时长 0.32s，观感是"浮现"而非"跳"。
  * 若确实不想要重播，得改成"只对刚结束的那一轮播"（需在消息上记一个已播标记），而不是靠 CSS 能做到的。
  */
+/* 展开内容的入场（Collapse）：只动 opacity / transform，不触发逐帧排版 */
+@keyframes axon-collapse-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: none; }
+}
+.animate-collapse-in {
+  animation: axon-collapse-in 0.16s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-collapse-in { animation: none; }
+}
+
 /* 翻牌切换（折叠组的阶段摘要）：旧的一行向上翻走，新的从下面翻到中间 */
 @keyframes axon-flip-in {
   from { transform: translateY(100%); opacity: 0; }

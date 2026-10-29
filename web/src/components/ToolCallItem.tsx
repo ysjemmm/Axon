@@ -10,6 +10,7 @@
  */
 
 import { useState, useContext, useRef, useEffect } from "react";
+import { Collapse } from "./chat/Collapse";
 // 图标分工（每个前导图标只表示一种东西，避免同一屏里两行长得一样）：
 //   Brain=思考过程  NotebookPen=记忆  AppWindow=浏览器  Telescope=联网搜索  FileDown=抓取网页
 //   Bug=语法诊断  SquareTerminal=执行命令  Server=启动进程  ScrollText=读进程输出  Power=停进程
@@ -596,12 +597,7 @@ function CommandCardItem({ tool, approval }: { tool: ToolCallData; approval: Ret
           )}
         </span>
       </div>
-      <div
-        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
-        style={{ gridTemplateRows: showDetail ? "1fr" : "0fr", opacity: showDetail ? 1 : 0 }}
-        aria-hidden={!showDetail}
-      >
-        <div className="min-h-0 overflow-hidden">
+      <Collapse open={showDetail}>
           <div className={`ml-5 mt-1 rounded-lg border bg-popover overflow-hidden ${approval?.danger ? "border-red-500/80 animate-danger-pulse" : approval ? "border-amber-400/70" : (isWaitingInput && tool.status === "pending") ? "border-primary/50 animate-pulse" : tool.status === "queued" ? "border-border/50 opacity-60" : "border-border"}`}>
       {tool.status === "queued" && tool.waitingFor && tool.waitingFor.length > 0 && (
         <div className="flex items-center gap-1.5 border-b border-border/50 bg-muted/20 px-2.5 py-1.5 text-[10px] text-muted-foreground">
@@ -641,8 +637,7 @@ function CommandCardItem({ tool, approval }: { tool: ToolCallData; approval: Ret
       {/* 执行结果 */}
       {tool.output && <OutputBlock output={tool.output} />}
           </div>
-        </div>
-      </div>
+        </Collapse>
     </div>
   );
 }
@@ -728,12 +723,7 @@ export function BrowserSessionGroup({ group }: { group: BrowserSessionData }) {
           </span>
         )}
       </div>
-      <div
-        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
-        style={{ gridTemplateRows: expanded ? "1fr" : "0fr", opacity: expanded ? 1 : 0 }}
-        aria-hidden={!expanded}
-      >
-        <div className="min-h-0 overflow-hidden">
+      <Collapse open={expanded}>
           <div className="ml-5 mt-1 rounded-lg border border-border bg-popover overflow-hidden">
             {group.steps.map((step, i) => (
               <div key={step.id} className={i > 0 ? "border-t border-border/50" : ""}>
@@ -741,8 +731,7 @@ export function BrowserSessionGroup({ group }: { group: BrowserSessionData }) {
               </div>
             ))}
           </div>
-        </div>
-      </div>
+        </Collapse>
     </div>
   );
 }
@@ -936,12 +925,7 @@ function ProcessStartCard({ tool, approval }: { tool: ToolCallData; approval: Re
           <FocusTerminalButton />
         </span>
       </div>
-      <div
-        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
-        style={{ gridTemplateRows: showDetail ? "1fr" : "0fr", opacity: showDetail ? 1 : 0 }}
-        aria-hidden={!showDetail}
-      >
-        <div className="min-h-0 overflow-hidden">
+      <Collapse open={showDetail}>
           <div className={`ml-5 mt-1 rounded-lg border bg-popover overflow-hidden ${approval?.danger ? "border-red-500/80 animate-danger-pulse" : approval ? "border-amber-400/70" : "border-border"}`}>
             {tool.command && (
               <div className="px-2.5 py-1.5">
@@ -962,8 +946,7 @@ function ProcessStartCard({ tool, approval }: { tool: ToolCallData; approval: Re
             {approval && <InlineCommandApproval options={approval.options} onApprove={handleApprove} />}
             {tool.output && <OutputBlock output={tool.output} />}
           </div>
-        </div>
-      </div>
+        </Collapse>
     </div>
   );
 }
@@ -994,17 +977,11 @@ function ProcessOutputCard({ tool, kind = "output" }: { tool: ToolCallData; kind
           <FocusTerminalButton />
         </span>
       </div>
-      <div
-        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
-        style={{ gridTemplateRows: expanded ? "1fr" : "0fr", opacity: expanded ? 1 : 0 }}
-        aria-hidden={!expanded}
-      >
-        <div className="min-h-0 overflow-hidden">
+      <Collapse open={expanded}>
           <div className="ml-5 mt-1 rounded-lg border border-border bg-popover overflow-hidden">
             {tool.output && <OutputBlock output={tool.output} />}
           </div>
-        </div>
-      </div>
+        </Collapse>
     </div>
   );
 }
@@ -1486,12 +1463,7 @@ function DiagnosticsItem({ tool }: { tool: ToolCallData }) {
           </>
         )}
       </div>
-      <div
-        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
-        style={{ gridTemplateRows: expanded ? "1fr" : "0fr", opacity: expanded ? 1 : 0 }}
-        aria-hidden={!expanded}
-      >
-        <div className="min-h-0 overflow-hidden">
+      <Collapse open={expanded}>
           <div className="ml-5 mt-1 rounded-lg border border-border bg-popover overflow-hidden">
             {files.map((f, i) => {
               // 整个项目的汇总结果：用 scope 字段判断（结构化标记），点不开具体文件
@@ -1520,8 +1492,7 @@ function DiagnosticsItem({ tool }: { tool: ToolCallData }) {
               );
             })}
           </div>
-        </div>
-      </div>
+        </Collapse>
     </div>
   );
 }
@@ -1691,12 +1662,7 @@ export function EditGroupItem({
         </div>
       </div>
       {/* 展开区：逐个文件/编辑，缩进内嵌（明细行本身也是折叠行，靠分隔线区隔） */}
-      <div
-        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
-        style={{ gridTemplateRows: expanded ? "1fr" : "0fr", opacity: expanded ? 1 : 0 }}
-        aria-hidden={!expanded}
-      >
-        <div className="min-h-0 overflow-hidden">
+      <Collapse open={expanded}>
           <div className="ml-5 mt-1 rounded-lg border border-border bg-popover overflow-hidden">
             {group.edits.map((edit, i) => (
               <div key={edit.id} className={i > 0 ? "border-t border-border/50" : ""}>
@@ -1718,8 +1684,7 @@ export function EditGroupItem({
               </div>
             ))}
           </div>
-        </div>
-      </div>
+        </Collapse>
     </div>
   );
 }
@@ -1781,12 +1746,7 @@ export function SearchGroupItem({ group }: { group: SearchGroupData }) {
           <span className="min-w-0 truncate font-mono">{fmt(aggregated[0]?.label ?? "", aggregated[0]?.count ?? 1)}</span>
         )}
       </div>
-      <div
-        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
-        style={{ gridTemplateRows: expanded ? "1fr" : "0fr", opacity: expanded ? 1 : 0 }}
-        aria-hidden={!expanded}
-      >
-        <div className="min-h-0 overflow-hidden">
+      <Collapse open={expanded}>
           <div className="ml-5 mt-1 rounded-lg border border-border bg-popover overflow-hidden">
             {aggregated.map((item, i) => (
               <div
@@ -1798,8 +1758,7 @@ export function SearchGroupItem({ group }: { group: SearchGroupData }) {
               </div>
             ))}
           </div>
-        </div>
-      </div>
+        </Collapse>
     </div>
   );
 }
@@ -1878,12 +1837,7 @@ export function ReadFileGroupItem({ group }: { group: ReadFileGroupData }) {
           </span>
         ) : null}
       </div>
-      <div
-        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
-        style={{ gridTemplateRows: expanded ? "1fr" : "0fr", opacity: expanded ? 1 : 0 }}
-        aria-hidden={!expanded}
-      >
-        <div className="min-h-0 overflow-hidden">
+      <Collapse open={expanded}>
           <div className="ml-5 mt-1 rounded-lg border border-border bg-popover overflow-hidden">
             {group.files.map((f, i) => (
               <div
@@ -1899,8 +1853,7 @@ export function ReadFileGroupItem({ group }: { group: ReadFileGroupData }) {
               </div>
             ))}
           </div>
-        </div>
-      </div>
+        </Collapse>
     </div>
   );
 }
@@ -1969,12 +1922,7 @@ function WebSearchItem({ tool }: { tool: ToolCallData }) {
         )}
       </div>
       {/* 展开区：缩进内嵌的结果列表，每条一行站点 + 标题链接 */}
-      <div
-        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
-        style={{ gridTemplateRows: expanded ? "1fr" : "0fr", opacity: expanded ? 1 : 0 }}
-        aria-hidden={!expanded}
-      >
-        <div className="min-h-0 overflow-hidden">
+      <Collapse open={expanded}>
           <div className="ml-5 mt-1 rounded-lg border border-border bg-popover overflow-hidden">
             {results.map((r, i) => (
               <div key={i} className={`px-2.5 py-1.5 min-w-0 ${i > 0 ? "border-t border-border/50" : ""}`}>
@@ -1995,8 +1943,7 @@ function WebSearchItem({ tool }: { tool: ToolCallData }) {
               </div>
             ))}
           </div>
-        </div>
-      </div>
+        </Collapse>
     </div>
   );
 }

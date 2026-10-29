@@ -4,6 +4,7 @@
  */
 
 import { useState, useRef, useEffect, useMemo } from "react";
+import { Collapse } from "./Collapse";
 import { Brain, Loader2 } from "lucide-react";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 
@@ -100,13 +101,7 @@ export function ReasoningBlock({
           </>
         ) : null}
       </button>
-      <div
-        className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
-        style={{ gridTemplateRows: expanded ? "1fr" : "0fr", opacity: expanded ? 1 : 0 }}
-        aria-hidden={!expanded}
-      >
-        {/* min-h-0 是必须的：grid 子项默认 min-height:auto，高度不会被压到 0 */}
-        <div className="min-h-0 overflow-hidden">
+      <Collapse open={expanded}>
           {/* 这里把正文压到 text-xs；正文里的行内代码 / 引用块 / 表格用的是 em 字号，会跟着一起缩。
               若把它们改回 px，就会在这个更小的上下文里比正文还大（曾出现「思考过程里代码字体特别大」）。 */}
           <div
@@ -115,8 +110,7 @@ export function ReasoningBlock({
           >
             <MarkdownRenderer content={cleanedContent} streaming={streaming} />
           </div>
-        </div>
-      </div>
+        </Collapse>
     </div>
   );
 }
