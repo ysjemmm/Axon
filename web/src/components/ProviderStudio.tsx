@@ -89,6 +89,8 @@ export function ProviderStudio({ workspace }: ProviderStudioProps) {
   const [visionFallbackModel, setVisionFallbackModelState] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
+  /** 从别处（如语音输入的指引）打开添加面板时预选的厂商 */
+  const [addPreset, setAddPreset] = useState<string | undefined>(undefined);
   /** Provider 配置（含用量规则 / 凭证）保存后递增，让用量总览重新取数 */
   const [quotaVersion, setQuotaVersion] = useState(0);
 
@@ -173,8 +175,9 @@ export function ProviderStudio({ workspace }: ProviderStudioProps) {
               level={level}
               workspace={wsArg}
               takenNames={providers.map((p) => p.name)}
-              onDone={() => { setAdding(false); void refreshAndNotify(); }}
-              onCancel={() => setAdding(false)}
+              initialPresetId={addPreset}
+              onDone={() => { setAdding(false); setAddPreset(undefined); void refreshAndNotify(); }}
+              onCancel={() => { setAdding(false); setAddPreset(undefined); }}
             />
           )}
           <div className="space-y-2.5">
@@ -212,7 +215,15 @@ export function ProviderStudio({ workspace }: ProviderStudioProps) {
         {isVSCode && (
           <section>
             <SectionTitle title="语音输入" />
-            <VoiceInputSettings providers={providers} />
+            <VoiceInputSettings
+              providers={providers}
+              onAddSiliconflow={() => {
+                setAddPreset("siliconflow");
+                setAdding(true);
+                // 添加面板在页面顶部：滚过去
+                requestAnimationFrame(() => document.querySelector("[data-add-provider]")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+              }}
+            />
           </section>
         )}
       </div>
@@ -1066,10 +1077,12 @@ function ModelForm({ initial, existingIds = [], onSave, onCancel }: { initial?: 
  * 添加 Provider：先选厂商（地址 / 协议 / 认证 / 常用模型自动带出），再填 Key。
  * 选「中转站 / 其他」就是原来的手动填写。保存后还可以在「模型」页从端点拉取补全。
  */
-function AddProviderPanel({ level, workspace, takenNames, onDone, onCancel }: {
+function AddProviderPanel({ level, workspace, takenNames, initialPresetId, onDone, onCancel }: {
   level: ProviderLevel;
   workspace?: string;
   takenNames: string[];
+  /** 打开时直接选中的预设 id */
+  initialPresetId?: string;
   onDone: () => void;
   onCancel: () => void;
 }) {
@@ -1092,6 +1105,12 @@ function AddProviderPanel({ level, workspace, takenNames, onDone, onCancel }: {
     setPicked(new Set(presetModels(p).map((m) => m.id)));
     setError("");
   };
+
+  useEffect(() => {
+    const p = initialPresetId ? PROVIDER_PRESETS.find((x) => x.id === initialPresetId) : undefined;
+    if (p) choose(p);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialPresetId]);
 
   const candidates = preset ? presetModels(preset) : [];
   const togglePick = (id: string) => setPicked((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
@@ -1121,7 +1140,7 @@ function AddProviderPanel({ level, workspace, takenNames, onDone, onCancel }: {
   };
 
   return (
-    <div className="mb-3 overflow-hidden rounded-xl border border-primary/40 bg-background shadow-sm">
+    <div data-add-provider className="mb-3 overflow-hidden rounded-xl border border-primary/40 bg-background shadow-sm">
       <div className="flex items-center justify-between border-b border-border/70 px-4 py-2.5">
         <span className="text-[13px] font-medium text-foreground">{preset ? `添加 ${preset.name}` : "选择厂商"}</span>
         <div className="flex items-center gap-1">

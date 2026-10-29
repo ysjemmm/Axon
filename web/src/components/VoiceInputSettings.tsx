@@ -4,7 +4,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { Check } from "lucide-react";
+import { Check, ExternalLink, Plus } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { getVoiceConfig, setVoiceConfig, type ResolvedProviderInfo, type VoiceInputConfig } from "@/lib/apiClient";
@@ -27,7 +27,22 @@ const LANGUAGES = [
 
 const NONE = "__none__";
 
-export function VoiceInputSettings({ providers }: { providers: ResolvedProviderInfo[] }) {
+/** 推荐的免费方案：硅基流动的 SenseVoiceSmall（免费模型，中文效果好，国内直连） */
+const SF_KEY_URL = "https://cloud.siliconflow.cn/account/ak";
+const SF_MODEL = "FunAudioLLM/SenseVoiceSmall";
+const isSiliconflow = (p: ResolvedProviderInfo) => /siliconflow\./i.test(p.baseUrl);
+
+function openExternal(url: string) {
+  const host = (window as { __axonVSCode?: { postMessage: (m: unknown) => void } }).__axonVSCode;
+  if (host) host.postMessage({ type: "open_external", url });
+  else window.open(url, "_blank", "noopener,noreferrer");
+}
+
+export function VoiceInputSettings({ providers, onAddSiliconflow }: {
+  providers: ResolvedProviderInfo[];
+  /** 打开「添加 Provider」并直接选中硅基流动预设 */
+  onAddSiliconflow?: () => void;
+}) {
   const [config, setConfig] = useState<VoiceInputConfig | null>(null);
   const [model, setModel] = useState("");
   const [loaded, setLoaded] = useState(false);
@@ -71,6 +86,7 @@ export function VoiceInputSettings({ providers }: { providers: ResolvedProviderI
         输入框右侧的麦克风：录音在本机完成，再交给这里选的服务转成文字（需要服务商支持语音识别接口，如 OpenAI、硅基流动、Groq）。
         {saved && <span className="ml-2 inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-500"><Check className="h-3 w-3" />已保存</span>}
       </p>
+      {!config && <FreeGuide siliconflow={usable.find(isSiliconflow)} onUse={(p) => { setModel(SF_MODEL); void save({ provider: p.name, model: SF_MODEL }); }} onAdd={onAddSiliconflow} />}
       <div className="grid grid-cols-[72px_1fr] items-center gap-x-3 gap-y-2 text-[12px]">
         <span className="text-muted-foreground">服务商</span>
         <Select value={config?.provider ?? NONE} onValueChange={pickProvider}>
@@ -115,6 +131,49 @@ export function VoiceInputSettings({ providers }: { providers: ResolvedProviderI
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * 还没配置时的申请指引：推荐硅基流动的免费识别模型。
+ * 已经加过硅基流动的 Provider 就直接给「用它」按钮，省掉后两步。
+ */
+function FreeGuide({ siliconflow, onUse, onAdd }: {
+  siliconflow?: ResolvedProviderInfo;
+  onUse: (p: ResolvedProviderInfo) => void;
+  onAdd?: () => void;
+}) {
+  return (
+    <div className="mb-3 rounded-lg bg-muted/40 px-3 py-2.5 text-[12px]">
+      <div className="mb-1.5 font-medium text-foreground">推荐免费方案：硅基流动 · SenseVoiceSmall</div>
+      {siliconflow ? (
+        <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+          你已经添加了「{siliconflow.label || siliconflow.name}」，它的 SenseVoiceSmall 识别模型免费、中文效果好。
+          <button type="button" onClick={() => onUse(siliconflow)} className="rounded-md bg-foreground px-2 py-0.5 text-[11px] text-background hover:opacity-90">
+            用它做语音识别
+          </button>
+        </div>
+      ) : (
+        <ol className="list-decimal space-y-1 pl-4 text-muted-foreground">
+          <li>
+            注册硅基流动并创建一个 API Key（不用充值，这个识别模型免费）
+            <button type="button" onClick={() => openExternal(SF_KEY_URL)} className="ml-1.5 inline-flex items-center gap-0.5 text-primary hover:underline">
+              去申请<ExternalLink className="h-3 w-3" />
+            </button>
+          </li>
+          <li>
+            把 Key 填进 Provider
+            {onAdd && (
+              <button type="button" onClick={onAdd} className="ml-1.5 inline-flex items-center gap-0.5 text-primary hover:underline">
+                <Plus className="h-3 w-3" />添加硅基流动
+              </button>
+            )}
+          </li>
+          <li>回到这里，在下面「服务商」里选它，模型会自动填好 {SF_MODEL}</li>
+        </ol>
+      )}
+      <p className="mt-1.5 text-[11px] text-muted-foreground/80">建议这个账号不充值：Key 即使泄露，别人也只能用免费模型。</p>
     </div>
   );
 }
