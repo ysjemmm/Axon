@@ -414,7 +414,9 @@ export function capToolContent(toolName: string, content: string, limit = conten
     return (
       content.slice(0, head) +
       `\n\n[⋯ 已省略中间 ${content.length - limit} 字符（原始 ${content.length} 字符，超出单次上限 ${limit}）⋯]\n` +
-      `[提示：输出过长。后续请改用管道过滤（如 | Select-Object -First 50）或更精确的命令分次获取，不要重复执行整条命令]\n\n` +
+      `[提示：中间部分已经丢失，不要原样重跑整条命令。需要中间的内容时：用 maxOutputChars + keep 只取需要的一段，` +
+      `或在命令里过滤（| head / | tail / | grep，PowerShell 用 | Select-Object -First / -Last / | Select-String），` +
+      `或把输出重定向到文件后用 read_file 按行号分段读]\n\n` +
       content.slice(-tail)
     );
   }

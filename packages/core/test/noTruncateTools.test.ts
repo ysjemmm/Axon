@@ -167,7 +167,8 @@ describe("终端输出的硬上限（capToolContent）", () => {
     expect(capped.endsWith("TAIL")).toBe(true);
     expect(capped).toContain("已省略中间");
     // 提示要可执行，否则模型会反复重跑同一条命令
-    expect(capped).toContain("Select-Object -First 50");
+    expect(capped).toContain("maxOutputChars");
+    expect(capped).toContain("read_file");
   });
 
   it("结论型不受影响：上限为 Infinity，再长也原样", () => {
@@ -229,5 +230,26 @@ describe("前端实时事件与历史写入同样不裁剪终端结果", () => {
     const { recorder, send } = makeRecorder();
     record(recorder, "search", "x".repeat(2_000));
     expect(payloadOf(send).result).toBe("x".repeat(500));
+  });
+});
+
+describe("execute_command 按模型指定的长度取输出", () => {
+  it("maxOutputChars + keep=tail / head / both", async () => {
+    const { executeToolCall } = await import("../src/tools/execute.js");
+    const output = Array.from({ length: 2000 }, (_, i) => `line ${i}`).join("\n");
+    const host = {
+      commands: { exec: async () => ({ stdout: output, stderr: "", exitCode: 0, timedOut: false }) },
+      edits: { readEffective: async () => ({ content: "" }) },
+      fs: { stat: async () => null },
+    } as never;
+    const run = (extra: Record<string, unknown>) => executeToolCall("execute_command", { command: "x", ...extra }, "/w", host, {}, ["/w"]);
+    const tail = await run({ maxOutputChars: 30, keep: "tail" });
+    expect(tail).toContain("keep=tail");
+    expect(tail.endsWith("line 1999")).toBe(true);
+    const head = await run({ maxOutputChars: 30, keep: "head" });
+    expect(head.startsWith("line 0")).toBe(true);
+    const both = await run({ maxOutputChars: 100 });
+    expect(both).toContain("省略中间");
+    expect(await run({})).toBe(output);
   });
 });

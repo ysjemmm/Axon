@@ -152,6 +152,20 @@ function assertWithinWorkspaces(
   }
 }
 
+/**
+ * execute_command 的 maxOutputChars / keep：模型自己指定要多少、要哪一段输出。
+ * 没指定时原样返回，超出单次上限的由 capToolContent 统一裁（头 40% + 尾 60%）。
+ */
+function sliceCommandOutput(output: string, args: Record<string, unknown>): string {
+  const max = typeof args.maxOutputChars === "number" && args.maxOutputChars > 0 ? Math.floor(args.maxOutputChars) : 0;
+  if (!max || output.length <= max) return output;
+  const omitted = output.length - max;
+  if (args.keep === "head") return `${output.slice(0, max)}\n[⋯ 按 keep=head 只保留开头 ${max} 字符，后面还有 ${omitted} 字符 ⋯]`;
+  if (args.keep === "tail") return `[⋯ 按 keep=tail 只保留结尾 ${max} 字符，前面还有 ${omitted} 字符 ⋯]\n${output.slice(-max)}`;
+  const head = Math.floor(max * 0.4);
+  return `${output.slice(0, head)}\n[⋯ 按 maxOutputChars=${max} 省略中间 ${omitted} 字符 ⋯]\n${output.slice(-(max - head))}`;
+}
+
 /** 执行工具调用。meta 为可选的输出参数，用于收集附加信息（如 fileDiff）。host 提供执行端能力 */
 export async function executeToolCall(
   name: string,
@@ -487,11 +501,11 @@ export async function executeToolCall(
         const env = describeShellEnvironment();
         const shellHint = `当前环境是 ${env.os}，shell 为 ${env.shell}。如果是语法错误或"找不到命令"，请按这种 shell 的正确写法改写。`;
         throw new ToolError(
-          `命令失败（退出码 ${result.exitCode}）：${args.command}\n${output || "(无输出)"}\n${shellHint}`,
+          `命令失败（退出码 ${result.exitCode}）：${args.command}\n${sliceCommandOutput(output, args) || "(无输出)"}\n${shellHint}`,
           `命令执行失败（退出码 ${result.exitCode}），AI 已获悉并将尝试其他方式`
         );
       }
-      return (result.stdout + (result.stderr ? `\n[stderr]\n${result.stderr}` : "")) || "(无输出)";
+      return sliceCommandOutput(result.stdout + (result.stderr ? `\n[stderr]\n${result.stderr}` : ""), args) || "(无输出)";
     }
     case "start_process": {
       if (typeof args.command !== "string" || !args.command.trim()) {
