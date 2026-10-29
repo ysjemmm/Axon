@@ -104,3 +104,57 @@ export function stableBlockCount(blocks: MarkdownBlock[]): number {
   }
   return n;
 }
+
+/** 这些写法会跨空行影响前后文（引用式链接定义、可以包含空行的 HTML 块），出现时不做增量，整段渲染 */
+const CROSS_BLOCK = /^\s{0,3}\[[^\]]+\]:\s|<!--|<pre[\s>]|<script[\s>]|<style[\s>]|<textarea[\s>]/im;
+/** 列表项开头 */
+const LIST_ITEM = /^\s{0,3}(?:[-*+]|\d{1,9}[.)])\s/;
+
+/**
+ * 把块合并成「可以各自独立渲染、拼起来与整段渲染结果完全一致」的段。
+ *
+ * 空行并不总是边界：松散列表（项之间隔空行）的下一项、列表项里缩进的续行，都和上一块属于同一个结构。
+ * 所以下一块以列表标记或缩进开头时，并进上一段；其余情况（段落、标题、围栏、表格、分隔线）
+ * markdown 本来就各自独立，拆开渲染再拼接，输出逐字一致。
+ */
+export function groupRenderChunks(blocks: MarkdownBlock[]): MarkdownBlock[] {
+  const chunks: MarkdownBlock[] = [];
+  for (const block of blocks) {
+    const firstLine = block.text.split("\n", 1)[0] ?? "";
+    const joinsPrevious = chunks.length > 0 && (/^\s/.test(firstLine) || LIST_ITEM.test(firstLine));
+    if (joinsPrevious) {
+      const prev = chunks[chunks.length - 1];
+      chunks[chunks.length - 1] = { text: `${prev.text}\n\n${block.text}`, closed: prev.closed && block.closed };
+    } else {
+      chunks.push({ ...block });
+    }
+  }
+  return chunks;
+}
+
+/**
+ * 增量渲染：已闭合的段按源文缓存渲染结果，只重渲染最后那段还在增长的。
+ * 流式输出时每 32ms 重解析一次，整段重解析的成本随回复长度增长，越到后面越卡；
+ * 改成增量后每次只解析末尾那一小段。遇到会跨块影响的写法（CROSS_BLOCK）时退回整段渲染。
+ *
+ * @param render 单段的渲染函数（markdown → html，含后续的 html 处理）
+ * @param cache  已闭合段的缓存（调用方持有，按实例隔离）
+ */
+export function renderIncremental(md: string, render: (text: string) => string, cache: Map<string, string>): string {
+  if (CROSS_BLOCK.test(md)) return render(md);
+  const chunks = groupRenderChunks(splitMarkdownBlocks(md));
+  let html = "";
+  for (const chunk of chunks) {
+    if (!chunk.closed) {
+      html += render(chunk.text);
+      continue;
+    }
+    let cached = cache.get(chunk.text);
+    if (cached === undefined) {
+      cached = render(chunk.text);
+      cache.set(chunk.text, cached);
+    }
+    html += cached;
+  }
+  return html;
+}

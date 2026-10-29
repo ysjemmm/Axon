@@ -7,6 +7,7 @@
  * - 增强渲染：SVG / Mermaid / HTML 代码块内联渲染为图表
  */
 
+import { renderIncremental } from "@/lib/markdownBlocks";
 import { useRef, useEffect, useLayoutEffect, useMemo, useState, useCallback, memo } from "react";
 import { renderMarkdown } from "@/lib/markdown";
 import { fitSvgToContainer, readSvgIntrinsicSize } from "@/lib/diagramFit";
@@ -734,13 +735,20 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, stream
   /** 归因埋点：请求重渲染的时刻（提交完成后在 layout effect 里结算） */
   const commitStartRef = useRef(0);
 
+  /** 流式期间已闭合段的渲染缓存（见 renderIncremental）；回复结束后清掉 */
+  const chunkCacheRef = useRef(new Map<string, string>());
+  const streamingRef = useRef(streaming);
+  streamingRef.current = streaming;
   const computeHtml = useCallback((text: string): string => {
-    // 这条链路是整条消息的全量重解析 + 两次整段 HTML 正则扫描（linkifyPaths / wrapTables），
-    // 成本随内容长度增长，而流式期间每约 32ms 就要重来一次。
+    // 流式期间每约 32ms 重解析一次：已闭合的段落 / 代码块按源文缓存，只重解析末尾还在增长的那段，
+    // 成本不再随回复长度增长。回复结束后的终态仍整段渲染一次（拆段规则保证两者输出一致，不会跳）。
     // 内容较大时写入持久化标记：万一主线程卡死在这一步，下次启动即可从标记读出规模与耗时。
     beginSpan("markdown-parse", { persist: text.length > 8000, detail: `${(text.length / 1024).toFixed(0)}KB` });
     try {
-      return wrapTables(linkifyPaths(renderMarkdown(text)));
+      const renderChunk = (chunk: string) => wrapTables(linkifyPaths(renderMarkdown(chunk)));
+      if (streamingRef.current) return renderIncremental(text, renderChunk, chunkCacheRef.current);
+      chunkCacheRef.current.clear();
+      return renderChunk(text);
     } finally {
       endSpan("markdown-parse");
     }
