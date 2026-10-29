@@ -1966,6 +1966,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
             onListSnapshots={session.listSnapshots}
             onRestoreSnapshot={session.restoreSnapshot}
             slashOpen={slash.open}
+            workspaces={session.workspaces.length > 0 ? session.workspaces : session.workspace ? [session.workspace] : []}
             leading={
               <>
                 <AxonMascot mood={mascot.mood} size={26} />

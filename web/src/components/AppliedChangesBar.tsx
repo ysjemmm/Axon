@@ -1,13 +1,15 @@
 /**
- * AppliedChangesBar —— 统一面板（Tab 模式）
+ * AppliedChangesBar —— 本会话文件改动面板（输入框上方「N 已应用」按钮弹出的浮层内容）
  *
- * 展开后通过内部 Tab 切换「文件改动」和「闪电回滚」。
- * 折叠状态下只显示标题栏 + badge 概要。
+ * 两个视图：
+ *   · 文件：待确认的改动单独成块放最上面（带全部接受 / 拒绝）；已应用的逐行列出——
+ *     文件名 + 所在目录（淡色）+ 增删行数，查看改动 / 撤销在悬停时出现，整行点击即查看改动
+ *   · 快照：每轮改动前的快照时间线，可回滚到任一快照
+ * 文件多（> 8）时才出现搜索框，平时不占位置。
  */
 
 import { useState, useMemo, useEffect, useCallback } from "react";
-import { ChevronDown, FileText, GitCompare, Undo2, Check, X, History, RotateCcw, Clock, Loader2, Search } from "lucide-react";
-import { ClickableFileName } from "@/components/ToolCallItem";
+import { Check, Clock, ExternalLink, GitCompare, Loader2, RotateCcw, Search, Undo2, X } from "lucide-react";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import type { ChatMessage } from "./chat/types";
 import { openDiff as openDiffView, openMergedDiff, usePanelClientId, type DiffRef } from "@/lib/openDiff";
@@ -28,8 +30,9 @@ interface AppliedChangesBarProps {
   onUndo: (path: string) => void;
   onListSnapshots?: () => void;
   onRestoreSnapshot?: (id: string) => void;
-  /** 无头模式：隐藏标题栏，始终展开内容（由外部控制展开/收起） */
-  headless?: boolean;
+  /** 工作区根目录：文件目录按相对路径显示 */
+  workspaces?: string[];
+  onClose?: () => void;
 }
 
 interface ChangeFile {
@@ -47,10 +50,41 @@ interface ChangeFile {
 
 type TabKey = "changes" | "rollback";
 
+/** 文件多到这个数才显示搜索框 */
+const SEARCH_THRESHOLD = 8;
+
 /** 从 "turn-10" 提取数字，用于排序 */
 function turnNum(id: string): number {
   const m = id.match(/(\d+)/);
   return m ? parseInt(m[1], 10) : 0;
+}
+
+/** 粗略的增删行数：按行做多重集合差（不求最优对齐，够用来给个量级） */
+function lineStats(oldContent?: string, newContent?: string): { added: number; removed: number } | null {
+  if (oldContent === undefined && newContent === undefined) return null;
+  const a = (oldContent ?? "").split("\n");
+  const b = (newContent ?? "").split("\n");
+  if (oldContent === undefined || oldContent === "") return { added: newContent ? b.length : 0, removed: 0 };
+  const count = new Map<string, number>();
+  for (const l of a) count.set(l, (count.get(l) ?? 0) + 1);
+  let added = 0;
+  for (const l of b) {
+    const n = count.get(l) ?? 0;
+    if (n > 0) count.set(l, n - 1);
+    else added++;
+  }
+  let removed = 0;
+  for (const n of count.values()) removed += n;
+  return { added, removed };
+}
+
+/** 路径 → { 文件名, 相对工作区的目录 } */
+function splitPath(path: string, workspaces: string[]): { name: string; dir: string } {
+  const norm = path.replace(/\\/g, "/");
+  const root = workspaces.map((w) => w.replace(/\\/g, "/").replace(/\/$/, "")).filter((w) => norm.startsWith(`${w}/`)).sort((x, y) => y.length - x.length)[0];
+  const rel = root ? norm.slice(root.length + 1) : norm;
+  const idx = rel.lastIndexOf("/");
+  return { name: idx >= 0 ? rel.slice(idx + 1) : rel, dir: idx >= 0 ? rel.slice(0, idx) : "" };
 }
 
 export function AppliedChangesBar({
@@ -62,20 +96,18 @@ export function AppliedChangesBar({
   onUndo,
   onListSnapshots,
   onRestoreSnapshot,
-  headless = false,
+  workspaces = [],
+  onClose,
 }: AppliedChangesBarProps) {
-  const [expanded, setExpanded] = useState(headless);
   const [tab, setTab] = useState<TabKey>("changes");
   const [search, setSearch] = useState("");
   const clientId = usePanelClientId();
 
-  // 切 Tab 时清空搜索词（避免跨 Tab 搜索词残留导致看起来不相关）
   const switchTab = useCallback((t: TabKey) => {
     setTab(t);
     setSearch("");
   }, []);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
-  const [snapLoaded, setSnapLoaded] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
 
   // ── 快照事件监听 ──
@@ -85,32 +117,21 @@ export function AppliedChangesBar({
       if (msg?.type === "snapshots_listed") {
         const snaps = (msg.snapshots || []) as Snapshot[];
         // 前端兜底排序：按 createdAt 倒序，时间相同按 turn 序号倒序
-        snaps.sort((a, b) => {
-          if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
-          return turnNum(b.id) - turnNum(a.id);
-        });
+        snaps.sort((a, b) => (a.createdAt !== b.createdAt ? b.createdAt - a.createdAt : turnNum(b.id) - turnNum(a.id)));
         setSnapshots(snaps);
-        setSnapLoaded(true);
       }
       if (msg?.type === "snapshot_restored") {
         setRestoring(null);
         if (msg.ok && onListSnapshots) onListSnapshots();
-      }
-      // session 加载完成后重新拉快照（reload 时序竞态兜底）
-      if (msg?.type === "session_loaded" && onListSnapshots) {
-        onListSnapshots();
       }
     };
     window.addEventListener("message", listener);
     return () => window.removeEventListener("message", listener);
   }, [onListSnapshots]);
 
-  // 挂载时请求快照
+  // 打开面板时拉一次快照
   useEffect(() => {
-    if (onListSnapshots && !snapLoaded) {
-      onListSnapshots();
-      setSnapLoaded(true);
-    }
+    onListSnapshots?.();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleRestore = useCallback((id: string) => {
@@ -120,12 +141,11 @@ export function AppliedChangesBar({
 
   // ── 文件改动提取 ──
   const { pendingFiles, appliedFiles } = useMemo(() => {
-    const assistantMsgs = chatHistory.filter((m) => m.role === "assistant" && m.segments);
     const pendingSet = new Set(pendingPaths);
     const map = new Map<string, ChangeFile>();
-
-    for (const msg of assistantMsgs) {
-      for (const seg of msg.segments!) {
+    for (const msg of chatHistory) {
+      if (msg.role !== "assistant" || !msg.segments) continue;
+      for (const seg of msg.segments) {
         if (seg.type !== "tool" || seg.status !== "success") continue;
         const collect = (path: string, editId?: string, reverted?: boolean, undoable?: boolean, oldContent?: string, newContent?: string, ref?: DiffRef) => {
           if (pendingSet.has(path)) return;
@@ -134,7 +154,6 @@ export function AppliedChangesBar({
             // 同一文件多次编辑：取最早 oldContent + 最新 newContent，撤销状态取最新
             if (oldContent !== undefined) existing.oldContent = existing.oldContent ?? oldContent;
             if (newContent !== undefined) existing.newContent = newContent;
-            // 正文被省略时靠这两个引用按需取回（最早一次取 old、最近一次取 new）
             if (ref) existing.lastRef = ref;
             existing.reverted = reverted ?? existing.reverted;
             existing.undoable = undoable ?? existing.undoable;
@@ -147,203 +166,213 @@ export function AppliedChangesBar({
         if (seg.diffs) for (const d of seg.diffs) collect(d.path, d.editId, seg.reverted, seg.undoable, d.oldContent, d.newContent, d as DiffRef);
       }
     }
-    // 保持出现顺序
-    const appliedArr = Array.from(map.values());
+    // 最近改的排在前面
+    const applied = Array.from(map.values()).reverse();
     const pending: ChangeFile[] = pendingPaths.map((p) => ({
       path: p, status: "pending" as const, oldContent: pendingDiffs[p]?.oldContent, newContent: pendingDiffs[p]?.newContent,
     }));
-    return { pendingFiles: pending, appliedFiles: appliedArr };
+    return { pendingFiles: pending, appliedFiles: applied };
   }, [chatHistory, pendingPaths, pendingDiffs]);
 
-  // 搜索过滤（独立 useMemo，确保 search 变化时过滤立即生效，不受流式高频更新影响）
-  const filteredPending = useMemo(
-    () => !search ? pendingFiles : pendingFiles.filter((f) => f.path.toLowerCase().includes(search.toLowerCase())),
-    [pendingFiles, search],
-  );
-  const filteredApplied = useMemo(
-    () => !search ? appliedFiles : appliedFiles.filter((f) => f.path.toLowerCase().includes(search.toLowerCase())),
-    [appliedFiles, search],
-  );
-  const filteredSnapshots = useMemo(
-    () => !search ? snapshots : snapshots.filter((s) => s.label.toLowerCase().includes(search.toLowerCase()) || s.id.toLowerCase().includes(search.toLowerCase())),
-    [snapshots, search],
-  );
+  const stats = useMemo(() => {
+    const m = new Map<string, { added: number; removed: number } | null>();
+    for (const f of [...pendingFiles, ...appliedFiles]) m.set(f.path, f.reverted ? null : lineStats(f.oldContent, f.newContent));
+    return m;
+  }, [pendingFiles, appliedFiles]);
+  const totals = useMemo(() => {
+    let added = 0, removed = 0, known = false;
+    for (const s of stats.values()) if (s) { added += s.added; removed += s.removed; known = true; }
+    return known ? { added, removed } : null;
+  }, [stats]);
+
+  const q = search.trim().toLowerCase();
+  const match = (f: ChangeFile) => !q || f.path.toLowerCase().includes(q);
+  const filteredPending = pendingFiles.filter(match);
+  const filteredApplied = appliedFiles.filter(match);
+  const filteredSnapshots = !q ? snapshots : snapshots.filter((s) => s.label.toLowerCase().includes(q));
 
   const totalChanges = pendingFiles.length + appliedFiles.length;
   const hasRollback = !!onListSnapshots;
-  // 无任何内容时不显示面板
-  if (totalChanges === 0 && !hasRollback) return null;
-  // 有快照功能但没改动也没快照时也不显示
-  if (totalChanges === 0 && snapshots.length === 0) return null;
+  const showSearch = tab === "changes" ? totalChanges > SEARCH_THRESHOLD : snapshots.length > SEARCH_THRESHOLD;
 
-  const openDiff = (path: string, oldContent?: string, newContent?: string, file?: ChangeFile) => {
+  const openDiff = (file: ChangeFile) => {
     // 从会话快照恢复的历史改动没有正文：按最早 / 最近两次改动的 editId 取回再打开
-    if (file?.firstRef?.bodyOmitted && file.lastRef) {
-      void openMergedDiff(clientId, path, file.firstRef, file.lastRef);
+    if (file.firstRef?.bodyOmitted && file.lastRef) {
+      void openMergedDiff(clientId, file.path, file.firstRef, file.lastRef);
       return;
     }
-    void openDiffView(clientId, { path, oldContent, newContent });
+    if (file.oldContent === undefined && file.newContent === undefined) { openFile(file.path); return; }
+    void openDiffView(clientId, { path: file.path, oldContent: file.oldContent, newContent: file.newContent });
   };
   const openFile = (path: string) => {
-    const vs = (window as any).__axonVSCode;
-    if (vs) vs.postMessage({ type: "open_file", path });
+    (window as { __axonVSCode?: { postMessage: (m: unknown) => void } }).__axonVSCode?.postMessage({ type: "open_file", path });
   };
 
   return (
-    <div className={`${headless ? "" : "mb-2"} rounded-lg border border-border bg-popover/50 overflow-hidden text-[13px]`}>
-      {/* ── 标题栏（headless 模式下隐藏） ── */}
-      {!headless && (
-      <div className="flex items-center gap-1.5 px-2 py-1">
-        <button
-          onClick={() => setExpanded((v) => !v)}
-          className="flex items-center gap-1 flex-1 text-left text-foreground/80"
-        >
-          <ChevronDown className={`w-3 h-3 shrink-0 transition-transform ${expanded ? "" : "-rotate-90"}`} />
-          {tab === "rollback" ? (
-            <History className="w-3 h-3 shrink-0 text-primary" />
-          ) : (
-            <FileText className="w-3 h-3 shrink-0 text-primary" />
-          )}
-          <span className="font-medium">{tab === "rollback" ? "闪电回滚" : `${totalChanges} 个文件改动`}</span>
-          {tab === "changes" && pendingFiles.length > 0 && (
-            <span className="text-[10px] text-amber-600 bg-amber-100 dark:bg-amber-900/30 rounded-full px-1 py-px">{pendingFiles.length} 待确认</span>
-          )}
-          {tab === "changes" && appliedFiles.length > 0 && (
-            <span className="text-[10px] text-muted-foreground bg-muted rounded-full px-1 py-px">{appliedFiles.length} 已应用</span>
-          )}
-          {tab === "rollback" && snapshots.length > 0 && (
-            <span className="text-[10px] text-primary/70 bg-primary/10 rounded-full px-1 py-px">{snapshots.length}</span>
-          )}
-        </button>
-        {tab === "changes" && pendingFiles.length > 0 && (
-          <div className="flex items-center gap-1">
-            <button onClick={onAcceptAll} className="px-1.5 py-px rounded bg-foreground text-background text-[11px] hover:bg-foreground/90 transition-colors">全部接受</button>
-            <button onClick={onRejectAll} className="px-1.5 py-px rounded border border-border text-[11px] text-muted-foreground hover:bg-muted/50 transition-colors">全部拒绝</button>
-          </div>
-        )}
-      </div>
-      )}
-
-      {/* ── 展开内容 ── */}
-      {expanded && (
-        <>
-          {/* Tab 切换条 */}
-          <div className="flex border-t border-b border-border/50 bg-muted/30">
-            <TabButton active={tab === "changes"} onClick={() => switchTab("changes")} icon={<FileText className="w-3 h-3" />} label="改动" badge={totalChanges} />
-            {hasRollback && (
-              <TabButton active={tab === "rollback"} onClick={() => switchTab("rollback")} icon={<History className="w-3 h-3" />} label="回滚" badge={snapshots.length} />
+    <div className="flex max-h-[min(60vh,480px)] flex-col overflow-hidden rounded-xl border border-border bg-background text-[12.5px] shadow-xl">
+      {/* ── 头部：标题 + 统计 + 视图切换 ── */}
+      <div className="flex items-center gap-3 border-b border-border/70 px-3.5 py-2.5">
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-medium text-foreground">本会话改动</div>
+          <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground tabular-nums">
+            <span>{totalChanges} 个文件</span>
+            {totals && (
+              <>
+                <span className="text-emerald-600 dark:text-emerald-400">+{totals.added}</span>
+                <span className="text-red-600 dark:text-red-400">−{totals.removed}</span>
+              </>
             )}
           </div>
-
-          {/* Tab 内容 */}
-          <div className="px-2.5 py-1 max-h-72 flex flex-col">
-            {/* 搜索框 */}
-            <div className="flex items-center gap-1 px-1.5 py-1 mb-1 rounded border border-border/50 bg-muted/30">
-              <Search className="w-3 h-3 text-muted-foreground/60 shrink-0" />
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder={tab === "changes" ? "搜索文件名…" : "搜索快照…"}
-                className="flex-1 bg-transparent text-[11px] outline-none placeholder:text-muted-foreground/40"
-              />
-              {search && <button onClick={() => setSearch("")} className="text-muted-foreground/60 hover:text-foreground"><X className="w-3 h-3" /></button>}
-            </div>
-
-            {/* 列表（滚动区） */}
-            <div className="overflow-y-auto flex-1">
-              {tab === "changes" && (
-                <>
-                  {filteredPending.map((f) => (
-                    <FileRow key={`p-${f.path}`} file={f} onOpenDiff={() => openDiff(f.path, f.oldContent, f.newContent)} onOpenFile={() => openFile(f.path)}>
-                      <button onClick={onAcceptAll} className="flex items-center px-1.5 py-px rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors shrink-0" title="接受"><Check className="w-3 h-3" /></button>
-                      <button onClick={onRejectAll} className="flex items-center px-1.5 py-px rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors shrink-0" title="拒绝"><X className="w-3 h-3" /></button>
-                    </FileRow>
-                  ))}
-                  {filteredApplied.map((f) => (
-                    <FileRow key={`a-${f.path}`} file={f} onOpenDiff={() => {
-                      if (f.oldContent !== undefined || f.newContent !== undefined || f.firstRef?.bodyOmitted) { openDiff(f.path, f.oldContent, f.newContent, f); } else { openFile(f.path); }
-                    }} onOpenFile={() => openFile(f.path)}>
-                      {f.undoable && !f.reverted && (
-                        <button onClick={() => onUndo(f.path)} className="flex items-center gap-0.5 px-1.5 py-px rounded text-amber-500 hover:text-amber-600 hover:bg-amber-500/10 transition-colors shrink-0 text-[11px]" title="撤销此文件改动"><Undo2 className="w-3 h-3" />撤销</button>
-                      )}
-                    </FileRow>
-                  ))}
-                </>
-              )}
-
-              {tab === "rollback" && (
-                <>
-                  {snapshots.length === 0 ? (
-                    <div className="text-[10px] text-muted-foreground/50 py-2 text-center">暂无快照（AI 修改文件后自动生成）</div>
-                  ) : (
-                    <div className="space-y-px py-0.5">
-                      {filteredSnapshots
-                        .map((snap, idx) => (
-                        <div key={snap.id} className="flex items-center gap-2 text-[11px] py-0.5 group">
-                          <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${idx === 0 ? "bg-primary" : "bg-muted-foreground/30"}`} />
-                          <span className="flex-1 text-muted-foreground truncate">{snap.label}</span>
-                          <span className="flex items-center gap-0.5 text-muted-foreground/50 shrink-0 w-14 justify-end tabular-nums">
-                            <Clock className="w-2.5 h-2.5 shrink-0" />
-                            {new Date(snap.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
-                          </span>
-                          <span className="shrink-0 w-14 flex justify-end">
-                            {idx !== 0 ? (
-                              <button onClick={() => handleRestore(snap.id)} disabled={restoring !== null} className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 whitespace-nowrap text-amber-500 hover:text-amber-600 hover:bg-amber-500/10 rounded px-1.5 py-px transition-all disabled:opacity-50">
-                                {restoring === snap.id ? <Loader2 className="w-2.5 h-2.5 animate-spin shrink-0" /> : <RotateCcw className="w-2.5 h-2.5 shrink-0" />}
-                                回滚
-                              </button>
-                            ) : (
-                              <span className="text-[9px] text-primary/60">当前</span>
-                            )}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
+        </div>
+        {hasRollback && (
+          <div className="flex shrink-0 rounded-lg bg-muted/60 p-0.5 text-[11.5px]">
+            {(["changes", "rollback"] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => switchTab(t)}
+                className={`rounded-md px-2.5 py-1 transition-colors ${tab === t ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                {t === "changes" ? "文件" : "快照"}
+              </button>
+            ))}
           </div>
-        </>
+        )}
+        {onClose && (
+          <button onClick={onClose} className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted/60 hover:text-foreground" aria-label="关闭">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+
+      {showSearch && (
+        <div className="px-3 pb-0.5 pt-2.5">
+          <div className="flex items-center gap-1.5 rounded-md border border-border/70 px-2 py-1">
+            <Search className="h-3 w-3 shrink-0 text-muted-foreground/60" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={tab === "changes" ? "按文件名或路径筛选" : "筛选快照"}
+              className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-muted-foreground/50"
+            />
+            {search && <button onClick={() => setSearch("")} className="text-muted-foreground/60 hover:text-foreground"><X className="h-3 w-3" /></button>}
+          </div>
+        </div>
       )}
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
+        {tab === "changes" && (
+          <>
+            {filteredPending.length > 0 && (
+              <div className="mx-1.5 mb-1.5 mt-0.5 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] py-1">
+                <div className="flex items-center gap-2 px-2.5 py-1">
+                  <span className="flex-1 text-[11.5px] font-medium text-amber-700 dark:text-amber-400">{pendingFiles.length} 个改动待确认</span>
+                  <button onClick={onRejectAll} className="rounded-md px-2 py-0.5 text-[11.5px] text-muted-foreground hover:bg-muted/70 hover:text-foreground">全部拒绝</button>
+                  <button onClick={onAcceptAll} className="inline-flex items-center gap-1 rounded-md bg-foreground px-2 py-0.5 text-[11.5px] text-background hover:opacity-90"><Check className="h-3 w-3" />全部接受</button>
+                </div>
+                {filteredPending.map((f) => (
+                  <FileRow key={`p-${f.path}`} file={f} workspaces={workspaces} stat={stats.get(f.path)} onOpenDiff={() => openDiff(f)} onOpenFile={() => openFile(f.path)} />
+                ))}
+              </div>
+            )}
+            {filteredApplied.map((f) => (
+              <FileRow key={`a-${f.path}`} file={f} workspaces={workspaces} stat={stats.get(f.path)} onOpenDiff={() => openDiff(f)} onOpenFile={() => openFile(f.path)}>
+                {f.undoable && !f.reverted && (
+                  <button onClick={(e) => { e.stopPropagation(); onUndo(f.path); }} className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground" title="撤销这个文件的改动">
+                    <Undo2 className="h-3 w-3" />撤销
+                  </button>
+                )}
+              </FileRow>
+            ))}
+            {filteredPending.length + filteredApplied.length === 0 && (
+              <div className="py-6 text-center text-[11.5px] text-muted-foreground">{q ? "没有匹配的文件" : "这个会话还没有改动文件"}</div>
+            )}
+          </>
+        )}
+
+        {tab === "rollback" && (
+          snapshots.length === 0 ? (
+            <div className="py-6 text-center text-[11.5px] text-muted-foreground">还没有快照（AI 改文件前会自动保存一份）</div>
+          ) : (
+            <div className="relative px-1.5 py-1">
+              <div className="absolute bottom-3 left-[13px] top-3 w-px bg-border" />
+              {filteredSnapshots.map((snap, idx) => {
+                const current = idx === 0 && !q;
+                return (
+                  <div key={snap.id} className="group relative flex items-center gap-2.5 rounded-md py-1.5 pl-1 pr-1.5 hover:bg-muted/50">
+                    <span className={`relative z-10 ml-[3px] size-2 shrink-0 rounded-full ring-2 ring-background ${current ? "bg-primary" : "bg-muted-foreground/40"}`} />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-foreground/90">{snap.label}</div>
+                      <div className="mt-0.5 flex items-center gap-1 text-[10.5px] text-muted-foreground tabular-nums">
+                        <Clock className="h-2.5 w-2.5" />
+                        {new Date(snap.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
+                        {snap.files.length > 0 && <span>· {snap.files.length} 个文件</span>}
+                      </div>
+                    </div>
+                    {current ? (
+                      <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10.5px] text-primary">当前</span>
+                    ) : (
+                      <button
+                        onClick={() => handleRestore(snap.id)}
+                        disabled={restoring !== null}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-0.5 text-[11px] text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 disabled:opacity-50"
+                      >
+                        {restoring === snap.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+                        回滚到这里
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )
+        )}
+      </div>
     </div>
   );
 }
 
-/** Tab 按钮 */
-function TabButton({ active, onClick, icon, label, badge }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string; badge: number }) {
+/** 文件行：整行点击查看改动；打开文件 / 撤销等操作悬停时出现 */
+function FileRow({ file, workspaces, stat, onOpenDiff, onOpenFile, children }: {
+  file: ChangeFile;
+  workspaces: string[];
+  stat?: { added: number; removed: number } | null;
+  onOpenDiff: () => void;
+  onOpenFile: () => void;
+  children?: React.ReactNode;
+}) {
+  const { name, dir } = splitPath(file.path, workspaces);
   return (
-    <button
-      onClick={onClick}
-      className={`flex-1 flex items-center justify-center gap-1 py-1 text-[11px] transition-colors border-b-2 ${
-        active ? "text-primary border-primary bg-background/50" : "text-muted-foreground border-transparent hover:text-foreground/70"
-      }`}
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpenDiff}
+      onKeyDown={(e) => { if (e.key === "Enter") onOpenDiff(); }}
+      title={`${file.path}\n点击查看改动`}
+      className={`group flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-[5px] hover:bg-muted/60 ${file.reverted ? "opacity-55" : ""}`}
     >
-      {icon}
-      <span>{label}</span>
-      {badge > 0 && <span className={`text-[9px] rounded-full px-1 ${active ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground/60"}`}>{badge}</span>}
-    </button>
-  );
-}
-
-/** 文件行 */
-function FileRow({ file, onOpenDiff, onOpenFile, children }: { file: ChangeFile; onOpenDiff: () => void; onOpenFile: () => void; children?: React.ReactNode }) {
-  const shortName = file.path.replace(/\\/g, "/").split("/").pop() || file.path;
-  const isPending = file.status === "pending";
-  return (
-    <div className={`flex items-center gap-2 text-xs py-0.5 ${file.reverted ? "opacity-50" : ""}`}>
-      {/* 圆点只表达"待确认 vs 已落定"，不表达好坏：已应用是正常态，不需要绿色来强调 */}
-      <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isPending ? "bg-amber-400" : file.reverted ? "bg-muted-foreground/30" : "bg-foreground/40"}`} />
-      <span className="flex-1 min-w-0 inline-flex items-center gap-1 font-mono cursor-pointer" onClick={onOpenFile}>
-        <FileTypeIcon fileName={shortName} />
-        <ClickableFileName fileName={shortName} absPath={file.path} className="text-foreground/80 truncate" />
+      <FileTypeIcon fileName={name} />
+      <span className={`shrink-0 truncate text-foreground ${file.reverted ? "line-through" : ""}`} style={{ maxWidth: "55%" }}>{name}</span>
+      <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground/70" dir="rtl" style={{ textAlign: "left" }}>
+        {dir && <bdi>{dir}</bdi>}
       </span>
-      {file.reverted && <span className="text-[10px] text-muted-foreground line-through px-1">已撤销</span>}
-      <button onClick={onOpenDiff} className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors shrink-0" title="查看改动">
-        <GitCompare className="w-3.5 h-3.5" />
-      </button>
-      {children}
+      {file.reverted ? (
+        <span className="shrink-0 text-[10.5px] text-muted-foreground">已撤销</span>
+      ) : stat ? (
+        <span className="shrink-0 text-[11px] tabular-nums group-hover:hidden">
+          <span className="text-emerald-600 dark:text-emerald-400">+{stat.added}</span>{" "}
+          <span className="text-red-600 dark:text-red-400">−{stat.removed}</span>
+        </span>
+      ) : null}
+      <span className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+        {children}
+        <button onClick={(e) => { e.stopPropagation(); onOpenDiff(); }} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground" title="查看改动">
+          <GitCompare className="h-3.5 w-3.5" />
+        </button>
+        <button onClick={(e) => { e.stopPropagation(); onOpenFile(); }} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground" title="打开文件">
+          <ExternalLink className="h-3.5 w-3.5" />
+        </button>
+      </span>
     </div>
   );
 }
+
