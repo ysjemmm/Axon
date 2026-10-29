@@ -17,6 +17,15 @@ importers:
 
   apps/vscode-extension:
     devDependencies:
+      '@axon/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@axon/host-node':
+        specifier: workspace:*
+        version: link:../../packages/host-node
+      '@axon/host-vscode':
+        specifier: workspace:*
+        version: link:../../packages/host-vscode
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.20

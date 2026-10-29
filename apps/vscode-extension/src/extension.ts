@@ -881,6 +881,10 @@ export function activate(context: vscode.ExtensionContext): void {
 
   /** 各页面依据文件的绝对路径（规整后的键），由 refreshWikiTree 维护 */
   let wikiSourcePaths = new Set<string>();
+  // 依据文件监听器的状态（见 rewatchWikiSources）。声明在 refreshWikiTree 之前：它可能在激活早期就被调用
+  let wikiSourceWatchers: vscode.Disposable[] = [];
+  let wikiWatchKey = "";
+  let wikiSourceTimer: ReturnType<typeof setTimeout> | undefined;
   const normPathKey = (p: string): string => p.replace(/\\/g, "/").toLowerCase();
 
   async function refreshWikiTree(): Promise<number> {
@@ -890,6 +894,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const pages = await store.summary();
     // 记下所有页面的依据文件：它们一改，侧边栏的「待复核」就要跟着变（见下方 wikiSourceWatcher）
     wikiSourcePaths = new Set(pages.flatMap((p: { workspace: string; sources: string[] }) => p.sources.map((src: string) => normPathKey(join(p.workspace, src)))));
+    rewatchWikiSources(pages);
     const staleCount = wikiTree.refresh(pages);
     wikiView.badge = staleCount > 0
       ? { value: staleCount, tooltip: `${staleCount} 个 Wiki 页面可能已过时` }
@@ -2228,19 +2233,43 @@ export function activate(context: vscode.ExtensionContext): void {
   // 依据文件变了也要刷新：否则侧边栏的「待复核」要等重启或手动刷新才更新，
   // 而聊天里的记忆召回卡片每轮都是新算的 —— 两边数字对不上。
   // 只关心页面引用过的那些文件；稍等一会儿再刷，批量改动（格式化、切分支）只刷一次。
-  let wikiSourceTimer: ReturnType<typeof setTimeout> | undefined;
-  const onMaybeSourceChange = (uri: vscode.Uri) => {
+  function onMaybeSourceChange(uri: vscode.Uri): void {
     if (!wikiSourcePaths.has(normPathKey(uri.fsPath))) return;
     if (wikiSourceTimer) clearTimeout(wikiSourceTimer);
     wikiSourceTimer = setTimeout(() => {
       wikiSourceTimer = undefined;
       void refreshWikiTree().catch(() => { /* 列表刷新失败不该影响主流程 */ });
     }, 1500);
-  };
-  const wikiSourceWatcher = vscode.workspace.createFileSystemWatcher("**/*", true, false, false);
-  wikiSourceWatcher.onDidChange(onMaybeSourceChange);
-  wikiSourceWatcher.onDidDelete(onMaybeSourceChange);
-  context.subscriptions.push(wikiSourceWatcher, { dispose: () => { if (wikiSourceTimer) clearTimeout(wikiSourceTimer); } });
+  }
+  // 只监听页面引用过的那些文件（每个工作区一个 RelativePattern，用 {a,b,c} 列出路径），列表变了就重建。
+  // 早先是一个 "**/*" 监听器：构建、git checkout、node_modules 的每次变动都要送进扩展进程，
+  // 没有 Wiki 的用户也在白白付这个代价。
+  function rewatchWikiSources(pages: { workspace: string; sources: string[] }[]): void {
+    const byWs = new Map<string, Set<string>>();
+    for (const p of pages) {
+      for (const src of p.sources) {
+        if (!byWs.has(p.workspace)) byWs.set(p.workspace, new Set());
+        byWs.get(p.workspace)!.add(src.replace(/\\/g, "/").replace(/[{}]/g, ""));
+      }
+    }
+    const key = [...byWs].map(([ws, s]) => `${ws}:${[...s].sort().join(",")}`).sort().join("|");
+    if (key === wikiWatchKey) return;
+    wikiWatchKey = key;
+    wikiSourceWatchers.forEach((d) => d.dispose());
+    wikiSourceWatchers = [];
+    for (const [ws, srcs] of byWs) {
+      const list = [...srcs];
+      const glob = list.length === 1 ? list[0] : `{${list.join(",")}}`;
+      const w = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(ws, glob), true, false, false);
+      w.onDidChange(onMaybeSourceChange);
+      w.onDidDelete(onMaybeSourceChange);
+      wikiSourceWatchers.push(w);
+    }
+  }
+  context.subscriptions.push({ dispose: () => {
+    if (wikiSourceTimer) clearTimeout(wikiSourceTimer);
+    wikiSourceWatchers.forEach((d) => d.dispose());
+  } });
 
 
   // 手动刷新命令（树标题栏刷新按钮用）
@@ -2342,7 +2371,7 @@ export function activate(context: vscode.ExtensionContext): void {
         name: p.name, label: p.label, builtin: p.builtin, locked: p.locked,
         configured: p.configured, modelCount: p.models.length,
       })));
-      void usageStatusBar.refresh();
+      void usageStatusBar?.refresh();
     } catch (err) {
       console.warn("[axon] provider 树刷新失败:", (err as Error).message);
     }
