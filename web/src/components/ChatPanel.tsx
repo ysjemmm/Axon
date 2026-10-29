@@ -244,6 +244,15 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
     }
   }, []);
 
+  // 语音输入的提示单独一条（标题不能叫「文件处理失败」）；说明较长，停留久一点
+  const [voiceError, setVoiceError] = useState("");
+  const voiceErrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showVoiceError = useCallback((msg: string) => {
+    if (voiceErrorTimer.current) clearTimeout(voiceErrorTimer.current);
+    setVoiceError(msg);
+    if (msg) voiceErrorTimer.current = setTimeout(() => setVoiceError(""), 8000);
+  }, []);
+
   const handleVoiceText = useCallback((text: string) => {
     editorRef.current?.insertAtCursor(text);
     setComposerEmpty(editorRef.current?.isEmpty() ?? false);
@@ -1447,6 +1456,15 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
       onDismiss: dismissFileError,
     });
   }
+  if (voiceError) {
+    noticeItems.push({
+      id: "voice-error",
+      tone: "error",
+      title: "语音输入",
+      detail: voiceError,
+      onDismiss: () => showVoiceError(""),
+    });
+  }
   // 2) 撤销失败轻提示（保守策略：文件未被改动）。3 秒后自动消失，也可手动关
   if (session.undoNotice) {
     noticeItems.push({
@@ -2275,7 +2293,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                   {isVSCode && (
                     <VoiceInputButton
                       onText={handleVoiceText}
-                      onError={showFileError}
+                      onError={showVoiceError}
                       disabled={!connected}
                     />
                   )}

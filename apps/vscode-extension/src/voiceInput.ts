@@ -7,10 +7,10 @@
  * 由系统自带的录音能力或 ffmpeg 来做。
  *
  * ── 录音后端（按平台挑，挑不到给出明确的安装建议）──
- *   · Windows：PowerShell 调系统自带的 winmm（MCI），零依赖；录音电平也由它报
+ *   · Windows：PowerShell 里调系统自带的 winmm waveIn，零依赖
  *   · macOS：ffmpeg（avfoundation）→ sox 的 rec
  *   · Linux：arecord（ALSA 自带）→ ffmpeg（pulse / alsa）
- * 除 Windows 外都让录音程序把 16kHz 单声道 PCM 写到标准输出，这边边收边算音量（界面画波形），
+ * 都让录音程序把 16kHz 单声道 PCM 写到标准输出，这边边收边算音量（界面画波形），
  * 停止时自己拼成 WAV。
  *
  * ── 识别 ──
@@ -20,8 +20,6 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findFfmpeg } from "@axon/host-node";
 import { getResolvedProviders, resolveProviderName } from "@axon/core";
@@ -48,10 +46,6 @@ interface Recording {
   chunks: Buffer[];
   /** 自上次取电平以来的音量（0~1），界面据此画波形 */
   levels: number[];
-  /** Windows MCI：停止标记文件与输出 WAV */
-  stopFlag?: string;
-  wavPath?: string;
-  tmpDir?: string;
   stderr: string;
   exited: Promise<number | null>;
   timer: ReturnType<typeof setTimeout>;
@@ -97,49 +91,89 @@ function onPath(bin: string): boolean {
 }
 
 /**
- * Windows：PowerShell + winmm MCI。每 80ms 输出一行「L <电平>」；停止标记文件出现后保存 WAV 并退出。
- * MCI 的 status level 在录音时返回当前采样幅度（16bit 时 0~32767）。
+ * Windows：PowerShell 里编译一小段 C#，直接调系统自带的 winmm waveIn 接口录音，
+ * 把 16kHz 单声道 PCM 原样写到标准输出 —— 和其它平台的录音程序同一套处理（实时音量、拼 WAV）。
+ *
+ * 早先用 MCI（mciSendString record / save）：拿不到实时音频，音量只能靠 status level，
+ * 不少机器上它一直返回 0，波形是平的；录到的是不是静音也只有录完才知道。
+ * waveIn 是最底层的录音接口，任何 Windows 都有，不用装东西。
  */
-function mciScript(wavPath: string, stopFlag: string): string {
-  const esc = (p: string) => p.replace(/'/g, "''");
+function waveInScript(): string {
   return `
 $ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [Text.Encoding]::UTF8
-Add-Type -Namespace AxonVoice -Name Mci -MemberDefinition @'
-[DllImport("winmm.dll", CharSet = CharSet.Unicode)] public static extern int mciSendString(string cmd, System.Text.StringBuilder ret, int len, IntPtr hwnd);
-[DllImport("winmm.dll", CharSet = CharSet.Unicode)] public static extern bool mciGetErrorString(int err, System.Text.StringBuilder buf, int len);
-'@
-function Mci([string]$c) {
-  $sb = New-Object System.Text.StringBuilder 256
-  $r = [AxonVoice.Mci]::mciSendString($c, $sb, 256, [IntPtr]::Zero)
-  if ($r -ne 0) {
-    $e = New-Object System.Text.StringBuilder 256
-    [void][AxonVoice.Mci]::mciGetErrorString($r, $e, 256)
-    [Console]::Error.WriteLine("MCI 错误 $r（$c）：$($e.ToString())")
-    exit 2
+$src = @'
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading;
+public static class AxonWaveIn {
+  [StructLayout(LayoutKind.Sequential, Pack = 2)]
+  struct WaveFormat { public ushort tag; public ushort channels; public uint rate; public uint bytesPerSec; public ushort align; public ushort bits; public ushort cb; }
+  [DllImport("winmm.dll")] static extern int waveInGetNumDevs();
+  [DllImport("winmm.dll")] static extern int waveInOpen(out IntPtr h, uint dev, ref WaveFormat f, IntPtr cb, IntPtr inst, uint flags);
+  [DllImport("winmm.dll")] static extern int waveInPrepareHeader(IntPtr h, IntPtr hdr, uint size);
+  [DllImport("winmm.dll")] static extern int waveInAddBuffer(IntPtr h, IntPtr hdr, uint size);
+  [DllImport("winmm.dll")] static extern int waveInStart(IntPtr h);
+  public static int Run(int rate) {
+    if (waveInGetNumDevs() == 0) { Console.Error.WriteLine("没有检测到录音设备（麦克风）"); return 3; }
+    WaveFormat f = new WaveFormat();
+    f.tag = 1; f.channels = 1; f.rate = (uint)rate; f.bytesPerSec = (uint)(rate * 2); f.align = 2; f.bits = 16; f.cb = 0;
+    IntPtr h;
+    int r = waveInOpen(out h, 0xFFFFFFFF, ref f, IntPtr.Zero, IntPtr.Zero, 0);
+    if (r != 0) { Console.Error.WriteLine("打开麦克风失败（waveInOpen " + r + "）"); return 2; }
+    // WAVEHDR：lpData, dwBufferLength, dwBytesRecorded, dwUser, dwFlags, dwLoops, lpNext, reserved
+    int ps = IntPtr.Size;
+    uint hdrSize = (uint)(ps * 4 + 16);
+    int recOff = ps + 4, flagsOff = ps * 2 + 8;
+    int bufBytes = rate * 2 / 10;
+    const int N = 4;
+    IntPtr[] hdrs = new IntPtr[N];
+    for (int i = 0; i < N; i++) {
+      IntPtr hdr = Marshal.AllocHGlobal((int)hdrSize);
+      for (int k = 0; k < hdrSize; k++) Marshal.WriteByte(hdr, k, 0);
+      Marshal.WriteIntPtr(hdr, 0, Marshal.AllocHGlobal(bufBytes));
+      Marshal.WriteInt32(hdr, ps, bufBytes);
+      waveInPrepareHeader(h, hdr, hdrSize);
+      waveInAddBuffer(h, hdr, hdrSize);
+      hdrs[i] = hdr;
+    }
+    r = waveInStart(h);
+    if (r != 0) { Console.Error.WriteLine("开始录音失败（waveInStart " + r + "）"); return 2; }
+    Stream o = Console.OpenStandardOutput();
+    byte[] tmp = new byte[bufBytes];
+    int next = 0;
+    while (true) {
+      IntPtr hdr = hdrs[next];
+      int flags = Marshal.ReadInt32(hdr, flagsOff);
+      if ((flags & 1) == 0) { Thread.Sleep(10); continue; }
+      int n = Marshal.ReadInt32(hdr, recOff);
+      if (n > 0) { Marshal.Copy(Marshal.ReadIntPtr(hdr, 0), tmp, 0, n); o.Write(tmp, 0, n); o.Flush(); }
+      Marshal.WriteInt32(hdr, flagsOff, flags & ~1);
+      waveInAddBuffer(h, hdr, hdrSize);
+      next = (next + 1) % N;
+    }
   }
-  return $sb.ToString()
 }
-Mci 'open new type waveaudio alias axonrec' | Out-Null
-Mci 'set axonrec format tag pcm bitspersample 16 channels 1 samplespersec ${SAMPLE_RATE} bytespersec ${SAMPLE_RATE * 2} alignment 2' | Out-Null
-Mci 'record axonrec' | Out-Null
-[Console]::Out.WriteLine('READY'); [Console]::Out.Flush()
-while (-not (Test-Path -LiteralPath '${esc(stopFlag)}')) {
-  $sb = New-Object System.Text.StringBuilder 64
-  $lv = if ([AxonVoice.Mci]::mciSendString('status axonrec level', $sb, 64, [IntPtr]::Zero) -eq 0) { $sb.ToString() } else { '0' }
-  [Console]::Out.WriteLine("L $lv"); [Console]::Out.Flush()
-  Start-Sleep -Milliseconds 80
+'@
+# 编译结果缓存到临时目录：第一次要编译一两秒，之后直接加载；缓存坏了就退回内存编译
+$dll = Join-Path $env:TEMP 'axon-wavein-v1.dll'
+try {
+  if (-not (Test-Path -LiteralPath $dll)) { Add-Type -TypeDefinition $src -OutputAssembly $dll -OutputType Library }
+  Add-Type -Path $dll
+} catch {
+  Add-Type -TypeDefinition $src
 }
-Mci 'stop axonrec' | Out-Null
-Mci 'save axonrec "${esc(wavPath.replace(/"/g, ""))}"' | Out-Null
-Mci 'close axonrec' | Out-Null
-[Console]::Out.WriteLine('SAVED'); [Console]::Out.Flush()
+exit ([AxonWaveIn]::Run(${SAMPLE_RATE}))
 `;
 }
 
 /** 拼出当前平台可用的 PCM 录音命令（stdout 输出 s16le / 16kHz / 单声道）；都没有返回 null */
 async function pcmRecorderCommand(): Promise<{ bin: string; args: string[]; backend: string } | null> {
   const pcmOut = ["-ac", "1", "-ar", String(SAMPLE_RATE), "-f", "s16le", "-acodec", "pcm_s16le", "pipe:1"];
+  if (process.platform === "win32") {
+    const encoded = Buffer.from(waveInScript(), "utf16le").toString("base64");
+    return { bin: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded], backend: "waveIn" };
+  }
   if (process.platform === "linux" && onPath("arecord")) {
     return { bin: "arecord", args: ["-q", "-f", "S16_LE", "-r", String(SAMPLE_RATE), "-c", "1", "-t", "raw"], backend: "arecord" };
   }
@@ -172,37 +206,10 @@ export function isRecording(): boolean {
 export async function startRecording(): Promise<void> {
   if (current) return;
   let rec: Recording;
-  if (process.platform === "win32") {
-    const dir = await mkdtemp(join(tmpdir(), "axon-voice-"));
-    const wavPath = join(dir, "voice.wav");
-    const stopFlag = join(dir, "stop");
-    const encoded = Buffer.from(mciScript(wavPath, stopFlag), "utf16le").toString("base64");
-    const proc = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded], { windowsHide: true });
-    rec = makeRecording(proc, "mci", { stopFlag, wavPath, tmpDir: dir });
-    // MCI 报的是 16bit 采样幅度：换算成和 PCM 后端同一套 0~1 刻度
-    let buf = "";
-    proc.stdout!.on("data", (d: Buffer) => {
-      buf += d.toString();
-      let nl: number;
-      while ((nl = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        const m = /^L\s+(\d+)/.exec(line);
-        if (m) {
-          const amp = Math.min(32767, Number(m[1])) / 32768;
-          const db = 20 * Math.log10(amp + 1e-9);
-          rec.levels.push(Math.max(0, Math.min(1, (db + 55) / 50)));
-        }
-      }
-    });
-    await waitReady(rec, (resolveReady) => {
-      const onData = (d: Buffer) => { if (d.toString().includes("READY")) { proc.stdout!.off("data", onData); resolveReady(); } };
-      proc.stdout!.on("data", onData);
-    });
-  } else {
+  {
     const cmd = await pcmRecorderCommand();
     if (!cmd) throw new Error(missingRecorderHint());
-    const proc = spawn(cmd.bin, cmd.args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(cmd.bin, cmd.args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     rec = makeRecording(proc, cmd.backend, {});
     let pending = Buffer.alloc(0);
     const frame = SAMPLE_RATE * 2 * 0.08; // 80ms 一个电平点
@@ -249,12 +256,11 @@ async function waitReady(rec: Recording, hook: (resolve: () => void) => void): P
     ready.then(() => "ready" as const),
     rec.exited.then(() => "exited" as const),
     // Windows 首次要编译一段 C# 声明（Add-Type），杀毒软件扫描时会慢一些
-    new Promise<"timeout">((r) => setTimeout(() => r("timeout"), rec.backend === "mci" ? 15_000 : 8000)),
+    new Promise<"timeout">((r) => setTimeout(() => r("timeout"), rec.backend === "waveIn" ? 15_000 : 8000)),
   ]);
   if (result === "ready") return;
   clearTimeout(rec.timer);
   rec.proc.kill();
-  if (rec.tmpDir) void rm(rec.tmpDir, { recursive: true, force: true });
   const detail = rec.stderr.trim().split(/\r?\n/).slice(-3).join(" ").slice(0, 300);
   throw new Error(`麦克风没有打开${result === "timeout" ? "（等待超时）" : ""}。请确认麦克风已连接、系统允许 VS Code 使用麦克风。${detail ? `\n${detail}` : ""}`);
 }
@@ -267,32 +273,52 @@ export function takeLevels(): { recording: boolean; levels: number[]; seconds: n
   return { recording: true, levels, seconds: Math.floor((Date.now() - current.startedAt) / 1000) };
 }
 
+/** 16bit PCM 的峰值幅度（0~32767） */
+function pcmPeak(pcm: Buffer): number {
+  let peak = 0;
+  for (let i = 0; i + 1 < pcm.length; i += 2) {
+    const v = Math.abs(pcm.readInt16LE(i));
+    if (v > peak) peak = v;
+  }
+  return peak;
+}
+
+/**
+ * 录到的是不是有效声音。全 0 几乎只有一种可能：系统挡住了麦克风（Windows 的隐私设置关掉了
+ * 「允许桌面应用访问麦克风」时，录音照常进行但数据全是 0，不报任何错）。
+ */
+function checkAudible(pcm: Buffer): void {
+  const peak = pcmPeak(pcm);
+  if (peak === 0) {
+    throw new Error(process.platform === "win32"
+      ? "录到的全是静音：Windows 可能禁止了桌面应用使用麦克风。打开「设置 → 隐私和安全性 → 麦克风」，打开「麦克风访问」和「允许桌面应用访问麦克风」，再试一次。"
+      : process.platform === "darwin"
+        ? "录到的全是静音：macOS 可能没有允许 VS Code 使用麦克风。打开「系统设置 → 隐私与安全性 → 麦克风」勾选它，再试一次。"
+        : "录到的全是静音：请检查麦克风是否被静音或被其它程序占用。");
+  }
+  if (peak < 300) throw new Error("几乎没录到声音：麦克风音量太小或选错了输入设备，检查一下系统的默认录音设备。");
+}
+
 /** 停止录音，返回 WAV；cancel 时丢弃录音返回 null */
 export async function stopRecording(cancel = false): Promise<Buffer | null> {
   const rec = current;
   if (!rec) return null;
   current = null;
   clearTimeout(rec.timer);
-  try {
-    if (rec.backend === "mci") {
-      if (cancel) { rec.proc.kill(); return null; }
-      await writeFile(rec.stopFlag!, "");
-      const code = await Promise.race([rec.exited, new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 10_000))]);
-      if (code === "timeout") rec.proc.kill();
-      if (!existsSync(rec.wavPath!)) throw new Error(`录音没有保存下来。${rec.stderr.trim().slice(0, 300)}`);
-      return await readFile(rec.wavPath!);
-    }
-    // PCM 后端：让程序正常结束（ffmpeg 收到 SIGINT 会刷完缓冲），没反应再强杀
-    rec.proc.kill("SIGINT");
-    const code = await Promise.race([rec.exited, new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 2000))]);
-    if (code === "timeout") rec.proc.kill("SIGKILL");
-    if (cancel) return null;
-    const pcm = Buffer.concat(rec.chunks);
-    if (pcm.length < SAMPLE_RATE * 2 * 0.3) throw new Error("录音太短了，按住说完再停。");
-    return wavFromPcm(pcm);
-  } finally {
-    if (rec.tmpDir) void rm(rec.tmpDir, { recursive: true, force: true });
-  }
+  // 让程序正常结束（ffmpeg 收到 SIGINT 会刷完缓冲），没反应再强杀；Windows 上直接结束进程，已收到的音频都在内存里
+  rec.proc.kill("SIGINT");
+  const code = await Promise.race([rec.exited, new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 2000))]);
+  if (code === "timeout") rec.proc.kill("SIGKILL");
+  if (cancel) return null;
+  const pcm = Buffer.concat(rec.chunks);
+  if (pcm.length < SAMPLE_RATE * 2 * 0.3) throw new Error("录音太短了，说完再停。");
+  checkAudible(pcm);
+  return wavFromPcm(pcm);
+}
+
+/** SenseVoice 一类模型可能带出 <|zh|><|NEUTRAL|><|Speech|> 这样的标签，去掉 */
+function cleanTranscript(text: string): string {
+  return text.replace(/<\|[^|>]*\|>/g, "").trim();
 }
 
 /** 中文提示词：让 Whisper 一类模型输出简体中文并带标点（不加时它常给出无标点或繁体的结果） */
@@ -330,8 +356,8 @@ export async function transcribe(wav: Buffer, cfg: VoiceInputConfig): Promise<st
     throw new Error(`语音识别失败（HTTP ${res.status}）：${msg}`);
   }
   try {
-    return String((JSON.parse(raw) as { text?: string }).text ?? "").trim();
+    return cleanTranscript(String((JSON.parse(raw) as { text?: string }).text ?? ""));
   } catch {
-    return raw.trim(); // 少数服务即使要了 json 也回纯文本
+    return cleanTranscript(raw); // 少数服务即使要了 json 也回纯文本
   }
 }
