@@ -401,6 +401,8 @@ export function handleCreditBudgetPaused(msg: WsMessage, ctx: EventHandlerCtx): 
 export function handleBackgroundTurn(msg: WsMessage, ctx: EventHandlerCtx): void {
   const m = msg as WsMessage & { clientMessageId?: string; label?: string; notice?: BackgroundNoticeInfo };
   const id = m.clientMessageId || `bg-notice-${Date.now()}`;
+  // 上一段回复的字还在打：先结清，否则剩下的字会接到这一轮的回复里
+  ctx.typewriter.settle(ctx);
   const gen = ++ctx.turnGeneration.current;
   ctx.currentTurnClientMessageId.current = id;
   ctx.cancelled.current = false;
@@ -472,6 +474,7 @@ export function handleSteerAbsorbed(msg: WsMessage, ctx: EventHandlerCtx): void 
 export function handleSteerTurn(msg: WsMessage, ctx: EventHandlerCtx): void {
   const ids = ((msg as { clientMessageIds?: string[] }).clientMessageIds ?? []);
   const steers = takeSteers(ctx, ids);
+  ctx.typewriter.settle(ctx);
   const gen = ++ctx.turnGeneration.current;
   ctx.currentTurnClientMessageId.current = ids[0] ?? null;
   ctx.cancelled.current = false;

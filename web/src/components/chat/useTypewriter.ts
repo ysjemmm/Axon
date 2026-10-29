@@ -149,6 +149,8 @@ export interface TypewriterApi {
   finish: (ctx: TypewriterCtx, stats: TurnStats) => void;
   /** 立即同步倒出全部积压（不改变模式，不收尾） */
   flush: (ctx: TypewriterCtx) => void;
+  /** 马上结清当前这段回复：倒出积压，正在收尾的立刻收尾（新一轮开始前调用） */
+  settle: (ctx: TypewriterCtx) => void;
   /** 丢弃全部积压并停掉循环（取消 / 切换会话） */
   cancel: () => void;
   reset: () => void;
@@ -455,5 +457,26 @@ export function useTypewriter(): TypewriterApi {
     ctxRef.current = null;
   }, [stopLoop]);
 
-  return { push, hasPending, draining, start, drain, finish, flush, cancel, reset: cancel };
+  /**
+   * 马上结清当前这段回复：没出完的字一次性落进去，正在收尾的就立刻收尾（打上本轮统计）。
+   * 新一轮要开始时调用（后台任务通知轮、插话开的新一轮、用户发下一句）——否则上一段回复还没打完的字
+   * 会接到新一轮的回复里，一句话被拆到两个气泡里，看起来像两个 AI 在同时说话。
+   */
+  const settle = useCallback((ctx: TypewriterCtx) => {
+    const stats = mode.current === "ending" ? endStats.current : null;
+    if (hasPending()) {
+      const remaining = stashed.current + buffer.current;
+      stashed.current = "";
+      stashFrames.current = 0;
+      buffer.current = "";
+      appendToLastText(ctx, remaining, stash);
+    }
+    if (stats) finalizeStreaming(ctx, stats);
+    mode.current = "normal";
+    draining.current = false;
+    endStats.current = null;
+    stopLoop();
+  }, [hasPending, stash, stopLoop]);
+
+  return { push, hasPending, draining, start, drain, finish, flush, settle, cancel, reset: cancel };
 }

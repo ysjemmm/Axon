@@ -495,6 +495,8 @@ export function useChatSession(opts: UseChatSessionOptions) {
   // ── 发送动作 ────────────────────────────────────────────────────────
 
   const sendNow = useCallback((payload: SubmitPayload) => {
+    // 上一段回复还在打字收尾时就发了下一句：先把它结清，再开新一轮
+    typewriter.settle({ setChatHistory, finishLoading });
     const gen = ++turnGeneration.current;
     const userMessageId = `user-${Date.now()}`;
     currentTurnClientMessageId.current = userMessageId;
