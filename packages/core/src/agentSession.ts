@@ -250,6 +250,8 @@ export class AgentSession {
   private lastWikiRecallSignature: string | null = null;
   // 生成中标志：挡住重复触发。并发生成会互相破坏，理由见 generateWiki 的注释。
   /** @internal */ wikiGenerating = false;
+  /** 每轮注入的 Wiki 目录字数上限（由 SessionHub 注入读取函数；不提供时用默认值） */
+  wikiIndexMaxChars?: () => number | undefined;
   /**
    * Wiki 生成专用的取消信号。不能复用聊天这一轮的 abortController：
    * 那样聊天里点「停止」会顺带停掉 Wiki 生成；生成期间发了新消息，旧信号被换掉，
@@ -3228,7 +3230,7 @@ export class AgentSession {
       // announceWikiRecall（发前端渲染「记忆召回」卡片）；只关一处会留下半吊子状态。
       this.mode === "quest"
         ? Promise.resolve(null)
-        : this.wikiStore.buildRecall().catch((e: unknown) => { console.warn("[wiki] 索引构建失败（忽略）:", (e as Error).message); return null; }),
+        : this.wikiStore.buildRecall({ maxChars: this.wikiIndexMaxChars?.() || undefined }).catch((e: unknown) => { console.warn("[wiki] 索引构建失败（忽略）:", (e as Error).message); return null; }),
       this.mode === "quest"
         ? Promise.resolve(null)
         : loadWorkspaceAxonConfig(this.host, this.workspaces, this.homeDir).catch((e: unknown) => { console.warn("[axon] 工作区配置加载失败（忽略）:", (e as Error).message); return null; }),

@@ -250,6 +250,14 @@
           "scope": "resource",
           "markdownDescription": "**单次生成的 token 上限**（输入 + 输出累计）。达到上限就停下，已写好的页面保留，下次点击接着写剩下的。\n\n0 表示按页数自动估算（规划约 120 万 + 每页约 60 万）。每个子任务另有自己的轮次和 token 上限，防止某一页把预算烧光。"
         },
+        "axon.wiki.indexMaxChars": {
+          "type": "number",
+          "default": 1200,
+          "minimum": 300,
+          "maximum": 8000,
+          "scope": "resource",
+          "markdownDescription": "**每轮注入给 AI 的 Wiki 目录字数上限**。\n\n每次对话时，Axon 会把项目 Wiki 的「标题 + 一句话摘要」目录随请求发给 AI，让它知道有哪些页面可以查（正文不发，需要时 AI 自己去读）。目录按 概览 → 架构 → 领域 → 功能 → 约定 排序，超出上限的页面不列出。\n\n- **调大**：AI 一眼能看到更多页面，但每轮请求都多带这些字（花费随之增加）\n- **调小**：更省，但靠后的页面 AI 要自己去目录里找\n\n默认 1200，约能列出 20 页左右。"
+        },
         "axon.wiki.maxPages": {
           "type": "number",
           "default": 15,

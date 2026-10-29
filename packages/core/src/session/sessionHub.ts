@@ -395,6 +395,8 @@ export class SessionHub {
     if (this.deps.getMediaEnabled) {
       session.setMediaEnabled(this.deps.getMediaEnabled());
     }
+    // Wiki 目录字数上限：传读取函数而不是值，改了设置下一轮就生效
+    if (this.deps.getWikiIndexMaxChars) session.wikiIndexMaxChars = this.deps.getWikiIndexMaxChars;
     // 注入文生图开关（同上：关闭时不注入 generate_image 工具）
     if (this.deps.getImageEnabled) {
       session.setImageEnabled(this.deps.getImageEnabled());

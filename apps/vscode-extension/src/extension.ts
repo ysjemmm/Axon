@@ -967,6 +967,8 @@ export function activate(context: vscode.ExtensionContext): void {
     getMediaEnabled: () => readMediaEnabled(),
     // 文生图开关：读取 VS Code 设置（axon.image.enabled），默认关闭
     getImageEnabled: () => readImageEnabled(),
+    // Wiki 目录字数上限：读取 VS Code 设置（axon.wiki.indexMaxChars）
+    getWikiIndexMaxChars: () => vscode.workspace.getConfiguration("axon.wiki").get<number>("indexMaxChars", 1200),
   });
 
   // REST 请求路由（webview 形态下替代 Express）

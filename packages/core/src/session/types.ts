@@ -93,4 +93,10 @@ export interface SessionHubDeps {
    * 开启且宿主提供 imageGenerator 时，才会给会话注入 generate_image 工具。
    */
   getImageEnabled?: () => boolean;
+
+  /**
+   * 可选：每轮注入的项目 Wiki 目录的字数上限（设置项 axon.wiki.indexMaxChars）。
+   * 每轮读一次，改了设置下一轮就生效。不提供时用 WIKI_INDEX_MAX_CHARS。
+   */
+  getWikiIndexMaxChars?: () => number | undefined;
 }
