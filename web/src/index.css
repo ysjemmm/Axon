@@ -1589,7 +1589,7 @@ body.vscode-high-contrast {
   display: flex;
   padding: 2px;
   border-radius: 8px;
-  background: color-mix(in srgb, var(--foreground) 9%, var(--sidebar, var(--background)));
+  background: color-mix(in srgb, var(--foreground) 7%, var(--sidebar, var(--background)));
 }
 
 .axon-mode-switch__indicator {

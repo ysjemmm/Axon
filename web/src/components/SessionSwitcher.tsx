@@ -25,6 +25,14 @@ import type { SessionTab } from "./SessionContainer";
 export const SESSION_HEADER_SLOT_ID = "axon-session-header-slot";
 
 /**
+ * 顶部栏图标按钮的统一样式：26px 见方，与右侧模式切换器（22px 按钮 + 2px 内边距）同高；
+ * 图标统一 15px、线宽 1.75。往 SESSION_HEADER_SLOT_ID 里挂按钮的地方也用它，整行才协调。
+ */
+export const HEADER_ICON_BUTTON = "inline-flex h-[26px] w-[26px] shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground";
+export const HEADER_ICON = "h-[15px] w-[15px]";
+export const HEADER_ICON_STROKE = 1.75;
+
+/**
  * 切换器上的三个档位。
  * agent/quest 是同一套界面的两种系统提示与工具集；cowork 会整页接管（面向办公文档），
  * 由上层 App 决定渲染哪一侧，这里只负责发出切换意图。
@@ -94,7 +102,7 @@ export function SessionSwitcher({
 
   return (
     <div ref={rootRef} className="relative shrink-0">
-      <div className="flex items-center gap-1 h-9 px-2 border-b border-border">
+      <div className="flex h-10 items-center gap-1 border-b border-border/70 px-2">
         {renaming && current ? (
           <input
             autoFocus
@@ -115,7 +123,7 @@ export function SessionSwitcher({
             onClick={() => setOpen((v) => !v)}
             onDoubleClick={() => { if (current) { setOpen(false); setRenaming(true); } }}
             title={current ? `${displaySessionTitle(current.title)}（点击切换会话，双击重命名）` : "会话"}
-            className="flex-1 min-w-0 flex items-center gap-1 px-1.5 py-1 rounded text-[13px] text-foreground hover:bg-muted/50 transition-colors cursor-pointer"
+            className="flex h-[26px] min-w-0 flex-1 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[13px] text-foreground transition-colors hover:bg-foreground/[0.06]"
           >
             <span className="truncate font-medium">{displaySessionTitle(current?.title) || "新对话"}</span>
             {backgroundRunning > 0 && (
@@ -127,44 +135,47 @@ export function SessionSwitcher({
                 {backgroundRunning}
               </span>
             )}
-            <ChevronDown className={`w-3.5 h-3.5 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
+            <ChevronDown strokeWidth={HEADER_ICON_STROKE} className={`h-3.5 w-3.5 shrink-0 text-muted-foreground/80 transition-transform ${open ? "rotate-180" : ""}`} />
           </button>
         )}
 
         {/* 新建 / 历史快捷入口（下拉底部也有，这里省掉一次展开） */}
         <button
           onClick={onNewTab}
-          className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors cursor-pointer shrink-0"
+          className={HEADER_ICON_BUTTON}
           title="新建对话"
           aria-label="新建对话"
         >
-          <Plus className="w-3.5 h-3.5" />
+          <Plus className={HEADER_ICON} strokeWidth={HEADER_ICON_STROKE} />
         </button>
         <button
           onClick={onOpenHistory}
-          className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors cursor-pointer shrink-0"
+          className={HEADER_ICON_BUTTON}
           title="历史会话"
           aria-label="历史会话"
         >
-          <History className="w-3.5 h-3.5" />
+          <History className={HEADER_ICON} strokeWidth={HEADER_ICON_STROKE} />
         </button>
         {/* 分叉：从当前会话派生一个新会话，只带走「记忆」而不带对话历史。
             未落盘的空白会话没有可分叉的内容，故不显示。 */}
         {current?.id && (
           <button
             onClick={onForkSession}
-            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors cursor-pointer shrink-0"
+            className={HEADER_ICON_BUTTON}
             title="分叉会话（只继承记忆，不复制对话历史）"
             aria-label="分叉会话"
           >
-            <GitFork className="w-3.5 h-3.5" />
+            <GitFork className={HEADER_ICON} strokeWidth={HEADER_ICON_STROKE} />
           </button>
         )}
-        <div id={SESSION_HEADER_SLOT_ID} className="flex items-center shrink-0 empty:hidden" />
+        <div id={SESSION_HEADER_SLOT_ID} className="flex shrink-0 items-center gap-1 empty:hidden" />
+
+        {/* 操作按钮与模式切换之间一条细分隔线：两组控件性质不同，分开看更整齐 */}
+        <span className="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden="true" />
 
         {/* Chat / Code / Cowork 模式切换：IDE 形态下原本挂在辅助侧栏标题栏，那行已隐藏，由这里接管 */}
         {/* 样式见 index.css 的 .axon-mode-switch（配色与原生标题栏那版一致） */}
-        <div className="axon-mode-switch shrink-0 ml-1" data-mode={mode} role="group" aria-label="对话模式">
+        <div className="axon-mode-switch shrink-0" data-mode={mode} role="group" aria-label="对话模式">
           <span className="axon-mode-switch__indicator" aria-hidden="true" />
           {([
             { value: "quest", label: "Chat：仅聊天", Icon: MessagesSquare },
@@ -179,7 +190,7 @@ export function SessionSwitcher({
               aria-pressed={mode === value}
               className="axon-mode-switch__btn"
             >
-              <Icon className="w-4 h-4" />
+              <Icon className={HEADER_ICON} strokeWidth={HEADER_ICON_STROKE} />
             </button>
           ))}
         </div>

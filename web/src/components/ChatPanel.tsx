@@ -9,7 +9,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { SESSION_HEADER_SLOT_ID } from "./SessionSwitcher";
+import { HEADER_ICON, HEADER_ICON_BUTTON, HEADER_ICON_STROKE, SESSION_HEADER_SLOT_ID } from "./SessionSwitcher";
 import { LiveSparkModeContext, type SparkMode } from "./AxonSpark";
 import { Loader2, ImagePlus, X, Paperclip, Plus, Camera, ChevronDown, ListChecks, Globe, NotebookPen, FolderOpen, Plug, Rocket } from "lucide-react";
 import { OPEN_CONNECTORS_EVENT } from "./ConnectorsDialog";
@@ -1603,9 +1603,9 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               <button
                 title="提问目录"
                 aria-label="提问目录"
-                className={`p-1 rounded transition-colors cursor-pointer ${questionListOpen ? "text-foreground bg-muted/60" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
+                className={`${HEADER_ICON_BUTTON} ${questionListOpen ? "bg-foreground/[0.06] text-foreground" : ""}`}
               >
-                <ListChecks className="w-3.5 h-3.5" />
+                <ListChecks className={HEADER_ICON} strokeWidth={HEADER_ICON_STROKE} />
               </button>
             </PopoverTrigger>
             <PopoverContent
