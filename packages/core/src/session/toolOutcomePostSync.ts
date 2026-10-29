@@ -17,7 +17,7 @@ export interface ToolOutcomePostSyncInput {
 export interface ToolOutcomePostSyncDeps {
   trace: (type: string, payload?: unknown, turn?: number) => void;
   markLastToolMessageTransient: () => void;
-  enqueueScreenshot: (dataUrl: string) => void;
+  enqueueScreenshot: (dataUrl: string, toolCallId: string) => void;
   sendEditsUpdated: (rejected?: string[]) => void;
   onPendingChanged?: () => void;
 }
@@ -54,7 +54,7 @@ export class ToolOutcomePostSync {
     }
 
     if (meta.screenshotDataUrl) {
-      this.deps.enqueueScreenshot(meta.screenshotDataUrl);
+      this.deps.enqueueScreenshot(meta.screenshotDataUrl, toolCallId);
     }
 
     if (isPending) {

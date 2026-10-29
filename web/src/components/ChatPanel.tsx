@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ImageViewer } from "./chat/ImageViewer";
+import { ImagePreviewContext } from "./chat/ScreenshotThumbs";
 import { ModelSelector, useModels, findModel, getModels } from "@/components/ModelSelector";
 import { useModelEffort, resolveEffortForModel } from "./chat/useModelEffort";
 import { getVisionFallbackModel } from "@/lib/apiClient";
@@ -288,6 +289,8 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   const [skillStudioOpen, setSkillStudioOpen] = useState(false);
   /** 图片查看器状态：当前图片组 + 索引（输入框图片与历史消息图片共用） */
   const [previewState, setPreviewState] = useState<{ images: string[]; index: number } | null>(null);
+  /** 消息里的截图缩略图点开大图（经 ImagePreviewContext 调起，与消息图片共用一个看图组件） */
+  const openImagePreview = useCallback((images: string[], index: number) => setPreviewState({ images, index }), []);
   // 问题列表 Popover 受控状态
   const [questionListOpen, setQuestionListOpen] = useState(false);
   // 顶部 sticky：当前视图所属 AI 回答对应的用户提问
@@ -1695,6 +1698,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
               </>
             }
             renderMessage={(msg, idx) => (
+              <ImagePreviewContext.Provider value={openImagePreview}>
               <CommandApprovalContext.Provider value={commandApprovalCtx}>
               <InlineFormContext.Provider value={inlineFormCtx}>
                 <MessageBubble
@@ -1721,6 +1725,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
                 />
               </InlineFormContext.Provider>
               </CommandApprovalContext.Provider>
+              </ImagePreviewContext.Provider>
             )}
           />
           )}

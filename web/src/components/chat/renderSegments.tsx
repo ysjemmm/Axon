@@ -776,6 +776,7 @@ export function renderSegments(
             id: s.id, name: s.name, status: s.status, description: s.description,
             command: s.command, output: s.output, args: s.args,
             queuedWaiting: queuedWaitingIds.has(s.id),
+            screenshot: s.screenshot,
           });
           if (s.name === "open_browser" && typeof s.args?.url === "string") url = s.args.url as string;
           if (s.name === "close_browser" && s.status === "success") closed = true;

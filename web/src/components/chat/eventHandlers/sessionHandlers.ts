@@ -75,7 +75,17 @@ export function handleSessionLoaded(msg: WsMessage, ctx: EventHandlerCtx): void 
     if (m.role === "assistant" && typeof m.content === "string" && m.content.startsWith("明白，我已了解之前的对话内容")) continue;
 
     if (m.role === "user") {
-      if ((m as any)._screenshotInjection) continue;
+      if ((m as any)._screenshotInjection) {
+        // 截图注入消息不显示成用户消息，但图要挂回对应的截图工具行（图只存这一份）
+        const forId = (m as any)._screenshotFor as string | undefined;
+        const img = (m as any)._screenshotData
+          ?? (Array.isArray(m.content) ? (m.content as any[]).find((p) => p?.type === "image_url")?.image_url?.url : undefined);
+        if (forId && img && currentAssistant?.segments) {
+          const seg = currentAssistant.segments.find((s) => s.type === "tool" && s.id === forId);
+          if (seg && seg.type === "tool") seg.screenshot = img;
+        }
+        continue;
+      }
       // 回复过程中并入的后台任务通知：不显示，前后两段回复接在同一条里
       if ((m as any)._bgInline) continue;
       if (currentAssistant) {

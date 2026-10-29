@@ -52,6 +52,8 @@ export interface ToolSegment {
   diff?: { path: string; absPath?: string; oldContent?: string; newContent?: string; editId?: string; bodyOmitted?: boolean; hadOldContent?: boolean }; // str_replace/create_file 专用：本次修改的完整文件前后快照
   diffs?: { path: string; absPath?: string; oldContent?: string; newContent?: string; editId?: string; bodyOmitted?: boolean }[]; // apply_patch 专用：一次改多个文件
   noopEdit?: boolean; // 编辑工具执行成功但无实际内容变化（无 diff）
+  /** screenshot_page 截下的图（data URL）：工具行右侧显示缩略图，折叠行也带上 */
+  screenshot?: string;
   diagnostics?: { path: string; ok: boolean; errorCount: number }[]; // check_diagnostics 专用：按文件诊断结果
   searchResults?: { query: string; source: string; results: { title: string; url: string; snippet: string; domain: string; date?: string }[] }; // web_search 专用
   fetchResult?: { url: string; title: string; byteSize: number; success: boolean; error?: string }; // web_fetch 专用

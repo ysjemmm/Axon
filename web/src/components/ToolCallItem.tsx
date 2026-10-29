@@ -9,6 +9,7 @@
  * execute_command 特殊样式：显示命令内容
  */
 
+import { ScreenshotStrip, ScreenshotThumb } from "./chat/ScreenshotThumbs";
 import { useState, useContext, useRef, useEffect } from "react";
 import { Collapse } from "./chat/Collapse";
 // 图标分工（每个前导图标只表示一种东西，避免同一屏里两行长得一样）：
@@ -184,6 +185,8 @@ export interface ToolCallData {
   /** MCP 工具专用：真实 server 名 / 工具名（后端透传，免去从编码工具名反推） */
   mcpServer?: string;
   mcpTool?: string;
+  /** screenshot_page 的截图（data URL） */
+  screenshot?: string;
 }
 
 /** 根据工具名和结果/参数生成描述 */
@@ -692,6 +695,7 @@ export function BrowserSessionGroup({ group }: { group: BrowserSessionData }) {
   const last = group.steps[group.steps.length - 1];
   const lastLabel = last ? browserStepLabel(last) : "";
   const host = browserHostLabel(group.url);
+  const shots = group.steps.map((s) => s.screenshot).filter((s): s is string => !!s);
 
   return (
     <div className="my-0.5">
@@ -717,17 +721,21 @@ export function BrowserSessionGroup({ group }: { group: BrowserSessionData }) {
             <span className="min-w-0 truncate font-mono">{lastLabel}</span>
           </>
         )}
-        {host && (
-          <span className="ml-auto shrink-0 max-w-[40%] truncate font-mono text-[10px] opacity-40" title={group.url}>
-            {host}
-          </span>
-        )}
+        <span className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
+          {/* 截图常驻在折叠行上：不展开也能看到这组操作截了什么 */}
+          <ScreenshotStrip images={shots} />
+          {host && (
+            <span className="max-w-[160px] truncate font-mono text-[10px] opacity-40" title={group.url}>
+              {host}
+            </span>
+          )}
+        </span>
       </div>
       <Collapse open={expanded}>
           <div className="ml-5 mt-1 rounded-lg border border-border bg-popover overflow-hidden">
             {group.steps.map((step, i) => (
               <div key={step.id} className={i > 0 ? "border-t border-border/50" : ""}>
-                <BrowserStepRow step={step} />
+                <BrowserStepRow step={step} shots={shots} />
               </div>
             ))}
           </div>
@@ -737,7 +745,7 @@ export function BrowserSessionGroup({ group }: { group: BrowserSessionData }) {
 }
 
 /** 浏览器分组内的单步行（精简一行） */
-function BrowserStepRow({ step }: { step: ToolCallData }) {
+function BrowserStepRow({ step, shots }: { step: ToolCallData; shots: string[] }) {
   const [showOutput, setShowOutput] = useState(false);
   const icon = step.status === "queued"
     ? <Clock className="w-3 h-3 text-muted-foreground/50 shrink-0" />
@@ -755,11 +763,15 @@ function BrowserStepRow({ step }: { step: ToolCallData }) {
       <div className="flex items-center gap-1.5 text-[11px]">
         {icon}
         <span className="text-muted-foreground truncate">{label}</span>
-        {hasOutput && (
-          <button onClick={() => setShowOutput(!showOutput)} className="ml-auto text-[10px] text-blue-600 dark:text-blue-400 hover:underline shrink-0">
-            {showOutput ? "收起" : "输出"}
-          </button>
-        )}
+        <span className="ml-auto flex shrink-0 items-center gap-2">
+          {hasOutput && (
+            <button onClick={() => setShowOutput(!showOutput)} className="text-[10px] text-blue-600 dark:text-blue-400 hover:underline shrink-0">
+              {showOutput ? "收起" : "输出"}
+            </button>
+          )}
+          {/* 截图在这一步的最右侧；点开后可以左右切换这组里的其它截图 */}
+          {step.screenshot && <ScreenshotThumb src={step.screenshot} group={shots} />}
+        </span>
       </div>
       {showOutput && step.output && (
         <pre className="mt-1 text-[9px] font-mono text-muted-foreground/70 whitespace-pre-wrap break-all max-h-24 overflow-y-auto leading-relaxed bg-muted/30 rounded px-2 py-1">{step.output}</pre>

@@ -21,6 +21,7 @@ import { CommandApprovalContext } from "./commandApprovalContext";
 import { summarizeRunStats } from "./activityGroupRules";
 import type { ToolSegment } from "./types";
 import { FlipText } from "./FlipText";
+import { ScreenshotStrip } from "./ScreenshotThumbs";
 
 export function ActivityGroup({ tools, live, children }: {
   /** 组内的工具段（用于统计、summary、审批检测） */
@@ -47,6 +48,8 @@ export function ActivityGroup({ tools, live, children }: {
   const title = summary || progress || current || stats;
   // 只有摘要（阶段 / 最终）换了才翻牌；实时刷新的当前动作、统计数字直接替换
   const flipKey = summary ? `s:${summary}` : progress ? `p:${progress}` : "plain";
+  // 组里截过的图：收起时也显示在标题行右侧，太多就只显示最近几张 +N
+  const shots = tools.map((t) => t.screenshot).filter((s): s is string => !!s);
 
   return (
     <div className="my-1">
@@ -71,6 +74,7 @@ export function ActivityGroup({ tools, live, children }: {
         {failed > 0 && (
           <span className="shrink-0 text-[11px] text-destructive">{failed} 次失败</span>
         )}
+        {shots.length > 0 && <span className="ml-1"><ScreenshotStrip images={shots} /></span>}
         <ChevronRight
           className={`w-3.5 h-3.5 shrink-0 opacity-50 transition-transform duration-200 motion-reduce:transition-none ${open ? "rotate-90" : ""}`}
         />

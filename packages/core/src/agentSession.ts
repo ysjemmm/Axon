@@ -537,7 +537,7 @@ export class AgentSession {
     this.toolOutcomePostSync = new ToolOutcomePostSync({
       trace: (type, payload, turn) => this.appendTrace(type, payload, turn),
       markLastToolMessageTransient: () => { (this.messages[this.messages.length - 1] as any)._transient = true; },
-      enqueueScreenshot: (dataUrl) => { ((this as any).__pendingScreenshots ??= []).push(dataUrl); },
+      enqueueScreenshot: (dataUrl, toolCallId) => { ((this as any).__pendingScreenshots ??= []).push({ dataUrl, toolCallId }); },
       sendEditsUpdated: (rejected) => this.sendEditsUpdated(rejected),
       onPendingChanged: this.onPendingChanged,
     });
@@ -3497,9 +3497,9 @@ export class AgentSession {
 
       // 所有 tool 结果 push 完毕后,统一追加本轮收集到的截图 user 消息。
       // 必须在 tool 消息全部就位之后——中间插 user 会违反 API "tool_calls → tool messages" 连续性要求导致 400。
-      const pendingScreenshots: string[] | undefined = (this as any).__pendingScreenshots;
+      const pendingScreenshots: { dataUrl: string; toolCallId: string }[] | undefined = (this as any).__pendingScreenshots;
       if (pendingScreenshots && pendingScreenshots.length > 0) {
-        for (const dataUrl of pendingScreenshots) {
+        for (const { dataUrl, toolCallId } of pendingScreenshots) {
           this.messages.push({
             role: "user",
             content: [
@@ -3507,9 +3507,12 @@ export class AgentSession {
               { type: "image_url", image_url: { url: dataUrl } },
             ],
             _screenshotInjection: true,
+            // 记下是哪次截图：重开会话时界面据此把图挂回对应的工具行（图只存这一份，不另存文件）
+            _screenshotFor: toolCallId,
           } as any);
         }
         (this as any).__pendingScreenshots = [];
+        pruneScreenshots(this.messages);
       }
 
       // 工具执行后更新 token 用量（tools 部分会增加）
@@ -3706,4 +3709,28 @@ async function extractTargetFiles(
   }
 }
 
+/** 发给模型的截图只带最近几张：更早的截图对判断当前页面没用，每轮重发却很费 token */
+const SCREENSHOTS_FOR_MODEL = 3;
+/** 会话里最多留几张截图供界面回看；再早的直接删掉，会话文件不会因为截图无限变大 */
+const SCREENSHOTS_KEPT = 20;
 
+/**
+ * 截图清理：从新到旧数，最近 SCREENSHOTS_FOR_MODEL 张照常发给模型；
+ * 之后的换成一句文字占位（图片挪到 _screenshotData，只给界面看）；
+ * 超过 SCREENSHOTS_KEPT 张的连图片一起删掉。
+ */
+function pruneScreenshots(messages: ChatCompletionMessageParam[]): void {
+  let seen = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i] as any;
+    if (!m?._screenshotInjection) continue;
+    seen++;
+    if (seen <= SCREENSHOTS_FOR_MODEL) continue;
+    if (Array.isArray(m.content)) {
+      const img = m.content.find((p: any) => p?.type === "image_url")?.image_url?.url;
+      if (img && !m._screenshotData) m._screenshotData = img;
+      m.content = "（较早的一张 screenshot_page 截图，已省略。需要再看页面就重新截图。）";
+    }
+    if (seen > SCREENSHOTS_KEPT) delete m._screenshotData;
+  }
+}

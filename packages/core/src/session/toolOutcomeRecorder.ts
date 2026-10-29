@@ -126,6 +126,8 @@ export class ToolOutcomeRecorder {
       powerActivated: (meta as any).powerActivated,
       // 产物：实时事件也要带上，前端据此在这个工具段的位置直接渲染卡片
       artifact: meta.artifact,
+      // 截图：界面在这次工具调用的行上显示缩略图
+      screenshot: meta.screenshotDataUrl,
       pending: isPending,
       userMessage: meta.userMessage,
       hidden: meta.hidden,
