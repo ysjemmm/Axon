@@ -110,6 +110,11 @@ export interface SubAgentDeps {
    * 用于按次计费的长任务（如 Wiki 生成）给单个子 Agent 封顶，防止一个页面把整次预算烧光。
    */
   tokenBudget?: number;
+  /**
+   * 可选：禁止访问的路径（按工具参数里的 path / paths 判断）。Wiki 撰写者用它挡住 .env、
+   * 密钥文件 —— 页面要进 git，撰写者根本不该读到真实的凭据。
+   */
+  blockPath?: (path: string) => boolean;
   /** 允许写入的工作区外目录（父会话注入：产物 / 产出目录，完全访问模式下含通配 "*"） */
   writeRoots?: () => string[];
   /**
@@ -505,8 +510,14 @@ export class SubAgentRunner {
       // （例如只读子 Agent 调 execute_command）。只靠「不给 schema」挡不住，必须在执行处拦。
       const offered = (this.getToolDefs() as unknown as { function?: { name?: string } }[]).some((d) => d.function?.name === toolName);
 
+      const argPaths = [toolArgs.path, ...(Array.isArray(toolArgs.paths) ? toolArgs.paths : [])].filter((x): x is string => typeof x === "string");
+      const blocked = this.deps.blockPath ? argPaths.find((x) => this.deps.blockPath!(x)) : undefined;
+
       if (!offered) {
         result = `工具 ${toolName} 在本任务中不可用。请只使用提供给你的工具。`;
+        status = "error";
+      } else if (blocked) {
+        result = `${blocked} 可能存放密钥或凭据，本任务不允许读取。写文档不需要真实的密钥值，跳过这个文件即可。`;
         status = "error";
       } else if (parseError) {
         result = parseError;

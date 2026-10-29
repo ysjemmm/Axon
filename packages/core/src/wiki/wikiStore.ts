@@ -23,7 +23,9 @@
  */
 
 import { join, basename, isAbsolute } from "node:path";
+import { createHash } from "node:crypto";
 import type { AgentHost } from "../host/index.js";
+import { isSensitivePath } from "./wikiSecrets.js";
 
 // ── 布局助手 ────────────────────────────────────────────────────────────────
 
@@ -62,19 +64,28 @@ export function wikiGitignorePath(workspace: string): string {
 }
 
 /**
- * .axon/.gitignore 的内容。
+ * .axon/.gitignore 的内容：只忽略本机产物，项目配置照常入库。
  *
- * 为什么必须有它：.axon 下同时住着「该入库的」与「不该入库的」——
- *   · wiki/    该入库（团队共享的知识文档）
- *   · relays/  不该入库（run-scoped 的任务中间产物）
- * 没有这层 ignore，每开一个项目都会往 git status 里塞噪声——这正是当初把 trace
- * 从工作区搬去用户目录的原因（见 sessionTraceWriter 的注释）。Wiki 恰恰需要入库共享，
- * 所以只能反向处理：默认忽略全部，再单独放行 wiki/。
- *
- * 用 `/*` 而不是 `*`：前者只匹配直接子项，于是放行 wiki/ 之后其内部文件自然被包含，
- * 无需再补 `!wiki/**`。
+ * .axon 下住着两类东西：
+ *   · 该入库的：wiki/、AXON.md、rules/、skills/、powers/、settings.json —— 团队共享的项目配置
+ *   · 不该入库的：relays/（某次任务的中间产物）、*.local.*（个人覆盖）、
+ *     settings/providers.json 与 settings/mcp.json（可能写着 API Key / Token）
+ * 早先写的是「/* 再放行 wiki/」，结果把团队共享的那一类也一起挡掉了 ——
+ * 新建的 AXON.md、skills/ 提交不上去，还没有任何提示。
  */
-export const WIKI_GITIGNORE_CONTENT = `# Axon 本地状态：本目录除 wiki/ 外一律不入库
+export const WIKI_GITIGNORE_CONTENT = `# Axon：只忽略本机产物；AXON.md、rules/、skills/、wiki/、settings.json 等项目配置照常入库
+#   relays/ —— 某次任务的中间产物（run-scoped），任务结束即历史，不必共享
+/relays/
+#   个人覆盖
+*.local.md
+*.local.json
+#   可能写着 API Key / Token 的配置（需要共享时自行去掉这两行，并确认里面没有密钥）
+/settings/providers.json
+/settings/mcp.json
+`;
+
+/** 旧版自动生成的内容：遇到原样未改的就升级成新版（用户改过的不动） */
+const LEGACY_GITIGNORE_CONTENT = `# Axon 本地状态：本目录除 wiki/ 外一律不入库
 #   relays/ —— 某次任务的中间产物（run-scoped），任务结束即历史，不必共享
 #   本机机器产物（trace 等）落在 ~/.axon/projects/ 下，不在本目录
 /*
@@ -107,6 +118,12 @@ export interface WikiPageMeta {
   summary: string;
   /** 本页依据的源文件，相对所属工作区的相对路径（保证文档可跨机器移植） */
   sources: string[];
+  /**
+   * 生成时各依据文件的内容指纹（相对路径 → 12 位哈希）。写在 frontmatter 里随 git 共享：
+   * 换机器、切分支、重新 clone 后时间戳全变了，但内容没变指纹就不变 —— 过期检测在任何机器上都准。
+   * 只有重新生成 / 标记已复核时才会变，不会产生与内容无关的 diff。
+   */
+  sourceHashes?: Record<string, string>;
   /**
    * 分类（一般取值见 WIKI_CATEGORIES）。
    *
@@ -230,9 +247,10 @@ export function wikiSlug(title: string): string {
   const cleaned = (title || "")
     .replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ") // 各平台文件名非法字符 + 控制字符
     .replace(/[\s\u3000]+/g, "-")
-    .replace(/^[.\-]+|[.\-]+$/g, "")
-    .slice(0, 60);
-  return cleaned || "untitled";
+    .replace(/^[.\-]+|[.\-]+$/g, "");
+  // 按字符截断而不是按 UTF-16 码元：slice 会把 emoji 这类代理对切成半个，文件名出现乱码
+  const short = Array.from(cleaned).slice(0, 60).join("").replace(/[.\-]+$/g, "");
+  return short || "untitled";
 }
 
 // ── frontmatter ─────────────────────────────────────────────────────────────
@@ -292,12 +310,20 @@ export function parseWikiFrontmatter(raw: string): { meta: Partial<Omit<WikiPage
   if (scalars.category) meta.category = scalars.category;
   if (scalars.generatedAt) meta.generatedAt = scalars.generatedAt;
   if (lists.sources) meta.sources = lists.sources.filter(Boolean);
+  if (lists.sourceHashes) {
+    const map: Record<string, string> = {};
+    for (const item of lists.sourceHashes) {
+      const i = item.lastIndexOf("#");
+      if (i > 0) map[item.slice(0, i)] = item.slice(i + 1);
+    }
+    if (Object.keys(map).length) meta.sourceHashes = map;
+  }
 
   return { meta, body };
 }
 
 /** 序列化页面：frontmatter + 正文。标题/摘要里的换行会被压平——它们必须是单行字段。 */
-export function serializeWikiPage(page: { title: string; summary: string; sources: string[]; category?: string; generatedAt?: string; body: string }): string {
+export function serializeWikiPage(page: { title: string; summary: string; sources: string[]; sourceHashes?: Record<string, string>; category?: string; generatedAt?: string; body: string }): string {
   const oneLine = (s: string) => (s || "").replace(/\r?\n/g, " ").trim();
   const lines = [
     "---",
@@ -309,6 +335,8 @@ export function serializeWikiPage(page: { title: string; summary: string; source
   if (page.category) lines.push(`category: ${oneLine(page.category)}`);
   lines.push("sources:", ...page.sources.map((s) => `  - ${oneLine(s)}`));
   if (page.generatedAt) lines.push(`generatedAt: ${oneLine(page.generatedAt)}`);
+  const hashes = Object.entries(page.sourceHashes ?? {});
+  if (hashes.length) lines.push("sourceHashes:", ...hashes.map(([src, h]) => `  - ${oneLine(src)}#${h}`));
   lines.push("---", "", page.body.trim(), "");
   return lines.join("\n");
 }
@@ -353,6 +381,33 @@ export function normalizeWikiSource(root: string, src: string): string | null {
     parts.push(seg);
   }
   return parts.length ? parts.join("/") : null;
+}
+
+/** 依据文件的内容指纹：统一换行符后取 sha256 前 12 位（Windows 上 git 自动转 CRLF 也不会误判） */
+export function wikiContentHash(content: string): string {
+  return createHash("sha256").update(content.replace(/\r\n/g, "\n")).digest("hex").slice(0, 12);
+}
+
+const CATEGORY_ALIASES: [RegExp, string][] = [
+  [/overview|intro|总览|简介|介绍/i, "概览"],
+  [/architect|structure|design|框架|结构|分层/i, "架构"],
+  [/domain|model|data|business|业务|数据|模型/i, "领域"],
+  [/feature|module|page|component|模块|页面|组件/i, "功能"],
+  [/convention|guide|rule|standard|规范|约束|指南|坑/i, "约定"],
+];
+
+/**
+ * 把分类收敛到固定的五类：模型常写「架构设计」「业务领域」「Overview」这类变体，
+ * 原样保留会在侧边栏各成一组。包含某个类名的直接归过去，常见别名按关键词归类，实在认不出的保留原样。
+ */
+export function normalizeWikiCategory(category?: string): string | undefined {
+  const c = (category || "").trim();
+  if (!c) return undefined;
+  if ((WIKI_CATEGORIES as readonly string[]).includes(c)) return c;
+  const direct = WIKI_CATEGORIES.find((k) => c.includes(k));
+  if (direct) return direct;
+  for (const [re, k] of CATEGORY_ALIASES) if (re.test(c)) return k;
+  return c;
 }
 
 /** 分类的展示 / 注入顺序：先讲是什么、怎么搭起来，再到细节 */
@@ -410,6 +465,8 @@ export interface WikiRecall {
   pages: WikiRecallPage[];
   /** 磁盘上共有多少页（当超出上限时大于 pages.length） */
   total: number;
+  /** 全部页面里待复核的页数（含没列进索引的）。界面上的数字要和侧边栏一致 */
+  staleTotal: number;
 }
 
 /**
@@ -480,6 +537,7 @@ export function buildWikiRecall(
     prompt: `${header}\n\n${lines.join("\n")}${tail}`,
     pages: listed,
     total: pages.length,
+    staleTotal: pages.filter((p) => p.stale).length,
   };
 }
 
@@ -506,7 +564,7 @@ export function buildWikiIndexPrompt(
  */
 export function wikiRecallSignature(recall: WikiRecall): string {
   const pages = recall.pages.map((p) => `${p.title}${p.stale ? "!" : ""}`).join("\n");
-  return `${recall.total}\u0000${pages}`;
+  return `${recall.total}\u0000${recall.staleTotal ?? ""}\u0000${pages}`;
 }
 
 /**
@@ -525,13 +583,29 @@ export class WikiStore {
    * 典型后果是同时保存两页、结果只留下一页的记录（另一页变成「无快照」，过时检测随即失效）。
    * 用一条 promise 链把写操作排队，从根上消除这个竞态。
    */
-  private writeChain: Promise<unknown> = Promise.resolve();
+  // 进程内共用一条：扩展侧删除 / 刷新会临时 new 一个 WikiStore，与会话里正在生成的那个不是同一实例，
+  // 各自排队就挡不住它们之间的读-改-写竞态（后写的覆盖先写的）。
+  private static writeChain: Promise<unknown> = Promise.resolve();
+
+  /** 依据文件的指纹缓存（绝对路径 → 当时的 mtime 与指纹）：mtime 没变就不必重读文件 */
+  private static hashCache = new Map<string, { mtime: number; hash: string }>();
 
   /** 把写操作排入串行队列（失败不阻断后续写） */
   private enqueueWrite<T>(fn: () => Promise<T>): Promise<T> {
-    const next = this.writeChain.then(fn, fn);
-    this.writeChain = next.then(() => undefined, () => undefined);
+    const next = WikiStore.writeChain.then(fn, fn);
+    WikiStore.writeChain = next.then(() => undefined, () => undefined);
     return next;
+  }
+
+  /** 读文件算指纹（带 mtime 缓存）；读不到返回 null */
+  private async hashOf(absPath: string, mtime?: number): Promise<string | null> {
+    const cached = WikiStore.hashCache.get(absPath);
+    if (cached && typeof mtime === "number" && cached.mtime === mtime) return cached.hash;
+    const raw = await this.host.fs.read(absPath);
+    if (raw === null) return null;
+    const hash = wikiContentHash(raw);
+    if (typeof mtime === "number") WikiStore.hashCache.set(absPath, { mtime, hash });
+    return hash;
   }
 
   constructor(roots: string | string[], private host: AgentHost) {
@@ -625,6 +699,7 @@ export class WikiStore {
           title: meta.title || slug,
           summary: meta.summary || "",
           sources: meta.sources || [],
+          sourceHashes: meta.sourceHashes,
           category: meta.category,
           generatedAt: meta.generatedAt,
         },
@@ -667,6 +742,7 @@ export class WikiStore {
       title: meta.title || slug,
       summary: meta.summary || "",
       sources: meta.sources || [],
+      sourceHashes: meta.sourceHashes,
       category: meta.category,
       generatedAt: meta.generatedAt,
       body,
@@ -694,8 +770,13 @@ export class WikiStore {
     const root = input.workspace || this.writeRoot;
     if (!root) return null;
 
-    const slug = wikiSlug(input.title);
+    let slug = wikiSlug(input.title);
     const generatedAt = new Date().toISOString();
+    // Windows / macOS 的文件名不区分大小写：「API」与「api」会写到同一个文件。
+    // 已有只差大小写的页面就沿用它的文件名，免得两个 slug 指向同一个文件、状态记录对不上。
+    const sameName = (await this.listInRoot(root)).find((p) => p.meta.slug !== slug && p.meta.slug.toLowerCase() === slug.toLowerCase());
+    if (sameName) slug = sameName.meta.slug;
+    const category = normalizeWikiCategory(input.category);
 
     await this.ensureGitignore(root);
     await this.host.fs.mkdirp(wikiDir(root));
@@ -705,16 +786,20 @@ export class WikiStore {
     // 先采快照再写正文：写 md 本身会改动 mtime，但改的是文档、不是它的依据。
     const sources: string[] = [];
     const snapshot: Record<string, number> = {};
+    const hashes: Record<string, string> = {};
     for (const raw of input.sources) {
       const src = normalizeWikiSource(root, raw);
-      if (!src || sources.includes(src)) continue;
+      // 凭据文件不作依据：frontmatter 会进 git，连文件名都不该暗示「这页参考了 .env」
+      if (!src || sources.includes(src) || isSensitivePath(src)) continue;
       const st = await this.host.fs.stat(join(root, src));
       if (!st?.isFile) continue;
       sources.push(src);
       if (typeof st.mtimeMs === "number") snapshot[src] = st.mtimeMs;
+      const h = await this.hashOf(join(root, src), st.mtimeMs);
+      if (h) hashes[src] = h;
     }
 
-    const content = serializeWikiPage({ title: input.title, summary: input.summary, sources, category: input.category, generatedAt, body: input.body });
+    const content = serializeWikiPage({ title: input.title, summary: input.summary, sources, sourceHashes: hashes, category, generatedAt, body: input.body });
     await this.host.fs.write(join(wikiDir(root), `${slug}.md`), content);
 
     // 写状态：读-改-写，保留其它页的记录
@@ -734,7 +819,7 @@ export class WikiStore {
 
     await this.writeState(root, state);
 
-    return { slug, title: input.title, summary: input.summary, sources, category: input.category, generatedAt };
+    return { slug, title: input.title, summary: input.summary, sources, sourceHashes: hashes, category, generatedAt };
   }
 
   /**
@@ -761,7 +846,8 @@ export class WikiStore {
         title: meta.title || slug,
         summary: meta.summary || "",
         sources: meta.sources || [],
-        category,
+        sourceHashes: meta.sourceHashes,
+        category: normalizeWikiCategory(category) ?? category,
         generatedAt: meta.generatedAt,
         body,
       }),
@@ -868,7 +954,9 @@ export class WikiStore {
 
     for (const meta of metas) {
       const recorded = state?.pages?.[meta.slug];
-      if (!recorded) {
+      const hashes = meta.sourceHashes;
+      // 既没有本机快照、页面里也没有内容指纹（旧版本生成 / 手写的页面）：无法判断
+      if (!recorded && !hashes) {
         out.set(meta.slug, { slug: meta.slug, stale: false, changedSources: [], unknown: true });
         continue;
       }
@@ -877,18 +965,26 @@ export class WikiStore {
       for (const rawSrc of meta.sources) {
         // 手改的页面可能写了反斜杠 / ./ 前缀：按同一规则规整后再比对（记录里存的是规整后的形式）
         const src = normalizeWikiSource(root, rawSrc) ?? rawSrc;
-        const st = await this.host.fs.stat(join(root, src));
+        const abs = join(root, src);
+        const st = await this.host.fs.stat(abs);
         if (st === null) {
-          changed.push(src);
+          changed.push(src); // 依据消失，结论不再可靠
           continue;
         }
-        if (typeof st.mtimeMs !== "number") continue; // 宿主不提供 → 无法判定，跳过
-        const recordedMs = recorded.sources?.[src] ?? recorded.sources?.[rawSrc];
-        if (typeof recordedMs !== "number") {
-          changed.push(src); // 生成时没采到快照
+        const recordedMs = recorded?.sources?.[src] ?? recorded?.sources?.[rawSrc];
+        const mtime = typeof st.mtimeMs === "number" ? st.mtimeMs : undefined;
+        // 快速路径：本机时间戳没变 → 没改过，不必读文件
+        if (mtime !== undefined && recordedMs === mtime) continue;
+        const expected = hashes?.[src] ?? hashes?.[rawSrc];
+        if (expected) {
+          // 时间戳变了（或换了机器、重新 clone），以内容为准：切分支、格式化后内容没变就不算过期
+          const actual = await this.hashOf(abs, mtime);
+          if (actual !== expected) changed.push(src);
           continue;
         }
-        if (st.mtimeMs !== recordedMs) changed.push(src);
+        // 没有指纹的旧页面：退回时间戳比对
+        if (mtime === undefined) continue; // 宿主不提供 → 无法判定，跳过
+        changed.push(src);
       }
 
       out.set(meta.slug, { slug: meta.slug, stale: changed.length > 0, changedSources: changed, unknown: false });
@@ -919,12 +1015,15 @@ export class WikiStore {
    *
    * 排序按标题：列表要便于查找，因此保持稳定顺序；哪些页需要关注由 stale 标记表达。
    */
-  async summary(): Promise<WikiPageSummary[]> {
+  async summary(workspace?: string): Promise<WikiPageSummary[]> {
     const out: WikiPageSummary[] = [];
+    // 指定工作区时只看它：生成目标可能不在本实例的根列表里（扩展侧可选任意已打开的工作区），
+    // 不能因此把那里已有的页面当成不存在、整批重写
+    const roots = workspace ? [workspace] : this.roots;
 
     // 不跨根去重：页面以（工作区, slug）区分。两个项目都有「项目概览」是常态，
     // 按 slug 去重会让后一个项目的页面从列表、注入里消失，生成时还会被当成缺失、每次重写。
-    for (const root of this.roots) {
+    for (const root of roots) {
       if (!root) continue;
       const pages = await this.listInRoot(root);
       if (pages.length === 0) continue;
@@ -959,11 +1058,19 @@ export class WikiStore {
       const page = await this.read(slug, root);
       if (!page) return false;
       const snapshot: Record<string, number> = {};
+      const hashes: Record<string, string> = {};
+      const sources: string[] = [];
       for (const raw of page.sources) {
         const src = normalizeWikiSource(root, raw) ?? raw;
         const st = await this.host.fs.stat(join(root, src));
-        if (st?.isFile && typeof st.mtimeMs === "number") snapshot[src] = st.mtimeMs;
+        if (!st?.isFile) continue; // 已删掉的依据文件一并移出 sources
+        sources.push(src);
+        if (typeof st.mtimeMs === "number") snapshot[src] = st.mtimeMs;
+        const h = await this.hashOf(join(root, src), st.mtimeMs);
+        if (h) hashes[src] = h;
       }
+      // 指纹写回页面：「已复核」是对当前代码的确认，队友拉下来后也应当看到它不再待复核
+      await this.host.fs.write(join(wikiDir(root), `${slug}.md`), serializeWikiPage({ ...page, sources, sourceHashes: hashes }));
       const state = (await this.readState(root)) ?? { version: 1 as const, pages: {} };
       state.pages[slug] = { sources: snapshot, generatedAt: state.pages[slug]?.generatedAt ?? page.generatedAt };
       await this.writeState(root, state);
@@ -1175,7 +1282,8 @@ export class WikiStore {
   async ensureGitignore(root: string = this.writeRoot): Promise<void> {
     if (!root) return;
     const p = wikiGitignorePath(root);
-    if (await this.pathExists(p)) return;
+    const cur = await this.host.fs.read(p);
+    if (cur !== null && cur.replace(/\r\n/g, "\n").trim() !== LEGACY_GITIGNORE_CONTENT.trim()) return;
     await this.host.fs.write(p, WIKI_GITIGNORE_CONTENT);
   }
 }

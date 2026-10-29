@@ -6,6 +6,7 @@ import {
   WikiStore,
   buildWikiIndexPrompt,
   buildWikiRecall,
+  normalizeWikiCategory,
   parseWikiFrontmatter,
   pendingPages,
   serializeWikiPage,
@@ -446,16 +447,24 @@ describe("WikiStore · 陈旧检测", () => {
 // ── gitignore ───────────────────────────────────────────────────────────────
 
 describe("WikiStore · .axon/.gitignore", () => {
-  it("首次 save 时自动创建，并忽略本目录、放行 wiki/", async () => {
+  it("首次 save 时自动创建：只忽略本机产物与可能带密钥的配置，项目配置照常入库", async () => {
     const { host, store } = makeHost();
     const w = new WikiStore(WS, host);
     await w.save({ title: "X", summary: "", sources: [], body: "x" });
 
-    const content = store.get(norm(wikiGitignorePath(WS)));
+    const content = store.get(norm(wikiGitignorePath(WS)))!;
     expect(content).toBe(WIKI_GITIGNORE_CONTENT);
-    // 用 /* 而非 *：放行 wiki/ 后其内部文件自然被包含，无需再写 !wiki/**
-    expect(content).toContain("/*");
-    expect(content).toContain("!wiki/");
+    expect(content).toContain("/relays/");
+    expect(content).toContain("/settings/providers.json");
+    // 不再一刀切忽略整个 .axon：AXON.md、skills/ 等要能提交
+    expect(content).not.toMatch(/^\/\*$/m);
+  });
+
+  it("旧版自动生成的 .gitignore（原样未改）会升级", async () => {
+    const legacy = "# Axon 本地状态：本目录除 wiki/ 外一律不入库\n#   relays/ —— 某次任务的中间产物（run-scoped），任务结束即历史，不必共享\n#   本机机器产物（trace 等）落在 ~/.axon/projects/ 下，不在本目录\n/*\n!.gitignore\n!wiki/\n";
+    const { host, store } = makeHost({ files: { "D:/ws/axon/.axon/.gitignore": legacy } });
+    await new WikiStore(WS, host).save({ title: "X", summary: "", sources: [], body: "x" });
+    expect(store.get(norm(wikiGitignorePath(WS)))).toBe(WIKI_GITIGNORE_CONTENT);
   });
 
   it("已存在时不覆盖（用户可能自己加过规则）", async () => {
@@ -543,7 +552,8 @@ describe("WikiStore · summary 聚合视图", () => {
     const { host } = makeHost({ files: { "D:/ws/axon/src/a.ts": "x" } });
     const w = new WikiStore(WS, host);
     await w.save({ title: "X", summary: "", sources: ["src/a.ts"], body: "" });
-    // 源文件被改过：之后 stat 拿到新的 mtime
+    // 源文件被改过：内容变了，stat 拿到新的 mtime
+    await host.fs.write("D:/ws/axon/src/a.ts", "changed");
     const orig = host.fs.stat;
     host.fs.stat = (async (p: string) => {
       const r = await orig(p);
@@ -775,6 +785,7 @@ describe("wikiRecallSignature · 变化判定", () => {
   const mk = (titles: string[], total = titles.length): WikiRecall => ({
     prompt: "",
     total,
+    staleTotal: 0,
     pages: titles.map((title) => ({ title, stale: false })),
   });
 
@@ -787,14 +798,14 @@ describe("wikiRecallSignature · 变化判定", () => {
   });
 
   it("某页转陈旧 → 签名变化（依据变了，最该被看见）", () => {
-    const before: WikiRecall = { prompt: "", total: 1, pages: [{ title: "A", stale: false }] };
-    const after: WikiRecall = { prompt: "", total: 1, pages: [{ title: "A", stale: true }] };
+    const before: WikiRecall = { prompt: "", total: 1, staleTotal: 0, pages: [{ title: "A", stale: false }] };
+    const after: WikiRecall = { prompt: "", total: 1, staleTotal: 0, pages: [{ title: "A", stale: true }] };
     expect(wikiRecallSignature(before)).not.toBe(wikiRecallSignature(after));
   });
 
   it("页面集合与陈旧状态都没变、只是摘要变了 → 签名不变（边界没变就不打断）", () => {
-    const a: WikiRecall = { prompt: "摘要甲", total: 1, pages: [{ title: "A", stale: false }] };
-    const b: WikiRecall = { prompt: "摘要乙", total: 1, pages: [{ title: "A", stale: false }] };
+    const a: WikiRecall = { prompt: "摘要甲", total: 1, staleTotal: 0, pages: [{ title: "A", stale: false }] };
+    const b: WikiRecall = { prompt: "摘要乙", total: 1, staleTotal: 0, pages: [{ title: "A", stale: false }] };
     expect(wikiRecallSignature(a)).toBe(wikiRecallSignature(b));
   });
 
@@ -968,5 +979,75 @@ describe("WikiStore · 生成作业", () => {
     }
     const raw = await host.fs.read(`${WS}/.axon/wiki/.state.json`);
     expect((JSON.parse(raw ?? "{}").jobs as unknown[]).length).toBe(WIKI_JOB_KEEP);
+  });
+});
+
+
+describe("WikiStore · 内容指纹", () => {
+  it("时间戳变了但内容没变（切分支 / 重新 clone）→ 不算过期", async () => {
+    const { host } = makeHost({ files: { "D:/ws/axon/src/a.ts": "x" } });
+    const w = new WikiStore(WS, host);
+    await w.save({ title: "X", summary: "", sources: ["src/a.ts"], body: "" });
+    const orig = host.fs.stat;
+    host.fs.stat = (async (p: string) => {
+      const r = await orig(p);
+      return r && norm(p).endsWith("src/a.ts") ? { ...r, mtimeMs: 777 } : r;
+    }) as typeof host.fs.stat;
+    expect((await w.summary())[0].stale).toBe(false);
+  });
+
+  it("没有本机状态（队友刚 clone）也能按指纹判断，而不是「未知」", async () => {
+    const { host, store } = makeHost({ files: { "D:/ws/axon/src/a.ts": "x" } });
+    const w = new WikiStore(WS, host);
+    await w.save({ title: "X", summary: "", sources: ["src/a.ts"], body: "" });
+    store.delete("D:/ws/axon/.axon/wiki/.state.json");
+    store.delete("D:/ws/axon/.axon/wiki/.state.json.bak");
+    const [fresh] = await w.summary();
+    expect(fresh.unknown).toBe(false);
+    expect(fresh.stale).toBe(false);
+    store.set("D:/ws/axon/src/a.ts", "y");
+    const orig = host.fs.stat;
+    host.fs.stat = (async (p: string) => {
+      const r = await orig(p);
+      return r && norm(p).endsWith("src/a.ts") ? { ...r, mtimeMs: 2222 } : r;
+    }) as typeof host.fs.stat;
+    const [stale] = await new WikiStore(WS, host).summary();
+    expect(stale.stale).toBe(true);
+  });
+
+  it("CRLF 与 LF 视为同一内容", async () => {
+    const { host, store } = makeHost({ files: { "D:/ws/axon/src/a.ts": "a\nb\n" } });
+    const w = new WikiStore(WS, host);
+    await w.save({ title: "X", summary: "", sources: ["src/a.ts"], body: "" });
+    store.delete("D:/ws/axon/.axon/wiki/.state.json");
+    store.delete("D:/ws/axon/.axon/wiki/.state.json.bak");
+    store.set("D:/ws/axon/src/a.ts", "a\r\nb\r\n");
+    const orig = host.fs.stat;
+    host.fs.stat = (async (p: string) => {
+      const r = await orig(p);
+      return r && norm(p).endsWith("src/a.ts") ? { ...r, mtimeMs: 3333 } : r;
+    }) as typeof host.fs.stat;
+    expect((await new WikiStore(WS, host).summary())[0].stale).toBe(false);
+  });
+
+  it("指纹写进 frontmatter，可往返解析", () => {
+    const text = serializeWikiPage({ title: "T", summary: "s", sources: ["src/a.ts"], sourceHashes: { "src/a.ts": "abc123def456" }, body: "x" });
+    expect(parseWikiFrontmatter(text).meta.sourceHashes).toEqual({ "src/a.ts": "abc123def456" });
+  });
+
+  it("分类变体收敛到固定五类", () => {
+    expect(normalizeWikiCategory("架构设计")).toBe("架构");
+    expect(normalizeWikiCategory("Overview")).toBe("概览");
+    expect(normalizeWikiCategory("业务模型")).toBe("领域");
+    expect(normalizeWikiCategory("奇怪的分类")).toBe("奇怪的分类");
+  });
+
+  it("文件名只差大小写时沿用已有文件，截断不切坏 emoji", async () => {
+    const { host } = makeHost();
+    const w = new WikiStore(WS, host);
+    await w.save({ title: "API", summary: "", sources: [], body: "1" });
+    const second = await w.save({ title: "api", summary: "", sources: [], body: "2" });
+    expect(second?.slug).toBe("API");
+    expect(Array.from(wikiSlug("😀".repeat(70))).length).toBe(60);
   });
 });

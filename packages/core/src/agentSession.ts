@@ -95,6 +95,7 @@ import { initializeWorkspaceAxon, inspectWorkspacesAxon, loadWorkspaceAxonConfig
 import { CreditBudgetGate } from "./session/creditBudgetGate.js";
 import { RelayStore } from "./relay/relayStore.js";
 import { WikiStore, wikiRecallSignature, type WikiRecall } from "./wiki/wikiStore.js";
+import { isSensitivePath } from "./wiki/wikiSecrets.js";
 import { WikiController, resolveWikiModel, type WikiGenerationResult, type WikiGenerationOptions } from "./wiki/wikiController.js";
 import { SubAgentRunner } from "./skills/subAgentRunner.js";
 import { deriveSubAgentHost } from "./host/derive.js";
@@ -1858,7 +1859,7 @@ export class AgentSession {
     const sig = wikiRecallSignature(recall);
     if (sig === this.lastWikiRecallSignature) return;
     this.lastWikiRecallSignature = sig;
-    this.send("wiki_recall", { total: recall.total, pages: recall.pages });
+    this.send("wiki_recall", { total: recall.total, staleTotal: recall.staleTotal, pages: recall.pages });
   }
 
   /** 工具定义装配（委托 ToolDefBuilder） */
@@ -2328,6 +2329,8 @@ export class AgentSession {
           wiki: req.wiki,
           maxRounds: req.maxRounds,
           tokenBudget: req.tokenBudget,
+          // 页面要进 git：撰写者 / 规划者都读不到 .env、密钥这类文件
+          blockPath: isSensitivePath,
         });
         const res = await runner.run(req.prompt, req.skill);
         // 用量带回去累计：这是本项目最贵的操作，花了多少必须算得清

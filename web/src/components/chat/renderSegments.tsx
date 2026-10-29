@@ -74,7 +74,8 @@ export function SkillBadgeCard({ skills, pending, queuedOnly }: { skills: string
  */
 export function WikiRecallCard({ seg }: { seg: WikiRecallSegment }) {
   const [expanded, setExpanded] = useState(false);
-  const staleCount = seg.pages.filter((p) => p.stale).length;
+  // 待复核按全部页面计（含没列进索引的），与侧边栏的数字一致
+  const staleCount = seg.staleTotal ?? seg.pages.filter((p) => p.stale).length;
   const omitted = seg.total - seg.pages.length;
   return (
     <div className="my-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 overflow-hidden">
@@ -91,14 +92,14 @@ export function WikiRecallCard({ seg }: { seg: WikiRecallSegment }) {
           </span>
         )}
         {omitted > 0 && (
-          <span className="shrink-0 text-[10px] text-muted-foreground/70">另有 {omitted} 页未注入</span>
+          <span className="shrink-0 text-[10px] text-muted-foreground/70" title="目录长度有上限，没列出的页面 AI 需要时会自己去 .axon/wiki/ 查">另有 {omitted} 页未列入目录</span>
         )}
         <ChevronRight className={`w-3.5 h-3.5 shrink-0 ml-auto text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`} />
       </button>
       {expanded && (
         <div className="border-t border-emerald-500/20 px-2.5 py-1.5 space-y-0.5">
-          {seg.pages.map((p) => (
-            <div key={p.title} className="flex items-center gap-1.5 text-xs">
+          {seg.pages.map((p, i) => (
+            <div key={`${i}-${p.title}`} className="flex items-center gap-1.5 text-xs">
               <span className={p.stale ? "shrink-0 text-amber-500" : "shrink-0 text-emerald-600/60"}>{p.stale ? "⚠️" : "•"}</span>
               <span className={p.stale ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"}>{p.title}</span>
             </div>

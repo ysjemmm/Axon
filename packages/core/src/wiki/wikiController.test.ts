@@ -446,7 +446,8 @@ describe("WikiController · 刷新、预算与用量", () => {
     });
     await controller.generate(WS);
     expect(written).toEqual(["A", "B"]);
-    // A 的依据文件变了
+    // A 的依据文件变了（内容 + 时间戳）
+    await host.fs.write(`${WS}/src/a.ts`, "a2");
     const orig = host.fs.stat;
     host.fs.stat = (async (p: string) => {
       const r = await orig(p);
@@ -471,6 +472,7 @@ describe("WikiController · 刷新、预算与用量", () => {
     });
     await wikiStore.save({ title: "A", summary: "s", sources: ["src/a.ts"], body: "x", workspace: WS });
     await wikiStore.save({ title: "B", summary: "s", sources: ["src/b.ts"], body: "x", workspace: WS });
+    await host.fs.write(`${WS}/src/b.ts`, "b2");
     const orig = host.fs.stat;
     host.fs.stat = (async (p: string) => {
       const r = await orig(p);

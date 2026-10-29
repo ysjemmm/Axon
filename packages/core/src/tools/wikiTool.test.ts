@@ -182,3 +182,22 @@ describe("wiki_plan_pages · 执行", () => {
     expect(seen[0][0].category).toBeUndefined();
   });
 });
+
+describe("wiki_save_page · 敏感信息", () => {
+  it("正文里有疑似密钥 → 拒绝保存，报错里给出行号但不回显密钥", async () => {
+    let saved = false;
+    const wiki = { save: async () => { saved = true; return { slug: "x" }; } };
+    const key = "sk-" + "a".repeat(30);
+    const out = await callWiki({ title: "X", summary: "s", sources: [], content: `第一行\nOPENAI_KEY=${key}` }, wiki).catch((e: Error) => e.message);
+    expect(saved).toBe(false);
+    expect(String(out)).toContain("第 2 行");
+    expect(String(out)).not.toContain(key);
+  });
+
+  it("占位写法不误报", async () => {
+    let saved = false;
+    const wiki = { save: async () => { saved = true; return { slug: "x" }; } };
+    await callWiki({ title: "X", summary: "s", sources: [], content: "api_key: <API_KEY>\npassword = process.env.DB_PASSWORD\ntoken: string" }, wiki);
+    expect(saved).toBe(true);
+  });
+});

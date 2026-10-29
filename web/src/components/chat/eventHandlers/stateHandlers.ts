@@ -185,7 +185,8 @@ export function handleWikiRecall(msg: WsMessage, ctx: EventHandlerCtx): void {
   const pages = ((msg as any).pages as { title: string; stale: boolean }[]) || [];
   if (pages.length === 0) return;
   const total = ((msg as any).total as number) || pages.length;
-  const seg: WikiRecallSegment = { type: "wikirecall", total, pages };
+  const staleTotal = typeof (msg as any).staleTotal === "number" ? ((msg as any).staleTotal as number) : undefined;
+  const seg: WikiRecallSegment = { type: "wikirecall", total, pages, ...(staleTotal !== undefined ? { staleTotal } : {}) };
 
   ctx.setChatHistory((prev) => {
     const updated = [...prev];

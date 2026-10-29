@@ -46,6 +46,7 @@ export * from "./relay/reviewAgent.js";
 // Wiki（项目级知识文档：落盘 / 读取 / 陈旧检测）
 export * from "./wiki/wikiStore.js";
 export * from "./wiki/wikiController.js";
+export * from "./wiki/wikiSecrets.js";
 
 // 系统提示、provider、Agent 会话、会话编排
 export * from "./systemPrompt.js";

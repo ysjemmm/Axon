@@ -800,7 +800,11 @@ export function activate(context: vscode.ExtensionContext): void {
 
     // 带上「已有多少页 / 是否有未完成作业」：选工作区时这正是判断依据，用户不必先去列表里翻。
     // 探测失败不阻塞选择本身 —— 选择框的价值在于让用户拍板，不在于这些附加信息。
-    const pages = await store.summary().catch(() => []);
+    const pages = await store.summary().catch((err: unknown) => {
+      // 不阻塞选择，但要留下线索：页数显示成「尚未生成」可能只是读取失败
+      console.warn("[wiki] 读取已有页面失败：", (err as Error)?.message);
+      return [];
+    });
     const countByWs = new Map<string, number>();
     for (const p of pages) countByWs.set(p.workspace, (countByWs.get(p.workspace) ?? 0) + 1);
 
@@ -874,11 +878,17 @@ export function activate(context: vscode.ExtensionContext): void {
    */
   let wikiGenerating = false;
 
+  /** 各页面依据文件的绝对路径（规整后的键），由 refreshWikiTree 维护 */
+  let wikiSourcePaths = new Set<string>();
+  const normPathKey = (p: string): string => p.replace(/\\/g, "/").toLowerCase();
+
   async function refreshWikiTree(): Promise<number> {
     const { WikiStore } = await import("@axon/core");
     const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
     const store = new WikiStore(allWorkspaces, createHost());
     const pages = await store.summary();
+    // 记下所有页面的依据文件：它们一改，侧边栏的「待复核」就要跟着变（见下方 wikiSourceWatcher）
+    wikiSourcePaths = new Set(pages.flatMap((p: { workspace: string; sources: string[] }) => p.sources.map((src: string) => normPathKey(join(p.workspace, src)))));
     const staleCount = wikiTree.refresh(pages);
     wikiView.badge = staleCount > 0
       ? { value: staleCount, tooltip: `${staleCount} 个 Wiki 页面可能已过时` }
@@ -2211,6 +2221,23 @@ export function activate(context: vscode.ExtensionContext): void {
   wikiWatcher.onDidCreate(scheduleWikiRefresh);
   wikiWatcher.onDidDelete(scheduleWikiRefresh);
   context.subscriptions.push(wikiWatcher, { dispose: () => { if (wikiRefreshTimer) clearTimeout(wikiRefreshTimer); } });
+
+  // 依据文件变了也要刷新：否则侧边栏的「待复核」要等重启或手动刷新才更新，
+  // 而聊天里的记忆召回卡片每轮都是新算的 —— 两边数字对不上。
+  // 只关心页面引用过的那些文件；稍等一会儿再刷，批量改动（格式化、切分支）只刷一次。
+  let wikiSourceTimer: ReturnType<typeof setTimeout> | undefined;
+  const onMaybeSourceChange = (uri: vscode.Uri) => {
+    if (!wikiSourcePaths.has(normPathKey(uri.fsPath))) return;
+    if (wikiSourceTimer) clearTimeout(wikiSourceTimer);
+    wikiSourceTimer = setTimeout(() => {
+      wikiSourceTimer = undefined;
+      void refreshWikiTree().catch(() => { /* 列表刷新失败不该影响主流程 */ });
+    }, 1500);
+  };
+  const wikiSourceWatcher = vscode.workspace.createFileSystemWatcher("**/*", true, false, false);
+  wikiSourceWatcher.onDidChange(onMaybeSourceChange);
+  wikiSourceWatcher.onDidDelete(onMaybeSourceChange);
+  context.subscriptions.push(wikiSourceWatcher, { dispose: () => { if (wikiSourceTimer) clearTimeout(wikiSourceTimer); } });
 
 
   // 手动刷新命令（树标题栏刷新按钮用）

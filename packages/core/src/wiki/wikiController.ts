@@ -37,7 +37,7 @@ export type WikiGenerationEvent =
    * cancelled 单独标出：用户主动取消既不是成功也不是失败，呈现端据此决定用信息提示而非警告。
    * 否则只能靠 message 里有没有「取消」二字来猜 —— 那是靠文案做逻辑，改一个字就失效。
    */
-  | { type: "finished"; workspace: string; ok: boolean; done: number; total: number; failed: string[]; message: string; cancelled?: boolean; usage?: WikiUsage; budgetExceeded?: boolean };
+  | { type: "finished"; workspace: string; ok: boolean; done: number; total: number; failed: string[]; message: string; cancelled?: boolean; usage?: WikiUsage; budgetExceeded?: boolean; orphans?: string[] };
 
 /** 一次生成累计消耗的 token */
 export interface WikiUsage {
@@ -213,7 +213,7 @@ export class WikiController {
 
     // 磁盘现状：既是「续跑时要跳过的页」，也是进度的真实基数。
     // 「待复核」的页面不算已完成 —— 刷新的意义正是重写它们。
-    const existing = (await store.summary()).filter((p) => p.workspace === workspace);
+    const existing = await store.summary(workspace);
     const freshSlugs = new Set(existing.filter((p) => !p.stale).map((p) => p.slug));
     const resumable: WikiJob | null = mode === "full" ? await store.getResumableJob(workspace) : null;
 
@@ -352,7 +352,13 @@ export class WikiController {
       );
     }
 
-    const cost = `（用量 ${formatTokens(used())} tokens）`;
+    // 重新规划后不在计划里的旧页面：代码结构变了、主题被合并或改名。不自动删（可能有人手改过），
+    // 但要告诉用户 —— 否则它们会一直留在列表和注入里，内容越来越旧。
+    const orphans = mode === "full" ? existing.filter((p) => !slugs.includes(p.slug)).map((p) => p.title) : [];
+    const orphanNote = orphans.length > 0
+      ? ` 另有 ${orphans.length} 页不在本次规划里（${orphans.slice(0, 5).join("、")}${orphans.length > 5 ? " 等" : ""}），可能已过时，可以在列表里删除。`
+      : "";
+    const cost = `（用量 ${formatTokens(used())} tokens）${orphanNote}`;
     const message = cancelled
       ? `已取消，已完成 ${saved.size}/${slugs.length} 页。下次点击会接着写剩下的。${cost}`
       : budgetExceeded
@@ -361,7 +367,7 @@ export class WikiController {
           ? `生成完成，共 ${slugs.length} 页。${cost}`
           : `完成 ${saved.size}/${slugs.length} 页，${failed.length} 页未成功：${failed.join("、")}。${cost}`;
 
-    emit({ type: "finished", workspace, ok, done: saved.size, total: slugs.length, failed, message, cancelled: cancelled || undefined, usage: { ...usage }, budgetExceeded: budgetExceeded || undefined });
+    emit({ type: "finished", workspace, ok, done: saved.size, total: slugs.length, failed, message, cancelled: cancelled || undefined, usage: { ...usage }, budgetExceeded: budgetExceeded || undefined, orphans: orphans.length ? orphans : undefined });
     return { ok, done: saved.size, total: slugs.length, failed, message, resumed: resumable !== null, usage: { ...usage }, budgetExceeded: budgetExceeded || undefined };
   }
 }

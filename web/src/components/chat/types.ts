@@ -94,6 +94,8 @@ export interface WikiRecallSegment {
   total: number;
   /** 实际注入的页面（顺序与提示词里的清单一致） */
   pages: { title: string; stale: boolean }[];
+  /** 全部页面里待复核的页数（含没列进索引的），与侧边栏一致；旧事件没有这个字段 */
+  staleTotal?: number;
 }
 
 /** 思考过程段：每个思考块（轮次 + 协议块号）独立为一个 segment，时序上紧跟在对应工具调用前 */

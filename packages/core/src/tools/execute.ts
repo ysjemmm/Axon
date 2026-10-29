@@ -17,6 +17,7 @@
  */
 
 import { describeShellEnvironment } from "../environment.js";
+import { findSecrets } from "../wiki/wikiSecrets.js";
 import { resolve, relative, sep } from "node:path";
 import { isWithinWorkspaces } from "./safety.js";
 import { formatWaitResult, waitForProcesses, waitTimeoutMs } from "./processWait.js";
@@ -963,6 +964,12 @@ export async function executeToolCall(
         : [];
       if (!title) throw new Error("wiki_save_page 失败：title 不能为空。");
       if (!body) throw new Error("wiki_save_page 失败：content 不能为空。");
+      // 页面要提交进 git、随仓库共享：疑似密钥一律不让落盘，让撰写者改成占位写法再交
+      const leaks = [...findSecrets(summary).map((f) => ({ ...f, where: "summary" })), ...findSecrets(body).map((f) => ({ ...f, where: "正文" }))];
+      if (leaks.length > 0) {
+        const list = leaks.slice(0, 8).map((f) => `${f.where}第 ${f.line} 行：疑似${f.label}`).join("；");
+        throw new Error(`wiki_save_page 失败：页面里有疑似密钥或凭据（${list}）。Wiki 会提交进 git，不能包含真实的密钥值。请改成占位写法（如 <API_KEY>、读取哪个环境变量），然后重新提交。`);
+      }
 
       const saved = await saver({ title, summary, sources, body, category: category || undefined });
       // sources 为空不阻断（某些总览页确实跨多个文件、难以逐一列举），但必须把后果说清楚：
