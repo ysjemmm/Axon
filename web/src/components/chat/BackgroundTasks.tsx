@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Bell, ChevronRight, Loader2, RefreshCw, Server, Square } from "lucide-react";
 import { useSessionEvents } from "@/hooks/useSessionEvents";
 import type { WsMessage } from "@/hooks/useWebSocket";
@@ -134,16 +135,32 @@ export function BackgroundTasksButton({ clientId, connected, send }: { clientId:
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const rootRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  /** 面板位置（fixed 坐标）：贴着按钮上沿，左右夹在视口内 */
+  const [pos, setPos] = useState<{ left: number; bottom: number; width: number } | null>(null);
   const running = tasks.filter((t) => t.status === "running").length;
 
-  // 打开时每秒刷新用时；点外面关闭
+  const place = useCallback(() => {
+    const rect = rootRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const width = Math.min(420, window.innerWidth - 16);
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+    setPos({ left, bottom: window.innerHeight - rect.top + 8, width });
+  }, []);
+
+  // 打开时每秒刷新用时；点外面关闭；窗口尺寸变化时跟着按钮重新定位
   useEffect(() => {
     if (!open) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
-    const onDown = (e: MouseEvent) => { if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false); };
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (rootRef.current?.contains(target) || panelRef.current?.contains(target)) return;
+      setOpen(false);
+    };
     document.addEventListener("mousedown", onDown);
-    return () => { clearInterval(timer); document.removeEventListener("mousedown", onDown); };
-  }, [open]);
+    window.addEventListener("resize", place);
+    return () => { clearInterval(timer); document.removeEventListener("mousedown", onDown); window.removeEventListener("resize", place); };
+  }, [open, place]);
 
   if (tasks.length === 0) return null;
 
@@ -151,7 +168,7 @@ export function BackgroundTasksButton({ clientId, connected, send }: { clientId:
     <div ref={rootRef} className="relative">
       <button
         type="button"
-        onClick={() => { setNow(Date.now()); setOpen((v) => !v); }}
+        onClick={() => { setNow(Date.now()); place(); setOpen((v) => !v); }}
         className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-[12px] transition-colors hover:bg-muted/60 ${running > 0 ? "text-foreground" : "text-muted-foreground"}`}
         title={running > 0 ? `${running} 个后台任务运行中` : "后台任务"}
         aria-label="后台任务"
@@ -159,8 +176,9 @@ export function BackgroundTasksButton({ clientId, connected, send }: { clientId:
         <Server className="h-3.5 w-3.5" />
         {running > 0 && <span className="tabular-nums">{running}</span>}
       </button>
-      {open && (
-        <div className="absolute bottom-full left-0 z-50 mb-2 w-[min(420px,calc(100vw-32px))] overflow-hidden rounded-xl border border-border bg-background shadow-xl">
+      {/* 挂到 body 上：输入框容器是 overflow-hidden（圆角裁切），面板放在里面会被整个裁掉，只剩一点阴影 */}
+      {open && pos && createPortal(
+        <div ref={panelRef} style={{ left: pos.left, bottom: pos.bottom, width: pos.width }} className="fixed z-[70] overflow-hidden rounded-xl border border-border bg-background shadow-xl">
           <div className="flex items-center justify-between border-b border-border px-3 py-2">
             <span className="text-[12px] font-medium text-foreground">后台任务</span>
             <span className="text-[11px] text-muted-foreground">{running > 0 ? `${running} 个运行中` : "都已结束"}</span>
@@ -170,7 +188,8 @@ export function BackgroundTasksButton({ clientId, connected, send }: { clientId:
               <TaskRow key={taskKey(task)} task={task} now={now} output={outputs[taskKey(task)]} onLoad={() => loadOutput(task)} onStop={() => stop(task)} />
             ))}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
