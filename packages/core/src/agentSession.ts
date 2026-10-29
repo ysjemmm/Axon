@@ -4,6 +4,8 @@
  * 复用 cli 的核心逻辑，但通过 WS 推送中间状态给前端。
  */
 
+import { coerceToolArgs, schemaForTool } from "./tools/argCoercion.js";
+import { preNormalizeArgs } from "./tools/argPreNormalize.js";
 import { formatWaitResult, waitForProcesses, waitTimeoutMs } from "./tools/processWait.js";
 import { ANY_PATH, normalizePermissionMode, skipsApproval, writesAnywhere, type PermissionMode } from "./session/permissionMode.js";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
@@ -1918,6 +1920,18 @@ export class AgentSession {
       tracker.endWait(wanted);
     }
     return { result: formatWaitResult(out, labels), status: "success" };
+  }
+
+  /**
+   * 执行前把模型给的参数摆正：先纠正个别工具的整体结构（ask_user / ask_form…），再按工具定义纠正类型和参数名、检查必填。
+   * 返回 error 时不执行，把原因交还给模型。
+   */
+  /** @internal */ prepareToolArgs(toolName: string, args: Record<string, unknown>): { args: Record<string, unknown>; error?: string } {
+    const pre = preNormalizeArgs(toolName, args);
+    const schema = schemaForTool(this.toolDefBuilder.getAllToolDefs() as never, toolName);
+    const out = coerceToolArgs(toolName, pre, schema);
+    if (out.fixes.length) console.debug(`[tool-args] ${toolName} 参数已纠正：${out.fixes.join("；")}`);
+    return { args: out.args, error: out.error };
   }
 
   /** load_tools 工具实现：按组名加载不常用的工具组，下一次请求起生效 */

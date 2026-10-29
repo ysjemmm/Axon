@@ -88,6 +88,17 @@ export class ToolCallExecutor {
       return;
     }
 
+    // 参数摆正：结构 / 类型 / 参数名的小偏差直接纠正；缺必填参数则不执行，告诉模型缺什么、该怎么传
+    const prepared = this.s.prepareToolArgs(toolName, toolArgs);
+    toolArgs = prepared.args;
+    if (prepared.error && Object.keys(toolArgs).length > 0) {
+      this.s.send("tool_call", { id: toolCall.id, name: toolName, args: toolArgs, cwd: this.s.cwd, status: ToolCallStatus.Executing });
+      this.s.send("tool_result", { id: toolCall.id, name: toolName, args: toolArgs, result: prepared.error, status: ToolCallStatus.Error, userMessage: "参数不对，AI 会重试" });
+      this.s.messages.push({ role: "tool", tool_call_id: toolCall.id, _toolName: toolName, content: prepared.error, status: "error" } as any);
+      guard.recordToolResult(false, true);
+      return;
+    }
+
     // 防御：模型有时生成空参数对象（流式截断/幻觉），直接执行会因缺参数而失败。
     if (this.requiresArguments(toolName) && Object.keys(toolArgs).length === 0) {
       const hint = typeof toolCall.arguments === "string" && toolCall.arguments.trim()

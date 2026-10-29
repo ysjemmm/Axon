@@ -147,16 +147,35 @@ function normalizeOptions(raw: unknown): FormOption[] {
     if (out.length >= MAX_OPTIONS) break;
     if (item && typeof item === "object") {
       const o = item as Record<string, unknown>;
-      const label = asString(o.label) ?? asString(o.value);
+      const label = asString(o.label) ?? asString(o.text) ?? asString(o.title) ?? asString(o.name) ?? asString(o.value);
       if (!label) continue;
       const value = asString(o.value) ?? label;
       out.push({ value, label, description: asString(o.description) });
-    } else if (typeof item === "string" && item.trim()) {
+    } else if ((typeof item === "string" && item.trim()) || typeof item === "number") {
       // 允许模型图省事直接给字符串数组
-      out.push({ value: item.trim(), label: item.trim() });
+      const text = String(item).trim();
+      out.push({ value: text, label: text });
     }
   }
   return out;
+}
+
+/** 模型常用的控件类型叫法 → 本表单的类型 */
+const TYPE_ALIASES: Record<string, FormFieldType> = {
+  input: "text", string: "text", email: "text", url: "text", password: "text", path: "text", file: "text",
+  multiline: "textarea", longtext: "textarea", paragraph: "textarea",
+  integer: "number", int: "number", float: "number", range: "slider",
+  dropdown: "select", enum: "select", choice: "radio", single: "radio",
+  multiselect: "checkbox", checkboxes: "checkbox", multi: "checkbox", multiple: "checkbox",
+  boolean: "switch", bool: "switch", toggle: "switch",
+  datetime: "date", list: "tags", array: "tags", grid: "table",
+  header: "section", heading: "section", title: "section", text_block: "note", info: "note", markdown: "note",
+};
+
+/** 从标签里造一个回传键：模型漏了 name 时用（英文数字保留，其余按序号） */
+function nameFromLabel(label: string | undefined, index: number): string {
+  const slug = (label ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return slug || `field_${index + 1}`;
 }
 
 function normalizeColumns(raw: unknown): FormColumnSpec[] {
@@ -216,23 +235,28 @@ function normalizeRowActions(raw: unknown): FormRowAction[] {
   return out;
 }
 
-/** 规整单个字段；返回 null 表示这个字段无法渲染、直接丢弃。 */
-function normalizeField(raw: unknown): FormFieldSpec | null {
-  if (!raw || typeof raw !== "object") return null;
+/** 规整单个字段；返回 null 表示这个字段无法渲染（原因记进 why）。 */
+function normalizeField(raw: unknown, index = 0, why: string[] = []): FormFieldSpec | null {
+  const at = `第 ${index + 1} 个字段`;
+  if (!raw || typeof raw !== "object") { why.push(`${at}不是对象`); return null; }
   const f = raw as Record<string, unknown>;
-  const type = f.type as FormFieldType;
+  const rawType = typeof f.type === "string" ? f.type.trim().toLowerCase() : "";
+  const type = (TYPE_ALIASES[rawType] ?? rawType) as FormFieldType;
 
   // 布局类字段：只要有一段文字就保留
   if (type === "section" || type === "note") {
-    const title = asString(f.title);
-    const text = asString(f.text);
-    if (!title && !text) return null;
+    const title = asString(f.title) ?? asString(f.label);
+    const text = asString(f.text) ?? asString(f.content) ?? asString(f.description);
+    if (!title && !text) { why.push(`${at}（${type}）没有 title / text`); return null; }
     return { type, title, text };
   }
-  if (!VALUE_FIELD_TYPES.has(type)) return null;
+  if (!VALUE_FIELD_TYPES.has(type)) {
+    why.push(`${at}的 type「${rawType || "（缺）"}」不支持，可用：${[...VALUE_FIELD_TYPES].join(" / ")} / section / note`);
+    return null;
+  }
 
-  const name = asString(f.name);
-  if (!name) return null; // 没有 name 就没法回传值
+  // 没有 name 就没法回传值：依次用 key / id，再不行从 label 造一个
+  const name = asString(f.name) ?? asString(f.key) ?? asString(f.id) ?? nameFromLabel(asString(f.label), index);
 
   const field: FormFieldSpec = {
     type,
@@ -245,8 +269,8 @@ function normalizeField(raw: unknown): FormFieldSpec | null {
   };
 
   if (type === "select" || type === "radio" || type === "checkbox") {
-    const options = normalizeOptions(f.options);
-    if (options.length === 0) return null; // 没有选项的选择控件毫无意义
+    const options = normalizeOptions(f.options ?? f.choices ?? f.enum);
+    if (options.length === 0) { why.push(`${at}「${field.label}」是 ${type}，但没有 options`); return null; } // 没有选项的选择控件毫无意义
     field.options = options;
   } else if (type === "number" || type === "slider") {
     field.min = asNumber(f.min);
@@ -262,7 +286,7 @@ function normalizeField(raw: unknown): FormFieldSpec | null {
     field.rows = asNumber(f.rows);
   } else if (type === "table") {
     const columns = normalizeColumns(f.columns);
-    if (columns.length === 0) return null;
+    if (columns.length === 0) { why.push(`${at}「${field.label}」是 table，但没有 columns`); return null; }
     field.columns = columns;
     // 表格初始行用 data：rows 已被 textarea 的「行数」占用，同名会让模型和前端都犯迷糊
     field.data = normalizeRows(f.data ?? (Array.isArray(f.rows) ? f.rows : undefined), columns);
@@ -286,18 +310,30 @@ export function normalizeFormSpec(raw: unknown): { spec: FormSpec | null; error?
   const src = raw as Record<string, unknown>;
   const rawFields = Array.isArray(src.fields) ? src.fields : [];
   const fields: FormFieldSpec[] = [];
-  for (const rf of rawFields) {
-    if (fields.length >= MAX_FIELDS) break;
-    const field = normalizeField(rf);
+  const why: string[] = [];
+  rawFields.forEach((rf, i) => {
+    if (fields.length >= MAX_FIELDS) return;
+    const field = normalizeField(rf, i, why);
     if (field) fields.push(field);
-  }
-  if (fields.length === 0) {
+  });
+  // 有字段渲染不了就整张打回：只弹一半，模型会以为该问的都问到了
+  if (fields.length === 0 || why.length > 0) {
     return {
       spec: null,
       error:
-        "form.fields 里没有可渲染的字段。每个取值字段都要有 type 和 name；" +
-        "select / radio / checkbox 还要有 options；table 还要有 columns。",
+        `${why.length ? why.join("；") : "form.fields 是空的"}。` +
+        "每个取值字段都要有 type 和 name；select / radio / checkbox 还要有 options；table 还要有 columns。" +
+        '示例：{"form": {"title": "部署参数", "fields": [{"type": "text", "name": "host", "label": "主机"}, {"type": "select", "name": "env", "label": "环境", "options": ["dev", "prod"]}]}}',
     };
+  }
+  // 回传键重复会互相覆盖：重复的加序号
+  const used = new Set<string>();
+  for (const field of fields) {
+    if (!field.name) continue;
+    let name = field.name;
+    for (let n = 2; used.has(name); n++) name = `${field.name}_${n}`;
+    field.name = name;
+    used.add(name);
   }
   const buttons: { id: string; label: string }[] = [];
   if (Array.isArray(src.buttons)) {

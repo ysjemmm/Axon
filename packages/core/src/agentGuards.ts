@@ -62,55 +62,69 @@ export function looksLikeIncompleteReply(content: string): boolean {
  * @throws 修复后仍无法解析时抛错（错误信息含原始字符串片段，便于模型纠正）
  */
 export function parseToolArguments(raw: string): Record<string, unknown> {
-  const text = (raw ?? "").trim();
+  let text = (raw ?? "").trim();
   if (!text) return {};
+  // 0) 模型把参数包进了 ```json 代码块
+  const fenced = text.match(/^```(?:json|JSON)?\s*\n?([\s\S]*?)\n?```$/);
+  if (fenced) text = fenced[1].trim();
 
-  // 1) 正常解析
-  try {
-    return JSON.parse(text);
-  } catch {
-    // 进入修复
+  const attempts: Array<(t: string) => string> = [
+    // 1) 正常解析
+    (t) => t,
+    // 2) 把不是合法 JSON 转义序列的孤立反斜杠转义掉
+    //    合法转义：\" \\ \/ \b \f \n \r \t \uXXXX —— 其余的 \（含 \x \v \0 \a 等 C 风格转义、
+    //    Windows 路径反斜杠、正则里的 \d \s \w \. 等）都补成 \\，使其成为合法 JSON。
+    (t) => t.replace(/\\(?!["\\/bfnrtu])/g, "\\\\"),
+    // 3) 再处理 \uXXXX 不完整（少于 4 位十六进制）
+    (t) => t.replace(/\\u(?![0-9a-fA-F]{4})/g, "\\\\u").replace(/\\(?!["\\/bfnrtu])/g, "\\\\"),
+    // 4) 尾随逗号：{"a": 1,} / [1, 2,]
+    (t) => t.replace(/,\s*([}\]])/g, "$1"),
+    // 5) 裸对象字面量：模型有时吐 {key: value} 而非 {"key": "value"}。
+    //    给无引号的 key 加双引号、给简单的无引号 value（如路径名）加引号。
+    //    这对含大段 HTML/代码的 content 字段不一定有效，但能救简单参数。
+    (t) => t
+      .replace(/([{,]\s*)(\w+)\s*:/g, '$1"$2":')
+      .replace(/:\s*([^"{\[\d\s][^,}]*)/g, (_, v: string) => (/^(true|false|null)$/.test(v.trim()) ? `: ${v.trim()}` : ': "' + v.trim().replace(/"/g, '\\"') + '"')),
+  ];
+  for (const fix of attempts) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(fix(text)); } catch { continue; }
+    // 参数被二次编码成字符串："{\"path\": \"a.ts\"}"
+    if (typeof parsed === "string") {
+      try { parsed = JSON.parse(parsed); } catch { /* 不是 JSON 字符串 */ }
+    }
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    throw new Error(`工具参数必须是一个 JSON 对象（形如 {"参数名": 值}），收到的是 ${Array.isArray(parsed) ? "数组" : typeof parsed}。请按工具定义重新生成这次调用。`);
   }
 
-  // 2) 修复：把不是合法 JSON 转义序列的孤立反斜杠转义掉
-  //    合法转义：\" \\ \/ \b \f \n \r \t \uXXXX —— 其余的 \（含 \x \v \0 \a 等 C 风格转义、
-  //    Windows 路径反斜杠、正则里的 \d \s \w \. 等）都补成 \\，使其成为合法 JSON。
-  try {
-    const repaired = text.replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
-    return JSON.parse(repaired);
-  } catch {
-    // 仍失败
-  }
-
-  // 3) 二次修复：处理 \uXXXX 不完整（少于 4 位十六进制）等情况——把不合法的 \u 也转义掉
-  try {
-    const repaired = text
-      .replace(/\\u(?![0-9a-fA-F]{4})/g, "\\\\u")
-      .replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
-    return JSON.parse(repaired);
-  } catch {
-    // 仍失败
-  }
-
-  // 4) 修复裸对象字面量：模型有时吐 {key: value} 而非 {"key": "value"}。
-  //    尝试给无引号的 key 加双引号、给简单的无引号 value（如路径名）加引号。
-  //    这对含大段 HTML/代码的 content 字段不一定有效，但能救简单参数。
-  try {
-    // 给无引号的 key 加引号：匹配 { 或 , 后面紧跟的 word 字符到冒号
-    let attempt = text.replace(/([{,]\s*)(\w+)\s*:/g, '$1"$2":');
-    // 给冒号后面不以 " { [ 或数字开头的简单值加引号（贪心到下一个逗号或 }）
-    attempt = attempt.replace(/:\s*([^"{\[\d\s][^,}]*)/g, (_, v) => ': "' + v.trim().replace(/"/g, '\\"') + '"');
-    return JSON.parse(attempt);
-  } catch {
-    // 仍失败
-  }
-
-  // 6) 彻底失败：抛出可读错误（截断原始内容，避免过长）
+  // 彻底失败：抛出可读错误（截断原始内容，避免过长）
   const preview = text.length > 200 ? text.slice(0, 200) + "..." : text;
+  if (looksTruncated(text)) {
+    throw new Error(
+      `工具参数不完整（JSON 没有闭合，多半是一次输出的内容太长被截断了）。` +
+      `请把内容拆小分几次调用（如先建文件骨架再分段 str_replace / apply_patch 补全），不要原样重试。原始参数开头：${preview}`,
+    );
+  }
   throw new Error(
     `工具参数不是合法 JSON，无法解析。请重新生成这次工具调用，确保参数是严格合法的 JSON` +
     `（注意：Windows 路径里的反斜杠必须写成 \\\\，或直接用正斜杠 /）。原始参数：${preview}`,
   );
+}
+
+/** 括号 / 引号没配平：参数在中途被截断 */
+function looksTruncated(text: string): boolean {
+  let depth = 0;
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (c === "\\") i++;
+      else if (c === '"') inString = false;
+    } else if (c === '"') inString = true;
+    else if (c === "{" || c === "[") depth++;
+    else if (c === "}" || c === "]") depth--;
+  }
+  return inString || depth > 0;
 }
 
 

@@ -11,6 +11,8 @@
  * 返回值：子 agent 的最终文本回复，作为工具结果回填给父 agent。
  */
 
+import { coerceToolArgs, schemaForTool } from "../tools/argCoercion.js";
+import { preNormalizeArgs } from "../tools/argPreNormalize.js";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { executeToolCall, getToolDefinitions, getReadOnlyToolDefinitions, getWikiToolDefinitions, getWikiPlanToolDefinitions, capToolContent, FULL_RESULT_TOOLS, ToolCallStatus, type ToolMeta, type SkillLoaderFn, type WikiTools, type WebCapability, type GateOutcome } from "../tools/index.js";
 import type { LLMStrategy, ToolDef, LLMStreamCallbacks } from "../llm/types.js";
@@ -465,6 +467,9 @@ export class SubAgentRunner {
       let parseError = "";
       try {
         toolArgs = parseToolArguments(tc.arguments);
+        const prepared = coerceToolArgs(toolName, preNormalizeArgs(toolName, toolArgs), schemaForTool(this.getToolDefs() as never, toolName));
+        toolArgs = prepared.args;
+        if (prepared.error && Object.keys(toolArgs).length > 0) parseError = prepared.error;
       } catch (err) {
         parseError = (err as Error).message;
       }
