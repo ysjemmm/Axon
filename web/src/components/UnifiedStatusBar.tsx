@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState, useMemo, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { FileText, ChevronDown } from "lucide-react";
+import { FileDiff, ChevronDown } from "lucide-react";
 import { AppliedChangesBar } from "./AppliedChangesBar";
 import type { ChatMessage } from "./chat/types";
 
@@ -135,15 +135,22 @@ export function UnifiedStatusBar({
             ref={buttonRef}
             onClick={() => { place(); setExpanded((v) => !v); }}
             aria-expanded={expanded}
-            className={`pointer-events-auto self-start flex items-center gap-1.5 rounded-md px-1.5 py-0.5 -mr-1 text-xs transition-colors shrink-0 ${expanded ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+            className={`pointer-events-auto self-start -mr-1 flex h-[22px] shrink-0 items-center gap-1.5 rounded-full border pl-[3px] pr-2 text-[11.5px] shadow-sm transition-colors ${expanded ? "border-border bg-muted text-foreground" : "border-border/60 bg-background/90 text-muted-foreground hover:border-border hover:text-foreground"}`}
           >
-            <FileText className="w-3 h-3 text-primary" />
-            <span>
-              {appliedCount > 0 && <span className="text-muted-foreground">{appliedCount} 已应用</span>}
-              {appliedCount > 0 && pendingCount > 0 && <span className="mx-1">·</span>}
-              {pendingCount > 0 && <span className="text-amber-600">{pendingCount} 待确认</span>}
+            {/* 图标放进一个带底色的小圆片：有待确认时用琥珀色提醒，全部已应用时是安静的绿色 */}
+            <span className={`grid size-4 place-items-center rounded-full ${pendingCount > 0 ? "bg-amber-500/15 text-amber-600 dark:text-amber-400" : "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"}`}>
+              <FileDiff className="h-2.5 w-2.5" strokeWidth={2.25} />
             </span>
-            <ChevronDown className={`w-3 h-3 transition-transform ${expanded ? "rotate-180" : ""}`} />
+            <span className="flex items-center tabular-nums">
+              {appliedCount > 0 && (
+                <span><span className="font-medium text-foreground/85">{appliedCount}</span> 已应用</span>
+              )}
+              {appliedCount > 0 && pendingCount > 0 && <span className="mx-1 text-muted-foreground/50">·</span>}
+              {pendingCount > 0 && (
+                <span className="text-amber-600 dark:text-amber-400"><span className="font-medium">{pendingCount}</span> 待确认</span>
+              )}
+            </span>
+            <ChevronDown className={`h-3 w-3 text-muted-foreground/70 transition-transform ${expanded ? "rotate-180" : ""}`} />
           </button>
         )}
       </div>
