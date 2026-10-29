@@ -733,9 +733,24 @@ export function setVoiceConfig(config: VoiceInputConfig | null): Promise<{ ok: b
   return put("/api/voice/config", { config });
 }
 
-/** 开始录音（扩展进程里录；没配置识别服务时返回 needsConfig） */
-export function startVoice(): Promise<{ ok: boolean; needsConfig?: boolean }> {
-  return post("/api/voice/start");
+/** 开始录音（扩展进程里录；没配置识别服务时返回 needsConfig）。monitor = 只试音看音量，不识别 */
+export function startVoice(monitor = false): Promise<{ ok: boolean; needsConfig?: boolean }> {
+  return post("/api/voice/start", monitor ? { monitor: true } : undefined);
+}
+
+/** 录音设备（Windows 按名称匹配；macOS 用设备的 uniqueID） */
+export interface VoiceDevice {
+  id: string;
+  name: string;
+}
+
+/** 本机的录音设备与当前选中的（null = 系统默认）；平台不支持列举时 devices 为空 */
+export function listVoiceDevices(): Promise<{ devices: VoiceDevice[]; selected: VoiceDevice | null }> {
+  return get("/api/voice/devices");
+}
+
+export function setVoiceDevice(device: VoiceDevice | null): Promise<{ ok: boolean }> {
+  return put("/api/voice/device", { device });
 }
 
 /** 取走自上次以来的音量点（0~1）与已录秒数 */

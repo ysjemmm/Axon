@@ -7,8 +7,9 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Loader2, Mic, X } from "lucide-react";
-import { startVoice, stopVoice, voiceLevels } from "@/lib/apiClient";
+import { Check, ChevronDown, Loader2, Mic, X } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { listVoiceDevices, setVoiceDevice, startVoice, stopVoice, voiceLevels, type VoiceDevice } from "@/lib/apiClient";
 
 /** 波形显示多少根竖条（最新的在最右） */
 const BARS = 28;
@@ -68,6 +69,9 @@ export function VoiceInputButton({ onText, onError, disabled }: {
   disabled?: boolean;
 }) {
   const [phase, setPhase] = useState<Phase>("idle");
+  const [menuOpen, setMenuOpen] = useState(false);
+  /** 设备菜单正在试音：开始正式录音前要先停掉，否则扩展那边会沿用试音那一路 */
+  const monitoringRef = useRef(false);
   const [levels, setLevels] = useState<number[]>(() => Array(BARS).fill(0));
   const [seconds, setSeconds] = useState(0);
   const phaseRef = useRef<Phase>("idle");
@@ -104,6 +108,11 @@ export function VoiceInputButton({ onText, onError, disabled }: {
   const start = useCallback(async () => {
     if (phaseRef.current !== "idle") return;
     setPhase("starting");
+    if (monitoringRef.current) {
+      setMenuOpen(false);
+      monitoringRef.current = false;
+      await stopVoice(true).catch(() => undefined);
+    }
     setLevels(Array(BARS).fill(0));
     setSeconds(0);
     vadRef.current = newVad();
@@ -192,15 +201,150 @@ export function VoiceInputButton({ onText, onError, disabled }: {
   }
 
   return (
+    <div className="inline-flex items-center">
+      <button
+        type="button"
+        onClick={() => void start()}
+        disabled={disabled || phase === "starting"}
+        title="语音输入"
+        aria-label="语音输入"
+        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+      >
+        {phase === "starting" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mic className="h-3.5 w-3.5" />}
+      </button>
+      <DeviceMenu
+        open={menuOpen}
+        onOpenChange={setMenuOpen}
+        disabled={disabled || phase !== "idle"}
+        monitoringRef={monitoringRef}
+      />
+    </div>
+  );
+}
+
+/**
+ * 选麦克风：列出本机录音设备，打开时试音（顶部音量条实时跳动），确认选对了设备再用。
+ * 关掉菜单就停止试音。
+ */
+function DeviceMenu({ open, onOpenChange, disabled, monitoringRef }: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  disabled?: boolean;
+  monitoringRef: React.MutableRefObject<boolean>;
+}) {
+  const [devices, setDevices] = useState<VoiceDevice[] | null>(null);
+  const [selected, setSelected] = useState<VoiceDevice | null>(null);
+  const [level, setLevel] = useState(0);
+  const [monitorError, setMonitorError] = useState("");
+
+  const stopMonitor = useCallback(async () => {
+    if (!monitoringRef.current) return;
+    monitoringRef.current = false;
+    await stopVoice(true).catch(() => undefined);
+  }, [monitoringRef]);
+
+  const startMonitor = useCallback(async () => {
+    await stopMonitor();
+    setLevel(0);
+    setMonitorError("");
+    try {
+      await startVoice(true);
+      monitoringRef.current = true;
+    } catch (err) {
+      setMonitorError((err as Error).message?.split("\n")[0] || "麦克风没有打开");
+    }
+  }, [stopMonitor, monitoringRef]);
+
+  // 打开时取设备列表并开始试音；关闭时停
+  useEffect(() => {
+    if (!open) { void stopMonitor(); return; }
+    let alive = true;
+    setDevices(null);
+    listVoiceDevices()
+      .then((r) => { if (alive) { setDevices(r.devices); setSelected(r.selected); } })
+      .catch(() => { if (alive) setDevices([]); });
+    void startMonitor();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // 试音时轮询音量：取这一批里最大的，音量条回落慢一点更好看
+  useEffect(() => {
+    if (!open) return;
+    const timer = setInterval(async () => {
+      if (!monitoringRef.current) return;
+      try {
+        const r = await voiceLevels();
+        const peak = r.levels.length ? Math.max(...r.levels) : 0;
+        setLevel((prev) => Math.max(peak, prev * 0.7));
+      } catch { /* 忽略偶发失败 */ }
+    }, 100);
+    return () => clearInterval(timer);
+  }, [open, monitoringRef]);
+
+  // 卸载时别把试音留着
+  useEffect(() => () => { void stopMonitor(); }, [stopMonitor]);
+
+  const choose = async (device: VoiceDevice | null) => {
+    setSelected(device);
+    await setVoiceDevice(device).catch(() => undefined);
+    void startMonitor(); // 换了设备重新试音
+  };
+
+  const isSelected = (d: VoiceDevice | null) => (d ? selected?.id === d.id : !selected);
+
+  return (
+    <Popover open={open} onOpenChange={onOpenChange}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          disabled={disabled}
+          title="选择麦克风"
+          aria-label="选择麦克风"
+          className="-ml-1 inline-flex h-7 w-4 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+        >
+          <ChevronDown className="h-3 w-3" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" side="top" className="w-64 gap-1 p-1.5">
+        {/* 试音：音量条跟着说话跳，确认选对了麦克风 */}
+        <div className="flex items-center gap-2 px-2 pb-1.5 pt-1">
+          <Mic className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+            <div className="h-full rounded-full bg-emerald-500 transition-[width] duration-100" style={{ width: `${Math.round(level * 100)}%` }} />
+          </div>
+        </div>
+        {monitorError && <p className="px-2 pb-1 text-[11px] text-destructive">{monitorError}</p>}
+        <div className="max-h-60 overflow-y-auto">
+          <DeviceRow label="系统默认" hint="跟随系统的默认录音设备" selected={isSelected(null)} onClick={() => void choose(null)} />
+          {devices === null ? (
+            <div className="flex items-center gap-1.5 px-2 py-1.5 text-[12px] text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />正在查找麦克风…
+            </div>
+          ) : devices.length === 0 ? (
+            <p className="px-2 py-1.5 text-[12px] text-muted-foreground">未找到其他设备</p>
+          ) : (
+            devices.map((d) => <DeviceRow key={d.id} label={d.name} selected={isSelected(d)} onClick={() => void choose(d)} />)
+          )}
+        </div>
+        {selected && devices && !devices.some((d) => d.id === selected.id) && (
+          <p className="px-2 pt-1 text-[11px] text-muted-foreground">之前选的「{selected.name}」没连上，暂时用系统默认。</p>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function DeviceRow({ label, hint, selected, onClick }: { label: string; hint?: string; selected: boolean; onClick: () => void }) {
+  return (
     <button
       type="button"
-      onClick={() => void start()}
-      disabled={disabled || phase === "starting"}
-      title="语音输入"
-      aria-label="语音输入"
-      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+      onClick={onClick}
+      title={hint ?? label}
+      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] transition-colors hover:bg-muted ${selected ? "text-foreground" : "text-muted-foreground"}`}
     >
-      {phase === "starting" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mic className="h-3.5 w-3.5" />}
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {selected && <Check className="h-3.5 w-3.5 shrink-0" />}
     </button>
   );
 }

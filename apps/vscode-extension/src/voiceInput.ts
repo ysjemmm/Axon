@@ -104,7 +104,7 @@ function onPath(bin: string): boolean {
  * 不少机器上它一直返回 0，波形是平的；录到的是不是静音也只有录完才知道。
  * waveIn 是最底层的录音接口，任何 Windows 都有，不用装东西。
  */
-function waveInScript(): string {
+function waveInScript(action: string): string {
   return `
 $ErrorActionPreference = 'Stop'
 $src = @'
@@ -120,12 +120,39 @@ public static class AxonWaveIn {
   [DllImport("winmm.dll")] static extern int waveInPrepareHeader(IntPtr h, IntPtr hdr, uint size);
   [DllImport("winmm.dll")] static extern int waveInAddBuffer(IntPtr h, IntPtr hdr, uint size);
   [DllImport("winmm.dll")] static extern int waveInStart(IntPtr h);
-  public static int Run(int rate) {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  struct WaveInCaps { public ushort mid; public ushort pid; public uint driverVersion; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string name; public uint formats; public ushort channels; public ushort reserved; }
+  [DllImport("winmm.dll", CharSet = CharSet.Unicode)] static extern int waveInGetDevCapsW(UIntPtr id, ref WaveInCaps caps, uint size);
+  static string DeviceName(int i) {
+    WaveInCaps c = new WaveInCaps();
+    return waveInGetDevCapsW((UIntPtr)(uint)i, ref c, (uint)Marshal.SizeOf(typeof(WaveInCaps))) == 0 ? c.name : null;
+  }
+  // 每行「序号<TAB>名称」，UTF-8 输出（设备名常有中文）
+  public static int List() {
+    Stream o = Console.OpenStandardOutput();
+    int n = waveInGetNumDevs();
+    for (int i = 0; i < n; i++) {
+      string name = DeviceName(i);
+      if (name == null) continue;
+      byte[] b = System.Text.Encoding.UTF8.GetBytes(i + "\\t" + name + "\\n");
+      o.Write(b, 0, b.Length);
+    }
+    o.Flush();
+    return 0;
+  }
+  // 按名称找设备（序号会随插拔变化，名称稳定）；找不到用系统默认
+  static uint FindDevice(string name) {
+    if (string.IsNullOrEmpty(name)) return 0xFFFFFFFF;
+    int n = waveInGetNumDevs();
+    for (int i = 0; i < n; i++) if (DeviceName(i) == name) return (uint)i;
+    return 0xFFFFFFFF;
+  }
+  public static int Run(int rate, string device) {
     if (waveInGetNumDevs() == 0) { Console.Error.WriteLine("没有检测到录音设备（麦克风）"); return 3; }
     WaveFormat f = new WaveFormat();
     f.tag = 1; f.channels = 1; f.rate = (uint)rate; f.bytesPerSec = (uint)(rate * 2); f.align = 2; f.bits = 16; f.cb = 0;
     IntPtr h;
-    int r = waveInOpen(out h, 0xFFFFFFFF, ref f, IntPtr.Zero, IntPtr.Zero, 0);
+    int r = waveInOpen(out h, FindDevice(device), ref f, IntPtr.Zero, IntPtr.Zero, 0);
     if (r != 0) { Console.Error.WriteLine("打开麦克风失败（waveInOpen " + r + "）"); return 2; }
     // WAVEHDR：lpData, dwBufferLength, dwBytesRecorded, dwUser, dwFlags, dwLoops, lpNext, reserved
     int ps = IntPtr.Size;
@@ -162,14 +189,14 @@ public static class AxonWaveIn {
 }
 '@
 # 编译结果缓存到临时目录：第一次要编译一两秒，之后直接加载；缓存坏了就退回内存编译
-$dll = Join-Path $env:TEMP 'axon-wavein-v1.dll'
+$dll = Join-Path $env:TEMP 'axon-wavein-v2.dll'
 try {
   if (-not (Test-Path -LiteralPath $dll)) { Add-Type -TypeDefinition $src -OutputAssembly $dll -OutputType Library }
   Add-Type -Path $dll
 } catch {
   Add-Type -TypeDefinition $src
 }
-exit ([AxonWaveIn]::Run(${SAMPLE_RATE}))
+exit (${action})
 `;
 }
 
@@ -211,6 +238,85 @@ function run(argv) {
 }
 `;
 
+/** macOS：列出录音设备，每行「uniqueID<TAB>名称」 */
+const MAC_LIST_JXA = `
+ObjC.import('AVFoundation');
+ObjC.import('Foundation');
+function run() {
+  var ds = $.AVCaptureDevice.devicesWithMediaType($('soun'));
+  var lines = [];
+  for (var i = 0; i < ds.count; i++) {
+    var d = ds.objectAtIndex(i);
+    lines.push(d.uniqueID.js + '\\t' + d.localizedName.js);
+  }
+  $.NSFileHandle.fileHandleWithStandardOutput.writeData($(lines.join('\\n') + '\\n').dataUsingEncoding($.NSUTF8StringEncoding));
+}
+`;
+
+/**
+ * macOS：从指定设备录音。AVAudioRecorder 只能用系统默认输入，指定设备要走 AVCaptureSession +
+ * AVCaptureAudioFileOutput；音量从连接的 audioChannels 读（同样是分贝）。输出协议与 MAC_RECORDER_JXA 一致。
+ */
+const MAC_DEVICE_RECORDER_JXA = `
+ObjC.import('AVFoundation');
+ObjC.import('Foundation');
+function out(s) {
+  $.NSFileHandle.fileHandleWithStandardOutput.writeData($(s + '\\n').dataUsingEncoding($.NSUTF8StringEncoding));
+}
+function spin(sec) {
+  $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(sec));
+}
+var finished = false;
+ObjC.registerSubclass({
+  name: 'AxonRecordingDelegate',
+  protocols: ['AVCaptureFileOutputRecordingDelegate'],
+  methods: {
+    'captureOutput:didFinishRecordingToOutputFileAtURL:fromConnections:error:': {
+      types: ['void', ['id', 'id', 'id', 'id']],
+      implementation: function () { finished = true; }
+    }
+  }
+});
+function run(argv) {
+  var dev = $.AVCaptureDevice.deviceWithUniqueID($(argv[2]));
+  if (!dev || dev.isNil()) { throw new Error('找不到选中的麦克风，可能已断开'); }
+  var err = Ref();
+  var input = $.AVCaptureDeviceInput.deviceInputWithDeviceError(dev, err);
+  if (!input || input.isNil()) { throw new Error('无法打开选中的麦克风'); }
+  var session = $.AVCaptureSession.alloc.init;
+  session.addInput(input);
+  var output = $.AVCaptureAudioFileOutput.alloc.init;
+  var settings = $.NSMutableDictionary.alloc.init;
+  settings.setObjectForKey($.NSNumber.numberWithInt(1819304813), $('AVFormatIDKey'));
+  settings.setObjectForKey($.NSNumber.numberWithDouble(${SAMPLE_RATE}), $('AVSampleRateKey'));
+  settings.setObjectForKey($.NSNumber.numberWithInt(1), $('AVNumberOfChannelsKey'));
+  settings.setObjectForKey($.NSNumber.numberWithInt(16), $('AVLinearPCMBitDepthKey'));
+  settings.setObjectForKey($.NSNumber.numberWithBool(false), $('AVLinearPCMIsFloatKey'));
+  settings.setObjectForKey($.NSNumber.numberWithBool(false), $('AVLinearPCMIsBigEndianKey'));
+  settings.setObjectForKey($.NSNumber.numberWithBool(false), $('AVLinearPCMIsNonInterleaved'));
+  output.audioSettings = settings;
+  session.addOutput(output);
+  session.startRunning;
+  output.startRecordingToOutputFileURLOutputFileTypeRecordingDelegate($.NSURL.fileURLWithPath(argv[0]), $('com.microsoft.waveform-audio'), $.AxonRecordingDelegate.alloc.init);
+  out('READY');
+  var fm = $.NSFileManager.defaultManager;
+  while (!fm.fileExistsAtPath(argv[1])) {
+    var db = -160;
+    var conns = output.connections;
+    if (conns.count > 0) {
+      var chans = conns.objectAtIndex(0).audioChannels;
+      if (chans.count > 0) db = chans.objectAtIndex(0).averagePowerLevel;
+    }
+    out('L ' + db);
+    spin(0.08);
+  }
+  output.stopRecording;
+  for (var i = 0; i < 40 && !finished; i++) spin(0.05);
+  session.stopRunning;
+  out('SAVED');
+}
+`;
+
 /** 从 WAV 文件里取出 data 块（AVAudioRecorder 写的 WAV 前面常带 FLLR 之类的填充块，不能按 44 字节头硬切） */
 function pcmFromWav(wav: Buffer): Buffer {
   let off = 12;
@@ -224,10 +330,12 @@ function pcmFromWav(wav: Buffer): Buffer {
 }
 
 /** 拼出当前平台可用的 PCM 录音命令（stdout 输出 s16le / 16kHz / 单声道）；都没有返回 null */
-async function pcmRecorderCommand(): Promise<{ bin: string; args: string[]; backend: string } | null> {
+async function pcmRecorderCommand(device?: InputDevice | null): Promise<{ bin: string; args: string[]; backend: string } | null> {
   const pcmOut = ["-ac", "1", "-ar", String(SAMPLE_RATE), "-f", "s16le", "-acodec", "pcm_s16le", "pipe:1"];
   if (process.platform === "win32") {
-    const encoded = Buffer.from(waveInScript(), "utf16le").toString("base64");
+    // 设备名作为 PowerShell 单引号字符串传入：单引号内只需把 ' 写成 ''，其余原样（不会展开 $）
+    const name = (device?.name ?? "").replace(/'/g, "''");
+    const encoded = Buffer.from(waveInScript(`[AxonWaveIn]::Run(${SAMPLE_RATE}, '${name}')`), "utf16le").toString("base64");
     return { bin: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded], backend: "waveIn" };
   }
   if (process.platform === "linux" && onPath("arecord")) {
@@ -254,19 +362,79 @@ function missingRecorderHint(): string {
   return "当前系统不支持录音。";
 }
 
+/** 录音设备（id 用于录音，name 给人看；Windows 按名称匹配，因为序号会随插拔变化） */
+export interface InputDevice {
+  id: string;
+  name: string;
+}
+
+function runCapture(bin: string, args: string[], timeoutMs = 15_000): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    let out = "";
+    let err = "";
+    const timer = setTimeout(() => { proc.kill(); reject(new Error("列出设备超时")); }, timeoutMs);
+    proc.stdout!.on("data", (d: Buffer) => { out += d.toString("utf8"); });
+    proc.stderr!.on("data", (d: Buffer) => { err += d.toString(); });
+    proc.on("error", (e) => { clearTimeout(timer); reject(e); });
+    proc.on("exit", (code) => { clearTimeout(timer); code === 0 ? resolve(out) : reject(new Error(err.trim().slice(0, 300) || `退出码 ${code}`)); });
+  });
+}
+
+/** 列出本机的录音设备；不支持列举的平台返回空数组（界面只显示「系统默认」） */
+export async function listInputDevices(): Promise<InputDevice[]> {
+  let raw = "";
+  if (process.platform === "win32") {
+    const encoded = Buffer.from(waveInScript("[AxonWaveIn]::List()"), "utf16le").toString("base64");
+    raw = await runCapture("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded]);
+  } else if (process.platform === "darwin" && existsSync("/usr/bin/osascript")) {
+    raw = await runCapture("/usr/bin/osascript", ["-l", "JavaScript", "-e", MAC_LIST_JXA]);
+  } else {
+    return [];
+  }
+  const seen = new Set<string>();
+  const devices: InputDevice[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const tab = line.indexOf("\t");
+    if (tab <= 0) continue;
+    const id = line.slice(0, tab).trim();
+    const name = line.slice(tab + 1).trim();
+    if (!name || seen.has(id)) continue;
+    seen.add(id);
+    devices.push({ id, name });
+  }
+  return devices;
+}
+
 export function isRecording(): boolean {
   return !!current;
 }
 
 /** 开始录音。已在录就直接返回 */
-export async function startRecording(): Promise<void> {
+export async function startRecording(device?: InputDevice | null): Promise<void> {
   if (current) return;
+  // macOS 上选中的设备拔掉了（或打不开）：退回系统默认，别让用户卡在一个不存在的设备上。
+  // Windows 在录音脚本里按名称找不到就自动用默认设备，不用这层兜底
+  if (process.platform === "darwin" && device?.id) {
+    try {
+      return await startRecordingWith(device);
+    } catch {
+      return await startRecordingWith(null);
+    }
+  }
+  return startRecordingWith(device ?? null);
+}
+
+async function startRecordingWith(device: InputDevice | null): Promise<void> {
   let rec: Recording;
   if (process.platform === "darwin" && existsSync("/usr/bin/osascript")) {
     const dir = await mkdtemp(join(tmpdir(), "axon-voice-"));
     const wavPath = join(dir, "voice.wav");
     const stopFlag = join(dir, "stop");
-    const proc = spawn("/usr/bin/osascript", ["-l", "JavaScript", "-e", MAC_RECORDER_JXA, wavPath, stopFlag], { stdio: ["ignore", "pipe", "pipe"] });
+    // 选了具体设备走 AVCaptureSession；系统默认走 AVAudioRecorder（更简单、最稳）
+    const script = device?.id ? MAC_DEVICE_RECORDER_JXA : MAC_RECORDER_JXA;
+    const args = ["-l", "JavaScript", "-e", script, wavPath, stopFlag, ...(device?.id ? [device.id] : [])];
+    const proc = spawn("/usr/bin/osascript", args, { stdio: ["ignore", "pipe", "pipe"] });
     rec = makeRecording(proc, "avfoundation", { wavPath, stopFlag, tmpDir: dir });
     let buf = "";
     let resolveReady: () => void = () => undefined;
@@ -284,7 +452,7 @@ export async function startRecording(): Promise<void> {
     });
     await waitReady(rec, (resolve) => { resolveReady = resolve; });
   } else {
-    const cmd = await pcmRecorderCommand();
+    const cmd = await pcmRecorderCommand(device);
     if (!cmd) throw new Error(missingRecorderHint());
     const proc = spawn(cmd.bin, cmd.args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     rec = makeRecording(proc, cmd.backend, {});

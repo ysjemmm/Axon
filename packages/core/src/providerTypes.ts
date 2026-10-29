@@ -182,4 +182,6 @@ export interface ProviderConfigFile {
    * 只认用户级配置：工作区配置不能决定把用户的录音发到哪里。
    */
   voiceInput?: { provider: string; model: string; language?: string };
+  /** 语音输入用哪个麦克风；缺省 = 系统默认录音设备 */
+  voiceDevice?: { id: string; name: string };
 }

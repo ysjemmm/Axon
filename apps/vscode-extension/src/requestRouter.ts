@@ -17,7 +17,7 @@ import { RelayStore, renameSessionTitle, ProviderRegistry, refreshProviders, pro
 import { createVSCodeAgentHost } from "@axon/host-vscode";
 import { queryProvider, quotaSecrets, clearQuotaSecrets, quotaTokenStatus, saveQuotaTokens, quotaOverview, invalidateQuotaOverview } from "./quotaService.js";
 import { createMarketplaceRegistry, persistSourcesToSettings } from "./marketplaceBridge.js";
-import { startRecording, stopRecording, takeLevels, transcribe } from "./voiceInput.js";
+import { listInputDevices, startRecording, stopRecording, takeLevels, transcribe } from "./voiceInput.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -708,10 +708,24 @@ export class RequestRouter {
       await writeProviderConfig("user", config);
       return { ok: true };
     }
+    if (path === "/api/voice/devices" && method === "GET") {
+      const [devices, config] = await Promise.all([listInputDevices().catch(() => []), readProviderConfig("user")]);
+      return { devices, selected: config.voiceDevice ?? null };
+    }
+    if (path === "/api/voice/device" && method === "PUT") {
+      const { device } = (body || {}) as { device?: { id?: string; name?: string } | null };
+      const config = await readProviderConfig("user");
+      if (device?.id && device.name) config.voiceDevice = { id: String(device.id), name: String(device.name) };
+      else delete config.voiceDevice;
+      await writeProviderConfig("user", config);
+      return { ok: true };
+    }
     if (path === "/api/voice/start" && method === "POST") {
-      const cfg = (await readProviderConfig("user")).voiceInput;
-      if (!cfg) return { ok: false, needsConfig: true };
-      await startRecording();
+      // monitor：设备菜单里试音，只看音量不识别，不要求先配好识别服务
+      const { monitor } = (body || {}) as { monitor?: boolean };
+      const config = await readProviderConfig("user");
+      if (!monitor && !config.voiceInput) return { ok: false, needsConfig: true };
+      await startRecording(config.voiceDevice ?? null);
       return { ok: true };
     }
     if (path === "/api/voice/levels" && method === "GET") {
@@ -1006,6 +1020,7 @@ async function readProviderConfig(level: "user" | "workspace", workspace?: strin
       builtinQuota: parsed.builtinQuota || {},
       ...(parsed.visionFallbackModel ? { visionFallbackModel: parsed.visionFallbackModel } : {}),
       ...(parsed.voiceInput ? { voiceInput: parsed.voiceInput } : {}),
+      ...(parsed.voiceDevice ? { voiceDevice: parsed.voiceDevice } : {}),
     };
   }
 }
@@ -1020,6 +1035,7 @@ async function writeProviderConfig(level: "user" | "workspace", config: Provider
     builtinQuota: config.builtinQuota || {},
     ...(config.visionFallbackModel ? { visionFallbackModel: config.visionFallbackModel } : {}),
     ...(config.voiceInput ? { voiceInput: config.voiceInput } : {}),
+    ...(config.voiceDevice ? { voiceDevice: config.voiceDevice } : {}),
   };
   // 原子写 + 仅本人可读：文件里有 API Key
   await writeJsonConfig(providerConfigPath(level, workspace), normalized);
