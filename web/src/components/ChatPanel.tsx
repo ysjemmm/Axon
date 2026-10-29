@@ -183,7 +183,7 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   const lastMessage = session.chatHistory[session.chatHistory.length - 1];
   const assistantTurnStarted = lastMessage?.role === "assistant" && !!lastMessage.streaming;
   const liveAssistantStatus = session.isLoading && assistantTurnStarted ? session.statusText : undefined;
-  // 回复头部星芒的动作：等用户 > 压缩 > 输出正文 > 执行工具 > 思考
+  // 回复头部图标的动作：等用户 > 压缩 > 输出正文 > 执行工具 > 推理 > 思考
   const sparkMode: SparkMode =
     session.askUser || session.formRequest || session.toolConfirm || session.compactionNeeded
       || session.creditBudgetPaused || Object.keys(session.commandApprovals).length > 0
@@ -194,7 +194,9 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
           ? "write"
           : ["tool", "acting", "executing", "running"].includes(session.statusPhase)
             ? "tool"
-            : "think";
+            : session.statusPhase === "reasoning"
+              ? "reason"
+              : "think";
   /**
    * 本轮（末尾往前数、遇到第一条 user 消息为止）是否已建出 assistant 消息、它是否仍在流式。
    *

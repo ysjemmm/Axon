@@ -16,13 +16,14 @@ import { createContext, useContext, useEffect, useId, useRef } from "react";
 
 /**
  * 活动中的几种状态（括号里是成分组合）：
- * · think   思考（三点一排，依次亮起）
+ * · think   思考：还没开始输出（三点一排，依次亮起）
+ * · reason  推理：模型在输出推理过程（三点弯成三角，缓缓转动）
  * · write   输出正文（三点一排，依次跳起）
  * · tool    执行工具（四点围成一圈转动）
  * · wait    等用户确认 / 作答（三点一排，一起慢呼吸）
  * · compact 压缩上下文（四点一圈，向中心收拢再舒展）
  */
-export type SparkMode = "think" | "write" | "tool" | "wait" | "compact";
+export type SparkMode = "think" | "reason" | "write" | "tool" | "wait" | "compact";
 
 /** 当前这一轮的状态（ChatPanel 提供）：只有流式中的那条回复头部会读它，免得把它层层透传过消息列表 */
 export const LiveSparkModeContext = createContext<SparkMode>("think");
@@ -54,6 +55,7 @@ interface Params {
 
 const MODES: Record<SparkMode | "idle", Params> = {
   think: { count: 3, ring: 0, speed: 1.1, bounce: 0, seq: 1, sync: 0, spin: 0, squeeze: 0, alpha: 1 },
+  reason: { count: 3, ring: 1, speed: 0.8, bounce: 0, seq: 0.5, sync: 0, spin: 110, squeeze: 0, alpha: 1 },
   write: { count: 3, ring: 0, speed: 1.5, bounce: 1, seq: 0.35, sync: 0, spin: 0, squeeze: 0, alpha: 1 },
   tool: { count: 4, ring: 1, speed: 1.2, bounce: 0, seq: 0.6, sync: 0, spin: 220, squeeze: 0, alpha: 1 },
   wait: { count: 3, ring: 0, speed: 0.5, bounce: 0, seq: 0, sync: 1, spin: 0, squeeze: 0, alpha: 1 },

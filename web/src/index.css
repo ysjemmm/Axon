@@ -317,10 +317,11 @@ code:not(.hljs):not(.prose code) {
      这里不再用 inline-block：它会把整个 code 包成一个满行高的盒子，连续标签换行时几乎没有视觉间隔。 */
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
-  padding: 0.04em 0.38em !important;
-  margin: 0 0.16em !important;
-  /* 使用正文的绝对行高，保证长文本换行时文字节奏与正文一致 */
-  line-height: 22.75px !important;
+  padding: 0.06em 0.36em !important;
+  margin: 0 0.12em !important;
+  /* 比正文行高（14px × 1.75 = 24.5px）略矮：上下行的代码底色之间留出空隙，
+     一行里代码片段多时不再连成一片灰格子；折行时文字节奏仍与正文一致 */
+  line-height: 1.55 !important;
   vertical-align: baseline;
   max-width: 100%;
   /* ── 字号与字重必须与正文完全一致 ───────────────────────────────────
@@ -342,7 +343,7 @@ code:not(.hljs):not(.prose code) {
      上面的字号/字重对齐后它与正文的视觉节奏已经一致。
      ⚠️ 用 em 不用 px：这个根节点的字号会被外层整体覆盖（思考块压到 text-xs），
         px 会在那些更小的上下文里保持原尺寸、比正文还大。 */
-  font-size: 1em !important;
+  font-size: 0.92em !important;
   font-weight: inherit !important;
   /* 中文与正文同一字族（见 :root 的 --font-mono-inline） */
   font-family: var(--font-mono-inline) !important;
