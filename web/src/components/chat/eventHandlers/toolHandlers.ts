@@ -428,6 +428,15 @@ export function handleToolResult(msg: WsMessage, ctx: EventHandlerCtx): void {
  * 所以从最新消息往前找，把摘要挂到对应工具段上。找不到（会话已切走 / 段被压缩）就忽略。
  */
 export function handleToolGroupSummary(msg: WsMessage, ctx: EventHandlerCtx): void {
+  patchGroupAnchor(msg, ctx, "groupSummary");
+}
+
+/** 进行中的阶段摘要：挂在同一个锚点上；组已经有最终标题时就不再覆盖（晚到的进度没意义） */
+export function handleToolGroupProgress(msg: WsMessage, ctx: EventHandlerCtx): void {
+  patchGroupAnchor(msg, ctx, "groupProgress");
+}
+
+function patchGroupAnchor(msg: WsMessage, ctx: EventHandlerCtx, field: "groupSummary" | "groupProgress"): void {
   const toolCallId = (msg as any).toolCallId as string | undefined;
   const summary = (msg as any).summary as string | undefined;
   if (!toolCallId || !summary) return;
@@ -437,8 +446,10 @@ export function handleToolGroupSummary(msg: WsMessage, ctx: EventHandlerCtx): vo
       if (!segs) continue;
       const idx = segs.findIndex((s) => s.type === "tool" && s.id === toolCallId);
       if (idx < 0) continue;
+      const anchor = segs[idx] as ToolSegment;
+      if (field === "groupProgress" && anchor.groupSummary) return prev;
       const nextSegs = [...segs];
-      nextSegs[idx] = { ...(segs[idx] as ToolSegment), groupSummary: summary };
+      nextSegs[idx] = { ...anchor, [field]: summary };
       const next = [...prev];
       next[m] = { ...prev[m], segments: nextSegs };
       return next;

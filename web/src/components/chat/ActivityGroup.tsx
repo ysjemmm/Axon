@@ -1,7 +1,8 @@
 /**
  * ActivityGroup —— 连续工具 / 思考行的大折叠行（分组规则见 activityGroup.ts）。
  *
- * 标题优先级：模型生成的一句话 summary > 进行中时的当前动作 > 统计。
+ * 标题优先级：模型生成的一句话 summary > 进行中的阶段摘要（每 3~5 个工具一条「正在…」）> 进行中时的当前动作 > 统计。
+ * 摘要之间切换用翻牌动画（旧的向上翻走、新的从下面翻上来），让用户感觉到 AI 在往前推进。
  * 统计常驻右侧（标题本身就是统计时不重复）。
  *
  * 展开规则：
@@ -17,6 +18,7 @@ import { CommandApprovalContext } from "./commandApprovalContext";
 // 带 Rules 后缀：同目录的 ActivityGroup.tsx 与它只差大小写，大小写不敏感的文件系统会认错文件
 import { summarizeRunStats } from "./activityGroupRules";
 import type { ToolSegment } from "./types";
+import { FlipText } from "./FlipText";
 
 export function ActivityGroup({ tools, live, children }: {
   /** 组内的工具段（用于统计、summary、审批检测） */
@@ -35,11 +37,14 @@ export function ActivityGroup({ tools, live, children }: {
   const inFlight = tools.some((t) => isToolInFlight(t.status));
   const failed = tools.filter((t) => t.status === "error").length;
   const summary = tools.find((t) => t.groupSummary)?.groupSummary;
+  const progress = live ? tools.find((t) => t.groupProgress)?.groupProgress : undefined;
   const stats = summarizeRunStats(tools);
   const current = live && inFlight
     ? [...tools].reverse().find((t) => isToolInFlight(t.status))?.description
     : undefined;
-  const title = summary || current || stats;
+  const title = summary || progress || current || stats;
+  // 只有摘要（阶段 / 最终）换了才翻牌；实时刷新的当前动作、统计数字直接替换
+  const flipKey = summary ? `s:${summary}` : progress ? `p:${progress}` : "plain";
 
   return (
     <div className="my-1">
@@ -54,7 +59,7 @@ export function ActivityGroup({ tools, live, children }: {
         {live && inFlight
           ? <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin opacity-70" />
           : <Layers className="w-3.5 h-3.5 shrink-0 opacity-70" />}
-        <span className="min-w-0 truncate">{title}</span>
+        <FlipText text={title} animateKey={flipKey} />
         {title !== stats && stats && (
           <>
             <span className="shrink-0 opacity-40">·</span>

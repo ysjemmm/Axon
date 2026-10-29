@@ -61,8 +61,16 @@ export interface ClosedToolGroup {
  * 逐轮追踪当前分组。每轮调用 onRound；本轮之后不再有工具调用时调用 close。
  * 返回的是「已结束、且够格生成摘要」的分组。
  */
+/** 进行中的分组每隔几个工具出一条阶段摘要：3~5 个随机，节奏不机械 */
+const PROGRESS_MIN = 3;
+const PROGRESS_MAX = 5;
+const nextProgressAt = () => PROGRESS_MIN + Math.floor(Math.random() * (PROGRESS_MAX - PROGRESS_MIN + 1));
+
 export class ToolGroupTracker {
   private current: ClosedToolGroup | null = null;
+  /** 当前分组自上次阶段摘要以来又执行了几个工具 */
+  private sinceProgress = 0;
+  private progressAt = nextProgressAt();
 
   /** 一轮 LLM 输出：先出正文、再出工具调用（与前端段顺序一致） */
   onRound(prose: string | null | undefined, toolCalls: ToolCallBrief[]): ClosedToolGroup[] {
@@ -75,6 +83,7 @@ export class ToolGroupTracker {
       }
       if (!this.current) this.current = { anchorToolCallId: tc.id, actions: [] };
       this.current.actions.push(describeToolCall(tc));
+      this.sinceProgress++;
     }
     return closed;
   }
@@ -86,9 +95,22 @@ export class ToolGroupTracker {
     return closed;
   }
 
+  /**
+   * 分组还在进行、又攒够了 3~5 个工具：返回到目前为止的分组，用来生成一条「正在…」的阶段摘要。
+   * 用户看着折叠行里一长串工具在转，不知道 AI 在忙什么——隔几步给一句人话。
+   */
+  takeProgress(): ClosedToolGroup | null {
+    if (!this.current || this.sinceProgress < this.progressAt) return null;
+    this.sinceProgress = 0;
+    this.progressAt = nextProgressAt();
+    return { anchorToolCallId: this.current.anchorToolCallId, actions: [...this.current.actions] };
+  }
+
   private flushInto(out: ClosedToolGroup[]): void {
     if (this.current && this.current.actions.length >= MIN_GROUP_TOOLS) out.push(this.current);
     this.current = null;
+    this.sinceProgress = 0;
+    this.progressAt = nextProgressAt();
   }
 }
 
@@ -144,6 +166,11 @@ export function sanitizeSummary(raw: string): string {
   return text;
 }
 
+const PROGRESS_SYSTEM =
+  "你给编程助手界面里一组正在进行的工具调用写一行进度说明，告诉用户它此刻在忙什么。" +
+  "要求：中文，不超过 22 字，以「正在」开头，侧重最近几步、说清在找什么或确认什么，" +
+  "不要罗列文件名（最多提 1~2 个最关键的名字）。不要引号句号，不要解释。只输出这一行。";
+
 const SUMMARY_SYSTEM =
   "你给编程助手界面里的一组工具调用写一行标题，概括这一组操作做了什么。" +
   "要求：中文，不超过 25 字，一句话，用「查看了…」「定位了…」「对比了…」这类过去式动宾短语，" +
@@ -162,13 +189,15 @@ export async function generateToolGroupSummary(params: {
   /** 声明的思考能力：think:false 要据此决定是否显式下发「关闭思考」参数 */
   modelSupportsThinking?: boolean;
   signal?: AbortSignal;
+  /** live：分组还在进行，写「正在…」的进度说明；缺省是分组结束后的过去式标题 */
+  live?: boolean;
 }): Promise<string> {
-  const { strategy, model, request, actions, modelSupportsThinking, signal } = params;
+  const { strategy, model, request, actions, modelSupportsThinking, signal, live } = params;
   const shown = actions.slice(0, 20);
   const more = actions.length > shown.length ? `\n…另有 ${actions.length - shown.length} 个类似操作` : "";
   const user = `用户的要求：${clip(request, 300)}\n这一组操作：\n${shown.map((a) => `- ${a}`).join("\n")}${more}`;
   const messages: ChatCompletionMessageParam[] = [
-    { role: "system", content: SUMMARY_SYSTEM },
+    { role: "system", content: live ? PROGRESS_SYSTEM : SUMMARY_SYSTEM },
     { role: "user", content: user },
   ];
 

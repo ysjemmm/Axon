@@ -135,6 +135,7 @@ export const AGENT_EVENT = {
   TOOL_HISTORY_MISMATCH: "tool_history_mismatch",
   /** 连续工具调用分组的一句话摘要（大折叠行标题），按组内第一个工具调用 id 挂载 */
   TOOL_GROUP_SUMMARY: "tool_group_summary",
+  TOOL_GROUP_PROGRESS: "tool_group_progress",
 } as const;
 
 // ═══════════════════════════════════════════════════════════════════

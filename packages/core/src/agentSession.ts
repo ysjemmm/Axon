@@ -2120,6 +2120,19 @@ export class AgentSession {
    * 只对 Chat Completions 协议的模型生成（DeepSeek / Qwen / GLM 等）；Cowork 不展示工具调用，
    * 不需要。fire-and-forget：失败、超时、用户取消都直接放弃，前端照常只显示统计。
    */
+  /** 进行中的分组攒够 3~5 个工具：生成一条「正在…」的阶段摘要推给前端（不落盘，分组结束后的标题才落盘） */
+  private summarizeToolGroupProgress(strategy: LLMStrategy): void {
+    const group = this.toolGroupTracker.takeProgress();
+    if (!group || strategy.name !== "chat_completions" || this.humanizedStatus) return;
+    const request = this.lastUserInput?.content ?? "";
+    void generateToolGroupSummary({
+      strategy, model: this.model, request, actions: group.actions.slice(-8), live: true,
+      modelSupportsThinking: declaredThinkingFor(this.model, this.provider), signal: this.abortController?.signal,
+    }).then((summary) => {
+      if (summary) this.send("tool_group_progress", { toolCallId: group.anchorToolCallId, summary });
+    }).catch(() => { /* 锦上添花，失败不影响主流程 */ });
+  }
+
   private summarizeToolGroups(strategy: LLMStrategy, groups: ClosedToolGroup[]): void {
     if (groups.length === 0 || strategy.name !== "chat_completions" || this.humanizedStatus) return;
     const model = this.model;
@@ -3422,6 +3435,7 @@ export class AgentSession {
       });
       this.messages.push(assistantMsg);
       this.summarizeToolGroups(strategy, this.toolGroupTracker.onRound(contentBuffer, toolCalls));
+      this.summarizeToolGroupProgress(strategy);
 
       // 工具轮执行：由新链路 DefaultToolDispatchHandler 编排（驱动 plan→execute→complete 状态机），
       // 每个工具的实际执行/门控/前端事件/落盘复用已验证的 executeSingleToolCall

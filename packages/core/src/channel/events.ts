@@ -286,7 +286,9 @@ export type AgentEventPayload =
   // ── 模型历史格式不兼容（deepseek 输出 DSML 退化）──
   | { type: "tool_history_mismatch"; model: string }
   // ── 连续工具调用分组的一句话摘要（前端大折叠行的标题；toolCallId = 组内第一个工具调用）──
-  | { type: "tool_group_summary"; toolCallId: string; summary: string };
+  | { type: "tool_group_summary"; toolCallId: string; summary: string }
+  // ── 进行中的分组每 3~5 个工具一条「正在…」阶段摘要（不落盘）──
+  | { type: "tool_group_progress"; toolCallId: string; summary: string };
 
 /**
  * AgentEvent —— 出站事件（含多会话路由标签）。

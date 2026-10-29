@@ -594,94 +594,7 @@ input[type="file"],
      在相邻像素间跳档，那是真抖动。scaleY 只沿描边轴向拉伸，不改变描边厚度。
    · transform-origin 取辐条内端（12, 7.5 用户单位），所以是从中心朝外生长，而非两端齐伸。
      默认 transform-box: view-box，px 值直接对应 viewBox 用户坐标。 */
-/* ── 各状态的动作（AxonSpark 的 SparkMode）──
-   每个状态内八根辐条同一个 duration，delay = -i × 周期 / 8 均分相位（--i 由组件写在辐条上）。
-   整体旋转放在 .axon-spark-body 上，与辐条伸缩分属两层，互不覆盖 transform。 */
-.axon-spark-ray {
-  transform-origin: 12px 7.5px;
-}
-.axon-spark-body {
-  transform-origin: 12px 12px;
-}
-
-/* 静止：略淡，表示这一轮已经结束 */
-.axon-spark--idle .axon-spark-ray {
-  stroke-opacity: 0.6;
-}
-
-/* think：波纹绕圈（1.6s）+ 整颗慢转（9s 一圈）。两者周期不同，但一个动辐条长度、一个动整体角度，
-   不叠加在同一属性上，不会出现明暗节拍。 */
-@keyframes axon-spark-wave {
-  0%, 100% { transform: scaleY(0.38); opacity: 0.3; }
-  50% { transform: scaleY(1); opacity: 1; }
-}
-@keyframes axon-spark-turn {
-  to { transform: rotate(360deg); }
-}
-.axon-spark--think .axon-spark-body {
-  animation: axon-spark-turn 9s linear infinite;
-}
-.axon-spark--think .axon-spark-ray {
-  animation: axon-spark-wave 1.6s ease-in-out infinite;
-  animation-delay: calc(var(--i) * -0.2s);
-}
-
-/* write：奇偶辐条反相闪烁，短促轻快 */
-@keyframes axon-spark-twinkle {
-  0%, 100% { transform: scaleY(1); opacity: 1; }
-  50% { transform: scaleY(0.5); opacity: 0.35; }
-}
-.axon-spark--write .axon-spark-ray {
-  animation: axon-spark-twinkle 0.9s cubic-bezier(0.45, 0, 0.55, 1) infinite;
-  animation-delay: calc(mod(var(--i), 2) * -0.45s);
-}
-/* 不支持 CSS mod() 的内核：退化为相邻错相的波纹，仍是轻快节奏 */
-@supports not (width: calc(mod(3px, 2px))) {
-  .axon-spark--write .axon-spark-ray {
-    animation-delay: calc(var(--i) * -0.1125s);
-  }
-}
-
-/* tool：一根亮辐条带拖尾绕圈追逐（类似加载，但辐条长度基本不变，只有亮度在转） */
-@keyframes axon-spark-chase {
-  0% { opacity: 1; transform: scaleY(1); }
-  30% { opacity: 0.45; transform: scaleY(0.82); }
-  60%, 100% { opacity: 0.18; transform: scaleY(0.7); }
-}
-.axon-spark--tool .axon-spark-ray {
-  animation: axon-spark-chase 0.96s linear infinite;
-  animation-delay: calc(var(--i) * 0.12s - 0.96s);
-}
-
-/* wait：所有辐条同步慢呼吸——停下来等你 */
-@keyframes axon-spark-breathe {
-  0%, 100% { transform: scaleY(0.72); opacity: 0.5; }
-  50% { transform: scaleY(1); opacity: 1; }
-}
-.axon-spark--wait .axon-spark-ray {
-  animation: axon-spark-breathe 2.2s ease-in-out infinite;
-}
-
-/* compact：整体向中心收拢再舒展 */
-@keyframes axon-spark-squeeze {
-  0%, 100% { transform: scale(1); }
-  45%, 55% { transform: scale(0.62); }
-}
-.axon-spark--compact .axon-spark-body {
-  animation: axon-spark-squeeze 1.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
-}
-
-/* 状态切换时的回弹形变：先缩一下、带一点旋转，再弹回原样。
-   只作用在 svg 本身，与内部各状态动画分层，把两套动作的相位差盖住。 */
-@keyframes axon-spark-morph {
-  0% { transform: scale(0.7) rotate(-35deg); opacity: 0.55; }
-  60% { transform: scale(1.12) rotate(6deg); opacity: 1; }
-  100% { transform: scale(1) rotate(0deg); opacity: 1; }
-}
-.axon-spark-morph {
-  transform-origin: center;
-  animation: axon-spark-morph 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
+/* AxonSpark 的动作由组件里的一套连续参数驱动（requestAnimationFrame），不再用分状态的关键帧，见 AxonSpark.tsx */
 
 /* 空态问候语旁的舒展星芒（EmptyStateGreeting 的 AxonBloom）。
    与 .axon-spark-spoke 同源的约束：只动 scaleY + opacity，不动 stroke-width；
@@ -1082,9 +995,6 @@ body.vscode-high-contrast {
   }
 
   /* 停在完全展开态，而不是停在关键帧起点（scaleY 0.34 会缩成一小团） */
-  .axon-spark-ray,
-  .axon-spark-body,
-  .axon-spark-morph,
   .axon-bloom-ray {
     animation: none;
     transform: none;
@@ -1397,6 +1307,25 @@ body.vscode-high-contrast {
  * 这是入场动画在虚拟列表里的固有性质，不是 bug；位移只有 6px、时长 0.32s，观感是"浮现"而非"跳"。
  * 若确实不想要重播，得改成"只对刚结束的那一轮播"（需在消息上记一个已播标记），而不是靠 CSS 能做到的。
  */
+/* 翻牌切换（折叠组的阶段摘要）：旧的一行向上翻走，新的从下面翻到中间 */
+@keyframes axon-flip-in {
+  from { transform: translateY(100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+@keyframes axon-flip-out {
+  from { transform: translateY(0); opacity: 1; }
+  to { transform: translateY(-100%); opacity: 0; }
+}
+.animate-flip-in {
+  animation: axon-flip-in 0.36s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+.animate-flip-out {
+  animation: axon-flip-out 0.36s cubic-bezier(0.55, 0, 0.75, 0.45) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-flip-in, .animate-flip-out { animation-duration: 1ms; }
+}
+
 .animate-rise-in {
   animation: axon-rise-in 0.32s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
