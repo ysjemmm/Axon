@@ -11,6 +11,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { Check, Clock, ExternalLink, GitCompare, Loader2, RotateCcw, Search, Undo2, X } from "lucide-react";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
+import { collectTempFiles, isTempFilePath } from "@/lib/tempFiles";
 import type { ChatMessage } from "./chat/types";
 import { openDiff as openDiffView, openMergedDiff, usePanelClientId, type DiffRef } from "@/lib/openDiff";
 
@@ -161,7 +162,8 @@ export function AppliedChangesBar({
       for (const seg of msg.segments) {
         if (seg.type !== "tool" || seg.status !== "success") continue;
         const collect = (path: string, editId?: string, reverted?: boolean, undoable?: boolean, oldContent?: string, newContent?: string, ref?: DiffRef) => {
-          if (pendingSet.has(path)) return;
+          // .axon/tmp/ 下的一次性脚本不是用户要的改动，不列（底部单独说一句）
+          if (pendingSet.has(path) || isTempFilePath(path)) return;
           const existing = map.get(path);
           if (existing) {
             // 同一文件多次编辑：取最早 oldContent + 最新 newContent，撤销状态取最新
@@ -181,7 +183,7 @@ export function AppliedChangesBar({
     }
     // 最近改的排在前面
     const applied = Array.from(map.values()).reverse();
-    const pending: ChangeFile[] = pendingPaths.map((p) => ({
+    const pending: ChangeFile[] = pendingPaths.filter((p) => !isTempFilePath(p)).map((p) => ({
       path: p, status: "pending" as const, oldContent: pendingDiffs[p]?.oldContent, newContent: pendingDiffs[p]?.newContent,
     }));
     return { pendingFiles: pending, appliedFiles: applied };
@@ -205,6 +207,7 @@ export function AppliedChangesBar({
   const filteredSnapshots = !q ? snapshots : snapshots.filter((s) => s.label.toLowerCase().includes(q));
 
   const totalChanges = pendingFiles.length + appliedFiles.length;
+  const tempFiles = useMemo(() => collectTempFiles(chatHistory), [chatHistory]);
   const hasRollback = !!onListSnapshots;
   const showSearch = tab === "changes" ? totalChanges > SEARCH_THRESHOLD : snapshots.length > SEARCH_THRESHOLD;
 
@@ -300,6 +303,14 @@ export function AppliedChangesBar({
             ))}
             {filteredPending.length + filteredApplied.length === 0 && (
               <div className="py-6 text-center text-[11.5px] text-muted-foreground">{q ? "没有匹配的文件" : "这个会话还没有改动文件"}</div>
+            )}
+            {tempFiles.length > 0 && !q && (
+              <div
+                className="mx-1 mt-1 border-t border-border/50 px-1.5 pb-0.5 pt-1.5 text-[11px] text-muted-foreground/70"
+                aria-label={tempFiles.join("、")}
+              >
+                另有 {tempFiles.length} 个临时脚本放在 .axon/tmp/，不计入改动、不进 git，过几天自动清理
+              </div>
             )}
           </>
         )}

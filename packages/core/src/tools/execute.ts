@@ -19,7 +19,8 @@
 import { describeShellEnvironment } from "../environment.js";
 import { findSecrets } from "../wiki/wikiSecrets.js";
 import { findUnterminatedCommand } from "./commandSyntax.js";
-import { resolve, relative, sep } from "node:path";
+import { axonTmpDir, ensureAxonLocalIgnore, isAxonTmpPath, pruneAxonTmp } from "./axonTmp.js";
+import { resolve, relative, sep, basename, join } from "node:path";
 import { isWithinWorkspaces } from "./safety.js";
 import { formatWaitResult, waitForProcesses, waitTimeoutMs } from "./processWait.js";
 import {
@@ -235,6 +236,20 @@ export async function executeToolCall(
       }
       if (typeof args.content !== "string") {
         throw new Error("create_file 失败：缺少必填参数 content。请提供文件内容（字符串，可为空串）。");
+      }
+      // 一次性脚本：放进 <工作区>/.axon/tmp/，直接写盘，不走改动审阅 —— 它不是用户要的改动，
+      // 进了改动列表只会把真正的改动淹没。路径本身就在 .axon/tmp/ 下的同样处理。
+      if (args.temporary === true || isAxonTmpPath(args.path)) {
+        const root = owningWorkspace(cwd, workspaces && workspaces.length ? workspaces : [cwd]);
+        const name = basename(String(args.path).replace(/\\/g, "/")) || "script.tmp";
+        const target = join(axonTmpDir(root), name);
+        await host.fs.mkdirp(axonTmpDir(root));
+        await ensureAxonLocalIgnore(host, root);
+        await pruneAxonTmp(host, root);
+        await host.fs.write(target, args.content);
+        if (meta) meta.tempFile = target;
+        const rel = `.axon/tmp/${name}`;
+        return `已写入临时文件 ${rel}（绝对路径 ${target}）。它不进 git、不算作用户的改动，过几天会自动清理。运行时用这个路径，例如 node ${rel}。`;
       }
       const filePath = await resolveInWorkspaces(args.path, cwd, host, workspaces, { create: true });
       assertWithinWorkspaces(filePath, cwd, workspaces, "create_file", writeRoots);

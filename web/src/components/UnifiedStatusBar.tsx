@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState, useMemo, type ReactNode } fro
 import { createPortal } from "react-dom";
 import { FileDiff, ChevronDown } from "lucide-react";
 import { AppliedChangesBar } from "./AppliedChangesBar";
+import { isTempFilePath } from "@/lib/tempFiles";
 import type { ChatMessage } from "./chat/types";
 
 interface UnifiedStatusBarProps {
@@ -77,16 +78,18 @@ export function UnifiedStatusBar({
 
   // 计算文件改动数量
   const { totalChanges, pendingCount, appliedCount } = useMemo(() => {
-    const pendingCount = pendingPaths.length;
+    // .axon/tmp/ 下的一次性脚本不算改动
+    const realPending = pendingPaths.filter((p) => !isTempFilePath(p));
+    const pendingCount = realPending.length;
     const assistantMsgs = chatHistory.filter((m) => m.role === "assistant" && m.segments);
     const appliedSet = new Set<string>();
     for (const msg of assistantMsgs) {
       for (const seg of msg.segments!) {
         if (seg.type !== "tool" || seg.status !== "success") continue;
-        if (seg.diff?.path && !pendingPaths.includes(seg.diff.path)) appliedSet.add(seg.diff.path);
+        if (seg.diff?.path && !pendingPaths.includes(seg.diff.path) && !isTempFilePath(seg.diff.path)) appliedSet.add(seg.diff.path);
         if (seg.diffs) {
           for (const d of seg.diffs) {
-            if (!pendingPaths.includes(d.path)) appliedSet.add(d.path);
+            if (!pendingPaths.includes(d.path) && !isTempFilePath(d.path)) appliedSet.add(d.path);
           }
         }
       }

@@ -76,6 +76,8 @@ export function wikiGitignorePath(workspace: string): string {
 export const WIKI_GITIGNORE_CONTENT = `# Axon：只忽略本机产物；AXON.md、rules/、skills/、wiki/、settings.json 等项目配置照常入库
 #   relays/ —— 某次任务的中间产物（run-scoped），任务结束即历史，不必共享
 /relays/
+#   tmp/ —— AI 写的一次性验证脚本，用完即弃，定期自动清理
+/tmp/
 #   个人覆盖
 *.local.md
 *.local.json
@@ -83,6 +85,24 @@ export const WIKI_GITIGNORE_CONTENT = `# Axon：只忽略本机产物；AXON.md�
 /settings/providers.json
 /settings/mcp.json
 `;
+
+/**
+ * 确保 <工作区>/.axon/.gitignore 存在且是最新的：
+ *   · 不存在 → 写入默认内容
+ *   · 是旧版自动生成、原样未改的 → 升级
+ *   · 用户的版本里缺了 /tmp/（且没有一刀切的 /*）→ 只补这一行，其它不动
+ */
+export async function ensureAxonGitignore(host: AgentHost, root: string): Promise<void> {
+  const p = wikiGitignorePath(root);
+  const cur = await host.fs.read(p);
+  if (cur === null || cur.replace(/\r\n/g, "\n").trim() === LEGACY_GITIGNORE_CONTENT.trim()) {
+    await host.fs.write(p, WIKI_GITIGNORE_CONTENT);
+    return;
+  }
+  if (!/^\/?tmp\/?\s*$/m.test(cur) && !/^\/\*\s*$/m.test(cur)) {
+    await host.fs.write(p, `${cur.trimEnd()}\n#   tmp/ —— AI 写的一次性验证脚本，用完即弃\n/tmp/\n`);
+  }
+}
 
 /** 旧版自动生成的内容：遇到原样未改的就升级成新版（用户改过的不动） */
 const LEGACY_GITIGNORE_CONTENT = `# Axon 本地状态：本目录除 wiki/ 外一律不入库
@@ -1281,9 +1301,6 @@ export class WikiStore {
    */
   async ensureGitignore(root: string = this.writeRoot): Promise<void> {
     if (!root) return;
-    const p = wikiGitignorePath(root);
-    const cur = await this.host.fs.read(p);
-    if (cur !== null && cur.replace(/\r\n/g, "\n").trim() !== LEGACY_GITIGNORE_CONTENT.trim()) return;
-    await this.host.fs.write(p, WIKI_GITIGNORE_CONTENT);
+    await ensureAxonGitignore(this.host, root);
   }
 }
