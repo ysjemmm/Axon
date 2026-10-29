@@ -718,23 +718,14 @@ export function setVisionFallbackModel(model: string | null, level: ProviderLeve
   return put(`/api/providers/vision-fallback${providerQuery(workspace)}`, { model, level });
 }
 
-/** 语音输入配置：录音交给哪个 Provider 的哪个模型转文字（只存用户级；不配置时用内置服务） */
+/** 语音输入配置：录音交给哪个 Provider 的哪个模型转文字（只存用户级） */
 export interface VoiceInputConfig {
   provider: string;
   model: string;
   language?: string;
 }
 
-/** 内置识别服务（硅基流动）：打包时注入了 Key 才有；Key 不会传到界面 */
-export interface BuiltinVoiceInfo {
-  label: string;
-  model: string;
-}
-
-/** provider 为 "builtin" 表示用内置服务 */
-export const BUILTIN_VOICE_PROVIDER = "builtin";
-
-export function getVoiceConfig(): Promise<{ config: VoiceInputConfig | null; supported: boolean; builtin: BuiltinVoiceInfo | null }> {
+export function getVoiceConfig(): Promise<{ config: VoiceInputConfig | null; supported: boolean }> {
   return get("/api/voice/config");
 }
 

@@ -40,11 +40,6 @@ const options = {
 	mainFields: ["module", "main"],
 	conditions: ["import", "node"],
 	logLevel: "info",
-	// 内置语音识别（硅基流动）的 Key：打包时从环境变量注入，不进 git。
-	// 没设就是空串 —— 内置识别不可用，用户自己在设置里选 Provider 照常能用。
-	define: {
-		__AXON_BUILTIN_VOICE_KEY__: JSON.stringify(process.env.AXON_BUILTIN_VOICE_KEY || ""),
-	},
 };
 
 /**
@@ -73,5 +68,4 @@ if (watch) {
 } else {
 	await build(options);
 	shipPlaywright();
-	console.log(`[esbuild] 内置语音识别 Key：${process.env.AXON_BUILTIN_VOICE_KEY ? "已注入" : "未设置（AXON_BUILTIN_VOICE_KEY）"}`);
 }

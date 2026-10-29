@@ -1,13 +1,13 @@
 /**
- * 语音输入设置：默认用内置的硅基流动（免费），也可以改用自己某个 Provider 的识别模型。
- * 识别走 OpenAI 兼容的 /audio/transcriptions，自选 Provider 时复用它的地址和 Key，不用再填一遍。
+ * 语音输入设置：选一个已配置的 Provider 和识别模型。
+ * 识别走 OpenAI 兼容的 /audio/transcriptions，复用 Provider 的地址和 Key，不用再填一遍。
  */
 
 import { useEffect, useState } from "react";
 import { Check } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { BUILTIN_VOICE_PROVIDER, getVoiceConfig, setVoiceConfig, type BuiltinVoiceInfo, type ResolvedProviderInfo, type VoiceInputConfig } from "@/lib/apiClient";
+import { getVoiceConfig, setVoiceConfig, type ResolvedProviderInfo, type VoiceInputConfig } from "@/lib/apiClient";
 
 /** 常见服务商的识别模型（第一个是默认推荐） */
 function suggestedModels(baseUrl: string): string[] {
@@ -30,14 +30,13 @@ const NONE = "__none__";
 export function VoiceInputSettings({ providers }: { providers: ResolvedProviderInfo[] }) {
   const [config, setConfig] = useState<VoiceInputConfig | null>(null);
   const [model, setModel] = useState("");
-  const [builtin, setBuiltin] = useState<BuiltinVoiceInfo | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [saved, setSaved] = useState(false);
   const usable = providers.filter((p) => p.configured);
 
   useEffect(() => {
     getVoiceConfig()
-      .then((r) => { setConfig(r.config); setModel(r.config?.model ?? ""); setBuiltin(r.builtin ?? null); })
+      .then((r) => { setConfig(r.config); setModel(r.config?.model ?? ""); })
       .catch(() => undefined)
       .finally(() => setLoaded(true));
   }, []);
@@ -54,12 +53,7 @@ export function VoiceInputSettings({ providers }: { providers: ResolvedProviderI
   };
 
   const pickProvider = (name: string) => {
-    if (name === NONE || name === BUILTIN_VOICE_PROVIDER) {
-      // 回到内置：清掉自选配置即可（没配置就用内置），保留语言选择
-      setModel("");
-      void save(name === BUILTIN_VOICE_PROVIDER && config?.language && builtin ? { provider: BUILTIN_VOICE_PROVIDER, model: builtin.model, language: config.language } : null);
-      return;
-    }
+    if (name === NONE) { setModel(""); void save(null); return; }
     const p = usable.find((x) => x.name === name);
     // 换服务商时模型换成它的推荐值：上一家的模型名到这家多半不认
     const m = p ? suggestedModels(p.baseUrl)[0] : "whisper-1";
@@ -69,42 +63,25 @@ export function VoiceInputSettings({ providers }: { providers: ResolvedProviderI
 
   const current = usable.find((p) => p.name === config?.provider);
   const suggestions = current ? suggestedModels(current.baseUrl) : [];
-  /** 当前是否在用内置服务：没有自选配置、或明确选了内置 */
-  const usingBuiltin = !!builtin && (!config || config.provider === BUILTIN_VOICE_PROVIDER);
-  const selectValue = usingBuiltin ? BUILTIN_VOICE_PROVIDER : config?.provider ?? NONE;
-  /** 语言对内置和自选都生效 */
-  const languageTarget: VoiceInputConfig | null = usingBuiltin
-    ? { provider: BUILTIN_VOICE_PROVIDER, model: builtin!.model, language: config?.language }
-    : config;
 
   if (!loaded) return null;
   return (
     <div className="rounded-xl border border-border px-4 py-3">
       <p className="mb-3 text-[12px] text-muted-foreground">
-        输入框右侧的麦克风：录音在本机完成，再交给这里选的服务转成文字。默认用内置的硅基流动（免费）；
-        也可以改用自己的 Provider（需要支持语音识别接口，如 OpenAI、硅基流动、Groq）。
+        输入框右侧的麦克风：录音在本机完成，再交给这里选的服务转成文字（需要服务商支持语音识别接口，如 OpenAI、硅基流动、Groq）。
         {saved && <span className="ml-2 inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-500"><Check className="h-3 w-3" />已保存</span>}
       </p>
       <div className="grid grid-cols-[72px_1fr] items-center gap-x-3 gap-y-2 text-[12px]">
         <span className="text-muted-foreground">服务商</span>
-        <Select value={selectValue} onValueChange={pickProvider}>
+        <Select value={config?.provider ?? NONE} onValueChange={pickProvider}>
           <SelectTrigger className="h-8 w-full max-w-[280px] text-[12px]"><SelectValue /></SelectTrigger>
           <SelectContent>
-            {builtin
-              ? <SelectItem value={BUILTIN_VOICE_PROVIDER}>内置 · 硅基流动（免费）</SelectItem>
-              : <SelectItem value={NONE}>不启用</SelectItem>}
+            <SelectItem value={NONE}>不启用</SelectItem>
             {usable.map((p) => <SelectItem key={p.name} value={p.name}>{p.label || p.name}</SelectItem>)}
           </SelectContent>
         </Select>
 
-        {usingBuiltin && (
-          <>
-            <span className="text-muted-foreground">模型</span>
-            <span className="font-mono text-[11px] text-muted-foreground">{builtin!.model}</span>
-          </>
-        )}
-
-        {config && !usingBuiltin && (
+        {config && (
           <>
             <span className="text-muted-foreground">模型</span>
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -127,13 +104,9 @@ export function VoiceInputSettings({ providers }: { providers: ResolvedProviderI
                 </button>
               ))}
             </div>
-          </>
-        )}
 
-        {languageTarget && (
-          <>
             <span className="text-muted-foreground">语言</span>
-            <Select value={languageTarget.language || "auto"} onValueChange={(v) => void save({ ...languageTarget, language: v === "auto" ? undefined : v })}>
+            <Select value={config.language || "auto"} onValueChange={(v) => void save({ ...config, language: v === "auto" ? undefined : v })}>
               <SelectTrigger className="h-8 w-full max-w-[160px] text-[12px]"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {LANGUAGES.map((l) => <SelectItem key={l.value} value={l.value}>{l.label}</SelectItem>)}
