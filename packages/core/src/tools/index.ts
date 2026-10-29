@@ -13,6 +13,7 @@ export * from "./catalog.js";
 export * from "./safety.js";
 export * from "./commandTrust.js";
 export * from "./commandGate.js";
+export * from "./commandSyntax.js";
 export * from "./applyPatch.js";
 export * from "./reverseEdit.js";
 export { executeToolCall } from "./execute.js";

@@ -21,6 +21,7 @@
  * └──────────────────────────────────────────────────────────┘
  */
 
+import { findUnterminatedCommand } from "@axon/core";
 import * as vscode from "vscode";
 import { spawn } from "node:child_process";
 import { commandTerminalEnv, isAxonCommandTerminal } from "./terminalIdentity.js";
@@ -435,6 +436,9 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** 报过「开始执行」事件的终端：只有这些终端上，「迟迟没开始执行」才能当作卡住的信号 */
+const siStartSeen = new WeakSet<vscode.Terminal>();
+
 function isWaitingForStdin(output: string): boolean {
   const tail = output.slice(-600);
   const lines = tail.split(/\r?\n/).filter((l) => l.trim());
@@ -521,12 +525,16 @@ async function runWithShellIntegration(
 
   // 命令篡改检测：同终端上有新命令启动（非我们的 execution）→ 命令被篡改/覆盖
   let commandHijacked = false;
+  let ourStarted = false;
+  const sentAt = Date.now();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = vscode.window as any;
   const startChecker: vscode.Disposable | undefined =
     typeof w.onDidStartTerminalShellExecution === "function"
       ? w.onDidStartTerminalShellExecution(
         (e: { terminal: vscode.Terminal; execution: vscode.TerminalShellExecution }) => {
+          if (e.terminal === t) siStartSeen.add(t);
+          if (e.execution === execution) ourStarted = true;
           if (e.terminal === t && e.execution !== execution) {
             console.debug("[terminal] command hijacked: new execution started on same terminal");
             commandHijacked = true;
@@ -540,6 +548,8 @@ async function runWithShellIntegration(
     signal: opts.signal,
     isTerminalAlive: () => terminalAlive,
     commandHijacked: () => commandHijacked,
+    // 只在这个终端以前报过「开始执行」事件时才信这个信号：有的 shell 集成不报，不能据此误杀静默的长命令
+    notStarted: () => siStartSeen.has(t) && !ourStarted && Date.now() - sentAt > 4000,
     onEnd: (cb) => {
       let matched = false;
       const d = vscode.window.onDidEndTerminalShellExecution((e) => {
@@ -831,28 +841,19 @@ interface WaitForCompletionConfig {
   isTerminalAlive?: () => boolean;
   /** 命令是否被篡改/覆盖（同终端上有新命令启动，非我们的 execution） */
   commandHijacked?: () => boolean;
+  /**
+   * shell 还没开始执行我们的命令（这个终端以前报过「开始执行」事件，这次却迟迟没报）。
+   * 卡在续行提示符时 shell 根本没开始执行，所以这是比解析命令文本更可靠的信号。
+   */
+  notStarted?: () => boolean;
 }
 
-/** 检查命令字符串是否语法不完整（引号/括号未闭合），用于判断 >> 续行 */
+/**
+ * 命令是否没写完（引号 / here-string / 括号没闭合、行尾续行符），用于判断终端是否卡在续行。
+ * 与发送前的检查同一套规则（core 的 findUnterminatedCommand）；这里是运行时兜底。
+ */
 function isCommandIncomplete(command: string): boolean {
-  if (!command) return false;
-  // PowerShell 单引号和双引号都可以触发 >> 续行
-  let dq = false, sq = false;
-  for (let i = 0; i < command.length; i++) {
-    const ch = command[i];
-    if (ch === '"' && !sq) dq = !dq;            // 双引号（不在单引号内时切换）
-    else if (ch === "'" && !dq) sq = !sq;       // 单引号（不在双引号内时切换）
-    // 反引号 ` 转义下一个字符（跳过，避免下一字符被误判）
-    else if (ch === "`") { i++; }
-  }
-  if (dq || sq) return true;
-  // 括号/花括号配对（粗略）
-  let paren = 0, brace = 0;
-  for (const ch of command) {
-    if (ch === '(') paren++; else if (ch === ')') paren--;
-    else if (ch === '{') brace++; else if (ch === '}') brace--;
-  }
-  return paren > 0 || brace > 0;
+  return findUnterminatedCommand(command) !== null;
 }
 
 /**
@@ -901,11 +902,13 @@ function waitForCompletion(cfg: WaitForCompletionConfig): Promise<{ code: number
         idleCount++;
         if (idleCount >= (SI_IDLE_MS / IDLE_POLL_MS)) {
           const incomplete = isCommandIncomplete(cfg.command ?? "");
-          const waiting = cfg.isWaitingForStdin();
-          // A：命令不完整 + 无输出 + idle → 续行卡死
-          if (incomplete && curLen === 0) {
+          // 输出末尾是 PowerShell 的 >> 续行提示符：一定是卡在续行，不是在等用户回答问题
+          const continuation = isContinuationLine(output) || isContinuationLine(cfg.getTerminalText?.() ?? "");
+          const waiting = !continuation && cfg.isWaitingForStdin();
+          // A：卡在续行 → 自动 Ctrl+C 并把原因交还给 AI（不再弹「等待你的输入」、一直等到超时）
+          if (continuation || ((incomplete || cfg.notStarted?.()) && curLen === 0)) {
             if (!stuckAt) stuckAt = Date.now();
-            if (Date.now() - stuckAt > 5000) {
+            if (Date.now() - stuckAt > 3000) {
               console.debug("[terminal] idle: incomplete command stuck too long → cancelling");
               cfg.cancelTerminal?.();
               finish(0, "terminal_stuck_waiting_input");

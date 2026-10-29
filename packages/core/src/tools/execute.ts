@@ -18,6 +18,7 @@
 
 import { describeShellEnvironment } from "../environment.js";
 import { findSecrets } from "../wiki/wikiSecrets.js";
+import { findUnterminatedCommand } from "./commandSyntax.js";
 import { resolve, relative, sep } from "node:path";
 import { isWithinWorkspaces } from "./safety.js";
 import { formatWaitResult, waitForProcesses, waitTimeoutMs } from "./processWait.js";
@@ -428,6 +429,9 @@ export async function executeToolCall(
       return `${okPart}\n\n⚠️ 以下 ${failed.length} 个文件未能应用（已成功的文件不受影响）：\n${failPart}\n请针对失败的文件修正补丁后重试。`;
     }
     case "execute_command": {
+      // 没写完的命令（引号 / here-string / 括号没闭合、行尾续行符）不发给终端：
+      // 发出去 shell 会停在续行提示符等人输入，终端卡住，这一轮也跟着卡住。
+      assertCommandComplete(args.command);
       // 命令在用户可见的 "Axon" 终端里执行（可交互输入），用 Shell Integration 捕获输出。
       // 解析 cwd 参数：支持相对路径或绝对路径，不传时从命令文本智能推断工作区
       let execCwd: string;
@@ -515,6 +519,7 @@ export async function executeToolCall(
       if (!host.processes) {
         throw new Error("start_process 失败：当前形态不支持后台进程。请改用 execute_command（注意它会等命令结束，不适合常驻进程）。");
       }
+      assertCommandComplete(args.command);
       const procCwd = typeof args.cwd === "string" && args.cwd.trim()
         ? await resolveInWorkspaces(args.cwd, cwd, host, workspaces)
         : cwd;
@@ -1160,4 +1165,17 @@ function formatDiagnostics(results: DiagnosticFileResult[]): string {
     }
   }
   return textParts.join("\n\n");
+}
+
+/** 命令没写完就直接报错退回给模型，不发给终端（原因见 commandSyntax.ts） */
+function assertCommandComplete(command: unknown): void {
+  if (typeof command !== "string") return;
+  const problem = findUnterminatedCommand(command);
+  if (!problem) return;
+  const script = process.platform === "win32" ? ".ps1 / .js / .cjs" : ".sh / .js";
+  throw new ToolError(
+    `命令没有发送：${problem}。这样的命令发到终端会停在续行提示符等待输入，终端会卡住。\n` +
+    `请补全后再执行；逻辑复杂、引号多层嵌套的，改成先写临时脚本文件（${script}）再运行。`,
+    "命令没写完，已退回给 AI 修改",
+  );
 }
