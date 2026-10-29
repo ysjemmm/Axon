@@ -17,7 +17,8 @@ import {
   HTML_PREVIEW_MIN_HEIGHT,
   HTML_PREVIEW_SANDBOX,
 } from "@/lib/htmlPreviewResize";
-import { useThemeVersion } from "@/lib/theme";
+import { isDarkTheme, useThemeVersion } from "@/lib/theme";
+import { decorateMermaidSvg, mermaidConfig } from "@/lib/mermaidTheme";
 import { beginSpan, endSpan, recordIncident } from "@/lib/diagnostics";
 import { createRoot, type Root } from "react-dom/client";
 import { FormPanel } from "./chat/FormPanel";
@@ -1279,8 +1280,9 @@ async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: 
   let renderId = "";
   let renderHost: HTMLDivElement | null = null;
   try {
-    // 用 neutral 主题（文字深色），背景由 CSS 控制为 transparent
-    mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "strict", suppressErrorRendering: true });
+    // 手绘 + 多巴胺配色，按当前明暗主题取色（见 lib/mermaidTheme.ts）；主题切换时 themeTick 变化会重新渲染
+    const dark = isDarkTheme();
+    mermaid.initialize(mermaidConfig(dark));
     mermaid.setParseErrorHandler(() => { /* Mermaid syntax errors are intentionally silent in chat previews. */ });
     renderId = `axon-mmd-${Date.now()}-${mermaidRenderSeq++}`;
 
@@ -1313,6 +1315,7 @@ async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: 
     }
     const svg = wrapper.querySelector("svg");
     if (!svg) throw new Error("mermaid rendered but no SVG produced");
+    decorateMermaidSvg(svg, dark);
     // 按固有尺寸显示：不放大、只适应，超出缩放下限则横向滚动（见 diagramFit）
     fitSvgToContainer(svg);
     // 注入 style 覆盖文字/线条颜色，用 CSS 变量跟随主题
@@ -1329,14 +1332,6 @@ async function hydrateMermaid(block: HTMLElement, content: string, onRendered?: 
       }
       ${scope} .messageLine0, ${scope} .messageLine1, ${scope} .loopLine, ${scope} .actor-line, ${scope} line.loopLine {
         stroke: var(--foreground, #666) !important;
-      }
-      ${scope} rect.actor {
-        fill: var(--muted, #f4f4f5) !important;
-        stroke: var(--border, #e4e4e7) !important;
-      }
-      ${scope} .labelBox {
-        fill: var(--muted, #f4f4f5) !important;
-        stroke: var(--border, #e4e4e7) !important;
       }
     `;
     svg.appendChild(overrideStyle);
