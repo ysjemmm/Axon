@@ -76,9 +76,11 @@ export function SessionSwitcher({
   const rootRef = useRef<HTMLDivElement>(null);
 
   const current = tabs.find((t) => t.key === activeKey) || tabs[0] || null;
-  // 运行中计数只算"当前不可见的那些"：当前会话在跑，正文里已经有流式光标在动了，
-  // 再在标题上计一次数属于重复告知。
+  // 是否显示徽章看「后台有没有会话在跑」：当前会话在跑，正文里已经有流式光标在动了。
   const backgroundRunning = tabs.filter((t) => t.key !== activeKey && runningKeys.has(t.key)).length;
+  // 徽章上的数字是「正在运行的会话总数」（含当前这个）：用户数的是一共几个在跑。
+  // 只有当前会话在跑时不显示徽章 —— 正文里已经有流式光标，不必重复告知。
+  const totalRunning = tabs.filter((t) => runningKeys.has(t.key)).length;
 
   // 点击外部 / Escape 关闭下拉
   useEffect(() => {
@@ -128,11 +130,14 @@ export function SessionSwitcher({
             <span className="truncate font-medium">{displaySessionTitle(current?.title) || "新对话"}</span>
             {backgroundRunning > 0 && (
               <span
-                title={`另有 ${backgroundRunning} 个会话正在运行`}
-                className="shrink-0 inline-flex items-center gap-0.5 px-1 rounded-full bg-primary/15 text-primary text-[10px] leading-4"
+                title={`${totalRunning} 个会话正在运行（其中 ${backgroundRunning} 个在后台）`}
+                className="ml-0.5 inline-flex h-[18px] shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 pl-1.5 pr-2 text-[10.5px] font-medium tabular-nums text-emerald-700 ring-1 ring-inset ring-emerald-500/25 dark:text-emerald-400"
               >
-                <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-                {backgroundRunning}
+                <span className="relative flex h-1.5 w-1.5">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500/60 motion-reduce:hidden" />
+                  <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                </span>
+                {totalRunning}
               </span>
             )}
             <ChevronDown strokeWidth={HEADER_ICON_STROKE} className={`h-3.5 w-3.5 shrink-0 text-muted-foreground/80 transition-transform ${open ? "rotate-180" : ""}`} />
