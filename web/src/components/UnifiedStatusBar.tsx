@@ -35,6 +35,27 @@ interface UnifiedStatusBarProps {
   workspaces?: string[];
 }
 
+/**
+ * 一条消息改过的文件（成功的编辑工具、不含 .axon/tmp/ 临时文件），按消息对象缓存。
+ * 流式输出时历史每 80ms 换一个新数组，但只有正在输出的那条消息对象是新的 ——
+ * 其它消息直接命中缓存，不必每一拍把所有历史的工具段重扫一遍。
+ */
+const changedPathsCache = new WeakMap<ChatMessage, string[]>();
+function changedPathsOf(msg: ChatMessage): string[] {
+  const cached = changedPathsCache.get(msg);
+  if (cached) return cached;
+  const paths: string[] = [];
+  if (msg.role === "assistant" && msg.segments) {
+    for (const seg of msg.segments) {
+      if (seg.type !== "tool" || seg.status !== "success") continue;
+      if (seg.diff?.path && !isTempFilePath(seg.diff.path)) paths.push(seg.diff.path);
+      for (const d of seg.diffs ?? []) if (!isTempFilePath(d.path)) paths.push(d.path);
+    }
+  }
+  changedPathsCache.set(msg, paths);
+  return paths;
+}
+
 export function UnifiedStatusBar({
   mode,
   chatHistory,
@@ -81,17 +102,10 @@ export function UnifiedStatusBar({
     // .axon/tmp/ 下的一次性脚本不算改动
     const realPending = pendingPaths.filter((p) => !isTempFilePath(p));
     const pendingCount = realPending.length;
-    const assistantMsgs = chatHistory.filter((m) => m.role === "assistant" && m.segments);
     const appliedSet = new Set<string>();
-    for (const msg of assistantMsgs) {
-      for (const seg of msg.segments!) {
-        if (seg.type !== "tool" || seg.status !== "success") continue;
-        if (seg.diff?.path && !pendingPaths.includes(seg.diff.path) && !isTempFilePath(seg.diff.path)) appliedSet.add(seg.diff.path);
-        if (seg.diffs) {
-          for (const d of seg.diffs) {
-            if (!pendingPaths.includes(d.path) && !isTempFilePath(d.path)) appliedSet.add(d.path);
-          }
-        }
+    for (const msg of chatHistory) {
+      for (const path of changedPathsOf(msg)) {
+        if (!pendingPaths.includes(path)) appliedSet.add(path);
       }
     }
     const appliedCount = appliedSet.size;

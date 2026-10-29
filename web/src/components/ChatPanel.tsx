@@ -408,10 +408,19 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
   );
 
   /** 用户提问文本（content 优先，回退到 userSegments 拼接），供 sticky 条展示 */
+  // 流式输出时 chatHistory 每 80ms 换一个新数组，但用户消息本身没变：
+  // 只取用户消息、内容没变就沿用上一份结果，下游（提问目录、sticky 条）不必跟着每一拍重渲染
+  const userMessagesRef = useRef<ChatMessage[]>([]);
+  const userMessages = useMemo(() => {
+    const next = session.chatHistory.filter((m) => m.role === "user");
+    const prev = userMessagesRef.current;
+    if (prev.length === next.length && prev.every((m, i) => m === next[i])) return prev;
+    userMessagesRef.current = next;
+    return next;
+  }, [session.chatHistory]);
   const questionTextById = useMemo(() => {
     const map = new Map<string, string>();
-    for (const m of session.chatHistory) {
-      if (m.role !== "user") continue;
+    for (const m of userMessages) {
       let text = (m.content || "").trim();
       if (!text && m.userSegments && m.userSegments.length > 0) {
         text = m.userSegments.map((s) => (s.type === "text" ? s.text : s.tag?.name ?? "")).join("").trim();
@@ -419,17 +428,15 @@ export function ChatPanel({ clientId, sessionId, mode, connected, active, send, 
       map.set(m.id, text);
     }
     return map;
-  }, [session.chatHistory]);
+  }, [userMessages]);
   /** 提问目录（标题栏按钮）的条目 */
-  const userQuestions = useMemo(() => session.chatHistory
-    .filter((m) => m.role === "user")
-    .map((m) => ({
-      id: m.id,
-      text: questionTextById.get(m.id) || "",
-      timestamp: m.timestamp,
-      hasImage: !!(m.images && m.images.length > 0),
-      files: m.attachedFiles?.map((f) => f.name),
-    })), [session.chatHistory, questionTextById]);
+  const userQuestions = useMemo(() => userMessages.map((m) => ({
+    id: m.id,
+    text: questionTextById.get(m.id) || "",
+    timestamp: m.timestamp,
+    hasImage: !!(m.images && m.images.length > 0),
+    files: m.attachedFiles?.map((f) => f.name),
+  })), [userMessages, questionTextById]);
   // 标题栏按钮位：标题栏随 Cowork 开关重新挂载时节点会换，每次渲染后重取（同一节点时 setState 直接跳过）
   const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- 故意每次渲染后执行：节点换了要跟上
