@@ -18,7 +18,7 @@ import { readJsonConfig, writeJsonConfig } from "./safeConfigFile.js";
 import { SessionHub, type ControlCommand, type WorkspaceGroup, type CompactionUserConfig, type CreditBudgetUserConfig, webSearch, webFetch, setBuiltinPowersDir } from "@axon/core";
 import { DEFAULT_COMPACTION_CONFIG, DEFAULT_CREDIT_BUDGET_CONFIG, DEFAULT_TRACE_CONFIG, type TraceConfig } from "@axon/core";
 import { createVSCodeAgentHost, VSCodeCommandTrustStore } from "@axon/host-vscode";
-import { JsonFileStorage, createNodeMcpCapability, ensureFfmpeg, findFfmpeg, setMediaVendorDir, setImageProviderConfig } from "@axon/host-node";
+import { JsonFileStorage, closeAllBrowsers, createNodeMcpCapability, ensureFfmpeg, findFfmpeg, setMediaVendorDir, setImageProviderConfig } from "@axon/host-node";
 import type { ImageProviderConfig } from "@axon/host-node";
 import { loadProviderEnv } from "./loadEnv.js";
 import { VSCodeChannel } from "./vscodeChannel.js";
@@ -950,6 +950,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  // MCP 连接（stdio 子进程 / 远程会话）在扩展停用时要关掉，否则子进程会比窗口活得久
+  const mcpCapability = createNodeMcpCapability();
+  disposeOnDeactivate = async () => {
+    await Promise.allSettled([mcpCapability.dispose(), closeAllBrowsers()]);
+  };
   const hub = new SessionHub({
     storage,
     channel,
@@ -960,7 +965,7 @@ export function activate(context: vscode.ExtensionContext): void {
     workspaces: allWorkspaces,
     homeDir: homedir(),
     web: { search: webSearch, fetch: webFetch },
-    mcp: createNodeMcpCapability(),
+    mcp: mcpCapability,
     // 命令信任白名单：读写 `axon.trustedCommands` 配置（弹窗授权与设置管理共用同一份数据）
     commandTrust: new VSCodeCommandTrustStore(),
     // 滚动压缩配置：读取 VS Code 设置（axon.compaction.*），默认关闭
@@ -2470,6 +2475,10 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 }
 
-export function deactivate(): void {
-  /* 资源由 context.subscriptions 自动释放 */
+/** 停用时要异步收尾的资源（MCP 子进程、Playwright 浏览器）；activate 里赋值 */
+let disposeOnDeactivate: (() => Promise<void>) | undefined;
+
+export async function deactivate(): Promise<void> {
+  // 其余资源由 context.subscriptions 自动释放；这两类是子进程，必须显式关闭
+  await disposeOnDeactivate?.();
 }

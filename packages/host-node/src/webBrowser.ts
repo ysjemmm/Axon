@@ -29,7 +29,19 @@ const MAX_ERRORS = 200;
 const MAX_NETWORK = 200;
 const MAX_NETWORK_ENTRIES = 1000;
 
+/** 进程内所有浏览器实例：扩展停用时统一关掉，免得 Chromium 子进程比窗口活得久 */
+const liveBrowsers = new Set<PlaywrightBrowser>();
+
+/** 关闭进程内所有打开着的浏览器（扩展停用 / 窗口重载时调用） */
+export async function closeAllBrowsers(): Promise<void> {
+  await Promise.all([...liveBrowsers].map((b) => b.close().catch(() => false)));
+}
+
 export class PlaywrightBrowser implements HostWebBrowser {
+  constructor() {
+    liveBrowsers.add(this);
+  }
+
   private browser: Browser | null = null;
   private page: Page | null = null;
   private console: BrowserConsoleEntry[] = [];

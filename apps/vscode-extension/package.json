@@ -24,7 +24,7 @@
     "vscode": "^1.95.0"
   },
   "categories": ["AI", "Programming Languages", "Other"],
-  "activationEvents": ["*"],
+  "activationEvents": ["onStartupFinished"],
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",

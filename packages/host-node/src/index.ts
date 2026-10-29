@@ -25,7 +25,7 @@ import { NodeEditPresenter } from "./edits.js";
 export { NodeFileSystem } from "./fs.js";
 export { NodeCommandRunner } from "./commands.js";
 export { NodeProcessManager } from "./processes.js";
-export { PlaywrightBrowser } from "./webBrowser.js";
+export { PlaywrightBrowser, closeAllBrowsers } from "./webBrowser.js";
 export { NodeMediaRenderer, setMediaVendorDir } from "./mediaRenderer.js";
 export { HttpImageGenerator, setImageProviderConfig, getImageProviderConfig } from "./imageGenerator.js";
 export type { ImageProviderConfig } from "./imageGenerator.js";
