@@ -8,10 +8,10 @@
  *
  * ── 录音后端（按平台挑，挑不到给出明确的安装建议）──
  *   · Windows：PowerShell 里调系统自带的 winmm waveIn，零依赖
- *   · macOS：ffmpeg（avfoundation）→ sox 的 rec
+ *   · macOS：系统自带的 osascript 调 AVFoundation，零依赖（找不到 osascript 才退回 ffmpeg / sox）
  *   · Linux：arecord（ALSA 自带）→ ffmpeg（pulse / alsa）
- * 都让录音程序把 16kHz 单声道 PCM 写到标准输出，这边边收边算音量（界面画波形），
- * 停止时自己拼成 WAV。
+ * 除 macOS 外都让录音程序把 16kHz 单声道 PCM 写到标准输出，这边边收边算音量（界面画波形），
+ * 停止时自己拼成 WAV；macOS 由系统录音器写文件、实时报分贝。
  *
  * ── 识别 ──
  * 走 OpenAI 兼容的 /audio/transcriptions（OpenAI、硅基流动、Groq 等都支持），
@@ -20,6 +20,8 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findFfmpeg } from "@axon/host-node";
 import { getResolvedProviders, resolveProviderName } from "@axon/core";
@@ -46,6 +48,10 @@ interface Recording {
   chunks: Buffer[];
   /** 自上次取电平以来的音量（0~1），界面据此画波形 */
   levels: number[];
+  /** macOS：录音写到这个文件，停止标记文件出现后录音程序收尾退出 */
+  wavPath?: string;
+  stopFlag?: string;
+  tmpDir?: string;
   stderr: string;
   exited: Promise<number | null>;
   timer: ReturnType<typeof setTimeout>;
@@ -167,6 +173,56 @@ exit ([AxonWaveIn]::Run(${SAMPLE_RATE}))
 `;
 }
 
+/**
+ * macOS：用系统自带的 osascript（JavaScript for Automation）调 AVFoundation 的 AVAudioRecorder，零依赖。
+ * 录到 16kHz 单声道 WAV 文件；每 80ms 输出一行「L <分贝>」给界面画波形；停止标记文件出现后收尾退出。
+ *
+ * 不用 ffmpeg：Axon 自动下载的 macOS ffmpeg 为了许可干净关掉了自动探测（--disable-autodetect），
+ * 不带 avfoundation 录音输入，用户自己没装 Homebrew 版就录不了。
+ */
+const MAC_RECORDER_JXA = `
+ObjC.import('AVFoundation');
+ObjC.import('Foundation');
+function out(s) {
+  $.NSFileHandle.fileHandleWithStandardOutput.writeData($(s + '\\n').dataUsingEncoding($.NSUTF8StringEncoding));
+}
+function run(argv) {
+  var settings = $.NSMutableDictionary.alloc.init;
+  settings.setObjectForKey($.NSNumber.numberWithInt(1819304813), $('AVFormatIDKey'));
+  settings.setObjectForKey($.NSNumber.numberWithDouble(${SAMPLE_RATE}), $('AVSampleRateKey'));
+  settings.setObjectForKey($.NSNumber.numberWithInt(1), $('AVNumberOfChannelsKey'));
+  settings.setObjectForKey($.NSNumber.numberWithInt(16), $('AVLinearPCMBitDepthKey'));
+  settings.setObjectForKey($.NSNumber.numberWithBool(false), $('AVLinearPCMIsFloatKey'));
+  settings.setObjectForKey($.NSNumber.numberWithBool(false), $('AVLinearPCMIsBigEndianKey'));
+  var err = Ref();
+  var rec = $.AVAudioRecorder.alloc.initWithURLSettingsError($.NSURL.fileURLWithPath(argv[0]), settings, err);
+  if (!rec || rec.isNil()) { throw new Error('无法创建录音器'); }
+  rec.meteringEnabled = true;
+  if (!rec.record) { throw new Error('无法开始录音'); }
+  out('READY');
+  var fm = $.NSFileManager.defaultManager;
+  while (!fm.fileExistsAtPath(argv[1])) {
+    rec.updateMeters;
+    out('L ' + rec.averagePowerForChannel(0));
+    delay(0.08);
+  }
+  rec.stop;
+  out('SAVED');
+}
+`;
+
+/** 从 WAV 文件里取出 data 块（AVAudioRecorder 写的 WAV 前面常带 FLLR 之类的填充块，不能按 44 字节头硬切） */
+function pcmFromWav(wav: Buffer): Buffer {
+  let off = 12;
+  while (off + 8 <= wav.length) {
+    const id = wav.toString("ascii", off, off + 4);
+    const size = wav.readUInt32LE(off + 4);
+    if (id === "data") return wav.subarray(off + 8, Math.min(wav.length, off + 8 + size));
+    off += 8 + size + (size % 2);
+  }
+  return Buffer.alloc(0);
+}
+
 /** 拼出当前平台可用的 PCM 录音命令（stdout 输出 s16le / 16kHz / 单声道）；都没有返回 null */
 async function pcmRecorderCommand(): Promise<{ bin: string; args: string[]; backend: string } | null> {
   const pcmOut = ["-ac", "1", "-ar", String(SAMPLE_RATE), "-f", "s16le", "-acodec", "pcm_s16le", "pipe:1"];
@@ -206,7 +262,28 @@ export function isRecording(): boolean {
 export async function startRecording(): Promise<void> {
   if (current) return;
   let rec: Recording;
-  {
+  if (process.platform === "darwin" && existsSync("/usr/bin/osascript")) {
+    const dir = await mkdtemp(join(tmpdir(), "axon-voice-"));
+    const wavPath = join(dir, "voice.wav");
+    const stopFlag = join(dir, "stop");
+    const proc = spawn("/usr/bin/osascript", ["-l", "JavaScript", "-e", MAC_RECORDER_JXA, wavPath, stopFlag], { stdio: ["ignore", "pipe", "pipe"] });
+    rec = makeRecording(proc, "avfoundation", { wavPath, stopFlag, tmpDir: dir });
+    let buf = "";
+    let resolveReady: () => void = () => undefined;
+    proc.stdout!.on("data", (d: Buffer) => {
+      buf += d.toString();
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (line === "READY") resolveReady();
+        const m = /^L\s+(-?[\d.]+)/.exec(line);
+        // AVAudioRecorder 报的是分贝（-160~0），换成和 PCM 后端同一套 0~1 刻度
+        if (m) rec.levels.push(Math.max(0, Math.min(1, (Number(m[1]) + 55) / 50)));
+      }
+    });
+    await waitReady(rec, (resolve) => { resolveReady = resolve; });
+  } else {
     const cmd = await pcmRecorderCommand();
     if (!cmd) throw new Error(missingRecorderHint());
     const proc = spawn(cmd.bin, cmd.args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
@@ -261,6 +338,7 @@ async function waitReady(rec: Recording, hook: (resolve: () => void) => void): P
   if (result === "ready") return;
   clearTimeout(rec.timer);
   rec.proc.kill();
+  if (rec.tmpDir) void rm(rec.tmpDir, { recursive: true, force: true });
   const detail = rec.stderr.trim().split(/\r?\n/).slice(-3).join(" ").slice(0, 300);
   throw new Error(`麦克风没有打开${result === "timeout" ? "（等待超时）" : ""}。请确认麦克风已连接、系统允许 VS Code 使用麦克风。${detail ? `\n${detail}` : ""}`);
 }
@@ -305,6 +383,21 @@ export async function stopRecording(cancel = false): Promise<Buffer | null> {
   if (!rec) return null;
   current = null;
   clearTimeout(rec.timer);
+  if (rec.backend === "avfoundation") {
+    try {
+      if (cancel) { rec.proc.kill(); return null; }
+      await writeFile(rec.stopFlag!, "");
+      const code = await Promise.race([rec.exited, new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 5000))]);
+      if (code === "timeout") rec.proc.kill();
+      if (!existsSync(rec.wavPath!)) throw new Error(`录音没有保存下来。${rec.stderr.trim().slice(0, 300)}`);
+      const pcm = pcmFromWav(await readFile(rec.wavPath!));
+      if (pcm.length < SAMPLE_RATE * 2 * 0.3) throw new Error("录音太短了，说完再停。");
+      checkAudible(pcm);
+      return wavFromPcm(pcm);
+    } finally {
+      void rm(rec.tmpDir!, { recursive: true, force: true });
+    }
+  }
   // 让程序正常结束（ffmpeg 收到 SIGINT 会刷完缓冲），没反应再强杀；Windows 上直接结束进程，已收到的音频都在内存里
   rec.proc.kill("SIGINT");
   const code = await Promise.race([rec.exited, new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 2000))]);
