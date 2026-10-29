@@ -20,18 +20,46 @@ let monacoReady = false;
 async function ensureMonacoReady() {
   if (monacoReady) return;
   monacoReady = true;
-  const monaco = await import("monaco-editor");
+  // 只加载编辑器核心 + 常用语言的语法高亮（Monarch）+ JSON 语言服务。
+  // 整包 "monaco-editor" 会注册 TS / CSS / HTML 的完整语言服务，各自要一个 worker（合计近 9MB，
+  // ts.worker 一个就 6.6MB）；这里编辑的是技能、配置这类小文件，用不上补全和类型检查。
+  // @ts-expect-error 深路径没有单独的类型声明，形状与 "monaco-editor" 一致
+  const monaco = (await import("monaco-editor/esm/vs/editor/edcore.main.js")) as typeof import("monaco-editor");
+  await Promise.all([
+    import("monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/python/python.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/java/java.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/go/go.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/rust/rust.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/csharp/csharp.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/shell/shell.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/powershell/powershell.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/bat/bat.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/xml/xml.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/html/html.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/css/css.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/scss/scss.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/less/less.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/ini/ini.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/dockerfile/dockerfile.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/php/php.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/ruby/ruby.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/kotlin/kotlin.contribution.js"),
+    import("monaco-editor/esm/vs/basic-languages/swift/swift.contribution.js"),
+    import("monaco-editor/esm/vs/language/json/monaco.contribution.js"),
+  ]);
+  // 只带通用 worker 和 JSON worker（配置文件要校验）。TS / CSS / HTML 的语言服务 worker 合计近 9MB
+  // （ts.worker 一个就 6.6MB），这里编辑的是技能、配置这类小文件，语法高亮由 Monarch 负责，用不上完整语言服务。
   const editorWorker = await import("monaco-editor/esm/vs/editor/editor.worker?worker");
   const jsonWorker = await import("monaco-editor/esm/vs/language/json/json.worker?worker");
-  const cssWorker = await import("monaco-editor/esm/vs/language/css/css.worker?worker");
-  const htmlWorker = await import("monaco-editor/esm/vs/language/html/html.worker?worker");
-  const tsWorker = await import("monaco-editor/esm/vs/language/typescript/ts.worker?worker");
   self.MonacoEnvironment = {
     getWorker(_workerId: string, label: string) {
       if (label === "json") return new jsonWorker.default();
-      if (label === "css" || label === "scss" || label === "less") return new cssWorker.default();
-      if (label === "html" || label === "handlebars" || label === "razor") return new htmlWorker.default();
-      if (label === "typescript" || label === "javascript") return new tsWorker.default();
       return new editorWorker.default();
     },
   };

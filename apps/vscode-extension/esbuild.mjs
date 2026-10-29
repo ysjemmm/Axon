@@ -13,6 +13,9 @@
  */
 
 import { build, context } from "esbuild";
+import { cpSync, existsSync, realpathSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 
 const watch = process.argv.includes("--watch");
 
@@ -39,9 +42,30 @@ const options = {
 	logLevel: "info",
 };
 
+/**
+ * playwright-core 不能打进 bundle（见上面 external 的说明），但 .vscodeignore 排除了 node_modules/**，
+ * 扩展也没有运行时依赖 —— 装好的 VSIX 里根本找不到它，浏览器 / 截图功能一用就报错。
+ * 这里把它整个复制到 dist/node_modules/：dist/extension.js 里的 import("playwright-core")
+ * 会先在 dist/node_modules 里找到它。
+ */
+function shipPlaywright() {
+	try {
+		const require = createRequire(join(process.cwd(), "../../packages/host-node/package.json"));
+		const pkgDir = dirname(realpathSync(require.resolve("playwright-core/package.json")));
+		const target = join("dist", "node_modules", "playwright-core");
+		if (existsSync(target)) rmSync(target, { recursive: true, force: true });
+		cpSync(pkgDir, target, { recursive: true, dereference: true });
+		console.log(`[esbuild] playwright-core → ${target}`);
+	} catch (err) {
+		console.warn("[esbuild] 没找到 playwright-core，浏览器能力在打包后不可用：", err.message);
+	}
+}
+
 if (watch) {
+	shipPlaywright();
 	const ctx = await context(options);
 	await ctx.watch();
 } else {
 	await build(options);
+	shipPlaywright();
 }
