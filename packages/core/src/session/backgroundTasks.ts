@@ -142,6 +142,8 @@ export class BackgroundTaskTracker {
     if (meta && this.waiting.has(event.terminalId)) { meta.acknowledged = true; return; }
     if (!meta?.notify || meta.acknowledged || event.status !== "exited") return;
     meta.acknowledged = true;
+    // 结束时刻在读输出之前记下：后面的读取要花时间，用读完之后的 Date.now() 会把结束时间往后推
+    const exitedAt = Date.now();
     const [out, info] = await Promise.all([
       this.inner.getOutput(event.terminalId, NOTICE_TAIL_LINES).catch(() => null),
       this.inner.list().then((all) => all.find((p) => p.terminalId === event.terminalId)).catch(() => undefined),
@@ -152,7 +154,7 @@ export class BackgroundTaskTracker {
       cwd: info?.cwd ?? "",
       exitCode: event.exitCode,
       startedAt: info?.startedAt,
-      endedAt: info?.endedAt ?? Date.now(),
+      endedAt: Math.min(info?.endedAt ?? exitedAt, exitedAt),
       tail: (out?.output ?? "").trimEnd(),
     });
   }

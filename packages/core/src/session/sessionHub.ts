@@ -1309,6 +1309,7 @@ export class SessionHub {
       }
     } finally {
       this.runningSessions.delete(created.id);
+      this.turnEndedAt.set(created.id, Date.now());
     }
 
     // 持久化新会话
@@ -1500,8 +1501,10 @@ export class SessionHub {
 
   // ── 后台任务 ──
 
-  /** 等待投递的后台任务结束通知（会话正忙时先攒着） */
+  /** 等待投递的后台任务结束通知（会话空闲时攒 500ms，几个前后脚结束的合并成一轮） */
   private readonly pendingNotices = new Map<string, BackgroundTaskNotice[]>();
+  /** 各会话上一轮回复结束的时刻：在这之前就已结束的任务不再单独通知 */
+  private readonly turnEndedAt = new Map<string, number>();
 
   /**
    * 列出所有活跃会话的后台任务。带 clientId 时只回给请求的面板，否则广播（列表变化时）。
@@ -1528,6 +1531,9 @@ export class SessionHub {
       running.enqueueBackgroundNotice(formatBackgroundNotice(notice, { inline: true }));
       return;
     }
+    // 任务其实在上一轮回复结束之前就结束了，只是结束事件晚到（要先读完输出、宿主检测有延迟）：
+    // 那一轮里 AI 已经有机会看到它，回复完再弹「后台任务结束」不合理，直接丢掉。
+    if (notice.endedAt && notice.endedAt <= (this.turnEndedAt.get(sessionId) ?? 0)) return;
     const list = this.pendingNotices.get(sessionId) ?? [];
     list.push(notice);
     this.pendingNotices.set(sessionId, list);
@@ -1860,6 +1866,7 @@ export class SessionHub {
       }
     } finally {
       this.runningSessions.delete(execSessionId);
+      this.turnEndedAt.set(execSessionId, Date.now());
     }
 
     // 收尾持久化
