@@ -13,6 +13,7 @@ import { useState, useEffect, useCallback, useRef, type KeyboardEvent as ReactKe
 import { Loader2, Cloud, Plus, Trash2, Save, KeyRound, ChevronDown, CornerDownLeft, Pencil, Ban, RotateCcw, Download, MoreHorizontal, Check, ExternalLink, Brain, Zap, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { VisionFallbackSelector } from "@/components/ModelSelector";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -281,7 +282,7 @@ function ProviderCard({ provider, level, workspace, onChanged }: { provider: Res
   ];
 
   return (
-    <div className={`overflow-hidden rounded-xl border bg-background transition-colors ${expanded ? "border-primary/40 shadow-sm" : "border-border hover:border-foreground/20"}`}>
+    <div className={`rounded-xl border bg-background transition-colors ${expanded ? "border-primary/40 shadow-sm" : "border-border hover:border-foreground/20"}`}>
       <div className="flex items-center gap-3 px-4 py-3">
         <button className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => setExpanded((v) => !v)}>
           <ProviderBadge baseUrl={provider.baseUrl} label={provider.label || provider.name} />
@@ -302,12 +303,14 @@ function ProviderCard({ provider, level, workspace, onChanged }: { provider: Res
           <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
         </button>
         {!isBuiltin && (
-          <div className="relative">
-            <button onClick={() => { setMenuOpen((v) => !v); setConfirmDelete(false); }} className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="更多操作">
-              <MoreHorizontal className="h-4 w-4" />
-            </button>
-            {menuOpen && (
-              <div className="absolute right-0 top-full z-20 mt-1 w-40 overflow-hidden rounded-lg border border-border bg-background py-1 shadow-lg" onMouseLeave={() => { setMenuOpen(false); setConfirmDelete(false); }}>
+          // 菜单走弹出层（挂到 body）：放在卡片里会被卡片和外层滚动容器裁掉
+          <Popover open={menuOpen} onOpenChange={(o) => { setMenuOpen(o); if (!o) setConfirmDelete(false); }}>
+            <PopoverTrigger asChild>
+              <button className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="更多操作">
+                <MoreHorizontal className="h-4 w-4" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-40 gap-0 p-0 py-1">
                 {!isEnvSource && (
                   <button onClick={() => { setMenuOpen(false); setExpanded(true); setTab("connection"); }} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] hover:bg-muted/60">
                     <Pencil className="h-3.5 w-3.5" />编辑连接
@@ -318,9 +321,8 @@ function ProviderCard({ provider, level, workspace, onChanged }: { provider: Res
                   {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
                   {confirmDelete ? "再点一次确认删除" : isEnvSource ? "从环境变量移除" : "删除"}
                 </button>
-              </div>
-            )}
-          </div>
+            </PopoverContent>
+          </Popover>
         )}
       </div>
 
