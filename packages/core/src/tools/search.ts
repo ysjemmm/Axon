@@ -24,18 +24,24 @@ import type { AgentHost, ContentMatch } from "../host/index.js";
  * 多工作区路径解析：尝试在 cwd 下 resolve，如果文件不存在则遍历其他 workspaces 找到它。
  * 支持相对路径（如 "src/main/xxx"）和绝对路径。
  * 返回 resolve 后的绝对路径。
+ *
+ * opts.create：调用方要在这个路径上【新建】文件（create_file、apply_patch 的 Add File）。
+ * 新文件本来就不存在，不能去别处找「像它的」文件——早先会按文件名在整个工作区里搜，
+ * 新建 src/new/index.ts 时搜到 src/old/index.ts，于是报「已存在」，带 overwrite=true 时直接覆盖了错的文件。
  */
 export async function resolveInWorkspaces(
   filePath: string,
   cwd: string,
   host: AgentHost,
   workspaces?: string[],
+  opts: { create?: boolean } = {},
 ): Promise<string> {
   // 绝对路径直接返回
   const primary = resolve(cwd, filePath);
   if (filePath.startsWith("/") || /^[A-Za-z]:/.test(filePath)) {
     return primary;
   }
+  if (opts.create) return primary;
   // 先检查主工作区
   if (await host.fs.stat(primary)) {
     return primary;
@@ -50,17 +56,34 @@ export async function resolveInWorkspaces(
       return candidate;
     }
   }
-  // 2) 兜底：用文件名（basename）在所有工作区中递归搜索（单/多工作区都适用）
-  //    解决"模型给了 main.js 但文件实际在 src/main.js"这类相对路径不精确的情况
-  const baseName = filePath.split("/").pop()?.split("\\").pop() || "";
+  // 2) 兜底：模型少写了前面几级目录（给了 main.js，文件实际在 src/main.js）时按文件名找回来。
+  //    只认「以模型给的整段路径结尾」的文件：src/new/index.ts 不会被认成 src/old/index.ts；
+  //    找到不止一个就不猜（宁可报不存在让模型去搜，也不改错文件）；隐藏目录（.axon 快照、.github…）不进。
+  const rel = filePath.replace(/\\/g, "/").replace(/^\.\//, "");
+  const baseName = rel.split("/").pop() || "";
   if (baseName && baseName.includes(".")) {
-    for (const ws of candidateRoots) {
-      const found = await findFileByName(ws, baseName, host);
-      if (found) return found;
-    }
+    const matches: string[] = [];
+    for (const ws of candidateRoots) await collectFilesByName(ws, baseName, host, matches, 50);
+    const exact = matches.filter((m) => m.replace(/\\/g, "/").endsWith(`/${rel}`));
+    if (exact.length === 1) return exact[0];
   }
   // 都找不到，返回原始 resolve 结果（后续会报文件不存在的错）
   return primary;
+}
+
+/** 在目录中递归收集文件名匹配的文件（深度限制 5 层，跳过隐藏目录；收够 limit 个就停） */
+async function collectFilesByName(dir: string, name: string, host: AgentHost, out: string[], limit: number, depth = 0): Promise<void> {
+  if (depth > 5 || out.length >= limit) return;
+  try {
+    const entries = await host.fs.readdir(dir);
+    for (const entry of entries) {
+      if (out.length >= limit) return;
+      if (IGNORED_DIRS.has(entry.name)) continue;
+      const full = join(dir, entry.name);
+      if (entry.isFile && entry.name === name) out.push(full);
+      else if (entry.isDir && !entry.name.startsWith(".")) await collectFilesByName(full, name, host, out, limit, depth + 1);
+    }
+  } catch { /* ignore */ }
 }
 
 /** 在目录中递归查找文件名匹配的第一个文件（深度限制 5 层） */

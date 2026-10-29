@@ -3597,7 +3597,8 @@ async function extractTargetFiles(
       const p = args.path as string;
       if (!p) return [];
       try {
-        const resolved = await resolveInWorkspaces(p, cwd, host, workspaces);
+        // 与执行时同口径：create_file 是新建，不按文件名去别处找
+        const resolved = await resolveInWorkspaces(p, cwd, host, workspaces, { create: toolName === "create_file" });
         return [resolved];
       } catch { return []; }
     }
@@ -3609,9 +3610,10 @@ async function extractTargetFiles(
       const fileHeaders = patch.match(/\*\*\* (?:Update File|Add File): (.+)/g);
       if (fileHeaders) {
         for (const h of fileHeaders) {
+          const isAdd = h.startsWith("*** Add File");
           const p = h.replace(/\*\*\* (?:Update File|Add File): /, "").trim();
           try {
-            const resolved = await resolveInWorkspaces(p, cwd, host, workspaces);
+            const resolved = await resolveInWorkspaces(p, cwd, host, workspaces, { create: isAdd });
             paths.push(resolved);
           } catch { /* skip */ }
         }

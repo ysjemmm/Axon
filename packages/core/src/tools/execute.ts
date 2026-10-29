@@ -220,7 +220,7 @@ export async function executeToolCall(
       if (typeof args.content !== "string") {
         throw new Error("create_file 失败：缺少必填参数 content。请提供文件内容（字符串，可为空串）。");
       }
-      const filePath = await resolveInWorkspaces(args.path, cwd, host, workspaces);
+      const filePath = await resolveInWorkspaces(args.path, cwd, host, workspaces, { create: true });
       assertWithinWorkspaces(filePath, cwd, workspaces, "create_file", writeRoots);
       // 本次编辑前的有效内容（手动模式下可能已有暂存版本），作为 diff 基准
       const eff = await host.edits.readEffective(filePath);
@@ -367,7 +367,7 @@ export async function executeToolCall(
       const failed: { path: string; error: string }[] = [];
       for (const op of ops) {
         try {
-          const filePath = await resolveInWorkspaces(op.path, cwd, host, workspaces);
+          const filePath = await resolveInWorkspaces(op.path, cwd, host, workspaces, { create: op.type === "add" });
           assertWithinWorkspaces(filePath, cwd, workspaces, "apply_patch", writeRoots);
           const eff = await host.edits.readEffective(filePath);
           const diskContent = await host.fs.read(filePath);
