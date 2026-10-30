@@ -218,11 +218,14 @@ export function getToolDefinitions() {
         description:
           "用真实浏览器打开（或导航到）一个 URL——通常是 start_process 启动的开发服务器地址（如 http://localhost:5173）。\n" +
           "打开后浏览器会持续运行并记录控制台日志、未捕获异常、失败的网络请求。配合 get_browser_logs 看前端运行时报错、screenshot_page 看页面长相，形成「改代码→看报错→确认」的闭环。\n" +
-          "已打开则复用同一浏览器并导航过去（不重复开窗）。",
+          "已打开则复用同一浏览器并导航过去（不重复开窗）。\n" +
+          "默认无头运行（不弹窗口，截图更稳定）。仅当用户明确要求在面前展示页面时才传 headless=false。\n" +
+          "⚠️ 不要主动用浏览器做视觉验证，除非用户明确要求或改动涉及大范围前端交互链路。小改动告诉用户自己刷新看看即可。",
         parameters: {
           type: "object",
           properties: {
             url: { type: "string", description: "要打开的完整 URL，必须以 http:// 或 https:// 开头" },
+            headless: { type: "boolean", description: "是否无头运行（默认 true）。无头不弹窗口、截图不受最小化影响。用户明确要求看到浏览器窗口时传 false" },
           },
           required: ["url"],
         },

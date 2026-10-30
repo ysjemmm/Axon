@@ -620,7 +620,8 @@ export async function executeToolCall(
         throw new Error("open_browser 失败：当前形态不支持浏览器能力。");
       }
       try {
-        const res = await host.webBrowser.open(args.url as string);
+        const headless = args.headless !== false; // 默认 true
+        const res = await host.webBrowser.open(args.url as string, { headless });
         const reuseNote = res.reused ? "（复用已打开的浏览器）" : "";
         return `已打开：${res.url}${res.title ? `（${res.title}）` : ""}${reuseNote}`;
       } catch (err) {

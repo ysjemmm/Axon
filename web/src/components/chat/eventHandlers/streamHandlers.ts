@@ -6,7 +6,7 @@ import type { TurnStats } from "../useTypewriter";
 import { stripPendingRetry } from "../retryLifecycle";
 import { sealReasoning } from "../reasoningPlacement";
 import { clearPendingRetry } from "./stateHandlers";
-import { isStaleCancelledTurnEnd } from "./turnHandlers";
+import { isStaleCancelledTurnEnd, sealStaleTurn } from "./turnHandlers";
 import type { EventHandlerCtx, WsMessage } from "./types";
 
 export function handleStreamStart(_msg: WsMessage, ctx: EventHandlerCtx): void {
@@ -84,12 +84,20 @@ export function handleStreamEnd(msg: WsMessage, ctx: EventHandlerCtx): void {
   // 高可用：老后端不带该字段时仍走原有逻辑，行为不变。
   const evTurnId = (msg as any).clientMessageId as string | undefined;
   const curTurnId = ctx.currentTurnClientMessageId.current;
-  if (evTurnId && curTurnId && evTurnId !== curTurnId) return;
+  if (evTurnId && curTurnId && evTurnId !== curTurnId) {
+    // 事件属于旧轮次：不能动当前轮的 isLoading / 状态文字 / 出队闸门，
+    // 但必须把旧轮次的 assistant 消息收口——否则图标永远在转。
+    sealStaleTurn(ctx, evTurnId);
+    return;
+  }
   if (ctx.cancelled.current) return;
   // 用户取消那一轮迟到的 stream_end（取消路径的收尾）不能收掉新一轮的 loading：
   // 它一旦被应用，不但会提前收掉新一轮的 loading/状态文字，还会把出队闸门打开，
   // 让下一条排队消息并发出去。判据见 isStaleCancelledTurnEnd。
-  if (isStaleCancelledTurnEnd(ctx, msg)) return;
+  if (isStaleCancelledTurnEnd(ctx, msg)) {
+    sealStaleTurn(ctx);
+    return;
+  }
   // 整轮结束兜底：retrying 段无论如何都该收掉（覆盖"重试成功后本轮没再产出正文"的情况）
   clearPendingRetry(ctx);
   const stats: TurnStats = {

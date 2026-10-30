@@ -100,8 +100,10 @@ export interface HostWebBrowser {
   /**
    * 打开（或导航到）指定 URL。已有打开的浏览器则复用并导航，reused=true。
    * 启动失败（如无可用 Chrome）应抛错，由 core 转成清晰的工具错误反馈给模型。
+   * @param opts.headless 是否无头运行（默认 true）。无头截图更稳定（不受最小化影响），
+   *   仅当用户明确要求"在我面前展示"时才传 false。
    */
-  open(url: string): Promise<OpenBrowserResult>;
+  open(url: string, opts?: { headless?: boolean }): Promise<OpenBrowserResult>;
 
   /**
    * 读取自上次 clear（或打开以来）累积的控制台日志 / 页面异常 / 网络失败。

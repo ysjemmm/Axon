@@ -478,7 +478,10 @@ export function handleSteerAbsorbed(msg: WsMessage, ctx: EventHandlerCtx): void 
     updated.push({ id: `assistant-${Date.now()}`, role: "assistant", segments: [], streaming: true, turnStatus: "running", turnGen: gen });
     return updated;
   });
-  ctx.currentTurnClientMessageId.current = steers[steers.length - 1].id;
+  // ⚠️ 不要更新 currentTurnClientMessageId：steer 被吸收不开新轮，后端的终态事件
+  // (stream_end / turn_cancelled) 仍然带的是原始那条用户消息的 clientMessageId。
+  // 若此处覆盖成 steer 的 id，stream_end 到达时 evTurnId !== curTurnId → 事件被丢弃
+  // → 前端 isLoading 永远不收，消息图标永远在转。
   ctx.setStatusText("看到你的补充，继续处理...");
 }
 

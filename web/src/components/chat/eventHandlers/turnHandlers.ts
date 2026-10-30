@@ -92,7 +92,10 @@ export function handleTurnCancelled(msg: WsMessage, ctx: EventHandlerCtx): void 
   // 高可用：老后端不带该字段时落到下面的 elapsed 推断，行为与改动前一致。
   const evTurnId = (msg as any).clientMessageId as string | undefined;
   const curTurnId = ctx.currentTurnClientMessageId.current;
-  if (evTurnId && curTurnId && evTurnId !== curTurnId) return;
+  if (evTurnId && curTurnId && evTurnId !== curTurnId) {
+    sealStaleTurn(ctx, evTurnId);
+    return;
+  }
   // 终止原因由后端给出：abort_error（provider/网关异常）是 "error"，用户取消 / 预算暂停是 "cancelled"。
   // 早先前端一律硬编码成 "cancelled"，于是后端落盘的 "error" 在实时界面上被抹平——
   // 用户看到的"已取消"其实可能是"网关挂了"，两者无从区分。
@@ -105,6 +108,7 @@ export function handleTurnCancelled(msg: WsMessage, ctx: EventHandlerCtx): void 
     // 上一轮已由 cancelTurn 在本地落了终态，这里整段丢弃即可。
     // ⚠️ 只清消息守卫，**不清** cancelledTurnGeneration：同一轮取消的收尾事件不止一条，
     // 标记若在此被清掉，紧随其后的那一条就会被当成"当前轮的终态"去收新一轮的 loading。
+    sealStaleTurn(ctx);
     ctx.cancelledTurnMsgId.current = null;
     return;
   }
@@ -189,4 +193,40 @@ export function handleTurnError(msg: WsMessage, ctx: EventHandlerCtx): void {
   // 早先这里只置了 streaming/turnStatus）。
   finalizeStreamingTurnAsError(ctx);
   ctx.finishLoading();
+}
+
+/**
+ * 收口属于旧轮次的 assistant 消息：把 streaming 置为 false，思考段封口。
+ *
+ * 当 stream_end / turn_cancelled 被判定为"不属于当前轮"时调用。
+ * 绝不动当前轮的 isLoading / statusText / 出队闸门——那些只有当前轮的终态才能动。
+ * 只做一件事：在 chatHistory 里找到那条还挂着 streaming=true 的旧消息，把它收掉，
+ * 这样旧消息的图标会停止转动、思考块会折叠、底部信息会显示。
+ *
+ * @param evTurnId 可选，事件携带的 clientMessageId；有时用于精确匹配旧消息。
+ *                 没有时退化为"收掉最后一条非当前轮的 streaming assistant"。
+ */
+export function sealStaleTurn(ctx: EventHandlerCtx, evTurnId?: string): void {
+  const curGen = ctx.turnGeneration.current;
+  ctx.setChatHistory((prev) => {
+    let changed = false;
+    const updated = prev.map((m) => {
+      if (m.role !== "assistant" || !m.streaming) return m;
+      // 当前轮的消息不能动（它还在正常流式中）
+      if (m.turnGen === curGen) return m;
+      // 如果有 evTurnId 精确匹配，优先只收那一条（避免误收）
+      // turnGen 是消息创建时的 generation，没有直接存 clientMessageId，
+      // 所以这里只能按"不是当前轮"来收。evTurnId 仅用于日志/调试。
+      changed = true;
+      const sealedSegments = sealReasoning(m.segments || []);
+      return {
+        ...m,
+        streaming: false,
+        // 保留原 turnStatus；没有就给一个 completed，让底部信息正常显示
+        turnStatus: m.turnStatus || "completed",
+        ...(sealedSegments ? { segments: sealedSegments } : {}),
+      };
+    });
+    return changed ? updated : prev;
+  });
 }

@@ -62,7 +62,7 @@ export class PromptBuilder {
   private turnFrozen: FrozenInjections | null = null;
 
   /**
-   * 除当前用户回合外，再保留最近几个**用户回合**的 reasoning_content；更早的【清空内容、保留字段】。
+   * 除当前用户回合外，再保留最近几个**用户回合**的 reasoning_content；更早的【删除字段】。
    *
    * ── 边界是「用户回合」，不是「带思考的消息条数」 ──
    * 当前回合（最后一条真实用户消息之后）的思考必须原样回传：做到第 5 步时，模型要看得到
@@ -76,13 +76,15 @@ export class PromptBuilder {
    * （"用户选择了X，我先摸清Y"），保留下来等于把 3 个范例原样喂回去，模型照抄。
    * 这类重复只需要【一个】样本就足以形成 few-shot，所以「少留几轮」不解决问题，必须清零。
    *
-   * ── 为什么清内容而不是删字段 ──
-   * 部分端点对「带 tool_calls 却缺 reasoning_content」会直接报错，保留空字符串既满足
-   * 字段存在性，又不引入任何语义。任务脉络仍由 tool_calls 与工具结果完整承载，不缺信息。
+   * ── 为什么删字段而不是置空 ──
+   * 早先保留空字符串 `""` 以满足"字段存在性"，但 DeepSeek 校验的是"原样回传"而非"字段存在"：
+   * 空字符串会触发 400 `reasoning_content must be passed back to the API`。
+   * 删掉字段的语义是"这条消息没有思考"，DeepSeek 服务端对更早回合的思考本来也会丢弃，
+   * 不会因为字段缺失而报错。任务脉络仍由 tool_calls 与工具结果完整承载，不缺信息。
    *
    * ── 缓存代价 ──
    * 回合之内被清空的集合不变，每一步的前缀逐字节稳定；只有新回合开始时，上一回合的思考
-   * 从「有内容」变成「空」，前缀从上一回合的第一条思考处断开一次（每回合一次，不是每步一次）。
+   * 从「有内容」变成「删除」，前缀从上一回合的第一条思考处断开一次（每回合一次，不是每步一次）。
    */
   private static readonly REASONING_KEEP_PREVIOUS_TURNS = 0;
 
@@ -336,12 +338,11 @@ export class PromptBuilder {
         const { _contextInjections, ...rest } = anyMsg;
         out = rest as ChatCompletionMessageParam;
       }
-      // 之前回合的思考清空内容（字段保留）：防止历史里累积的同质思考把模型带向重复
+      // 之前回合的思考：删掉字段（不是置空）。DeepSeek 校验"原样回传"，空字符串会 400；
+      // 删掉字段则表示"这条消息没有思考"，服务端不校验不存在的字段。
       if (dropReasoning(index)) {
-        return {
-          ...(out as unknown as Record<string, unknown>),
-          reasoning_content: "",
-        } as unknown as ChatCompletionMessageParam;
+        const { reasoning_content, ...rest } = out as unknown as Record<string, unknown>;
+        return rest as unknown as ChatCompletionMessageParam;
       }
       return out;
     };

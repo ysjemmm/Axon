@@ -2660,12 +2660,16 @@ export class AgentSession {
   ): Promise<LLMTurnResult> {
     const MAX_RETRIES = 5;
     let lastError: Error | null = null;
+    let consecutiveFailures = 0;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       // 这一次尝试有没有已经吐出内容：吐过就不能再重试，否则前端会看到同一段文字 / 工具卡片出现两遍
       let emitted = false;
-      // 流式看门狗：网关中途卡住时不再无限挂着，过一段时间没有任何数据就断开并按可重试处理
-      const watchdog = createStreamWatchdog(this.abortController?.signal);
+      // 流式看门狗：网关中途卡住时不再无限挂着，过一段时间没有任何数据就断开并按可重试处理。
+      // 重试场景收紧超时：已经知道上一次失败了，再等 5 分钟毫无意义（503/网关挂了的典型场景，
+      // 6 次 × 5 分钟 = 30 分钟卡死，用户只看到「正在回复…」）。
+      const retryWatchdogMs = consecutiveFailures > 0 ? 30_000 : undefined;
+      const watchdog = createStreamWatchdog(this.abortController?.signal, retryWatchdogMs ? { firstEventMs: retryWatchdogMs, idleMs: retryWatchdogMs } : undefined);
       try {
         const turnSource = new StrategyTurnSource({
           strategy,
@@ -2692,6 +2696,7 @@ export class AgentSession {
           effectiveMessages: requestMessages,
         });
         console.log(`[pipeline] 新链路驱动本回合，stage=${draft.stage}，toolDrafts=${draft.toolDrafts.length}`);
+        consecutiveFailures = 0;
 
         // 把新链路草案回填成老循环消费的 LLMTurnResult 形状。
         // 工具草案 → NormalizedToolCall：id/name/arguments 与老协议一一对应，rawArgsText 即原始参数串。
@@ -2726,8 +2731,9 @@ export class AgentSession {
           throw error;
         }
         lastError = error;
+        consecutiveFailures++;
         const delay = backoffDelay(attempt, decision.retryAfterMs);
-        console.warn(`[pipeline] 接口失败（${error.message}），${(delay / 1000).toFixed(1)}s 后第 ${attempt + 1} 次重试...`);
+        console.warn(`[pipeline] 接口失败（${this.formatUserFacingError(error)}），${(delay / 1000).toFixed(1)}s 后第 ${attempt + 1} 次重试...`);
         this.send("retry", { attempt: attempt + 1, maxRetries: MAX_RETRIES, error: this.formatUserFacingError(error), status: "retrying" });
         // 等待期间点「停止」立即结束，不再干等退避时间走完
         await abortableSleep(delay, this.abortController?.signal);

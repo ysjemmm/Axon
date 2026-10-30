@@ -2,7 +2,8 @@
  * PlaywrightBrowser —— 基于 playwright-core 的 HostWebBrowser 实现
  *
  * 驱动一个真实 Chromium（优先复用系统已装的 Chrome/Edge，channel 方式不下载二进制），
- * 通过 CDP 订阅控制台、未捕获异常、失败网络请求，并支持截图。headful 运行，用户可见页面。
+ * 通过 CDP 订阅控制台、未捕获异常、失败网络请求，并支持截图。headless 运行，
+ * 不弹窗口、截图不受窗口最小化影响。
  *
  * 设计：
  * - 单浏览器单页：再次 open 同一实例导航即可（避免开一堆窗口）。
@@ -66,6 +67,7 @@ export class PlaywrightBrowser implements HostWebBrowser {
 
   private browser: Browser | null = null;
   private page: Page | null = null;
+  private currentHeadless: boolean | null = null;
   private console: BrowserConsoleEntry[] = [];
   private pageErrors: BrowserPageError[] = [];
   private networkFailures: BrowserNetworkFailure[] = [];
@@ -77,9 +79,14 @@ export class PlaywrightBrowser implements HostWebBrowser {
     return !!this.page && !this.page.isClosed();
   }
 
-  async open(url: string): Promise<OpenBrowserResult> {
+  async open(url: string, opts?: { headless?: boolean }): Promise<OpenBrowserResult> {
+    const headless = opts?.headless !== false; // 默认 true
+    // headless 模式切换时需要重启浏览器（不能复用有头的跑无头，反之亦然）
+    if (this.isOpen() && this.currentHeadless !== null && this.currentHeadless !== headless) {
+      await this.close();
+    }
     const reused = this.isOpen();
-    const page = await this.ensurePage();
+    const page = await this.ensurePage(headless);
     await gotoWhenReady(page, url);
     let title: string | undefined;
     try { title = await page.title(); } catch { /* 忽略 */ }
@@ -289,7 +296,7 @@ export class PlaywrightBrowser implements HostWebBrowser {
   }
 
   /** 确保浏览器与页面就绪，并挂好事件监听（只挂一次） */
-  private async ensurePage(): Promise<Page> {
+  private async ensurePage(headless = true): Promise<Page> {
     if (this.page && !this.page.isClosed()) return this.page;
 
     const { chromium } = await import("playwright-core");
@@ -299,7 +306,7 @@ export class PlaywrightBrowser implements HostWebBrowser {
     let lastErr: unknown;
     for (const opt of attempts) {
       try {
-        browser = await chromium.launch({ headless: false, ...opt });
+        browser = await chromium.launch({ headless, ...opt });
         break;
       } catch (err) {
         lastErr = err;
@@ -312,6 +319,7 @@ export class PlaywrightBrowser implements HostWebBrowser {
       );
     }
     this.browser = browser;
+    this.currentHeadless = headless;
     const page = await browser.newPage();
     this.page = page;
     this.attachListeners(page);

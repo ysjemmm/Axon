@@ -1,0 +1,11 @@
+# Axon：只忽略本机产物；AXON.md、rules/、skills/、wiki/、settings.json 等项目配置照常入库
+#   relays/ —— 某次任务的中间产物（run-scoped），任务结束即历史，不必共享
+/relays/
+#   tmp/ —— AI 写的一次性验证脚本，用完即弃，定期自动清理
+/tmp/
+#   个人覆盖
+*.local.md
+*.local.json
+#   可能写着 API Key / Token 的配置（需要共享时自行去掉这两行，并确认里面没有密钥）
+/settings/providers.json
+/settings/mcp.json
